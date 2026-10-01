@@ -56,7 +56,6 @@ from django.db.models.sql.datastructures import BaseTable
 from model_hub.models.develop_dataset import Cell
 from simulate.models import CallExecution, SimulateEvalConfig, TestExecution
 from simulate.models.hosted_harness import HostedHarnessJob, HostedHarnessScenario
-from simulate.semantics import SupportedProviders
 from simulate.services.harness_scenarios import GROUP_BY as SCENARIO_GROUP_BY
 from simulate.services.run_reliability_v3 import build_reliability
 from simulate.services.run_results_v3 import OUTCOME_LABELS, build_evaluation_catalog
@@ -644,10 +643,6 @@ def run_calls_queryset(
         if execution_ids is not None
         else Q(test_execution=execution)
     )
-    provider_cases = [
-        When(provider_call_data__has_key=provider, then=Value(provider))
-        for provider in sorted(SupportedProviders)
-    ]
     dataset_goal = Cell.all_objects.filter(
         row_id=OuterRef("row_id"),
         column__name__in=["use_case", "goal"],
@@ -782,12 +777,8 @@ def run_calls_queryset(
         ),
         result_tokens=_safe_json_float("conversation_metrics_data", "total_tokens"),
         result_cost_cents=Cast("customer_cost_cents", FloatField()),
-        result_provider=Case(
-            *provider_cases,
-            default=Coalesce(
-                F("test_execution__agent_definition__provider"), Value("Unknown")
-            ),
-            output_field=CharField(),
+        result_provider=Coalesce(
+            F("test_execution__agent_definition__provider"), Value("Unknown")
         ),
         result_scenario_key=Coalesce(
             _json_text("call_metadata", "harness_scenario_key"),
