@@ -160,9 +160,9 @@ function translateEvent(event, constraints, policy) {
         prototype_occurrence_ids: current(command.issue_id).prototypes,
         mechanism: mechanism(current(command.issue_id))};
     case 'merge': {
-      const issue = createdIssues(event)[0];
+      const issue = event.after.issues.find(item => item.active && command.issue_ids.includes(item.id));
       return {type: 'merge', source_issue_ids: command.issue_ids,
-        expected_revisions: command.expected_revisions, temporary_id: issue.id,
+        expected_revisions: command.expected_revisions, survivor_issue_id: issue.id,
         mechanism: mechanism(issue), prototype_occurrence_ids: issue.prototypes,
         citations: citations(command.receipt),admission:command.receipt.model_provenance,
         ...(policy.sampled_merge_reviews ? {reviewed_occurrence_ids:command.group.member_ids} : {})};
