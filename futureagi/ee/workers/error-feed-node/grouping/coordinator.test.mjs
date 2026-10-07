@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MAX_CHECKPOINT_BYTES, processFeatureClaim, processGroupingClaim, engineInput} from './coordinator.mjs';
+import {MAX_CHECKPOINT_BYTES, processFeatureClaim, processGroupingClaim, engineInput, groupingFailureCode} from './coordinator.mjs';
+import {createControlClient} from '../control-client.mjs';
 import {makeGroupingSnapshotFixture} from './snapshot-fixture.mjs';
 import {adaptGroupingSnapshot, canonicalSnapshotDigest} from './snapshot.mjs';
 import {FEATURE_VERSION, featureDigest} from './features.mjs';
@@ -74,7 +75,7 @@ test('publication binds cohort digest, durable receipts and all F6 checkpoint fi
 test('paused algorithm cannot publish partial assignments',async()=>{
   let published=false;
   await assert.rejects(()=>processGroupingClaim(claim(),{
-    control:async()=>{published=true;},
+    control:async path=>{if(path.endsWith('publish/'))published=true;return {state:'cancelled'};},
     createInvestigator:async()=>({investigate:()=>{},receiptIds:()=>[]}),
     engine:async()=>({status:'paused'}),
   }),/no Feed publication/);
@@ -84,7 +85,7 @@ test('paused algorithm cannot publish partial assignments',async()=>{
 test('model-backed commands without a known per-command receipt never publish',async()=>{
   let published=false;
   await assert.rejects(()=>processGroupingClaim(claim(),{
-    control:async()=>{published=true;return {status:'completed',registry_revision:4};},
+    control:async path=>{if(path.endsWith('publish/'))published=true;return {state:'cancelled'};},
     createInvestigator:async()=>({investigate:()=>{},receiptIds:()=>[]}),
     engine:async()=>({status:'complete',commands:[{type:'create',temporary_id:'new-issue',
       occurrence_ids:['finding'],citations:[]}],dispositions:[]}),
@@ -102,7 +103,97 @@ test('oversized checkpoint fails before write and cannot publish',async()=>{
       return {status:'complete',commands:[],dispositions:[]};
     },
   }),/checkpoint exceeds bound/);
-  assert.deepEqual(writes,[]);
+  assert.deepEqual(writes,[`/grouping/attempts/${id}/`]);
+});
+
+test('lost publication response is reconciled as success when backend already completed', async()=>{
+  const client=createControlClient({baseUrl:'https://example.test',token:'test',
+    fetchImpl:async()=>{throw new DOMException('Timeout','TimeoutError');}});
+  let failure;
+  const result=await processGroupingClaim(claim(),{
+    control:async(path,body,options)=>{
+      if(path.endsWith('checkpoint/'))return {checkpoint_revision:body.expected_revision+1};
+      if(path.endsWith('publish/'))return client(path,body,options);
+      failure=body;return {state:'completed'};
+    },
+    createInvestigator:async()=>({investigate:()=>{},receiptIds:()=>[]}),
+    engine:async()=>({status:'complete',commands:[],dispositions:[]}),
+  });
+  assert.deepEqual(result,{published:true,reconciled:true});
+  assert.equal(failure.action,'fail');
+  assert.equal(failure.failure_code,'control_network_error');
+  assert.ok(!JSON.stringify(failure).includes('Timeout'));
+});
+
+test('shutdown cleanup uses a live bounded signal and preserves the original error', async()=>{
+  const stop=new AbortController();stop.abort();
+  const original=new Error('private source text must not enter failure payload');
+  let payload;
+  await assert.rejects(()=>processGroupingClaim(claim(),{
+    signal:stop.signal,
+    control:async(path,body,options)=>{payload=body;assert.equal(options.signal.aborted,false);throw new Error('cleanup offline');},
+    createInvestigator:async()=>({investigate:()=>{},receiptIds:()=>[]}),
+    engine:async()=>{throw original;},
+  }), error=>error===original);
+  assert.equal(payload.failure_code,'worker_cancelled');
+  assert.ok(!JSON.stringify(payload).includes('private source'));
+});
+
+test('paused work reports a stable nonretryable failure code',async()=>{
+  let payload;
+  await assert.rejects(()=>processGroupingClaim(claim(),{
+    control:async(path,body)=>{payload=body;return {state:'cancelled'};},
+    createInvestigator:async()=>({investigate:()=>{},receiptIds:()=>[]}),
+    engine:async()=>({status:'paused'}),
+  }),/no Feed publication/);
+  assert.equal(payload.failure_code,'grouping_paused');
+});
+
+test('shutdown preserves an explicit unknown-usage failure in backend cleanup',async()=>{
+  const stop=new AbortController();stop.abort();
+  const original=Object.assign(new Error('synthetic usage failure'),{groupingFailureCode:'gateway_unknown_usage'});
+  let payload;
+  await assert.rejects(()=>processGroupingClaim(claim(),{
+    signal:stop.signal,
+    control:async(path,body,options)=>{payload=body;assert.equal(options.signal.aborted,false);return {state:'cancelled'};},
+    createInvestigator:async()=>({investigate:()=>{},receiptIds:()=>[]}),
+    engine:async()=>{throw original;},
+  }),error=>error===original);
+  assert.equal(payload.failure_code,'gateway_unknown_usage');
+  for(const code of ['grouping_paused','context_budget']){
+    assert.equal(groupingFailureCode({groupingFailureCode:code},stop.signal),code);
+  }
+});
+
+test('control HTTP failures are classified without forwarding response or exception text',async()=>{
+  for(const [status,code] of [[409,'control_rejected'],[429,'control_server_error'],[503,'control_server_error'],[403,'control_rejected']]){
+    const client=createControlClient({baseUrl:'https://example.test',token:'test',fetchImpl:async()=>new Response('private upstream body',{status})});
+    try{await client(`/grouping/attempts/${id}/publish/`,{});assert.fail('expected failure');}
+    catch(error){assert.equal(groupingFailureCode(error),code);}
+  }
+  assert.equal(groupingFailureCode(new Error('private text')),'grouping_worker_error');
+});
+
+test('only recognized stale-state conflicts retry; persistent and unknown conflicts park',async()=>{
+  const stop=new AbortController();stop.abort();
+  for(const [reason,code] of [
+    ['grouping publication read set is stale','grouping_conflict'],
+    ['candidate registry changed while building claim','grouping_conflict'],
+    ['candidate context exceeds response bound','context_budget'],
+    ['grouping project budget exhausted or disabled','grouping_paused'],
+    ['unknown call receipt cannot be overwritten','gateway_unknown_usage'],
+    ['refresh target is stale or not offered','control_rejected'],
+    ['publication key was reused for a different proposal','control_rejected'],
+    ['private provider text','control_rejected'],
+  ]){
+    const client=createControlClient({baseUrl:'https://example.test',token:'test',
+      fetchImpl:async()=>Response.json({code:'grouping_conflict',detail:reason},{status:409})});
+    await assert.rejects(()=>client(`/grouping/attempts/${id}/publish/`,{}),error=>{
+      assert.equal(groupingFailureCode(error),code);
+      assert.equal(groupingFailureCode(error,stop.signal),code);
+      return true;
+    });
+  }
 });
 
 test('after a failed checkpoint, a settled receipt resumes without another paid call',async()=>{
@@ -243,6 +334,7 @@ test('a publication validation conflict is not retried', async () => {
     engine:async()=>({status:'complete',commands:[],dispositions:[{state:'deferred',occurrence_id:'a',reason:'uncertain'}]}),
     control:async(path,body)=>{
       if(path.endsWith('checkpoint/'))return {checkpoint_revision:body.expected_revision+1};
+      if(body.action === 'fail')return {state:'cancelled'};
       sends++;throw Object.assign(new Error('stale publication'),{status:409});
     },
   }),/stale publication/);
