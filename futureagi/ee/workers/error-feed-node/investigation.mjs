@@ -92,6 +92,7 @@ export function failureDiagnostic(error, phase, attemptId) {
     ['Gateway request aborted', 'gateway_request_aborted'],
     ['Gateway transport failed', 'gateway_transport_failed'],
     ['Gateway response could not be processed', 'gateway_response_invalid'],
+    ['ClickHouse evidence read failed', 'clickhouse_read_failed'],
   ]);
   let reason = reasons.get(error?.message) ?? 'runtime_or_output_validation';
   // Omega's JSON parser includes model content in some exception messages.
@@ -194,6 +195,7 @@ async function investigateClaim(claim, {gatewayConfig, clickhouse, control, scra
     ? {audio_observations: audioInspection.receipts().map(({evidence_id, excerpt}) => ({evidence_id, excerpt}))} : {};
   let assessment = {outcome: 'unknown', findings: [], requirement_checks: []};
   let executionStatus = 'failed';
+  let errorMessage = null;
   let incompleteReason = null;
   try {
     const evidencePath = join(scratch, simulation ? 'simulation-calls.jsonl' : 'trace.jsonl');
@@ -376,6 +378,12 @@ async function investigateClaim(claim, {gatewayConfig, clickhouse, control, scra
       diagnostic.provider = lastCall.provider ?? null;
       diagnostic.gateway_latency_ms = lastCall.latency_ms ?? null;
     }
+    if (diagnostic.reason === 'clickhouse_read_failed') diagnostic.clickhouse_code = error.clickhouseCode ?? null;
+    // The report keeps a reason and a numeric status, never upstream text. Django
+    // reads the part before the colon to decide whether the job may run again.
+    const status = diagnostic.clickhouse_code ?? diagnostic.http_status;
+    errorMessage = diagnostic.reason + (Number.isInteger(status)
+      ? (diagnostic.reason === 'clickhouse_read_failed' ? ':code_' : ':http_') + status : '');
     process.stderr.write(JSON.stringify({...diagnostic,
       model_calls: gateway.accounting().model_calls, request_bytes: gateway.accounting().request_bytes,
       output_tokens: outputTokens}) + '\n');
@@ -396,7 +404,9 @@ async function investigateClaim(claim, {gatewayConfig, clickhouse, control, scra
     ...Object.fromEntries(resultFields.map(key => [key, claim[key]])),
     memory_snapshot_id: claim.memory.snapshot_id, memory_digest: claim.memory.digest,
     evidence_digest: store?.digest ?? canonicalDigest({evidence_unavailable: true}),
-    execution_status: executionStatus, ...assessment,
+    // Debug analysis shows a simulation report's error_message to the user, so only trace reports carry the code.
+    execution_status: executionStatus, ...(executionStatus === 'failed' && !simulation ? {error_message: errorMessage} : {}),
+    ...assessment,
     evidence_receipts: evidenceReceipts().filter(receipt => usedIds.has(receipt.evidence_id)),
     verification_receipts: [],
     coverage: store?.coverage ? {...store.coverage,

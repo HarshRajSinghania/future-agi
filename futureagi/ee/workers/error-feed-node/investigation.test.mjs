@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {investigateTrace, investigateSimulation, validateAssessment, canonicalDigest, failureDiagnostic} from './investigation.mjs';
-import {storeEvidence} from './evidence-store.mjs';
+import {storeEvidence, EvidenceReadError} from './evidence-store.mjs';
 
 function makeClaim() {
   return {organization_id: randomUUID(), workspace_id: null, project_id: randomUUID(), trace_id: randomUUID(),
@@ -30,6 +30,7 @@ test('failure diagnostics classify host budget errors without exposing upstream 
     ['Gateway request aborted', 'gateway_request_aborted'],
     ['Gateway transport failed', 'gateway_transport_failed'],
     ['Gateway response could not be processed', 'gateway_response_invalid'],
+    ['ClickHouse evidence read failed', 'clickhouse_read_failed'],
   ]) {
     const result = failureDiagnostic(new Error(message), 'verifier', 'attempt');
     assert.equal(result.reason, code);
@@ -63,6 +64,7 @@ for (const malformed of ['{', '{"action":"finish"}']) {
             {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0.000100'}});
           }}});
       assert.equal(result.execution_status, 'completed');
+      assert.ok(!('error_message' in result));
       assert.equal(result.outcome, 'unknown');
       assert.deepEqual(calls, [{verifier: false, repairing: false},
         {verifier: false, repairing: true}, {verifier: true, repairing: false}]);
@@ -112,9 +114,30 @@ test('upstream HTTP status is retained in a failed investigation receipt', async
       gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
         fetchImpl: async () => new Response('private upstream body', {status: 503})}});
     assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'gateway_upstream_error:http_503');
     assert.equal(result.gateway_accounting.length, 1);
     assert.equal(result.gateway_accounting[0].raw.http_status, 503);
     assert.ok(!JSON.stringify(result).includes('private upstream body'));
+  } finally { await rm(scratch, {recursive: true, force: true}); }
+});
+
+test('a failed evidence read publishes its reason and ClickHouse code inside the signed report', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-evidence-failure-test-'));
+  try {
+    const result = await investigateTrace(makeClaim(), {scratchRoot: scratch,
+      fetchEvidence: async () => { throw new EvidenceReadError(241); },
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async () => assert.fail('no model call may follow a failed evidence read')}});
+    assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'clickhouse_read_failed:code_241');
+    assert.equal(result.usage.model_calls, 0);
+    assert.equal(result.coverage.observed_span_count, 0);
+    const {result_digest: digest, ...signed} = result;
+    assert.equal(digest, canonicalDigest(signed));
+    assert.equal((await investigateTrace(makeClaim(), {scratchRoot: scratch,
+      fetchEvidence: async () => { throw new EvidenceReadError(null); },
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture'}})).error_message,
+    'clickhouse_read_failed');
   } finally { await rm(scratch, {recursive: true, force: true}); }
 });
 
@@ -141,6 +164,7 @@ test('verifier call-budget exhaustion without an assessment remains a technical 
           {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0.000100'}});
         }}});
     assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'call_budget_exhausted');
     assert.equal(result.outcome, 'unknown');
     assert.equal(result.usage.model_calls, 4);
   } finally { await rm(scratch, {recursive: true, force: true}); }
@@ -401,6 +425,20 @@ test('Node report digest matches the Django wire fixture', () => {
       {cost: 0, model_used: 'openai/test', raw: {units: 1}}, {cost: 1, model_used: 'openai/test', raw: null}],
     nested: {small: 0.001, large: 1000000000000000}}),
   'sha256:c0c2d86a98393d4a34d1ec1f7aabff4b5c134d06c7fb568185f607bbb91e09c8');
+});
+
+test('a failed simulation report carries no failure code', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-simulation-investigation-test-'));
+  try {
+    const claim = {...makeClaim(), workload_type: 'simulation_test_execution',
+      contract_version: 'omega-simulation/v1', test_execution_id: randomUUID(), lease_token: 'fixture-lease'};
+    const result = await investigateSimulation(claim, {scratchRoot: scratch,
+      control: async () => { throw new Error('control plane unavailable'); },
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async () => assert.fail('no model call may follow a failed evidence read')}});
+    assert.equal(result.execution_status, 'failed');
+    assert.ok(!('error_message' in result));
+  } finally { await rm(scratch, {recursive: true, force: true}); }
 });
 
 test('simulation investigation reads call evidence and returns a scoped report', async () => {
