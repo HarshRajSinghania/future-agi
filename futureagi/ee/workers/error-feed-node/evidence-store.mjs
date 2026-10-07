@@ -97,9 +97,7 @@ FORMAT JSONEachRow`;
   if (!window) return read(false);
   // The window is a speed-up, never a reason to judge a partial trace. A parent
   // outside the result, or no rows at all, means the window may have cut the
-  // trace, so the read runs again without it. A cut that leaves no dangling
-  // parent is not visible here: a second root, or a late child of a span that
-  // is inside the window, when either starts outside it.
+  // trace, so the read runs again without it.
   let store;
   try { store = await read(true); }
   catch (error) { if (error?.message !== 'No visible trace evidence') throw error; }
