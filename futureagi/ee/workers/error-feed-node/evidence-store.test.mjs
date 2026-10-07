@@ -4,7 +4,7 @@ import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID, createHash} from 'node:crypto';
-import {storeEvidence, createEvidenceReader, downloadEvidence} from './evidence-store.mjs';
+import {storeEvidence, createEvidenceReader, downloadEvidence, downloadTraceEvidence} from './evidence-store.mjs';
 
 export function makeClaim() {
   return {organization_id: randomUUID(), workspace_id: null, project_id: randomUUID(), trace_id: randomUUID(),
@@ -193,6 +193,45 @@ test('a connection that fails before or during the response is a failed read', a
     await assert.rejects(downloadEvidence(claim, join(dir, 'aborted'), {...clickhouse, signal: stop,
       fetchImpl: async () => { throw stop.reason; }}), error => error === stop.reason);
   } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test('a claim that names conversation evidence reads the compact row from the backend', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'omega-evidence-test-'));
+  try {
+    const claim = {...makeClaim(), lease_token: 'fixture-lease', evidence_source: 'conversation'};
+    const row = {id: 'call-span', project_id: claim.project_id, trace_id: claim.trace_id, parent_span_id: '',
+      name: 'Call Log', conversation: {turns: [{i: 0, role: 'agent', text: 'Hello', spoken: true}]}};
+    const calls = [];
+    const store = await downloadTraceEvidence(claim, join(dir, 'trace'), {...clickhouse,
+      control: async (path, body) => { calls.push([path, body]); return {rows: [row]}; },
+      fetchImpl: async () => assert.fail('the stored span must not be read')});
+    assert.deepEqual(calls, [[`/attempts/${claim.attempt_id}/conversation-evidence/`, {lease_token: 'fixture-lease'}]]);
+    assert.deepEqual([...store.index.keys()], ['call-span']);
+    assert.equal(await readFile(join(dir, 'trace'), 'utf8'), JSON.stringify(row) + '\n');
+    // A served row is held to the claim's scope like any stored span.
+    await assert.rejects(downloadTraceEvidence(claim, join(dir, 'foreign'), {...clickhouse,
+      control: async () => ({rows: [{...row, project_id: randomUUID()}]}),
+      fetchImpl: async () => assert.fail('the stored span must not be read')}), /Evidence scope mismatch/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test('conversation evidence falls back to the stored spans when the backend has none', async () => {
+  const stored = claim => new Response(JSON.stringify(
+    {id: 'stored-span', project_id: claim.project_id, trace_id: claim.trace_id, parent_span_id: ''}) + '\n');
+  for (const [name, evidenceSource, control, asked] of [
+    ['no rows', 'conversation', async () => ({rows: []}), 1],
+    ['a backend without the route', 'conversation', async () => { throw Object.assign(new Error('Control request failed'), {status: 404}); }, 1],
+    ['a claim that does not name it', undefined, async () => assert.fail('the backend must not be asked'), 0]]) {
+    const dir = await mkdtemp(join(tmpdir(), 'omega-evidence-test-'));
+    try {
+      const claim = {...makeClaim(), lease_token: 'fixture-lease', evidence_source: evidenceSource};
+      let controlCalls = 0, reads = 0;
+      const store = await downloadTraceEvidence(claim, join(dir, 'trace'), {...clickhouse,
+        control: async (...args) => { controlCalls++; return control(...args); },
+        fetchImpl: async () => { reads++; return stored(claim); }});
+      assert.deepEqual([controlCalls, reads, [...store.index.keys()]], [asked, 1, ['stored-span']], name);
+    } finally { await rm(dir, {recursive: true, force: true}); }
+  }
 });
 
 test('bounded tool pages reconstruct escaped and multibyte payloads without dropped content', async () => {

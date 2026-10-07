@@ -109,6 +109,29 @@ FORMAT JSONEachRow`;
   return read(false);
 }
 
+// A provider call is one span that repeats its transcript several times. For a
+// claim that names conversation evidence the backend serves that call as one
+// compact row, in the same shape as a stored span. Anything else (no rows, a
+// backend that does not know the route, a failed request) falls back to the
+// stored spans: the compact row is a cheaper read, not a different truth.
+export async function downloadTraceEvidence(claim, path, {control, signal, ...clickhouse}) {
+  if (claim.evidence_source === 'conversation' && control) {
+    let rows = null;
+    try {
+      rows = (await control(`/attempts/${claim.attempt_id}/conversation-evidence/`,
+        {lease_token: claim.lease_token}, {signal})).rows;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      process.stderr.write(JSON.stringify({event: 'omega_conversation_evidence_unavailable',
+        attempt_id: claim.attempt_id, status: Number.isInteger(error?.status) ? error.status : null}) + '\n');
+    }
+    if (Array.isArray(rows) && rows.length) {
+      return storeEvidence(rows.map(row => Buffer.from(JSON.stringify(row) + '\n')), path, claim, {signal});
+    }
+  }
+  return downloadEvidence(claim, path, {...clickhouse, signal});
+}
+
 export async function storeEvidence(chunks, path, claim, {signal, maxBytes = claim.limits.max_evidence_bytes, maxRows = 50000} = {}) {
   const file = await open(path, 'wx', 0o600);
   const digest = createHash('sha256');

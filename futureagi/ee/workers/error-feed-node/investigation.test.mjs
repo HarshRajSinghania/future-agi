@@ -73,6 +73,31 @@ for (const malformed of ['{', '{"action":"finish"}']) {
   });
 }
 
+test('a trace investigation hands its control client to the evidence read', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-conversation-evidence-test-'));
+  try {
+    const claim = {...makeClaim(), lease_token: 'fixture-lease', evidence_source: 'conversation'};
+    const row = {id: 'call-span', project_id: claim.project_id, trace_id: claim.trace_id, parent_span_id: '',
+      name: 'Call Log', conversation: {turns: []}};
+    const assessment = {outcome: 'unknown', findings: [], requirement_checks: []};
+    const result = await investigateTrace(claim, {scratchRoot: scratch,
+      control: async () => ({rows: [row]}),
+      clickhouse: {baseUrl: 'http://clickhouse:8123', database: 'default', username: 'readonly', password: 'fixture',
+        fetchImpl: async () => assert.fail('the stored span must not be read')},
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async (_url, init) => {
+          const system = JSON.parse(init.body).messages.find(message => message.role === 'system').content;
+          const content = JSON.stringify(system.includes('Independently check') ? assessment
+            : {action: 'finish', question: '', child_instructions: '', assessment});
+          return new Response(JSON.stringify({choices: [{message: {role: 'assistant', content},
+            finish_reason: 'stop'}], usage: {prompt_tokens: 10, completion_tokens: 10}}),
+          {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0.000100'}});
+        }}});
+    assert.equal(result.execution_status, 'completed');
+    assert.equal(result.coverage.observed_span_count, 1);
+  } finally { await rm(scratch, {recursive: true, force: true}); }
+});
+
 test('controller and verifier ask for plain-language finding statements', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'omega-wording-test-'));
   try {

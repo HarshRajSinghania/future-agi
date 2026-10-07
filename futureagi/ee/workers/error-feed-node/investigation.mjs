@@ -4,7 +4,7 @@ import {mkdtemp, mkdir, rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createOmega, agent, tool, RuntimeContextManager} from '@future-agi/omega-runtime';
 import {createGatewayProvider} from './gateway-provider.mjs';
-import {downloadEvidence, createEvidenceReader, validateClaim} from './evidence-store.mjs';
+import {downloadTraceEvidence, createEvidenceReader, validateClaim} from './evidence-store.mjs';
 import {downloadSimulationEvidence, createSimulationEvidenceReader} from './simulation-evidence.mjs';
 import {createAudioInspectionTool} from './audio-inspection.mjs';
 
@@ -199,8 +199,8 @@ async function investigateClaim(claim, {gatewayConfig, clickhouse, control, scra
   let incompleteReason = null;
   try {
     const evidencePath = join(scratch, simulation ? 'simulation-calls.jsonl' : 'trace.jsonl');
-    store = await (fetchEvidence ?? (simulation ? downloadSimulationEvidence : downloadEvidence))(
-      claim, evidencePath, simulation ? {control, signal} : {...clickhouse, signal});
+    store = await (fetchEvidence ?? (simulation ? downloadSimulationEvidence : downloadTraceEvidence))(
+      claim, evidencePath, simulation ? {control, signal} : {...clickhouse, control, signal});
     const readerOptions = {signal,
       maxResultBytes: Math.min(claim.limits.max_tool_result_bytes, 8000),
       maxTotalBytes: 4 * store.bytes};
