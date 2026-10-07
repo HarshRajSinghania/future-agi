@@ -22200,6 +22200,7 @@ export const ModelHubEvalTemplatesCreateCompositeCreateResponse = zod.object({
 Supports the new scoring fields (pass_threshold, choice_scores, output_type_normalized).
  * @summary POST /model-hub/eval-templates/create-v2/
  */
+export const modelHubEvalTemplatesCreateV2CreateBodyMultiChoiceDefault = false;
 export const modelHubEvalTemplatesCreateV2CreateBodyNameMax = 255;
 
 export const modelHubEvalTemplatesCreateV2CreateBodyIsDraftDefault = false;
@@ -22222,6 +22223,11 @@ export const modelHubEvalTemplatesCreateV2CreateBodyErrorLocalizerEnabledDefault
 export const modelHubEvalTemplatesCreateV2CreateBodyTemplateFormatDefault = `mustache`;
 
 export const ModelHubEvalTemplatesCreateV2CreateBody = zod.object({
+  jev_mapping: zod.object({}).passthrough().optional(),
+  multi_choice: zod
+    .boolean()
+    .default(modelHubEvalTemplatesCreateV2CreateBodyMultiChoiceDefault),
+  input_data_types: zod.object({}).passthrough().optional(),
   name: zod
     .string()
     .max(modelHubEvalTemplatesCreateV2CreateBodyNameMax)
@@ -22393,6 +22399,8 @@ export const ModelHubEvalTemplatesListCreateResponse = zod.object({
   result: zod.object({
     items: zod.array(
       zod.object({
+        jev_mapping: zod.object({}).passthrough().optional(),
+        model: zod.string().optional(),
         id: zod.string().uuid(),
         name: zod.string().min(1),
         template_type: zod.string().min(1),
@@ -22631,6 +22639,7 @@ export const ModelHubEvalTemplatesDetailListParams = zod.object({
 export const ModelHubEvalTemplatesDetailListResponse = zod.object({
   status: zod.boolean(),
   result: zod.object({
+    jev_mapping: zod.object({}).passthrough().optional(),
     id: zod.string().uuid(),
     name: zod.string().min(1),
     description: zod.string().optional(),
@@ -22846,6 +22855,8 @@ export const modelHubEvalTemplatesUpdateUpdateBodyPassThresholdMin = 0;
 export const modelHubEvalTemplatesUpdateUpdateBodyPassThresholdMax = 1;
 
 export const ModelHubEvalTemplatesUpdateUpdateBody = zod.object({
+  jev_mapping: zod.object({}).passthrough().optional(),
+  input_data_types: zod.object({}).passthrough().optional(),
   name: zod
     .string()
     .min(1)
@@ -23119,6 +23130,7 @@ export const ModelHubEvalTemplatesVersionsListResponse = zod.object({
     template_id: zod.string().uuid(),
     versions: zod.array(
       zod.object({
+        jev_mapping: zod.object({}).passthrough().optional(),
         id: zod.string().uuid(),
         version_number: zod.number(),
         is_default: zod.boolean(),
@@ -23142,6 +23154,7 @@ export const ModelHubEvalTemplatesVersionsCreateCreateParams = zod.object({
 });
 
 export const ModelHubEvalTemplatesVersionsCreateCreateBody = zod.object({
+  jev_mapping: zod.object({}).passthrough().optional(),
   criteria: zod.string().optional(),
   model: zod.string().optional(),
   config_snapshot: zod.object({}).passthrough().optional(),

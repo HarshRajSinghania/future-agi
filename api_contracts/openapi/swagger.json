@@ -107020,6 +107020,21 @@
         "EvalTemplateCreateV2Request": {
             "type": "object",
             "properties": {
+                "jev_mapping": {
+                    "title": "Jev mapping",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "multi_choice": {
+                    "title": "Multi choice",
+                    "type": "boolean",
+                    "default": false
+                },
+                "input_data_types": {
+                    "title": "Input data types",
+                    "type": "object",
+                    "x-nullable": true
+                },
                 "name": {
                     "title": "Name",
                     "type": "string",
@@ -107519,6 +107534,16 @@
             ],
             "type": "object",
             "properties": {
+                "jev_mapping": {
+                    "title": "Jev mapping",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "model": {
+                    "title": "Model",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "id": {
                     "title": "Id",
                     "type": "string",
@@ -107884,6 +107909,11 @@
             ],
             "type": "object",
             "properties": {
+                "jev_mapping": {
+                    "title": "Jev mapping",
+                    "type": "object",
+                    "x-nullable": true
+                },
                 "id": {
                     "title": "Id",
                     "type": "string",
@@ -108435,6 +108465,16 @@
         "EvalTemplateUpdateV2Request": {
             "type": "object",
             "properties": {
+                "jev_mapping": {
+                    "title": "Jev mapping",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "input_data_types": {
+                    "title": "Input data types",
+                    "type": "object",
+                    "x-nullable": true
+                },
                 "name": {
                     "title": "Name",
                     "type": "string",
@@ -109049,6 +109089,11 @@
             ],
             "type": "object",
             "properties": {
+                "jev_mapping": {
+                    "title": "Jev mapping",
+                    "type": "object",
+                    "x-nullable": true
+                },
                 "id": {
                     "title": "Id",
                     "type": "string",
@@ -109128,6 +109173,11 @@
         "EvalTemplateVersionCreateRequest": {
             "type": "object",
             "properties": {
+                "jev_mapping": {
+                    "title": "Jev mapping",
+                    "type": "object",
+                    "x-nullable": true
+                },
                 "criteria": {
                     "title": "Criteria",
                     "type": "string",
