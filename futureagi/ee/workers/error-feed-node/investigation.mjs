@@ -94,6 +94,7 @@ export function failureDiagnostic(error, phase, attemptId) {
     ['Gateway transport failed', 'gateway_transport_failed'],
     ['Gateway response could not be processed', 'gateway_response_invalid'],
     ['ClickHouse evidence read failed', 'clickhouse_read_failed'],
+    ['Investigation attempt is not active', 'attempt_inactive'],
   ]);
   let reason = reasons.get(error?.message) ?? 'runtime_or_output_validation';
   // Omega's JSON parser includes model content in some exception messages.
