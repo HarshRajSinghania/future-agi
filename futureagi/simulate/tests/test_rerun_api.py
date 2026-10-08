@@ -3367,3 +3367,161 @@ class TestOptimiserAnalysisRefreshView:
         assert (run.metadata or {}).get("error", {}).get("dispatch_error") == (
             "temporal dispatch timed out"
         )
+
+
+# ============================================================================
+# Eval-only rerun: the request, then the grader
+# ============================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestEvalOnlyRerunRequestAndGraderAgree:
+    """The request and the grader settle on the same evals for a call: every
+    row the request marks pending the grader fills, and every row the request
+    keeps the grader leaves alone."""
+
+    @staticmethod
+    def _fresh_verdict(eval_config):
+        return {
+            "output": "Failed",
+            "reason": "regraded",
+            "output_type": "Pass/Fail",
+            "name": eval_config.name,
+        }
+
+    @staticmethod
+    def _regrades(eval_config, call_execution, transcript_data):
+        """Stand in for the judge: store a fresh verdict for this eval."""
+        call_execution.eval_outputs[str(eval_config.id)] = (
+            TestEvalOnlyRerunRequestAndGraderAgree._fresh_verdict(eval_config)
+        )
+        call_execution.save(update_fields=["eval_outputs"])
+
+    @pytest.mark.parametrize("harness_scored_by", ["job", "sdk", "plain"])
+    @patch("simulate.temporal.activities.xl._run_single_evaluation")
+    @patch("simulate.temporal.activities.xl._build_transcript_data")
+    @patch("simulate.temporal.activities.xl.close_old_connections", lambda: None)
+    @patch("simulate.temporal.client.rerun_call_executions")
+    def test_no_row_is_left_pending_and_every_harness_column_survives(
+        self,
+        mock_rerun,
+        mock_transcript,
+        mock_single,
+        harness_scored_by,
+        auth_client,
+        organization,
+        run_test,
+        test_execution,
+        call_execution,
+    ):
+        """After the request and then the grader, no row still reads pending,
+        every row the harness wrote is as it was, and each eval the platform
+        grades on the call holds its new verdict."""
+        from simulate.temporal.activities.xl import _run_evaluations_standalone
+
+        mock_rerun.return_value = {"workflow_id": "wf", "merged": False}
+        mock_transcript.return_value = {"transcript": "agent: Hello.\nuser: Hi."}
+        mock_single.side_effect = self._regrades
+        request_side = TestEvalOnlyRerunKeepsHarnessChecks
+        if harness_scored_by != "plain":
+            request_side._scored_by(harness_scored_by, run_test, call_execution)
+        rows = request_side._seed_harness_rows(call_execution, organization)
+        filled, own = rows.configs
+        outputs_before = copy.deepcopy(call_execution.eval_outputs)
+
+        response = auth_client.post(
+            request_side.CALL_URL.format(test_execution.id),
+            {
+                "rerun_type": "eval_only",
+                "select_all": False,
+                "call_execution_ids": [str(call_execution.id)],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert str(call_execution.id) in response.json()["successful_reruns"]
+
+        _run_evaluations_standalone(call_execution, skip_existing=False)
+
+        call_execution.refresh_from_db()
+        outputs = call_execution.eval_outputs
+        regraded = [own, filled] if harness_scored_by == "plain" else [own]
+        assert [
+            key for key, row in outputs.items() if row.get("status") == "pending"
+        ] == []
+        assert outputs[rows.code_check] == outputs_before[rows.code_check]
+        if harness_scored_by == "plain":
+            assert outputs[rows.filled] == self._fresh_verdict(filled)
+        else:
+            assert outputs[rows.filled] == outputs_before[rows.filled]
+        assert outputs[rows.own] == self._fresh_verdict(own)
+        assert outputs == {
+            **outputs_before,
+            **{str(config.id): self._fresh_verdict(config) for config in regraded},
+        }
+        assert call_execution.call_metadata["eval_completed"] is True
+
+    @pytest.mark.parametrize("harness_scored_by", ["job", "sdk", "plain"])
+    @patch("simulate.temporal.client.rerun_call_executions")
+    def test_a_failed_grading_job_marks_skipped_only_what_the_request_marked_pending(
+        self,
+        mock_rerun,
+        harness_scored_by,
+        auth_client,
+        organization,
+        run_test,
+        test_execution,
+        call_execution,
+    ):
+        """When the grading job fails as a whole, the rows the request marked
+        pending read skipped and every row the harness wrote is as it was."""
+        from asgiref.sync import async_to_sync
+
+        from simulate.temporal.activities.small import persist_processing_skip_state
+        from simulate.temporal.types.activities import PersistProcessingSkipStateInput
+
+        mock_rerun.return_value = {"workflow_id": "wf", "merged": False}
+        request_side = TestEvalOnlyRerunKeepsHarnessChecks
+        if harness_scored_by != "plain":
+            request_side._scored_by(harness_scored_by, run_test, call_execution)
+        rows = request_side._seed_harness_rows(call_execution, organization)
+        filled, own = rows.configs
+        outputs_before = copy.deepcopy(call_execution.eval_outputs)
+        reason = "Call failed during evaluation processing, so processing was skipped."
+
+        response = auth_client.post(
+            request_side.CALL_URL.format(test_execution.id),
+            {
+                "rerun_type": "eval_only",
+                "select_all": False,
+                "call_execution_ids": [str(call_execution.id)],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert str(call_execution.id) in response.json()["successful_reruns"]
+
+        async_to_sync(persist_processing_skip_state)(
+            PersistProcessingSkipStateInput(
+                call_id=str(call_execution.id),
+                processing_skipped=True,
+                processing_skip_reason=reason,
+                mark_eval_outputs_skipped=True,
+            )
+        )
+
+        call_execution.refresh_from_db()
+        marked = [own, filled] if harness_scored_by == "plain" else [own]
+        assert call_execution.eval_outputs == {
+            **outputs_before,
+            **{
+                str(config.id): build_skipped_eval_output_payload(
+                    eval_name=config.name, reason=reason
+                )
+                for config in marked
+            },
+        }
+        assert call_execution.call_metadata["eval_completed"] is True
