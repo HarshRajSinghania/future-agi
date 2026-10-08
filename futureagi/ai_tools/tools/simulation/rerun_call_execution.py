@@ -53,6 +53,10 @@ class RerunCallExecutionTool(BaseTool):
             CallExecutionSnapshot,
             TestExecution,
         )
+        from simulate.services.harness_evals import (
+            outputs_for_eval_rerun,
+            platform_graded_evals,
+        )
         from simulate.temporal.client import rerun_call_executions
 
         try:
@@ -115,6 +119,10 @@ class RerunCallExecutionTool(BaseTool):
         previous_status = call.status
 
         if params.rerun_type == "eval_only":
+            graded_eval_ids = platform_graded_evals(
+                call.test_execution.run_test_id
+            ).for_call(call.call_metadata)
+
             # Snapshot must match the backend's eval-only rerun logic.
             CallExecutionSnapshot.objects.create(
                 call_execution=call,
@@ -125,8 +133,10 @@ class RerunCallExecutionTool(BaseTool):
                 tool_outputs=call.tool_outputs,
             )
 
-            # Clear only eval data
-            call.eval_outputs = {}
+            # A column the harness filled keeps the harness's verdict.
+            call.eval_outputs = outputs_for_eval_rerun(
+                call.eval_outputs, graded_eval_ids
+            )
             call.call_metadata = call.call_metadata or {}
             call.call_metadata["eval_started"] = False
             call.call_metadata["eval_completed"] = False
@@ -242,9 +252,7 @@ class RerunCallExecutionTool(BaseTool):
 
         content = section("Call Execution Rerun", info)
         if params.rerun_type == "eval_only":
-            content += (
-                "\n\n_Evaluation data has been cleared and will be re-evaluated._"
-            )
+            content += "\n\n_The evaluations are being graded again._"
         else:
             content += (
                 "\n\n_Call has been reset and marked pending for re-execution. "

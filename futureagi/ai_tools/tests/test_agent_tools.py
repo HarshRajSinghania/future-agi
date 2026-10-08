@@ -1,3 +1,4 @@
+import copy
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -5,7 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ai_tools.tests.conftest import run_tool
-from ai_tools.tests.fixtures import make_agent_definition, make_scenario
+from ai_tools.tests.fixtures import (
+    make_agent_definition,
+    make_eval_template,
+    make_scenario,
+)
 
 
 def _voice_denial():
@@ -263,3 +268,224 @@ def test_voice_rerun_denied_before_snapshot_or_reset(tool_context):
     call.transcripts.all.return_value.delete.assert_not_called()
     call.reset_to_default.assert_not_called()
     rerun.assert_not_called()
+
+
+# ===================================================================
+# RERUN TOOLS — eval-only keeps what the harness wrote
+# ===================================================================
+
+
+def _run_test_with_a_harness_column(tool_context):
+    """A run test with one eval the harness fills (an empty mapping) and one
+    the platform grades (a mapping of its own)."""
+    from simulate.models import SimulateEvalConfig
+    from simulate.models.run_test import RunTest
+
+    run_test = RunTest.objects.create(
+        name="Eval Only Rerun",
+        agent_definition=make_agent_definition(tool_context),
+        organization=tool_context.organization,
+        workspace=tool_context.workspace,
+    )
+    run_test.scenarios.add(make_scenario(tool_context))
+    filled, own = (
+        SimulateEvalConfig.objects.create(
+            name=name,
+            eval_template=make_eval_template(
+                tool_context,
+                name=f"{name} template",
+                config={
+                    "required_keys": list(mapping) or ["conversation"],
+                    "output": "Pass/Fail",
+                },
+            ),
+            run_test=run_test,
+            config={},
+            mapping=mapping,
+        )
+        for name, mapping in (
+            ("Task completion", {}),
+            ("Mapped", {"output": "transcript"}),
+        )
+    )
+    return run_test, filled, own
+
+
+def _call_the_harness_scored(run_test, filled, own):
+    """A finished call, in an execution of its own, that an SDK harness run
+    scored: the receipt is on the call, and the call holds a code check with
+    no eval behind it, the harness's verdict under the eval it fills, and a
+    platform verdict under the eval with a mapping of its own.
+
+    Returns the call and the code check's key."""
+    from simulate.models.test_execution import CallExecution, TestExecution
+
+    execution = TestExecution.objects.create(
+        run_test=run_test,
+        status=TestExecution.ExecutionStatus.COMPLETED,
+        total_scenarios=1,
+        total_calls=1,
+    )
+    code_check = str(uuid.uuid4())
+    call = CallExecution.objects.create(
+        test_execution=execution,
+        scenario=run_test.scenarios.get(),
+        phone_number="+1234567890",
+        status=CallExecution.CallStatus.COMPLETED,
+        eval_outputs={
+            code_check: {
+                "name": "ends_call_on_goodbye",
+                "output": "Passed",
+                "output_type": "Pass/Fail",
+                "reason": "said goodbye",
+                "status": "completed",
+                "source": "harness",
+                "kind": "checkpoint",
+            },
+            str(filled.id): {
+                "name": filled.name,
+                "output": "Passed",
+                "output_type": "Pass/Fail",
+                "reason": "the caller's task was done",
+                "status": "completed",
+                "source": "harness",
+            },
+            str(own.id): {
+                "output": "Passed",
+                "reason": "ok",
+                "output_type": "Pass/Fail",
+                "name": own.name,
+            },
+        },
+        call_metadata={
+            "eval_started": True,
+            "eval_completed": True,
+            "harness_evaluations": [
+                {"name": "ends_call_on_goodbye", "kind": "checkpoint", "passed": True}
+            ],
+        },
+    )
+    # Compare later against what the database holds, not what was assigned.
+    call.refresh_from_db()
+    return call, code_check
+
+
+@pytest.mark.django_db
+def test_rerun_call_execution_eval_only_keeps_harness_columns(tool_context):
+    """Re-running one call's evals through the assistant leaves every row the
+    harness wrote as it was and marks pending only the eval the platform
+    grades."""
+    from simulate.models.test_execution import CallExecutionSnapshot
+
+    run_test, filled, own = _run_test_with_a_harness_column(tool_context)
+    call, code_check = _call_the_harness_scored(run_test, filled, own)
+    outputs_before = copy.deepcopy(call.eval_outputs)
+
+    with patch(
+        "simulate.temporal.client.rerun_call_executions",
+        return_value={"workflow_id": "wf", "merged": False},
+    ) as rerun:
+        result = run_tool(
+            "rerun_call_execution",
+            {"call_execution_id": str(call.id), "rerun_type": "eval_only"},
+            tool_context,
+        )
+
+    assert not result.is_error
+    rerun.assert_called_once()
+    call.refresh_from_db()
+    outputs = call.eval_outputs
+    assert outputs[code_check] == outputs_before[code_check]
+    assert outputs[str(filled.id)] == outputs_before[str(filled.id)]
+    assert outputs[str(own.id)] == {"status": "pending"}
+    assert outputs == {**outputs_before, str(own.id): {"status": "pending"}}
+    assert call.call_metadata["eval_started"] is False
+    assert call.call_metadata["eval_completed"] is False
+    snapshot = CallExecutionSnapshot.objects.get(call_execution=call)
+    assert snapshot.rerun_type == "eval_only"
+    assert snapshot.eval_outputs == outputs_before
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("tool", ["rerun_call_execution", "rerun_test_execution"])
+def test_eval_only_rerun_on_a_call_the_harness_did_not_score_pends_every_eval(
+    tool, tool_context
+):
+    """On a call that carries no harness receipt, on a run test no harness
+    owns, the assistant's re-run marks every eval of the run test pending,
+    the one with an empty mapping included, and keeps the row no eval stands
+    behind."""
+    run_test, filled, own = _run_test_with_a_harness_column(tool_context)
+    call, _ = _call_the_harness_scored(run_test, filled, own)
+    del call.call_metadata["harness_evaluations"]
+    call.save(update_fields=["call_metadata"])
+    outputs_before = copy.deepcopy(call.eval_outputs)
+    params = {
+        "rerun_call_execution": {"call_execution_id": str(call.id)},
+        "rerun_test_execution": {"run_test_id": str(run_test.id), "select_all": True},
+    }[tool]
+
+    with patch(
+        "simulate.temporal.client.rerun_call_executions",
+        return_value={"workflow_id": "wf", "merged": False},
+    ):
+        result = run_tool(tool, {**params, "rerun_type": "eval_only"}, tool_context)
+
+    assert not result.is_error
+    call.refresh_from_db()
+    assert call.eval_outputs == {
+        **outputs_before,
+        str(filled.id): {"status": "pending"},
+        str(own.id): {"status": "pending"},
+    }
+
+
+@pytest.mark.django_db
+def test_rerun_test_execution_eval_only_keeps_harness_columns(tool_context):
+    """Re-running a run test's evals through the assistant follows the same
+    rule on every call, and reads which evals the platform grades once for
+    the run test, not once per call."""
+    from simulate.models.test_execution import CallExecutionSnapshot
+    from simulate.services.harness_evals import platform_graded_evals
+
+    run_test, filled, own = _run_test_with_a_harness_column(tool_context)
+    calls = [_call_the_harness_scored(run_test, filled, own) for _ in range(2)]
+    before = {call.id: copy.deepcopy(call.eval_outputs) for call, _ in calls}
+
+    with (
+        patch(
+            "simulate.temporal.client.rerun_call_executions",
+            return_value={"workflow_id": "wf", "merged": False},
+        ),
+        patch(
+            "simulate.services.harness_evals.platform_graded_evals",
+            wraps=platform_graded_evals,
+        ) as read_graded_evals,
+    ):
+        result = run_tool(
+            "rerun_test_execution",
+            {
+                "run_test_id": str(run_test.id),
+                "select_all": True,
+                "rerun_type": "eval_only",
+            },
+            tool_context,
+        )
+
+    assert not result.is_error
+    assert result.data["overall_success_count"] == 2
+    assert result.data["overall_failure_count"] == 0
+    assert read_graded_evals.call_count == 1
+    for call, code_check in calls:
+        outputs_before = before[call.id]
+        call.refresh_from_db()
+        outputs = call.eval_outputs
+        assert outputs[code_check] == outputs_before[code_check]
+        assert outputs[str(filled.id)] == outputs_before[str(filled.id)]
+        assert outputs[str(own.id)] == {"status": "pending"}
+        assert outputs == {**outputs_before, str(own.id): {"status": "pending"}}
+        assert call.call_metadata["eval_started"] is False
+        assert call.call_metadata["eval_completed"] is False
+        snapshot = CallExecutionSnapshot.objects.get(call_execution=call)
+        assert snapshot.rerun_type == "eval_only"
+        assert snapshot.eval_outputs == outputs_before

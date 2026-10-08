@@ -133,12 +133,19 @@ class RerunTestExecutionTool(BaseTool):
             CallExecutionSnapshot,
             TestExecution,
         )
+        from simulate.services.harness_evals import (
+            outputs_for_eval_rerun,
+            platform_graded_evals,
+        )
 
         logger = structlog.get_logger(__name__)
 
         results = []
         overall_success = 0
         overall_failure = 0
+        graded_evals = (
+            platform_graded_evals(run_test.id) if rerun_type == "eval_only" else None
+        )
 
         for test_execution in test_executions:
             call_executions = CallExecution.objects.filter(
@@ -171,7 +178,10 @@ class RerunTestExecutionTool(BaseTool):
                                 overall_score=call_execution.overall_score,
                                 tool_outputs=call_execution.tool_outputs,
                             )
-                            call_execution.eval_outputs = {}
+                            call_execution.eval_outputs = outputs_for_eval_rerun(
+                                call_execution.eval_outputs,
+                                graded_evals.for_call(call_execution.call_metadata),
+                            )
                             call_execution.call_metadata = (
                                 call_execution.call_metadata or {}
                             )
