@@ -5,7 +5,7 @@ import {mkdtemp, rm, readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {investigateTrace, investigateSimulation, validateAssessment, canonicalDigest, failureDiagnostic} from './investigation.mjs';
+import {investigateTrace, investigateSimulation, validateAssessment, canonicalDigest, failureDiagnostic, deriveOutcome} from './investigation.mjs';
 import {storeEvidence, EvidenceReadError} from './evidence-store.mjs';
 
 function makeClaim() {
@@ -121,6 +121,8 @@ test('controller and verifier ask for plain-language finding statements', async 
     assert.equal(result.execution_status, 'completed');
     assert.equal(systems.length, 2);
     for (const system of systems) {
+      assert.match(system, /A goal that this situation made impossible to meet or to break is not a requirement of this trace/);
+      assert.match(system, /Obligations toward whoever or whatever did respond still apply/);
       assert.match(system, /finding statement in plain words for a product reader/);
       assert.match(system, /short sentences of at most 25 words, one idea each, in active voice/);
       assert.match(system, /Never stack more than three nouns in a row/);
@@ -495,6 +497,13 @@ test('simulation investigation reads call evidence and returns a scoped report',
           systems.push(system);
           const verifier = system.includes('Independently check');
           const toolMessage = request.messages.find(message => message.role === 'tool');
+          if (!verifier && !toolMessage) {
+            // The trace-only changes leave a simulation stage input and its tools as they were.
+            assert.equal(JSON.parse(request.messages.find(message => message.role === 'user').content)
+              .coverage.read_complete, false);
+            assert.deepEqual(request.tools.map(item => item.function.name),
+              ['list_simulation_calls', 'read_simulation_call']);
+          }
           const message = !toolMessage
             ? {role: 'assistant', content: '', tool_calls: [{id: 'read-call', type: 'function',
               function: {name: 'read_simulation_call', arguments: JSON.stringify({
@@ -513,6 +522,7 @@ test('simulation investigation reads call evidence and returns a scoped report',
       body: {lease_token: claim.lease_token, cursor: 0}}]);
     assert.ok(systems.length > 0);
     for (const system of systems) {
+      assert.doesNotMatch(system, /impossible to meet or to break/);
       assert.match(system, /finding statement in plain words for a product reader/);
       assert.match(system, /short sentences of at most 25 words, one idea each, in active voice/);
       assert.match(system, /Never stack more than three nouns in a row/);
@@ -634,6 +644,102 @@ test('verifier rechecks an unread child after an unsupported success', async () 
   } finally { await rm(scratch, {recursive: true, force: true}); }
 });
 
+test('the requirement checks decide the outcome', () => {
+  const checks = (...statuses) => ({requirement_checks: statuses.map(status => ({status}))});
+  const complete = {read_complete: true};
+  assert.equal(deriveOutcome(checks('satisfied', 'violated'), complete), 'failure');
+  assert.equal(deriveOutcome(checks('violated'), {read_complete: false}), 'failure');
+  assert.equal(deriveOutcome(checks('satisfied', 'satisfied'), complete), 'success');
+  assert.equal(deriveOutcome(checks('satisfied', 'unknown'), complete), 'unknown');
+  assert.equal(deriveOutcome(checks(), complete), 'unknown');
+  assert.equal(deriveOutcome(checks('satisfied'), {read_complete: false}), 'unknown');
+});
+
+// A clean trace: the controller reads the first span once, then both stages answer.
+async function investigateCleanTrace(verifierAnswer, {extraSpans = 0} = {}) {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-verdict-test-'));
+  const requests = [], events = [];
+  const write = process.stderr.write;
+  process.stderr.write = chunk => {
+    try { events.push(JSON.parse(chunk)); } catch { /* not a worker event */ }
+    return true;
+  };
+  try {
+    const claim = makeClaim();
+    const row = {id: 'first-span', project_id: claim.project_id, trace_id: claim.trace_id,
+      parent_span_id: '', input: 'Refund 10', output: 'Refunded 10'};
+    const raw = JSON.stringify(row);
+    const rows = [raw, ...Array.from({length: extraSpans}, (_, index) => JSON.stringify(
+      {...row, id: 'later-span-' + index, parent_span_id: row.id}))].join('\n') + '\n';
+    const answer = verifierAnswer(`${row.id}:0:${Buffer.byteLength(raw)}`);
+    const result = await investigateTrace(claim, {scratchRoot: scratch,
+      fetchEvidence: async (c, path) => storeEvidence([Buffer.from(rows)], path, c),
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async (_url, init) => {
+          const request = JSON.parse(init.body);
+          const verifier = request.messages.find(m => m.role === 'system').content.includes('Independently check');
+          requests.push({verifier, tools: (request.tools ?? []).map(item => item.function.name),
+            input: JSON.parse(request.messages.find(m => m.role === 'user').content)});
+          const message = !verifier && !request.messages.some(m => m.role === 'tool')
+            ? {role: 'assistant', content: '', tool_calls: [{id: 'read-first', type: 'function',
+              function: {name: 'read_span', arguments: JSON.stringify({span_id: row.id, offset: 0, length: 4096})}}]}
+            : {role: 'assistant', content: JSON.stringify(verifier ? answer
+              : {action: 'finish', question: '', child_instructions: '', assessment: answer})};
+          return new Response(JSON.stringify({choices: [{message}], usage: {prompt_tokens: 10, completion_tokens: 5}}),
+            {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0'}});
+        }}});
+    return {result, requests, events, claim};
+  } finally {
+    process.stderr.write = write;
+    await rm(scratch, {recursive: true, force: true});
+  }
+}
+
+const refundCheck = (status, evidenceIds) => ({requirement_id: 'refund', requirement: 'Refund 10', status,
+  evidence_ids: evidenceIds});
+
+test('a fully read trace with every check satisfied is a success whatever outcome the verifier chose', async () => {
+  const {result, events, claim} = await investigateCleanTrace(evidenceId => ({outcome: 'unknown', findings: [],
+    requirement_checks: [refundCheck('satisfied', [evidenceId])]}));
+  assert.equal(result.execution_status, 'completed');
+  assert.equal(result.outcome, 'success');
+  assert.deepEqual(events.filter(event => event.event === 'omega_outcome_derived'), [{event: 'omega_outcome_derived',
+    attempt_id: claim.attempt_id, phase: 'verifier', model_outcome: 'unknown', derived_outcome: 'success'}]);
+});
+
+test('a failure claimed without a violated requirement publishes what its checks support', async () => {
+  const {result, events} = await investigateCleanTrace(evidenceId => ({outcome: 'failure', findings: [],
+    requirement_checks: [refundCheck('satisfied', [evidenceId]),
+      {requirement_id: 'receipt', requirement: 'Send a receipt', status: 'unknown', evidence_ids: []}]}));
+  // This answer used to end the attempt with missing_violated_requirement and no report.
+  assert.equal(result.execution_status, 'completed');
+  assert.ok(!('error_message' in result));
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(events.filter(event => event.event === 'omega_outcome_derived')[0].model_outcome, 'failure');
+});
+
+test('a stage is not told the evidence is unread before it has read it', async () => {
+  const {requests} = await investigateCleanTrace(() => ({outcome: 'unknown', findings: [], requirement_checks: []}));
+  const controller = requests.find(request => !request.verifier).input;
+  assert.ok(!('read_complete' in controller.coverage));
+  assert.equal(controller.coverage.observed_span_count, 1);
+  assert.equal(requests.find(request => request.verifier).input.coverage.read_complete, true);
+});
+
+test('a trace inventory of one page replaces the list tool', async () => {
+  const answer = () => ({outcome: 'unknown', findings: [], requirement_checks: []});
+  for (const request of (await investigateCleanTrace(answer)).requests) {
+    assert.deepEqual(request.tools, ['read_span']);
+    assert.deepEqual(request.input.available_capabilities, ['read_span']);
+  }
+  const paged = (await investigateCleanTrace(answer, {extraSpans: 20})).requests;
+  assert.equal(paged[0].input.inventory.more, true);
+  for (const request of paged) {
+    assert.deepEqual(request.tools, ['list_spans', 'read_span']);
+    assert.deepEqual(request.input.available_capabilities, ['list_spans', 'read_span']);
+  }
+});
+
 test('an audio-grounded finding survives the verifier and publishes its audio receipt', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'omega-audio-evidence-test-'));
   try {
@@ -702,6 +808,7 @@ test('an audio-grounded finding survives the verifier and publishes its audio re
     assert.match(verifierSystem, /must cite evidence IDs returned by read_span or inspect_audio\./);
     assert.match(verifierSystem, /an audio receipt supports what the audio model heard even when no span text contains it/);
     assert.doesNotMatch(verifierSystem, /returned by read_span\. /);
+    assert.match(verifierSystem, /A goal that this situation made impossible to meet or to break is not a requirement of this trace/);
   } finally {await rm(scratch, {recursive: true, force: true});}
 });
 
