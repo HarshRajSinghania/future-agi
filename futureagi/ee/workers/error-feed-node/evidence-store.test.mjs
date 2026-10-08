@@ -237,6 +237,7 @@ test('conversation evidence falls back to the stored spans when the backend has 
   for (const [name, evidenceSource, control, asked] of [
     ['no rows', 'conversation', async () => ({rows: []}), 1],
     ['a backend without the route', 'conversation', async () => { throw Object.assign(new Error('Control request failed'), {status: 404}); }, 1],
+    ['a backend that is unavailable', 'conversation', async () => { throw Object.assign(new Error('Control request failed'), {status: 503}); }, 1],
     ['a claim that does not name it', undefined, async () => assert.fail('the backend must not be asked'), 0]]) {
     const dir = await mkdtemp(join(tmpdir(), 'omega-evidence-test-'));
     try {

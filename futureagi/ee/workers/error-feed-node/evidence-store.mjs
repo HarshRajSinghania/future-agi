@@ -114,7 +114,9 @@ FORMAT JSONEachRow`;
 // claim that names conversation evidence the backend serves that call as one
 // compact row, in the same shape as a stored span. Anything else (no rows, a
 // backend that does not know the route, a failed request) falls back to the
-// stored spans: the compact row is a cheaper read, not a different truth.
+// stored spans: the compact row is a cheaper read, not a different truth. The
+// exception is a 409: the backend no longer holds the attempt as active, so the
+// investigation stops before it spends a read or a model call on it.
 export async function downloadTraceEvidence(claim, path, {control, signal, ...clickhouse}) {
   if (claim.evidence_source === 'conversation' && control) {
     let rows = null;
@@ -123,6 +125,7 @@ export async function downloadTraceEvidence(claim, path, {control, signal, ...cl
         {lease_token: claim.lease_token}, {signal})).rows;
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (error?.status === 409) throw new Error('Investigation attempt is not active');
       process.stderr.write(JSON.stringify({event: 'omega_conversation_evidence_unavailable',
         attempt_id: claim.attempt_id, status: Number.isInteger(error?.status) ? error.status : null}) + '\n');
     }

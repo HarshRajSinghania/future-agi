@@ -98,6 +98,27 @@ test('a trace investigation hands its control client to the evidence read', asyn
   } finally { await rm(scratch, {recursive: true, force: true}); }
 });
 
+test('an attempt the backend no longer holds as active ends before any stored-span read or model call', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-conversation-evidence-test-'));
+  try {
+    const claim = {...makeClaim(), lease_token: 'fixture-lease', evidence_source: 'conversation'};
+    let reads = 0, modelCalls = 0;
+    const result = await investigateTrace(claim, {scratchRoot: scratch,
+      control: async () => { throw Object.assign(new Error('Control request failed'), {status: 409}); },
+      clickhouse: {baseUrl: 'http://clickhouse:8123', database: 'default', username: 'readonly', password: 'fixture',
+        fetchImpl: async () => {
+          reads++;
+          return new Response(JSON.stringify({id: 'stored-span', project_id: claim.project_id,
+            trace_id: claim.trace_id, parent_span_id: ''}) + '\n');
+        }},
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async () => { modelCalls++; throw new TypeError('fetch failed'); }}});
+    assert.deepEqual([reads, modelCalls, result.usage.model_calls], [0, 0, 0]);
+    assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'attempt_inactive');
+  } finally { await rm(scratch, {recursive: true, force: true}); }
+});
+
 test('controller and verifier ask for plain-language finding statements', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'omega-wording-test-'));
   try {
