@@ -71,9 +71,11 @@ for (const malformed of ['{', '{"action":"finish"}']) {
   });
 }
 
-for (const [name, broken] of [
+for (const [name, broken, fixed = {}] of [
   ['a recovery outside the allowed values', {recovery: 'Halted and delivered the full message before the caller hung up'}],
-  ['a kind longer than its declared bound', {kind: 'k'.repeat(65)}]]) {
+  ['a kind longer than its declared bound', {kind: 'k'.repeat(65)}],
+  // The backend counts characters. The repair is 64 of them, which is 65 UTF-16 units.
+  ['a kind one emoji over its declared bound', {kind: 'k'.repeat(64) + '👋'}, {kind: 'k'.repeat(63) + '👋'}]]) {
   for (const repaired of [true, false]) {
     test(`${name} is ${repaired ? 'repaired once' : 'a failed investigation when the repair breaks it too'}`, async () => {
       const scratch = await mkdtemp(join(tmpdir(), 'omega-output-bounds-test-'));
@@ -106,7 +108,7 @@ for (const [name, broken] of [
               else if (!system.includes('Independently check')) message = {role: 'assistant', content: JSON.stringify(
                 {action: 'finish', question: '', child_instructions: '', assessment: assessment({})})};
               else message = {role: 'assistant', content: JSON.stringify(
-                assessment(verdicts++ === 0 || !repaired ? broken : {}))};
+                assessment(verdicts++ === 0 || !repaired ? broken : fixed))};
               return new Response(JSON.stringify({choices: [{message}], usage: {prompt_tokens: 10, completion_tokens: 5}}),
                 {headers: {'Content-Type': 'application/json', 'x-agentcc-cost': '0'}});
             }}});
@@ -114,7 +116,8 @@ for (const [name, broken] of [
         assert.equal(verdicts, 2);
         if (repaired) {
           assert.equal(result.execution_status, 'completed');
-          assert.deepEqual(result.findings.map(item => [item.kind, item.recovery]), [['incorrect refund amount', 'unrecovered']]);
+          assert.deepEqual(result.findings.map(item => [item.kind, item.recovery]),
+            [[fixed.kind ?? 'incorrect refund amount', 'unrecovered']]);
         } else {
           // A report Django would reject never leaves the worker as a completed one.
           assert.equal(result.execution_status, 'failed');

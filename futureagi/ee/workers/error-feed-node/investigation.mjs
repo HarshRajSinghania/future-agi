@@ -40,7 +40,9 @@ class EarlierStageOutputTruncated extends Error {}
 function assertBounds(value, schema, path = 'output') {
   const fail = () => { throw new Error(`Structured output failed validation: ${path} is outside its declared bound`); };
   if (typeof value === 'string') {
-    if (value.length < (schema.minLength ?? 0) || value.length > (schema.maxLength ?? Infinity)) fail();
+    // Django counts characters, so count code points: .length counts an emoji as two.
+    const length = [...value].length;
+    if (length < (schema.minLength ?? 0) || length > (schema.maxLength ?? Infinity)) fail();
   } else if (Array.isArray(value)) {
     if (value.length > (schema.maxItems ?? Infinity)) fail();
     value.forEach((item, index) => assertBounds(item, schema.items ?? {}, `${path}[${index}]`));
