@@ -85,3 +85,15 @@ test('network and cancelled requests retain safe diagnostics',async()=>{
     });
   }
 });
+
+test('disconnect after successful response headers remains a network failure',async()=>{
+  const failure=new Error('private response transport failure');
+  const client=createControlClient({baseUrl:'http://django',token:'private-token',
+    fetchImpl:async()=>new Response(new ReadableStream({start(controller){controller.error(failure);}}))});
+  await assert.rejects(()=>client('/grouping/claims/',{}),error=>{
+    assert.equal(error,failure);
+    assert.equal(controlFailureDetails(error).failure_code,'control_network_error');
+    assert.doesNotMatch(JSON.stringify(controlFailureDetails(error)),/private/);
+    return true;
+  });
+});

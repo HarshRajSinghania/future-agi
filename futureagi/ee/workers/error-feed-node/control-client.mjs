@@ -62,10 +62,19 @@ export function createControlClient({baseUrl, token, fetchImpl = fetch}) {
     }
     let bytes = 0;
     const chunks = [];
-    for await (const chunk of response.body) {
-      bytes += chunk.length;
-      if (bytes > limit) throw new Error('Control response exceeded limit');
-      chunks.push(chunk);
+    try {
+      for await (const chunk of response.body) {
+        bytes += chunk.length;
+        if (bytes > limit) throw new Error('Control response exceeded limit');
+        chunks.push(chunk);
+      }
+    } catch (error) {
+      // Headers can arrive before a transport timeout/disconnect. Retain the
+      // same classification for these failures as for the initial fetch.
+      if (error && typeof error === 'object') failures.set(error, {...details(),
+        failure_code: boundedSignal.aborted ? (signal?.aborted ? 'control_cancelled' : 'control_timeout')
+          : bytes > limit ? 'control_response_invalid' : 'control_network_error'});
+      throw error;
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   };

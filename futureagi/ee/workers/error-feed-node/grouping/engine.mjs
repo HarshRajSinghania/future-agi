@@ -103,7 +103,9 @@ function hydrateCandidates(window, byId, constraints, policy) {
       fix_hypothesis: offered.mechanism.fix_hypothesis,
       falsifier: offered.mechanism.falsifier,
       members: unique(members),
-      prototypes: unique(prototypes),
+      // Prototype order is ranked, not ID order. Sorting it manufactures a
+      // refresh even when the offered examples already match the selector.
+      prototypes: [...new Set(prototypes)],
       evidence_state: 'Emerging',
       admission: null,
       workflow: offered.protected ? 'triaged' : 'open',
@@ -211,7 +213,7 @@ export async function runGrouping({rows, pendingIds, features, candidateWindow,
   assert.ok(pendingIds.every(id => byId.has(id) && !byId.get(id).control),
     'Pending occurrence absent or control');
   validateFeatureSet(rows, features, policy);
-  const initialRegistry = hydrateCandidates(candidateWindow, byId, constraints, policy);
+  let initialRegistry = hydrateCandidates(candidateWindow, byId, constraints, policy);
   assert.ok(initialRegistry.issues.every(issue => issue.scope === scope),
     'Cross-scope candidate issue');
   const currentMembers = new Set(initialRegistry.issues.flatMap(issue => issue.members));
@@ -231,7 +233,19 @@ export async function runGrouping({rows, pendingIds, features, candidateWindow,
     inputBinding: {registry_revision: candidateWindow.registry_revision,
       omitted_candidates: candidateWindow.omitted_candidates}};
   const checkpoint = await store.read('checkpoint.json');
-  const migrated = migrateContextBudget(checkpoint, inputs);
+  let migrated = migrateContextBudget(checkpoint, inputs);
+  if (checkpoint && migrated.binding !== digest(inputs)) {
+    // Existing checkpoints were bound to ID-sorted prototypes. Resume that
+    // exact representation only when every other input still matches.
+    const legacyRegistry = structuredClone(initialRegistry);
+    for (const issue of legacyRegistry.issues) issue.prototypes = unique(issue.prototypes);
+    const legacyInputs = {...inputs, initialRegistry: legacyRegistry};
+    const legacyCheckpoint = migrateContextBudget(checkpoint, legacyInputs);
+    if (legacyCheckpoint.binding === digest(legacyInputs)) {
+      initialRegistry = legacyRegistry;
+      migrated = legacyCheckpoint;
+    }
+  }
   if (migrated !== checkpoint) await store.save('checkpoint.json', migrated);
   const result = await runPipeline({rows: preparedRows, pendingIds, features: preparedFeatures, cannotLinks, policy,
     pairRelease: null, investigate, store, initialRegistry,
