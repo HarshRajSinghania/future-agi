@@ -294,6 +294,28 @@ test('reconciliation merge keeps a source identity with exact member coverage', 
   assert.deepEqual(result.registry.issues.find(issue => issue.id === merged.survivor_issue_id).aliases.sort(),
     merged.source_issue_ids.filter(id => id !== merged.survivor_issue_id).sort());
   assert.equal(result.registry.issues.filter(issue => issue.active).length, 1);
+
+  // A completed checkpoint from the previous worker has a newly created
+  // merge target and two inactive sources. Its event is still replayable, so
+  // resuming it must publish the legacy command instead of crashing.
+  const checkpoint = structuredClone(setup.files.get('checkpoint.json'));
+  const event = checkpoint.registry.events.at(-1);
+  assert.equal(event.command.type, 'merge');
+  const oldTarget = {...structuredClone(event.after.issues.find(issue =>
+    issue.id === merged.survivor_issue_id)), id: 'legacy-merge-target', aliases: []};
+  event.after.issues = event.after.issues.map(issue =>
+    merged.source_issue_ids.includes(issue.id) ? {...issue, active: false} : issue);
+  event.after.issues.push(oldTarget);
+  const {hash, ...unsigned} = event;
+  event.hash = digest(unsigned);
+  checkpoint.registry.issues = structuredClone(event.after.issues);
+  await setup.store.save('checkpoint.json', checkpoint);
+  const resumed = await runGrouping({rows, pendingIds: rows.map(row => row.id),
+    features: setup.features, candidateWindow: setup.candidateWindow, store: setup.store,
+    investigate: async () => { throw new Error('completed checkpoint called provider'); }});
+  assert.equal(resumed.status, 'complete');
+  assert.equal(resumed.commands[2].temporary_id, oldTarget.id);
+  assert.ok(!('survivor_issue_id' in resumed.commands[2]));
 });
 
 test('discovery and reconciliation prompts ask for plain-language titles and descriptions', async () => {
