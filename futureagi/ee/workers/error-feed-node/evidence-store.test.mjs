@@ -155,6 +155,22 @@ test('a rejected read keeps the ClickHouse exception code and none of the respon
   }
 });
 
+test('a rejected read keeps its ClickHouse code when the response body is already broken', async () => {
+  const broken = reason => new ReadableStream({start(controller) { controller.error(reason); }});
+  const headers = {'X-ClickHouse-Exception-Code': '241'};
+  await assert.rejects(downloadEvidence(makeClaim(), '/tmp/unopened-evidence', {...clickhouse,
+    fetchImpl: async () => new Response(broken(new TypeError('terminated')), {status: 500, headers})}),
+  error => {
+    assert.equal(error.message, 'ClickHouse evidence read failed');
+    assert.equal(error.clickhouseCode, 241);
+    return true;
+  });
+  // A cancelled or timed-out read still keeps its own error.
+  const stop = AbortSignal.abort();
+  await assert.rejects(downloadEvidence(makeClaim(), '/tmp/unopened-evidence', {...clickhouse, signal: stop,
+    fetchImpl: async () => new Response(broken(stop.reason), {status: 500, headers})}), error => error === stop.reason);
+});
+
 test('an error ClickHouse raises after the first block is a failed read with its code', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'omega-evidence-test-'));
   try {

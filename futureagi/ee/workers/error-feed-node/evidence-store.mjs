@@ -89,7 +89,8 @@ FORMAT JSONEachRow`;
       .catch(error => { throw signal?.aborted ? error : new EvidenceReadError(null); });
     if (!response.ok || !response.body) {
       const code = response.headers.get('x-clickhouse-exception-code') ?? '';
-      await response.body?.cancel();
+      // Cancelling a body that has already failed rejects. The read failed either way.
+      await response.body?.cancel().catch(error => { if (signal?.aborted) throw error; });
       throw new EvidenceReadError(/^\d{1,5}$/.test(code) ? Number(code) : null);
     }
     return storeEvidence(responseRows(response.body, signal), path, claim, {signal, maxBytes, maxRows});
