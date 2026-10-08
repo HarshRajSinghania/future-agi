@@ -43,7 +43,6 @@ from simulate.utils.eval_summary import derive_kpi_output_type
 from simulate.utils.processing_outcomes import build_skipped_eval_output_payload
 from simulate.utils.verdicts import has_stored_verdict
 from tfc.utils.case import to_camel_case, to_snake_case
-
 from tfc.utils.storage_client import server_reachable_url
 
 logger = structlog.get_logger(__name__)

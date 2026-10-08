@@ -2608,9 +2608,7 @@ class TestExecutionDetailView(APIView):
             # The live-only view. The list builds a fresh column order; the map
             # is only what grouping is handed, an argument it accepts and never
             # reads. Filters deliberately resolve against every config instead.
-            eval_configs = [
-                config for config in all_eval_configs if not config.deleted
-            ]
+            eval_configs = [config for config in all_eval_configs if not config.deleted]
             eval_configs_map = {str(config.id): config for config in eval_configs}
 
             # Get scenarios for dynamic columns

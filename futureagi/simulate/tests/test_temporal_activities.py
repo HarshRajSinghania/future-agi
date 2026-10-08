@@ -15,16 +15,10 @@ Environment variables:
 
 import os
 import uuid
-from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
-from django.utils import timezone
-
-# Environment variables for sensitive test data
-VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID", "phone-test-id-12345")
-VAPI_API_KEY = os.environ.get("VAPI_API_KEY", "test-api-key-for-testing")
 
 from model_hub.models.choices import DatasetSourceChoices, SourceChoices, StatusType
 from model_hub.models.develop_dataset import Cell, Column, Dataset, Row
@@ -35,6 +29,10 @@ from simulate.models.simulator_agent import SimulatorAgent
 from simulate.models.test_execution import CallExecution, TestExecution
 from simulate.semantics import CallType
 from tracer.models.observability_provider import ProviderChoices
+
+# Environment variables for sensitive test data
+VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID", "phone-test-id-12345")
+VAPI_API_KEY = os.environ.get("VAPI_API_KEY", "test-api-key-for-testing")
 
 # ============================================================================
 # Fixtures
@@ -422,9 +420,7 @@ class TestTemporalClientAPIIntegration:
         mock_client.get_workflow_handle.return_value = mock_handle
         mock_get_client.return_value = mock_client
 
-        result = await _cancel_simulation_runner_workflow_async(
-            str(test_execution.id)
-        )
+        result = await _cancel_simulation_runner_workflow_async(str(test_execution.id))
 
         assert result is True
         mock_client.get_workflow_handle.assert_called_once_with(
@@ -1700,7 +1696,6 @@ class TestCallExecutionWorkflowIntegration:
     @pytest.mark.requires_ee
     async def test_workflow_activity_sequence_inbound(self, call_execution):
         """Test that CallExecutionWorkflow calls activities in correct order for inbound calls."""
-        from unittest.mock import call
 
         # Track activity calls in order
         activity_calls = []
@@ -2186,7 +2181,6 @@ class TestHeartbeatConfiguration:
 
     def test_workflow_has_heartbeat_timeout_for_fetch_and_persist(self):
         """Verify CallExecutionWorkflow sets heartbeat_timeout for fetch_and_persist_call_result."""
-        import ast
         import inspect
 
         CallExecutionWorkflow = _ee_call_execution_workflow().CallExecutionWorkflow

@@ -112,10 +112,10 @@ async def update_call_status(input: UpdateCallStatusInput) -> None:
                     f"(all calls are analyzing or complete)"
                 )
 
-    except CallExecution.DoesNotExist:
+    except CallExecution.DoesNotExist as exc:
         activity.logger.error(f"Call not found: {input.call_id}")
         activity.logger.exception(f"Call not found: {input.call_id}")
-        raise Exception(f"Call not found: {input.call_id}")
+        raise Exception(f"Call not found: {input.call_id}") from exc
 
     except Exception as e:
         activity.logger.error(f"Failed to update call status: {str(e)}")
@@ -184,9 +184,9 @@ async def persist_processing_skip_state(input: PersistProcessingSkipStateInput) 
             call.call_metadata = call_metadata
             await call.asave(update_fields=list(set(update_fields)))
 
-    except CallExecution.DoesNotExist:
+    except CallExecution.DoesNotExist as exc:
         activity.logger.error(f"Call not found while setting outcomes: {input.call_id}")
-        raise Exception(f"Call not found: {input.call_id}")
+        raise Exception(f"Call not found: {input.call_id}") from exc
     except Exception as e:
         activity.logger.error(f"Failed to set call processing outcomes: {str(e)}")
         activity.logger.exception(f"Failed to set call processing outcomes: {str(e)}")

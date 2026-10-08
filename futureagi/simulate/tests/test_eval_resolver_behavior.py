@@ -903,7 +903,7 @@ class TestGenericDottedPathResolution:
             eval_template,
         )
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
             _run(ec, call_execution, transcript_data)
 
 
@@ -921,7 +921,7 @@ class TestWalkerAttributeSafety:
             run_test,
             eval_template,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
             _run(ec, call_execution, transcript_data)
 
     @patch("simulate.services.test_executor.run_eval_func")
@@ -929,7 +929,7 @@ class TestWalkerAttributeSafety:
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
         ec = _make_eval({"x": "call.__dict__"}, run_test, eval_template)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
             _run(ec, call_execution, transcript_data)
 
     @patch("simulate.services.test_executor.run_eval_func")
@@ -937,7 +937,7 @@ class TestWalkerAttributeSafety:
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
         ec = _make_eval({"x": "call._meta.app_label"}, run_test, eval_template)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
             _run(ec, call_execution, transcript_data)
 
     @patch("simulate.services.test_executor.run_eval_func")
@@ -945,7 +945,7 @@ class TestWalkerAttributeSafety:
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
         ec = _make_eval({"x": "call._state.db"}, run_test, eval_template)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
             _run(ec, call_execution, transcript_data)
 
     @patch("simulate.services.test_executor.run_eval_func")
@@ -953,7 +953,7 @@ class TestWalkerAttributeSafety:
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
         ec = _make_eval({"x": "call.objects.all"}, run_test, eval_template)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
             _run(ec, call_execution, transcript_data)
 
     @patch("simulate.services.test_executor.run_eval_func")
@@ -961,7 +961,7 @@ class TestWalkerAttributeSafety:
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
         ec = _make_eval({"x": "call.save"}, run_test, eval_template)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
             _run(ec, call_execution, transcript_data)
 
 

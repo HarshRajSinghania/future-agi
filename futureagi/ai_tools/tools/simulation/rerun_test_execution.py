@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -13,7 +12,7 @@ from ai_tools.formatting import (
 from ai_tools.registry import register_tool
 
 
-class RerunType(str, Enum):
+class RerunType(str, Enum):  # noqa: UP042 -- StrEnum changes str() of the members
     EVAL_ONLY = "eval_only"
     CALL_AND_EVAL = "call_and_eval"
 
@@ -22,7 +21,7 @@ class RerunTestExecutionInput(PydanticBaseModel):
     run_test_id: UUID = Field(
         description="The UUID of the RunTest containing the test executions to rerun.",
     )
-    test_execution_ids: Optional[List[UUID]] = Field(
+    test_execution_ids: list[UUID] | None = Field(
         default=None,
         description="List of test execution IDs to rerun. If not provided, use select_all=True.",
     )

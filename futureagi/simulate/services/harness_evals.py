@@ -542,9 +542,7 @@ def _briefing_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return {field: entry[field] for field in _BRIEFING_FIELDS}
 
 
-def briefing_evals(
-    organization, workspace, modality: str = ""
-) -> list[dict[str, Any]]:
+def briefing_evals(organization, workspace, modality: str = "") -> list[dict[str, Any]]:
     """What goes into the job's briefing under ``metadata.available_evals``.
 
     Before a contract exists the agent kind is unknown, so the union of both
