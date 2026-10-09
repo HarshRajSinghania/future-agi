@@ -200,7 +200,11 @@ test('controller and verifier ask for plain-language finding statements', async 
     assert.equal(systems.length, 2);
     for (const system of systems) {
       assert.match(system, /A goal that this situation made impossible to meet or to break is not a requirement of this trace/);
+      assert.doesNotMatch(system, /whose stage the call never reached/);
       assert.match(system, /Obligations toward whoever or whatever did respond still apply/);
+      // Conduct no requirement covers is still reported, as a finding with no requirement.
+      assert.match(system, /Meeting its requirements does not settle how the agent did/);
+      assert.match(system, /Conduct that failed them or wasted the interaction is a finding even when no requirement covers it: report it with requirement_id null\./);
       assert.match(system, /finding statement in plain words for a product reader/);
       assert.match(system, /short sentences of at most 25 words, one idea each, in active voice/);
       assert.match(system, /Never stack more than three nouns in a row/);
@@ -601,11 +605,69 @@ test('simulation investigation reads call evidence and returns a scoped report',
     assert.ok(systems.length > 0);
     for (const system of systems) {
       assert.doesNotMatch(system, /impossible to meet or to break/);
+      assert.doesNotMatch(system, /Conduct that failed them or wasted the interaction/);
+      // A sub-goal the call never reached is left out, so it cannot leave the call without a verdict.
+      assert.match(system, /check each one the call put to the test/);
+      assert.match(system, /A sub-goal whose stage the call never reached, or whose trigger never occurred, could be neither met nor broken: it is not a requirement of this call, so do not list it\./);
+      assert.match(system, /Obligations toward the caller in the situation that did occur still apply/);
       assert.match(system, /finding statement in plain words for a product reader/);
       assert.match(system, /short sentences of at most 25 words, one idea each, in active voice/);
       assert.match(system, /Never stack more than three nouns in a row/);
     }
   } finally {
+    await rm(scratch, {recursive: true, force: true});
+  }
+});
+
+test('a simulation failure claimed without a violated sub-goal publishes what its checks support', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-simulation-investigation-test-'));
+  const events = [];
+  const write = process.stderr.write;
+  process.stderr.write = chunk => {
+    try { events.push(JSON.parse(chunk)); } catch { /* not a worker event */ }
+    return true;
+  };
+  try {
+    const claim = {...makeClaim(), workload_type: 'simulation_test_execution',
+      contract_version: 'omega-simulation/v1', test_execution_id: randomUUID(), lease_token: 'fixture-lease'};
+    const row = {call_execution_id: randomUUID(), status: 'completed',
+      simulation_call_type: 'conversation', scenario: 'Ask for help',
+      call_summary: 'Agent answered', error_message: null, ended_reason: null,
+      transcript: [{id: randomUUID(), speaker: 'assistant', content: 'How can I help?', start_time: 1, end_time: 2}],
+      goals: {use_case: 'Get help', sub_goals: ['greeting'], expected_outcome: 'The agent greets the caller'}};
+    const evidenceId = `${row.call_execution_id}:0:${Buffer.byteLength(JSON.stringify(row))}`;
+    const unknownRole = {status: 'unknown', call_execution_id: null, evidence_ids: []};
+    // The verifier saw the call go wrong for a reason no authored sub-goal covers.
+    const assessment = {outcome: 'failure',
+      findings: [{finding_id: 'f1', kind: 'caller_left_waiting', statement: 'The agent left the caller waiting.',
+        requirement_id: null, evidence_ids: [evidenceId], recovery: 'unrecovered',
+        attribution: {origin: unknownRole, decisive: unknownRole, symptom: unknownRole}}],
+      requirement_checks: [{requirement_id: 'greeting', requirement: 'Agent greets the caller', status: 'satisfied',
+        evidence_ids: [evidenceId]}]};
+    const result = await investigateSimulation(claim, {scratchRoot: scratch,
+      control: async () => ({calls: [row], next_cursor: 1, total_calls: 1}),
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async (_url, init) => {
+          const request = JSON.parse(init.body);
+          const verifier = request.messages.find(m => m.role === 'system').content.includes('Independently check');
+          const message = !request.messages.some(m => m.role === 'tool')
+            ? {role: 'assistant', content: '', tool_calls: [{id: 'read-call', type: 'function',
+              function: {name: 'read_simulation_call', arguments: JSON.stringify({
+                call_execution_id: row.call_execution_id, offset: 0, length: 4096})}}]}
+            : {role: 'assistant', content: JSON.stringify(verifier ? assessment
+              : {action: 'finish', question: '', child_instructions: '', assessment})};
+          return new Response(JSON.stringify({choices: [{message}], usage: {prompt_tokens: 10, completion_tokens: 5}}),
+            {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0'}});
+        }}});
+    // This answer used to end the attempt with no report, and the call showed as not analysed.
+    assert.equal(result.execution_status, 'completed');
+    assert.equal(result.outcome, 'success');
+    assert.deepEqual(result.findings.map(item => [item.finding_id, item.requirement_id, item.recovery]),
+      [['f1', null, 'unrecovered']]);
+    assert.deepEqual(events.filter(event => event.event === 'omega_outcome_derived'), [{event: 'omega_outcome_derived',
+      attempt_id: claim.attempt_id, phase: 'verifier', model_outcome: 'failure', derived_outcome: 'success'}]);
+  } finally {
+    process.stderr.write = write;
     await rm(scratch, {recursive: true, force: true});
   }
 });
