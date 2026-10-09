@@ -147,6 +147,40 @@ test('terminally rejected saved report is quarantined without blocking later rep
   } finally { await rm(spool, {recursive: true, force: true}); }
 });
 
+for (const [status, released, releaseFails] of [[400, true, false], [422, true, true], [409, false, false]]) {
+  test(`a saved report rejected with HTTP ${status} ${released ? 'releases' : 'does not touch'} its attempt${releaseFails ? ' and a failed release blocks nothing' : ''}`, async () => {
+    const spool = await mkdtemp(join(tmpdir(), 'omega-spool-test-'));
+    const stop = new AbortController();
+    const c = claim();
+    const calls = [];
+    const reported = [];
+    try {
+      await writeFile(join(spool, c.attempt_id + '.json'), JSON.stringify({idempotency_key: c.attempt_id,
+        lease_token: c.lease_token, result: {attempt_id: c.attempt_id, organization_id: c.organization_id,
+          workspace_id: c.workspace_id, project_id: c.project_id, job_id: c.job_id, findings: []}}));
+      await runCoordinator({spool, signal: stop.signal, workerId: 'test', engineVersion: 'test', pollMs: 1,
+        control: async (path, payload, options) => {
+          calls.push([path, options?.method ?? 'POST', payload]);
+          if (path === '/reports/') throw Object.assign(new Error('Control request failed'), {status});
+          if (path === '/claims/') { stop.abort(); return {claims: []}; }
+          if (releaseFails) throw Object.assign(new Error('Control request failed'), {status: 409});
+          return {status: 'cancelled'};
+        },
+        onError: (error, attemptId) => reported.push([error.status, attemptId]),
+        investigate: async () => { throw new Error('Unexpected investigation'); }});
+      // The rejection itself is what gets reported, whether or not the release worked.
+      assert.deepEqual(reported, [[status, c.attempt_id]]);
+      assert.deepEqual(calls.map(([path, method]) => [path, method]), [['/reports/', 'POST'],
+        ...(released ? [[`/attempts/${c.attempt_id}/`, 'PATCH']] : []), ['/claims/', 'POST']]);
+      // The reason is a fixed word and the status: nothing from the rejected report.
+      if (released) assert.deepEqual(calls[1][2], {organization_id: c.organization_id, workspace_id: null,
+        project_id: c.project_id, job_id: c.job_id, lease_token: c.lease_token, action: 'cancel',
+        reason: `report_rejected:http_${status}`});
+      assert.deepEqual(await readdir(join(spool, 'rejected')), [c.attempt_id + '.json']);
+    } finally { await rm(spool, {recursive: true, force: true}); }
+  });
+}
+
 test('corrupt saved report is quarantined without blocking claims', async () => {
   const spool = await mkdtemp(join(tmpdir(), 'omega-spool-test-'));
   const stop = new AbortController();

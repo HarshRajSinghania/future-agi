@@ -1,4 +1,4 @@
-import {observe, claimAttributes, claimInput} from '../observability.mjs';
+import {observe, claimAttributes, claimInput, spanAttributes} from '../observability.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
 import {adaptGroupingSnapshot} from './snapshot.mjs';
 import {buildFeatures, featureDigest, FEATURE_VERSION} from './features.mjs';
@@ -8,6 +8,7 @@ import {groupingPolicy} from './policy.mjs';
 import {createGroupingInvestigator} from './gateway.mjs';
 import {validateEmbeddingModel} from './embedding-client.mjs';
 import {assessSeverity} from './severity.mjs';
+import {controlFailureDetails} from '../control-client.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 // The control client permits 8 MiB grouping payloads. Leave 1 MiB for the
@@ -168,7 +169,56 @@ function validateCommandProvenance(commands, receiptIds) {
 
 export async function processGroupingClaim(claim, options) {
   return observe('error_feed.grouping', 'CHAIN', claimAttributes(claim),
-    () => runGroupingClaim(claim, options), {root: true, input: () => claimInput(claim), output: true});
+    async () => {
+      try { return await runGroupingClaim(claim, options); }
+      catch (error) {
+        const failureCode = groupingFailureCode(error, options.signal);
+        spanAttributes({'error_feed.grouping.failure_code':failureCode});
+        if (UUID.test(claim.attempt_id ?? '') && typeof claim.lease_token === 'string') {
+          try {
+            // Use a separate bounded signal: shutdown/lease revocation must not
+            // abort the cleanup request. Backend completion/fencing is authority.
+            const reply = await options.control(`/grouping/attempts/${claim.attempt_id}/`,
+              {lease_token:claim.lease_token, action:'fail', failure_code:failureCode},
+              {method:'PATCH', signal:AbortSignal.timeout(10000)});
+            spanAttributes({'error_feed.grouping.failure_ack_state':reply?.state});
+            if (reply?.state === 'completed') return {published:true, reconciled:true};
+          } catch {
+            spanAttributes({'error_feed.grouping.failure_ack_failed':true});
+            // Expired-lease reconciliation is the crash/network fallback.
+          }
+        }
+        throw error;
+      }
+    }, {root: true, input: () => claimInput(claim), output: true});
+}
+
+export function groupingFailureCode(error, signal) {
+  // Preserve a known cause even when shutdown happens at the same time.
+  // In particular, unknown paid usage must stay parked rather than retrying.
+  if (['grouping_paused','gateway_error','gateway_unknown_usage','context_budget'].includes(error?.groupingFailureCode)) return error.groupingFailureCode;
+  const details = controlFailureDetails(error);
+  if (details.http_status === 409) {
+    // A conflict is retryable only when a fresh read set can resolve it.
+    // Validation/protection/receipt failures and unrecognized 409s need review.
+    if (['candidate constraint window exceeds bound','candidate context exceeds response bound',
+      'candidate hard-constraint window exceeds bound','candidate index exceeds bounded window',
+      'work call count exceeds bound'].includes(details.backend_reason)) return 'context_budget';
+    if (details.backend_reason === 'grouping project budget exhausted or disabled') return 'grouping_paused';
+    if (['unknown call receipt cannot be overwritten','unknown call result cannot be discarded']
+      .includes(details.backend_reason)) return 'gateway_unknown_usage';
+    if (['candidate read set changed since claim','candidate registry changed while building claim',
+      'candidate issue full membership changed','claimed cohort work changed',
+      'claimed report snapshot changed','grouping publication read set is stale',
+      'offered issue changed','checkpoint revision changed','grouping attempt lease is expired or fenced']
+      .includes(details.backend_reason)) return 'grouping_conflict';
+    return 'control_rejected';
+  }
+  if (details.http_status === 429 || details.http_status >= 500) return 'control_server_error';
+  if (details.http_status) return 'control_rejected';
+  if (signal?.aborted || details.failure_code === 'control_cancelled') return 'worker_cancelled';
+  if (['control_timeout','control_network_error'].includes(details.failure_code)) return details.failure_code;
+  return 'grouping_worker_error';
 }
 
 async function runGroupingClaim(claim, options) {
@@ -189,7 +239,11 @@ async function runGroupingClaim(claim, options) {
       const input = engineInput(claim, options.model);
       const gateway = await createInvestigator({claim,control,config:gatewayConfig,reserveUsd,signal});
       const result = await engine({...input,policy,investigate:gateway.investigate,store});
-      if (result.status !== 'complete') throw new Error('Grouping paused with durable checkpoint; no Feed publication');
+      if (result.status !== 'complete') {
+        const error = new Error('Grouping paused with durable checkpoint; no Feed publication');
+        error.groupingFailureCode = 'grouping_paused';
+        throw error;
+      }
       const commands = [...result.commands,...result.dispositions.filter(item=>item.state==='deferred')
         .map(item=>({type:'defer',occurrence_ids:[item.occurrence_id],reason:item.reason}))];
       const receiptIds=[...new Set([...(claim.receipt_ids ?? []),...gateway.receiptIds()])].sort();
