@@ -66,7 +66,7 @@ async function executeDaemon(env = process.env, signal) {
       engineVersion: env.OMEGA_ENGINE_VERSION, concurrency, signal: combined,
       investigate: (claim, {signal: runSignal}) => claim.workload_type === 'simulation_test_execution'
         ? investigateSimulation(claim, {gatewayConfig: config, control, scratchRoot: env.OMEGA_SCRATCH_DIR || '/tmp', signal: runSignal})
-        : investigateTrace(claim, {gatewayConfig: config, clickhouse,
+        : investigateTrace(claim, {gatewayConfig: config, clickhouse, control,
           scratchRoot: env.OMEGA_SCRATCH_DIR || '/tmp', signal: runSignal, resolveRecording}),
       onError: (_error, attemptId) => process.stderr.write(JSON.stringify({event: 'omega_work_failed', attempt_id: attemptId ?? null}) + '\n')});
     await running;

@@ -9,7 +9,7 @@ test('control routes include simulation evidence without widening unrelated inve
     calls.push({url:String(url),init});return Response.json({ok:true});
   }});
   for(const path of ['/notifications/','/claims/','/reports/',`/attempts/${id}/`,
-    `/attempts/${id}/simulation-evidence/`,
+    `/attempts/${id}/simulation-evidence/`,`/attempts/${id}/conversation-evidence/`,
     '/grouping/feature-claims/','/grouping/claims/',`/grouping/feature-attempts/${id}/complete/`,
     '/grouping/severity/claims/',`/grouping/severity/attempts/${id}/`,
     ...['reserve','settle','publish'].map(part=>`/grouping/severity/attempts/${id}/${part}/`),
