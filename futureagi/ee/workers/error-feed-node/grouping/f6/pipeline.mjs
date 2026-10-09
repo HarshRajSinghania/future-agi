@@ -128,7 +128,7 @@ export async function runPipeline({rows, features, cannotLinks = [], policy, pai
     full.key = digest(full); state.registry = commitCommand(state.registry, full, context);
   };
   const refresh = () => {
-    for(const issue of state.registry.issues.filter(i=>i.active))if(digest(issue.prototypes)!==digest(context.selectPrototypes(issue.members)))
+    for(const issue of state.registry.issues.filter(i=>i.active && !i.protected))if(digest(issue.prototypes)!==digest(context.selectPrototypes(issue.members)))
       commit({type:'refresh',issue_id:issue.id,expected_revisions:{[issue.id]:issue.mechanism_revision}});
   };
   const hold = (id, reason, receipt) => { if (!assigned(state.registry).has(id)) state.deferred[id] = {finding_id: id, reason, receipt, evidence_revision: byId.get(id).evidence_revision}; };

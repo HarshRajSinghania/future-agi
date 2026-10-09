@@ -55,7 +55,7 @@ const server = createServer(async (request, response) => {
         const unknown = {status: 'unknown', span_id: null, evidence_ids: []};
         const assessment = {outcome: 'failure', requirement_checks: [{requirement_id: 'amount', requirement: 'Refund 10',
           status: 'violated', evidence_ids: [evidenceId]}], findings: [{finding_id: 'f1', kind: 'incorrect refund amount',
-          statement: 'Refunded 5 instead of the requested 10', requirement_id: 'amount', recovery: 'not_recovered', evidence_ids: [evidenceId],
+          statement: 'Refunded 5 instead of the requested 10', requirement_id: 'amount', recovery: 'unrecovered', evidence_ids: [evidenceId],
           attribution: {origin: {status: 'supported', span_id: spanId, evidence_ids: [evidenceId]}, decisive: unknown, symptom: unknown}}]};
         message = {role: 'assistant', content: JSON.stringify(verifier ? assessment : {
           action: 'finish', question: '', child_instructions: '', assessment})};

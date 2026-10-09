@@ -1,3 +1,5 @@
+import {addCompanionEvidence} from './f6/companion-context.mjs';
+import {ViewIndex, selectPrototypes} from './f6/retrieval.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {adaptGroupingSnapshot} from './snapshot.mjs';
@@ -468,4 +470,65 @@ test('sampled policy attaches to a reviewed issue without refreshing or changing
   assert.equal(current.mechanism_revision,issue.revision);
   assert.equal(current.title,issue.mechanism.title);
   assert.equal(current.member_count,2);
+});
+
+test('loading ranked prototypes preserves their order without manufacturing a refresh', async () => {
+  const setup = fixture();
+  const ownedRows = Array.from({length: 8}, (_, i) => {
+    const row = addSecondFinding(setup);
+    row.id = `${i + 1}0000000-0000-4000-8000-000000000000`;
+    row.occurrence_id = row.id;
+    row.upstream_finding_id = 'owned-' + i;
+    const feature = structuredClone(setup.features.rows['99999999-9999-4999-8999-999999999999']);
+    const angle = [0, .15, .3, .45, .6, 1, 1.3, 1.5][i];
+    feature.views.semantics.vector = Array.from({length: 384}, (_, d) => d === 0 ? Math.cos(angle) : d === 1 ? Math.sin(angle) : 0);
+    setup.features.rows[row.id] = feature;
+    return row;
+  });
+  const pending = addThirdFinding(setup);
+  const issue = offeredIssue(ownedRows);
+  const index = new ViewIndex(ownedRows, setup.features, F6_MINILM_POLICY);
+  issue.prototype_occurrence_ids = selectPrototypes(ownedRows.map(row => row.id), index, F6_MINILM_POLICY.prototypes);
+  assert.notDeepEqual(issue.prototype_occurrence_ids, [...issue.prototype_occurrence_ids].sort());
+  const result = await runGrouping({rows: [...ownedRows, pending], pendingIds: [pending.id], features: setup.features,
+    candidateWindow: {...setup.candidateWindow, issues: [issue]}, store: setup.store,
+    investigate: withReceipts(async prompt => ({groups: [], deferred: prompt.findings.map(item =>
+      ({finding_id: item.id, reason: 'No supported assignment'}))}))});
+  assert.equal(result.status, 'complete');
+  assert.ok(!result.commands.some(command => command.type === 'refresh'));
+  // Reproduce the previous release's sorted registry and its sealed binding.
+  const checkpoint = await setup.store.read('checkpoint.json');
+  assert.equal(checkpoint.registry.events.length, 0);
+  for (const item of checkpoint.registry.issues) item.prototypes.sort();
+  const preparedRows = addCompanionEvidence([...ownedRows, pending], F6_MINILM_POLICY);
+  const preparedFeatures = structuredClone(setup.features);
+  for (const row of preparedRows) {
+    preparedFeatures.rows[row.id].source_digest = row.source_digest;
+    preparedFeatures.rows[row.id].evidence_revision = row.evidence_revision;
+  }
+  checkpoint.binding = digest({rows: preparedRows, pendingIds: [pending.id], features: preparedFeatures,
+    cannotLinks: [], policy: F6_MINILM_POLICY, pairRelease: null, initialRegistry: checkpoint.registry,
+    inputBinding: {registry_revision: setup.candidateWindow.registry_revision,
+      omitted_candidates: setup.candidateWindow.omitted_candidates}});
+  await setup.store.save('checkpoint.json', checkpoint);
+  const resume = window => runGrouping({rows: [...ownedRows, pending], pendingIds: [pending.id],
+    features: setup.features, candidateWindow: window, store: setup.store,
+    investigate: async () => {throw new Error('Completed checkpoint must not call the model');}});
+  assert.equal((await resume({...setup.candidateWindow, issues: [issue]})).status, 'complete');
+  await assert.rejects(() => resume({...setup.candidateWindow, issues: [issue],
+    registry_revision: setup.candidateWindow.registry_revision + 1}), /Checkpoint input\/policy mismatch/);
+});
+
+test('protected issues retain their examples even when the selector would replace them', async () => {
+  const setup = fixture();
+  const second = addSecondFinding(setup);
+  const pending = addThirdFinding(setup);
+  const issue = offeredIssue([setup.row, second], true);
+  issue.prototype_occurrence_ids = [setup.row.id];
+  const result = await runGrouping({rows: [setup.row, second, pending], pendingIds: [pending.id], features: setup.features,
+    candidateWindow: {...setup.candidateWindow, issues: [issue]}, store: setup.store,
+    investigate: withReceipts(async prompt => ({groups: [], deferred: prompt.findings.map(item =>
+      ({finding_id: item.id, reason: 'No supported assignment'}))}))});
+  assert.equal(result.status, 'complete');
+  assert.ok(!result.commands.some(command => command.type === 'refresh'));
 });
