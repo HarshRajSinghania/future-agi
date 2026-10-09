@@ -267,7 +267,7 @@ test('a paused investigation emits no publishable commands and resumes from its 
   assert.deepEqual(replayed.commands, completed.commands);
 });
 
-test('reconciliation merge creates a new target with exact member coverage', async () => {
+test('reconciliation merge keeps a source identity with exact member coverage', async () => {
   const setup = fixture();
   const second = addSecondFinding(setup);
   const rows = [setup.row, second];
@@ -290,8 +290,34 @@ test('reconciliation merge creates a new target with exact member coverage', asy
   assert.equal(merged.admission.group_index,0);
   assert.deepEqual(merged.source_issue_ids.slice().sort(),
     result.commands.slice(0, 2).map(command => command.temporary_id).sort());
-  assert.deepEqual(result.registry.issues.find(issue => issue.id === merged.temporary_id).members,
+  assert.ok(merged.source_issue_ids.includes(merged.survivor_issue_id));
+  assert.deepEqual(result.registry.issues.find(issue => issue.id === merged.survivor_issue_id).members,
     rows.map(row => row.id).sort());
+  assert.deepEqual(result.registry.issues.find(issue => issue.id === merged.survivor_issue_id).aliases.sort(),
+    merged.source_issue_ids.filter(id => id !== merged.survivor_issue_id).sort());
+  assert.equal(result.registry.issues.filter(issue => issue.active).length, 1);
+
+  // A completed checkpoint from the previous worker has a newly created
+  // merge target and two inactive sources. Its event is still replayable, so
+  // resuming it must publish the legacy command instead of crashing.
+  const checkpoint = structuredClone(setup.files.get('checkpoint.json'));
+  const event = checkpoint.registry.events.at(-1);
+  assert.equal(event.command.type, 'merge');
+  const oldTarget = {...structuredClone(event.after.issues.find(issue =>
+    issue.id === merged.survivor_issue_id)), id: 'legacy-merge-target', aliases: []};
+  event.after.issues = event.after.issues.map(issue =>
+    merged.source_issue_ids.includes(issue.id) ? {...issue, active: false} : issue);
+  event.after.issues.push(oldTarget);
+  const {hash, ...unsigned} = event;
+  event.hash = digest(unsigned);
+  checkpoint.registry.issues = structuredClone(event.after.issues);
+  await setup.store.save('checkpoint.json', checkpoint);
+  const resumed = await runGrouping({rows, pendingIds: rows.map(row => row.id),
+    features: setup.features, candidateWindow: setup.candidateWindow, store: setup.store,
+    investigate: async () => { throw new Error('completed checkpoint called provider'); }});
+  assert.equal(resumed.status, 'complete');
+  assert.equal(resumed.commands[2].temporary_id, oldTarget.id);
+  assert.ok(!('survivor_issue_id' in resumed.commands[2]));
 });
 
 test('discovery and reconciliation prompts ask for plain-language titles and descriptions', async () => {
@@ -340,6 +366,7 @@ test('reconciliation split retires the source and partitions all current members
   assert.equal(result.commands[0].admissions[0].primary_receipt_id,
     result.commands[0].admissions[1].primary_receipt_id);
   assert.equal(result.registry.issues.find(issue => issue.id === 'issue-existing').active, false);
+  assert.equal(result.registry.issues.filter(issue => issue.active && issue.aliases.includes('issue-existing')).length, 1);
 });
 
 test('a protected issue cannot be split by model review', async () => {
@@ -398,7 +425,8 @@ test('large source counts no longer block a sampled merge',async()=>{
   assert.equal(result.commands.filter(item=>item.type==='merge').length,1);
   const merge=result.commands.find(item=>item.type==='merge');
   assert.equal(merge.reviewed_occurrence_ids.length,2);
-  const target=result.registry.issues.find(item=>item.id===merge.temporary_id);
+  assert.equal(merge.survivor_issue_id,'issue-a');
+  const target=result.registry.issues.find(item=>item.id===merge.survivor_issue_id);
   assert.equal(target.member_count,25);
   assert.equal(target.membership_complete,false);
 });
