@@ -903,66 +903,89 @@ class TestGenericDottedPathResolution:
             eval_template,
         )
 
-        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
+        with pytest.raises(ValueError, match="Column mapping mismatch"):
             _run(ec, call_execution, transcript_data)
+
+        mock_run.assert_not_called()
 
 
 @pytest.mark.django_db
 @patch("simulate.services.test_executor.close_old_connections", lambda: None)
 class TestWalkerAttributeSafety:
-    """Dunder / private / callable attrs must not resolve; user paths cannot pivot into module globals."""
+    """Dunder / private / callable attrs must not resolve; user paths cannot pivot into module globals.
+
+    Such a path is read as empty: the eval still runs and gets "" for it.
+    """
 
     @patch("simulate.services.test_executor.run_eval_func")
     def test_dunder_class_globals_settings_secret_key_does_not_resolve(
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
+        mock_run.return_value = _SUCCESS_STUB
         ec = _make_eval(
             {"x": "call.__class__.__init__.__globals__.settings.SECRET_KEY"},
             run_test,
             eval_template,
         )
-        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
-            _run(ec, call_execution, transcript_data)
+
+        _run(ec, call_execution, transcript_data)
+
+        assert mock_run.call_args.kwargs["mappings"]["x"] == ""
 
     @patch("simulate.services.test_executor.run_eval_func")
     def test_dunder_dict_does_not_resolve(
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
+        mock_run.return_value = _SUCCESS_STUB
         ec = _make_eval({"x": "call.__dict__"}, run_test, eval_template)
-        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
-            _run(ec, call_execution, transcript_data)
+
+        _run(ec, call_execution, transcript_data)
+
+        assert mock_run.call_args.kwargs["mappings"]["x"] == ""
 
     @patch("simulate.services.test_executor.run_eval_func")
     def test_django_private_meta_does_not_resolve(
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
+        mock_run.return_value = _SUCCESS_STUB
         ec = _make_eval({"x": "call._meta.app_label"}, run_test, eval_template)
-        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
-            _run(ec, call_execution, transcript_data)
+
+        _run(ec, call_execution, transcript_data)
+
+        assert mock_run.call_args.kwargs["mappings"]["x"] == ""
 
     @patch("simulate.services.test_executor.run_eval_func")
     def test_django_private_state_does_not_resolve(
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
+        mock_run.return_value = _SUCCESS_STUB
         ec = _make_eval({"x": "call._state.db"}, run_test, eval_template)
-        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
-            _run(ec, call_execution, transcript_data)
+
+        _run(ec, call_execution, transcript_data)
+
+        assert mock_run.call_args.kwargs["mappings"]["x"] == ""
 
     @patch("simulate.services.test_executor.run_eval_func")
     def test_objects_manager_callable_does_not_resolve(
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
+        mock_run.return_value = _SUCCESS_STUB
         ec = _make_eval({"x": "call.objects.all"}, run_test, eval_template)
-        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
-            _run(ec, call_execution, transcript_data)
+
+        _run(ec, call_execution, transcript_data)
+
+        assert mock_run.call_args.kwargs["mappings"]["x"] == ""
 
     @patch("simulate.services.test_executor.run_eval_func")
     def test_save_method_does_not_resolve(
         self, mock_run, run_test, call_execution, transcript_data, eval_template
     ):
+        mock_run.return_value = _SUCCESS_STUB
         ec = _make_eval({"x": "call.save"}, run_test, eval_template)
-        with pytest.raises(Exception):  # noqa: B017 -- any failure counts here
-            _run(ec, call_execution, transcript_data)
+
+        _run(ec, call_execution, transcript_data)
+
+        assert mock_run.call_args.kwargs["mappings"]["x"] == ""
 
 
 @pytest.mark.django_db
