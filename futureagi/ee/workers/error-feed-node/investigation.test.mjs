@@ -202,6 +202,9 @@ test('controller and verifier ask for plain-language finding statements', async 
       assert.match(system, /A goal that this situation made impossible to meet or to break is not a requirement of this trace/);
       assert.doesNotMatch(system, /whose stage the call never reached/);
       assert.match(system, /Obligations toward whoever or whatever did respond still apply/);
+      // Conduct no requirement covers is still reported, as a finding with no requirement.
+      assert.match(system, /Meeting its requirements does not settle how the agent did/);
+      assert.match(system, /Conduct that failed them or wasted the interaction is a finding even when no requirement covers it: report it with requirement_id null\./);
       assert.match(system, /finding statement in plain words for a product reader/);
       assert.match(system, /short sentences of at most 25 words, one idea each, in active voice/);
       assert.match(system, /Never stack more than three nouns in a row/);
@@ -602,6 +605,7 @@ test('simulation investigation reads call evidence and returns a scoped report',
     assert.ok(systems.length > 0);
     for (const system of systems) {
       assert.doesNotMatch(system, /impossible to meet or to break/);
+      assert.doesNotMatch(system, /Conduct that failed them or wasted the interaction/);
       // A sub-goal the call never reached is left out, so it cannot leave the call without a verdict.
       assert.match(system, /check each one the call put to the test/);
       assert.match(system, /A sub-goal whose stage the call never reached, or whose trigger never occurred, could be neither met nor broken: it is not a requirement of this call, so do not list it\./);
