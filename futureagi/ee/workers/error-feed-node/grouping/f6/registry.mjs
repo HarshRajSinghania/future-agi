@@ -52,7 +52,9 @@ export function commitCommand(registry, command, context) {
       title: group.title, mechanism: group.mechanism, fix_hypothesis: group.fix_hypothesis, falsifier: group.falsifier,
       members: unique(group.member_ids), prototypes: context.selectPrototypes(group.member_ids),
       evidence_state: admission.state, admission, workflow: 'open', protected: false, aliases: [],
-      membership_sequence: next.sequence + 1};
+      membership_sequence: next.sequence + 1,
+      ...(context.policy.sampled_merge_reviews ? {member_count:group.member_ids.length,
+        membership_complete:true} : {})};
     next.issues.push(issue); return issue;
   };
   const requiredRevision = issue => assert.equal(command.expected_revisions?.[issue.id], issue.mechanism_revision, 'Missing expected mechanism revision');
@@ -64,6 +66,7 @@ export function commitCommand(registry, command, context) {
       else assert.equal(command.receipt.target_issue_id, issue.id);
       validateReceipt(command.receipt, command.member_ids, context, next);
       validateMembers(unique([...issue.members, ...command.member_ids]), byId, constraints);
+      if (context.policy.sampled_merge_reviews) issue.member_count += command.member_ids.length;
       issue.members = unique([...issue.members, ...command.member_ids]); issue.membership_sequence = next.sequence + 1;
       // Routine membership doesn't bump semantics/prototypes. Explicit refresh does.
       break;
@@ -72,11 +75,40 @@ export function commitCommand(registry, command, context) {
       assert.ok(unique(command.issue_ids).length === command.issue_ids.length && command.issue_ids.length >= 2);
       const sources = command.issue_ids.map(id => active(next, id)); sources.forEach(requiredRevision);
       assert.ok(sources.every(i => !i.protected), 'Human-owned/ticketed issue requires operator approval');
-      assert.deepEqual(unique(command.group.member_ids), unique(sources.flatMap(i => i.members)), 'Merge lost/invented members');
+      const represented = unique(sources.flatMap(i => i.members));
+      if (context.policy.sampled_merge_reviews) {
+        assert.ok(command.group.member_ids.every(id => represented.includes(id)), 'Merge sampled an unknown member');
+        for (const source of sources) {
+          const reviewed = command.group.member_ids.filter(id => source.members.includes(id));
+          assert.ok(reviewed.length > 0 && reviewed.length <= context.policy.merge_sample_members_per_issue,
+            'Merge sample must cover both sources within budget');
+        }
+      } else assert.deepEqual(unique(command.group.member_ids), represented, 'Merge lost/invented members');
       assert.equal(command.group.target_issue_id, null);
-      const target = newIssue(command.group, command.receipt, 'merge');
-      target.aliases = unique(sources.flatMap(i => [i.id, ...i.aliases]));
-      sources.forEach(i => { i.active = false; i.mechanism_revision++; });
+      validateMembers(command.group.member_ids, byId, constraints);
+      const admission = validateReceipt(command.receipt, command.group.member_ids, context, next);
+      assert.equal(digest(command.receipt.group), digest(command.group), 'Issue semantics not bound to evidence receipt');
+      const target = sources.reduce((best, issue) =>
+        (issue.member_count ?? issue.members.length) > (best.member_count ?? best.members.length) ? issue : best);
+      target.title = command.group.title;
+      target.mechanism = command.group.mechanism;
+      target.fix_hypothesis = command.group.fix_hypothesis;
+      target.falsifier = command.group.falsifier;
+      target.prototypes = context.selectPrototypes(command.group.member_ids);
+      target.evidence_state = admission.state;
+      target.admission = admission;
+      target.members = represented;
+      target.mechanism_revision++;
+      target.membership_sequence = next.sequence + 1;
+      if (context.policy.sampled_merge_reviews) {
+        // The registry carries shown rows, not unseen authoritative members.
+        // Publication resolves the complete source union under database locks.
+        validateMembers(represented, byId, constraints);
+        target.member_count = sources.reduce((n, item) => n + item.member_count, 0);
+        target.membership_complete = target.member_count === target.members.length;
+      }
+      target.aliases = unique(sources.flatMap(i => i.id === target.id ? i.aliases : [i.id, ...i.aliases]));
+      sources.filter(i => i.id !== target.id).forEach(i => { i.active = false; i.mechanism_revision++; });
       break;
     }
     case 'split': {
@@ -84,7 +116,13 @@ export function commitCommand(registry, command, context) {
       assert.ok(command.groups.length >= 2 && command.groups.length === command.receipts.length);
       assert.deepEqual(unique(command.groups.flatMap(g => g.member_ids)), unique(source.members), 'Split lost/invented members');
       assert.equal(command.groups.flatMap(g => g.member_ids).length, source.members.length, 'Split children must partition parent');
-      command.groups.forEach((g, i) => { assert.equal(g.target_issue_id, null); newIssue(g, command.receipts[i], `split-${i}`); });
+      const redirectIndex = command.groups.reduce((best, group, index) =>
+        group.member_ids.length > command.groups[best].member_ids.length ? index : best, 0);
+      command.groups.forEach((g, i) => {
+        assert.equal(g.target_issue_id, null);
+        const child = newIssue(g, command.receipts[i], `split-${i}`);
+        if (i === redirectIndex) child.aliases = unique([source.id, ...source.aliases]);
+      });
       source.active = false; source.mechanism_revision++; break;
     }
     case 'remove': {
@@ -95,6 +133,7 @@ export function commitCommand(registry, command, context) {
       const kept = issue.members.filter(id => !command.member_ids.includes(id)); assert.ok(kept.length);
       for (const id of command.member_ids) assert.ok(kept.some(p => context.scorePair(id, p).contradictions.length)
         || issue.prototypes.filter(p => kept.includes(p)).length && issue.prototypes.filter(p => kept.includes(p)).every(p => context.scorePair(id, p).decision === 'reject'), 'Unsupported removal');
+      if (context.policy.sampled_merge_reviews) issue.member_count -= command.member_ids.length;
       issue.members = kept; issue.prototypes = context.selectPrototypes(kept); issue.mechanism_revision++; break;
     }
     case 'refresh': {

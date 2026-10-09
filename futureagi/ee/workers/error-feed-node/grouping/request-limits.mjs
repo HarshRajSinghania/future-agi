@@ -11,8 +11,14 @@ export const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
 // packer records every example/candidate it cannot show for later review.
 export const MAX_EVIDENCE_BYTES = 400_000;
 
-function limitError(message, diagnostics) {
-  return Object.assign(new Error(message), {diagnostics});
+function limitError(message, diagnostics, groupingFailureCode) {
+  return Object.assign(new Error(message), {diagnostics,
+    ...(groupingFailureCode ? {groupingFailureCode} : {})});
+}
+
+function transportError(cause) {
+  return Object.assign(new Error('Grouping token count unavailable; inference not sent', {cause}),
+    {groupingFailureCode:'gateway_error',diagnostics:{reason:'token_count_unavailable'}});
 }
 
 export function requestLimits(env = process.env) {
@@ -39,7 +45,8 @@ export async function measureRequest({body, config, signal, fetchImpl = fetch,
   const requestBytes = Buffer.byteLength(JSON.stringify(body));
   if (requestBytes > limits.requestBytes) {
     throw limitError(`Grouping transport limit: ${requestBytes} bytes > ${limits.requestBytes}`,
-      {reason:'transport_limit',request_bytes:requestBytes,request_byte_limit:limits.requestBytes});
+      {reason:'transport_limit',request_bytes:requestBytes,request_byte_limit:limits.requestBytes},
+      'context_budget');
   }
   // Match the text-only grouping request's Gemini translation, including its
   // system instruction and structured-output schema. Never use /v1/count_tokens:
@@ -57,26 +64,39 @@ export async function measureRequest({body, config, signal, fetchImpl = fetch,
   url.pathname = url.pathname.replace(/\/v1\/?$/, '')
     + '/v1beta/models/' + config.model.split('/').map(encodeURIComponent).join('/') + ':countTokens';
   const timeout = AbortSignal.timeout(30000);
-  const response = await fetchImpl(url, {method:'POST', redirect:'error',
-    headers:{authorization:`Bearer ${config.apiKey}`, 'content-type':'application/json'},
-    body:JSON.stringify(countBody), signal:signal ? AbortSignal.any([signal,timeout]) : timeout});
+  let response;
+  try {
+    response = await fetchImpl(url, {method:'POST', redirect:'error',
+      headers:{authorization:`Bearer ${config.apiKey}`, 'content-type':'application/json'},
+      body:JSON.stringify(countBody), signal:signal ? AbortSignal.any([signal,timeout]) : timeout});
+  } catch (error) { throw transportError(error); }
   // AgentCC's OpenAI-compatible route does not expose native countTokens.
   // Each text token consumes at least one UTF-8 byte; add fixed headroom for
   // protocol framing and reserve against this upper bound, not an estimate
   // that could undercharge or silently exceed the model context.
   const fallbackTokens = requestBytes + 8192;
+  if (!response.ok) {
+    try { await response.body?.cancel(); }
+    catch { /* Body disposal must not replace the trusted HTTP failure. */ }
+  }
   if (response.status === 404 && fallbackTokens <= limits.inputTokens) {
-    await response.body?.cancel();
     return {input_tokens:fallbackTokens,request_bytes:requestBytes,
       input_token_limit:limits.inputTokens,request_byte_limit:limits.requestBytes,
       count_source:'utf8_upper_bound'};
   }
   if (!response.ok) {
-    await response.body?.cancel();
     throw limitError(`Grouping token count unavailable: HTTP ${response.status}; inference not sent`,
-      {reason:'token_count_unavailable',http_status:response.status,request_bytes:requestBytes});
+      {reason:'token_count_unavailable',http_status:response.status,request_bytes:requestBytes},
+      response.status === 429 || response.status >= 500 ? 'gateway_error'
+        : response.status === 404 && fallbackTokens > limits.inputTokens ? 'context_budget' : undefined);
   }
-  const {totalTokens} = await response.json();
+  let count;
+  try { count = await response.json(); }
+  catch (error) {
+    if (error instanceof SyntaxError) throw error;
+    throw transportError(error);
+  }
+  const {totalTokens} = count;
   if (!Number.isSafeInteger(totalTokens) || totalTokens < 1) {
     throw new Error('Invalid Gemini token count; inference not sent');
   }
@@ -84,7 +104,7 @@ export async function measureRequest({body, config, signal, fetchImpl = fetch,
     input_token_limit:limits.inputTokens, request_byte_limit:limits.requestBytes};
   if (totalTokens > limits.inputTokens) {
     throw limitError(`Grouping token limit: ${totalTokens} tokens > ${limits.inputTokens}; ${requestBytes} bytes`,
-      {reason:'token_limit',...measured});
+      {reason:'token_limit',...measured}, 'context_budget');
   }
   return measured;
 }

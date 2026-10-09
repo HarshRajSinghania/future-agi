@@ -49,7 +49,16 @@ function hydrateCandidates(window, byId, constraints, policy) {
     const id = offered.issue_id;
     assert.ok(typeof id === 'string' && id && !seen.has(id), 'Invalid candidate issue identity');
     seen.add(id);
-    assert.equal(offered.membership_complete, true, 'Incomplete candidate membership');
+    if (policy.sampled_merge_reviews) {
+      assert.equal(offered.evidence_mode, 'sampled', 'Sampled policy requires explicit evidence mode');
+      assert.ok(Number.isSafeInteger(offered.member_count) && offered.member_count >= offered.members.length,
+        'Invalid full member count');
+      assert.ok(Number.isSafeInteger(offered.membership_revision) && offered.membership_revision >= 1,
+        'Invalid membership revision');
+      assert.match(offered.membership_digest, /^sha256:[a-f0-9]{64}$/, 'Invalid membership binding');
+      assert.equal(offered.membership_complete, offered.member_count === offered.members.length,
+        'Incorrect sample coverage');
+    } else assert.equal(offered.membership_complete, true, 'Incomplete candidate membership');
     assert.ok(Number.isSafeInteger(offered.revision) && offered.revision >= 1,
       'Invalid candidate revision');
     assert.equal(typeof offered.protected, 'boolean', 'Invalid candidate protection');
@@ -58,7 +67,8 @@ function hydrateCandidates(window, byId, constraints, policy) {
         typeof offered.mechanism[key] === 'string' && offered.mechanism[key].trim()),
     'Invalid candidate mechanism');
     const members = offered.members?.map(member => member.occurrence_id);
-    boundedIds(members, policy.max_reconcile_members, 'candidate members');
+    boundedIds(members, policy.sampled_merge_reviews ? policy.merge_sample_members_per_issue
+      : policy.max_reconcile_members, 'candidate members');
     assert.ok(members.length > 0, 'Empty candidate issue');
     assert.ok(members.every(memberId => !owned.has(memberId)),
       'Candidate occurrence belongs to multiple issues');
@@ -93,13 +103,19 @@ function hydrateCandidates(window, byId, constraints, policy) {
       fix_hypothesis: offered.mechanism.fix_hypothesis,
       falsifier: offered.mechanism.falsifier,
       members: unique(members),
-      prototypes: unique(prototypes),
+      // Prototype order is ranked, not ID order. Sorting it manufactures a
+      // refresh even when the offered examples already match the selector.
+      prototypes: [...new Set(prototypes)],
       evidence_state: 'Emerging',
       admission: null,
       workflow: offered.protected ? 'triaged' : 'open',
       protected: offered.protected,
       aliases: [],
       membership_sequence: 0,
+      ...(policy.sampled_merge_reviews ? {member_count:offered.member_count,
+        membership_complete:offered.membership_complete,
+        membership_revision:offered.membership_revision,
+        membership_digest:offered.membership_digest} : {}),
     });
   }
   return registry;
@@ -124,7 +140,7 @@ function createdIssues(event) {
   return event.after.issues.filter(issue => !before.has(issue.id));
 }
 
-function translateEvent(event, constraints) {
+function translateEvent(event, constraints, policy) {
   const command = event.command;
   const current = id => event.after.issues.find(issue => issue.id === id);
   switch (command.type) {
@@ -146,11 +162,17 @@ function translateEvent(event, constraints) {
         prototype_occurrence_ids: current(command.issue_id).prototypes,
         mechanism: mechanism(current(command.issue_id))};
     case 'merge': {
-      const issue = createdIssues(event)[0];
+      const survivor = event.after.issues.find(item => item.active && command.issue_ids.includes(item.id));
+      // Checkpoints written before survivor-preserving merges contain a new
+      // target and two inactive sources. Keep their original publication shape.
+      const issue = survivor ?? createdIssues(event)[0];
+      assert.ok(issue, 'Merge event has no surviving or created issue');
       return {type: 'merge', source_issue_ids: command.issue_ids,
-        expected_revisions: command.expected_revisions, temporary_id: issue.id,
+        expected_revisions: command.expected_revisions,
+        ...(survivor ? {survivor_issue_id: issue.id} : {temporary_id: issue.id}),
         mechanism: mechanism(issue), prototype_occurrence_ids: issue.prototypes,
-        citations: citations(command.receipt),admission:command.receipt.model_provenance};
+        citations: citations(command.receipt),admission:command.receipt.model_provenance,
+        ...(policy.sampled_merge_reviews ? {reviewed_occurrence_ids:command.group.member_ids} : {})};
     }
     case 'split':
       return {type: 'split', issue_id: command.issue_id,
@@ -191,7 +213,7 @@ export async function runGrouping({rows, pendingIds, features, candidateWindow,
   assert.ok(pendingIds.every(id => byId.has(id) && !byId.get(id).control),
     'Pending occurrence absent or control');
   validateFeatureSet(rows, features, policy);
-  const initialRegistry = hydrateCandidates(candidateWindow, byId, constraints, policy);
+  let initialRegistry = hydrateCandidates(candidateWindow, byId, constraints, policy);
   assert.ok(initialRegistry.issues.every(issue => issue.scope === scope),
     'Cross-scope candidate issue');
   const currentMembers = new Set(initialRegistry.issues.flatMap(issue => issue.members));
@@ -211,7 +233,19 @@ export async function runGrouping({rows, pendingIds, features, candidateWindow,
     inputBinding: {registry_revision: candidateWindow.registry_revision,
       omitted_candidates: candidateWindow.omitted_candidates}};
   const checkpoint = await store.read('checkpoint.json');
-  const migrated = migrateContextBudget(checkpoint, inputs);
+  let migrated = migrateContextBudget(checkpoint, inputs);
+  if (checkpoint && migrated.binding !== digest(inputs)) {
+    // Existing checkpoints were bound to ID-sorted prototypes. Resume that
+    // exact representation only when every other input still matches.
+    const legacyRegistry = structuredClone(initialRegistry);
+    for (const issue of legacyRegistry.issues) issue.prototypes = unique(issue.prototypes);
+    const legacyInputs = {...inputs, initialRegistry: legacyRegistry};
+    const legacyCheckpoint = migrateContextBudget(checkpoint, legacyInputs);
+    if (legacyCheckpoint.binding === digest(legacyInputs)) {
+      initialRegistry = legacyRegistry;
+      migrated = legacyCheckpoint;
+    }
+  }
   if (migrated !== checkpoint) await store.save('checkpoint.json', migrated);
   const result = await runPipeline({rows: preparedRows, pendingIds, features: preparedFeatures, cannotLinks, policy,
     pairRelease: null, investigate, store, initialRegistry,
@@ -225,7 +259,7 @@ export async function runGrouping({rows, pendingIds, features, candidateWindow,
       commands: [], dispositions: pendingIds.map(id => ({occurrence_id: id, state: 'pending'})),
       decision_receipts: [], native_events: [], registry: null};
   }
-  const commands = nativeEvents.map(event => translateEvent(event, constraints));
+  const commands = nativeEvents.map(event => translateEvent(event, constraints, policy));
   const dispositions = pendingIds.map(id => {
     const issue = result.state.registry.issues.find(item => item.active && item.members.includes(id));
     const deferred = result.predictions.deferred.find(item => item.finding_id === id);

@@ -34,7 +34,7 @@ export function createControlClient({baseUrl, token, fetchImpl = fetch}) {
       || !token || /[\r\n]/.test(token)) throw new Error('Invalid control-plane configuration');
   return async function request(path, body, {method = 'POST', signal} = {}) {
     const grouping = /^\/grouping\/(?:feature-claims|claims|outbox)\/$|^\/grouping\/outbox\/[a-f0-9-]{36}\/ack\/$|^\/grouping\/feature-attempts\/[a-f0-9-]{36}\/(?:complete\/)?$|^\/grouping\/attempts\/[a-f0-9-]{36}\/(?:checkpoint\/|reserve\/|settle\/|publish\/)?$|^\/grouping\/severity\/claims\/$|^\/grouping\/severity\/attempts\/[a-f0-9-]{36}\/(?:reserve\/|settle\/|publish\/)?$/.test(path);
-    if (!grouping && !/^\/(?:notifications|claims|reports)\/$|^\/attempts\/[a-f0-9-]{36}\/(?:simulation-evidence\/)?$/.test(path)) throw new Error('Unsupported control operation');
+    if (!grouping && !/^\/(?:notifications|claims|reports)\/$|^\/attempts\/[a-f0-9-]{36}\/(?:(?:simulation|conversation)-evidence\/)?$/.test(path)) throw new Error('Unsupported control operation');
     const payload = JSON.stringify(body);
     const limit = grouping ? 8 * 1024 * 1024 : 2 * 1024 * 1024;
     if (Buffer.byteLength(payload) > limit) throw new Error('Control request exceeded limit');
@@ -62,10 +62,19 @@ export function createControlClient({baseUrl, token, fetchImpl = fetch}) {
     }
     let bytes = 0;
     const chunks = [];
-    for await (const chunk of response.body) {
-      bytes += chunk.length;
-      if (bytes > limit) throw new Error('Control response exceeded limit');
-      chunks.push(chunk);
+    try {
+      for await (const chunk of response.body) {
+        bytes += chunk.length;
+        if (bytes > limit) throw new Error('Control response exceeded limit');
+        chunks.push(chunk);
+      }
+    } catch (error) {
+      // Headers can arrive before a transport timeout/disconnect. Retain the
+      // same classification for these failures as for the initial fetch.
+      if (error && typeof error === 'object') failures.set(error, {...details(),
+        failure_code: boundedSignal.aborted ? (signal?.aborted ? 'control_cancelled' : 'control_timeout')
+          : bytes > limit ? 'control_response_invalid' : 'control_network_error'});
+      throw error;
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   };
