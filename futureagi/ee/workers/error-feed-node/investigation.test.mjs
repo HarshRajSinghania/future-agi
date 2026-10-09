@@ -119,6 +119,63 @@ test('an attempt the backend no longer holds as active ends before any stored-sp
   } finally { await rm(scratch, {recursive: true, force: true}); }
 });
 
+for (const [name, broken, fixed = {}] of [
+  ['a recovery outside the allowed values', {recovery: 'Halted and delivered the full message before the caller hung up'}],
+  ['a kind longer than its declared bound', {kind: 'k'.repeat(65)}],
+  // The backend counts characters. The repair is 64 of them, which is 65 UTF-16 units.
+  ['a kind one emoji over its declared bound', {kind: 'k'.repeat(64) + '👋'}, {kind: 'k'.repeat(63) + '👋'}]]) {
+  for (const repaired of [true, false]) {
+    test(`${name} is ${repaired ? 'repaired once' : 'a failed investigation when the repair breaks it too'}`, async () => {
+      const scratch = await mkdtemp(join(tmpdir(), 'omega-output-bounds-test-'));
+      try {
+        const claim = makeClaim();
+        const row = {id: '1234567890abcdef', project_id: claim.project_id, trace_id: claim.trace_id,
+          parent_span_id: '', name: 'refund', input: 'Refund exactly 10', output: 'Refunded 5'};
+        const raw = JSON.stringify(row);
+        const evidenceId = `${row.id}:0:${Buffer.byteLength(raw)}`;
+        const unknownRole = {status: 'unknown', span_id: null, evidence_ids: []};
+        const assessment = overrides => ({outcome: 'failure', requirement_checks: [{requirement_id: 'refund-amount',
+          requirement: 'Refund 10', status: 'violated', evidence_ids: [evidenceId]}],
+        findings: [{finding_id: 'f1', kind: 'incorrect refund amount', statement: 'Only 5 refunded instead of 10',
+          requirement_id: 'refund-amount', recovery: 'unrecovered', evidence_ids: [evidenceId],
+          attribution: {origin: {status: 'supported', span_id: row.id, evidence_ids: [evidenceId],
+            explanation: 'The refund span records 5 refunded against the request for 10.'},
+          decisive: unknownRole, symptom: unknownRole}, ...overrides}]});
+        let verdicts = 0;
+        const result = await investigateTrace(claim, {scratchRoot: scratch,
+          fetchEvidence: async (c, path) => storeEvidence([Buffer.from(raw + '\n')], path, c),
+          gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+            fetchImpl: async (_url, init) => {
+              const request = JSON.parse(init.body);
+              const system = request.messages.find(message => message.role === 'system').content;
+              assert.match(system, /Set recovery to "recovered" when a later recorded step corrected the mistake/);
+              let message;
+              if (!request.messages.some(item => item.role === 'tool')) message = {role: 'assistant', content: '',
+                tool_calls: [{id: 'read', type: 'function', function: {name: 'read_span',
+                  arguments: JSON.stringify({span_id: row.id, offset: 0, length: 4096})}}]};
+              else if (!system.includes('Independently check')) message = {role: 'assistant', content: JSON.stringify(
+                {action: 'finish', question: '', child_instructions: '', assessment: assessment({})})};
+              else message = {role: 'assistant', content: JSON.stringify(
+                assessment(verdicts++ === 0 || !repaired ? broken : fixed))};
+              return new Response(JSON.stringify({choices: [{message}], usage: {prompt_tokens: 10, completion_tokens: 5}}),
+                {headers: {'Content-Type': 'application/json', 'x-agentcc-cost': '0'}});
+            }}});
+        // The first verdict breaks the schema; exactly one repair follows.
+        assert.equal(verdicts, 2);
+        if (repaired) {
+          assert.equal(result.execution_status, 'completed');
+          assert.deepEqual(result.findings.map(item => [item.kind, item.recovery]),
+            [[fixed.kind ?? 'incorrect refund amount', 'unrecovered']]);
+        } else {
+          // A report Django would reject never leaves the worker as a completed one.
+          assert.equal(result.execution_status, 'failed');
+          assert.deepEqual(result.findings, []);
+        }
+      } finally { await rm(scratch, {recursive: true, force: true}); }
+    });
+  }
+}
+
 test('controller and verifier ask for plain-language finding statements', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'omega-wording-test-'));
   try {
@@ -398,7 +455,7 @@ test('real Omega controller, child, return and verifier use file tools and prese
     const assessment = {outcome: 'failure', requirement_checks: [{requirement_id: 'refund-amount',
       requirement: 'Refund 10', status: 'violated', evidence_ids: [evidenceId]}],
       findings: [{finding_id: 'f1', kind: 'incorrect refund amount', statement: 'Only 5 refunded instead of 10',
-        requirement_id: 'refund-amount', recovery: 'not_recovered', evidence_ids: [evidenceId],
+        requirement_id: 'refund-amount', recovery: 'unrecovered', evidence_ids: [evidenceId],
         attribution: {origin: {status: 'supported', span_id: row.id, evidence_ids: [evidenceId],
           explanation: 'The refund span records 5 refunded against the request for 10, making it the first observed mismatch.'},
         decisive: unknownRole, symptom: unknownRole}}]};
@@ -635,7 +692,7 @@ test('unresolved external payloads preserve findings supported by inline evidenc
     (evidenceId, spanId) => ({outcome: 'failure', requirement_checks: [{requirement_id: 'refund',
       requirement: 'Refund 10', status: 'violated', evidence_ids: [evidenceId]}],
     findings: [{finding_id: 'f1', kind: 'incorrect refund amount', statement: 'Only 5 was refunded',
-      requirement_id: 'refund', evidence_ids: [evidenceId], recovery: 'not_recovered',
+      requirement_id: 'refund', evidence_ids: [evidenceId], recovery: 'unrecovered',
       attribution: {origin: {status: 'supported', span_id: spanId, evidence_ids: [evidenceId]},
         decisive: unknownRole, symptom: unknownRole}}]}));
 

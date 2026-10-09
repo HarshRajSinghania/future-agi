@@ -134,6 +134,7 @@ export async function createGroupingInvestigator({claim, control, config, signal
       if (reservation.created !== true || reservation.status !== 'reserved') {
         const unavailable = new Error('Prior request has unresolved usage; refusing automatic resend');
         if (sampledMerge) unavailable.name = 'MergeReviewUnavailable';
+        unavailable.groupingFailureCode = 'gateway_unknown_usage';
         throw unavailable;
       }
       activeBody = body;
@@ -176,9 +177,11 @@ export async function createGroupingInvestigator({claim, control, config, signal
       // Settlement has its own bounded control timeout and is attempted even on
       // cancellation. If it fails, the original durable reservation stays spent.
       await control(base+'settle/', settlement);
-      if (failure) throw failure;
-      // Spending receipts remain durable even when inference fails. Only a
-      // successfully settled result is eligible as publication evidence.
+      if (failure) {
+        failure.groupingFailureCode = settlement.status === 'unknown' ? 'gateway_unknown_usage' : 'gateway_error';
+        throw failure;
+      }
+      // Keep successful spending receipts as publication evidence.
       receiptIds.add(reservation.receipt_id);
       resultReceipts.set(result,reservation.receipt_id);
       return result;
