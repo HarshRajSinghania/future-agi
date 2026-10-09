@@ -1,4 +1,4 @@
-import {open} from 'node:fs/promises';
+import {open, rm} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -24,12 +24,32 @@ export function validateClaim(claim) {
   }
 }
 
+// Only the numeric exception code leaves this boundary: an error body can echo query text.
+export class EvidenceReadError extends Error {
+  constructor(clickhouseCode) {
+    super('ClickHouse evidence read failed');
+    this.clickhouseCode = clickhouseCode;
+  }
+}
+
+const clickhouseTime = value => new Date(value).toISOString().replace('T', ' ').replace('Z', '');
+
+// A connection lost while the rows arrive is a failed read, like one refused up front.
+async function* responseRows(body, signal) {
+  try { yield* body; }
+  catch (error) { throw signal?.aborted ? error : new EvidenceReadError(null); }
+}
+
 // The project ownership proof comes from Django's claimed job, never the model.
 // created_at/updated_at cutoff excludes later rows but is not an MVCC snapshot:
 // a replacement merge may remove an earlier version between attempts.
 export async function downloadEvidence(claim, path, {baseUrl, database, username, password, signal,
   maxQueryMemoryBytes = 256 * 1024 * 1024, fetchImpl = fetch}) {
   validateClaim(claim);
+  const window = claim.evidence_window ?? null;
+  const [windowStart, windowEnd] = window ? [Date.parse(window.start), Date.parse(window.end)] : [];
+  if (window && (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd) || windowStart >= windowEnd
+      || windowStart % 3600000 || windowEnd % 3600000)) throw new Error('Invalid evidence window');
   if (!Number.isSafeInteger(maxQueryMemoryBytes) || maxQueryMemoryBytes < 128 * 1024 * 1024
       || maxQueryMemoryBytes > 1024 * 1024 * 1024) throw new Error('Invalid ClickHouse query memory budget');
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(database)) throw new Error('Invalid ClickHouse database');
@@ -39,14 +59,23 @@ export async function downloadEvidence(claim, path, {baseUrl, database, username
   endpoint.searchParams.set('param_project', claim.project_id);
   endpoint.searchParams.set('param_trace', claim.trace_id);
   endpoint.searchParams.set('param_org', claim.organization_id);
-  endpoint.searchParams.set('param_cutoff', new Date(claim.read_cutoff).toISOString().replace('T', ' ').replace('Z', ''));
+  endpoint.searchParams.set('param_cutoff', clickhouseTime(claim.read_cutoff));
+  if (window) {
+    endpoint.searchParams.set('param_window_start', clickhouseTime(windowStart));
+    endpoint.searchParams.set('param_window_end', clickhouseTime(windowEnd));
+  }
   const maxBytes = Math.min(claim.limits.max_evidence_bytes, 256 * 1024 * 1024);
   const maxRows = 50000;
   // trace_id is part of the immutable ReplacingMergeTree key, so its Bloom index
   // can safely prune before FINAL. Deletion and cutoff filters must remain after
   // FINAL; skipping on them could expose an older row version.
-  const query = `SELECT * FROM spans FINAL
-PREWHERE project_id = {project:UUID} AND trace_id = {trace:String}
+  // The window prunes day partitions. Its bounds are whole hours, the granularity
+  // of start_time in the sorting key, so every version of a row falls on the same
+  // side of them and the filter is also safe before FINAL.
+  const read = async bounded => {
+    const query = `SELECT * FROM spans FINAL
+PREWHERE project_id = {project:UUID} AND trace_id = {trace:String}${bounded
+    ? ' AND start_time >= {window_start:DateTime64(6)} AND start_time < {window_end:DateTime64(6)}' : ''}
 WHERE (org_id = {org:UUID} OR isNull(org_id)) AND is_deleted = 0
 AND created_at <= {cutoff:DateTime64(6)} AND updated_at <= {cutoff:DateTime64(6)}
 ORDER BY start_time, id LIMIT ${maxRows + 1}
@@ -55,10 +84,30 @@ SETTINGS max_execution_time=30, max_result_bytes=${maxBytes}, result_overflow_mo
   optimize_move_to_prewhere_if_final=0,
   ignore_data_skipping_indices='auto_minmax_index_is_deleted,auto_minmax_index_created_at'
 FORMAT JSONEachRow`;
-  const response = await fetchImpl(endpoint, {method: 'POST', body: query, signal, redirect: 'error',
-    headers: {'Content-Type': 'text/plain', 'X-ClickHouse-User': username, 'X-ClickHouse-Key': password}});
-  if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error('ClickHouse evidence read failed'); }
-  return storeEvidence(response.body, path, claim, {signal, maxBytes, maxRows});
+    const response = await fetchImpl(endpoint, {method: 'POST', body: query, signal, redirect: 'error',
+      headers: {'Content-Type': 'text/plain', 'X-ClickHouse-User': username, 'X-ClickHouse-Key': password}})
+      .catch(error => { throw signal?.aborted ? error : new EvidenceReadError(null); });
+    if (!response.ok || !response.body) {
+      const code = response.headers.get('x-clickhouse-exception-code') ?? '';
+      // Cancelling a body that has already failed rejects. The read failed either way.
+      await response.body?.cancel().catch(error => { if (signal?.aborted) throw error; });
+      throw new EvidenceReadError(/^\d{1,5}$/.test(code) ? Number(code) : null);
+    }
+    return storeEvidence(responseRows(response.body, signal), path, claim, {signal, maxBytes, maxRows});
+  };
+  if (!window) return read(false);
+  // The window is a speed-up, never a reason to judge a partial trace. A parent
+  // outside the result, or no rows at all, means the window may have cut the
+  // trace, so the read runs again without it.
+  let store;
+  try { store = await read(true); }
+  catch (error) { if (error?.message !== 'No visible trace evidence') throw error; }
+  if (store && ![...store.index.values()].some(span => span.parent_span_id
+    && !store.index.has(span.parent_span_id))) return store;
+  process.stderr.write(JSON.stringify({event: 'omega_evidence_window_fallback', attempt_id: claim.attempt_id,
+    observed_span_count: store?.index.size ?? 0}) + '\n');
+  await rm(path, {force: true});
+  return read(false);
 }
 
 export async function storeEvidence(chunks, path, claim, {signal, maxBytes = claim.limits.max_evidence_bytes, maxRows = 50000} = {}) {
@@ -68,6 +117,11 @@ export async function storeEvidence(chunks, path, claim, {signal, maxBytes = cla
   let bytes = 0, pending = Buffer.alloc(0), offset = 0, unresolvedExternalPayloads = 0;
   function indexLine(line) {
     const row = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(line));
+    // ClickHouse reports an error raised after the first block as a row in an HTTP 200 body.
+    if (typeof row.exception === 'string' && row.project_id === undefined) {
+      const code = /^Code: (\d{1,5})\./.exec(row.exception)?.[1];
+      throw new EvidenceReadError(code ? Number(code) : null);
+    }
     if (row.project_id !== claim.project_id || row.trace_id !== claim.trace_id
         || (row.org_id && row.org_id !== claim.organization_id)) throw new Error('Evidence scope mismatch');
     if (typeof row.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(row.id) || index.has(row.id)) throw new Error('Invalid or duplicate span identity');
