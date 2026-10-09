@@ -59,6 +59,17 @@ async function quarantineRejectedReport(spool, name) {
   await rename(join(spool, name), join(rejected, name));
 }
 
+// Django stored nothing for a report it rejected as invalid. Without a word from
+// the worker the attempt holds its lease until it expires, and the job then runs
+// again towards the same rejection.
+async function releaseRejectedAttempt(path, status, control, signal) {
+  const {lease_token: leaseToken, result} = JSON.parse(await readFile(path, 'utf8'));
+  if (!leaseToken || !result?.attempt_id) return;
+  await control(`/attempts/${result.attempt_id}/`, {organization_id: result.organization_id,
+    workspace_id: result.workspace_id, project_id: result.project_id, job_id: result.job_id,
+    lease_token: leaseToken, action: 'cancel', reason: `report_rejected:http_${status}`}, {method: 'PATCH', signal});
+}
+
 // Model execution and publication have separate retry boundaries. A finished
 // report remains on the mounted spool until Django acknowledges it.
 export async function processClaim(claim, {control, investigate, spool, signal, heartbeatMs = 15000}) {
@@ -133,6 +144,12 @@ export async function runCoordinator({control, investigate, spool, workerId, eng
           catch (error) {
             if (!error.terminal && ![400, 404, 409, 422].includes(error.status)) throw error;
             await quarantineRejectedReport(spool, name);
+            // Best effort: when this fails the lease still expires and Django settles the job.
+            if ([400, 422].includes(error.status)) {
+              await releaseRejectedAttempt(join(spool, 'rejected', name), error.status, control, signal)
+                .catch(() => process.stderr.write(JSON.stringify(
+                  {event: 'omega_rejected_attempt_not_released', attempt_id: attemptId}) + '\n'));
+            }
             onError(error, attemptId);
           }
           finally { publishing.delete(name); }
