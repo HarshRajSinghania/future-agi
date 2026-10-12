@@ -7,14 +7,44 @@ from rest_framework.test import APIClient
 from accounts.models.organization_membership import OrganizationMembership
 from saml2_auth.models import SAMLMetadataModel
 from tfc.constants.levels import Level
+from tfc.middleware.workspace_context import (
+    clear_workspace_context,
+    set_workspace_context,
+)
 
 pytestmark = [pytest.mark.django_db, pytest.mark.api]
 
 
-def _as_org_owner(user):
+def _bind_org(user, organization):
+    """Match API-key auth: request org plus the workspace ContextVar.
+
+    force_authenticate skips both. SAMLConfigPermission reads the ContextVar,
+    and IDPUploadViews.get_queryset reads request.organization.
+    """
+
+    def _start(request):
+        request.organization = organization
+        set_workspace_context(organization=organization, user=user, workspace=None)
+
+    def _finish(request):
+        clear_workspace_context()
+
     client = APIClient()
     client.force_authenticate(user=user)
+    client.handler.load_middleware()
+    client.handler._middleware_chain = None
+    # Insert after the middleware that clears context at process_request,
+    # so the bind survives that clear and is dropped on the response.
+    client.handler._view_middleware.insert(0, _start)
+    client.handler._template_response_middleware.append(_finish)
+    client.handler._exception_middleware.append(_finish)
     return client
+
+
+def _as_org_owner(user, organization=None):
+    if organization is None:
+        organization = user.organization
+    return _bind_org(user, organization)
 
 
 def test_config_retrieve_foreign_is_404_envelope(saml_tenants, idp_b):
@@ -31,7 +61,7 @@ def test_config_retrieve_foreign_is_404_envelope(saml_tenants, idp_b):
 def test_config_list_excludes_foreign_idp(saml_tenants, idp_a, idp_b):
     """Any authenticated member must not see another org's IdP row."""
 
-    client = _as_org_owner(saml_tenants.a2)
+    client = _bind_org(saml_tenants.a2, saml_tenants.org_a)
     response = client.get("/saml2_auth/idp-uploads/")
 
     assert response.status_code == 200
@@ -45,13 +75,38 @@ def test_config_list_excludes_foreign_idp(saml_tenants, idp_a, idp_b):
 def test_config_delete_foreign_is_404_and_row_stays(saml_tenants, idp_b):
     """A foreign id must not soft-delete another org's IdP."""
 
-    client = _as_org_owner(saml_tenants.a1)
+    client = _bind_org(saml_tenants.a1, saml_tenants.org_a)
     response = client.delete(f"/saml2_auth/idp-uploads/{idp_b.id}/")
     idp_b.refresh_from_db()
 
     assert response.status_code == 404
     assert idp_b.deleted is False
     assert idp_b.organization_id == saml_tenants.org_b.id
+
+
+def test_config_update_foreign_is_404_and_row_stays(saml_tenants, idp_b):
+    """A foreign id must not rewrite another org's IdP or move it."""
+
+    original_name = idp_b.name
+    original_generation = idp_b.security_generation
+    client = _bind_org(saml_tenants.a1, saml_tenants.org_a)
+    response = client.put(
+        f"/saml2_auth/idp-uploads/{idp_b.id}/",
+        {
+            "name": "attacker-supplied-name",
+            "identity_type": str(idp_b.identity_type),
+            "is_enabled": "true",
+            "organization": str(saml_tenants.org_a.id),
+        },
+        format="multipart",
+    )
+    idp_b.refresh_from_db()
+
+    assert response.status_code == 404
+    assert idp_b.organization_id == saml_tenants.org_b.id
+    assert idp_b.name == original_name
+    assert idp_b.security_generation == original_generation
+    assert idp_b.deleted is False
 
 
 def test_config_update_ignores_posted_organization(saml_tenants, idp_b):
