@@ -28,6 +28,32 @@ def test_config_retrieve_foreign_is_404_envelope(saml_tenants, idp_b):
     assert "identity_type" not in str(body)
 
 
+def test_config_list_excludes_foreign_idp(saml_tenants, idp_a, idp_b):
+    """Any authenticated member must not see another org's IdP row."""
+
+    client = _as_org_owner(saml_tenants.a2)
+    response = client.get("/saml2_auth/idp-uploads/")
+
+    assert response.status_code == 200
+    results = response.json()["result"]["results"]
+    ids = {item["id"] for item in results}
+    assert str(idp_a.id) in ids
+    assert str(idp_b.id) not in ids
+    assert str(idp_b.id) not in response.content.decode()
+
+
+def test_config_delete_foreign_is_404_and_row_stays(saml_tenants, idp_b):
+    """A foreign id must not soft-delete another org's IdP."""
+
+    client = _as_org_owner(saml_tenants.a1)
+    response = client.delete(f"/saml2_auth/idp-uploads/{idp_b.id}/")
+    idp_b.refresh_from_db()
+
+    assert response.status_code == 404
+    assert idp_b.deleted is False
+    assert idp_b.organization_id == saml_tenants.org_b.id
+
+
 def test_config_update_ignores_posted_organization(saml_tenants, idp_b):
     """A caller must not use a global lookup to move a foreign IdP into A."""
 
