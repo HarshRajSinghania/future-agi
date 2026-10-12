@@ -668,19 +668,19 @@ class IDPUploadViews(viewsets.ModelViewSet):
             if not form.is_valid():
                 return self._gm.bad_request(_format_form_errors(form.errors))
             data = form.cleaned_data
-            data.pop("file", None)
             data.pop("relay_state", None)
             data["organization"] = organization
+            uploaded = data.get("file")
             if int(saml_model.identity_type) != int(
                 data.get("identity_type")
-            ) and not data.get("file"):
+            ) and not uploaded:
                 return self._gm.bad_request("Please select a XML file.")
-            if "file" in data:
+            if uploaded:
                 try:
-                    meta = data.pop("file").read()
-                    data["meta"] = meta.decode()
+                    data["meta"] = uploaded.read().decode()
                 except Exception:
                     logger.info("No file in update SSO.")
+            data.pop("file", None)
             self.get_queryset().filter(
                 id=uuid,
                 deleted=False,
