@@ -222,3 +222,97 @@ class TestInviteAcceptanceReportingActivity:
         assert invitee.config[INVITE_SIGNUP_REPORTING_KEY]["status"] == "pending"
         slack.assert_not_called()
         mixpanel.assert_not_called()
+
+    def test_retry_after_later_destination_failure_does_not_repeat_sent_calls(
+        self, invitee, monkeypatch
+    ):
+        """A Mixpanel failure must not cause a later retry to resend HubSpot or Slack."""
+        monkeypatch.setenv("ENV_TYPE", "staging")
+        calls = {"hubspot": 0, "slack": 0, "mixpanel": 0}
+
+        def hubspot(_user):
+            calls["hubspot"] += 1
+            return True, None
+
+        def slack(_user, updated, err):
+            calls["slack"] += 1
+            assert updated is True
+            assert err is None
+            return True
+
+        def mixpanel(*_args, **_kwargs):
+            calls["mixpanel"] += 1
+            if calls["mixpanel"] == 1:
+                raise RuntimeError("mixpanel down")
+            return True
+
+        with (
+            patch("accounts.utils.send_hubspot_notification", side_effect=hubspot),
+            patch("accounts.utils.hubspot_is_configured", return_value=True),
+            patch(
+                "accounts.utils.slack_signup_webhook_is_configured", return_value=True
+            ),
+            patch("accounts.utils.send_slack_notification", side_effect=slack),
+            patch("analytics.utils.track_mixpanel_event", side_effect=mixpanel),
+        ):
+            run = _ACTIVITY_REGISTRY[ACTIVITY]["func"]
+            with pytest.raises(RuntimeError, match="mixpanel down"):
+                run(str(invitee.id))
+
+            invitee.refresh_from_db()
+            state = invitee.config[INVITE_SIGNUP_REPORTING_KEY]
+            assert state["status"] == "pending"
+            assert state["destinations"]["hubspot"] == "sent"
+            assert state["destinations"]["slack"] == "sent"
+            assert state["destinations"]["mixpanel"] == "pending"
+
+            run(str(invitee.id))
+
+        assert calls == {"hubspot": 1, "slack": 1, "mixpanel": 2}
+        invitee.refresh_from_db()
+        final = invitee.config[INVITE_SIGNUP_REPORTING_KEY]
+        assert final["status"] == "complete"
+        assert final["destinations"]["mixpanel"] == "sent"
+
+    def test_stale_claim_is_reclaimed_instead_of_stranding_the_report(
+        self, invitee, monkeypatch
+    ):
+        """A dead worker's claim past the lease must not block the next attempt forever."""
+        monkeypatch.setenv("ENV_TYPE", "staging")
+        invitee.config = {
+            "currentOrganizationId": str(invitee.organization_id),
+            INVITE_SIGNUP_REPORTING_KEY: {
+                "status": "in_progress",
+                "destinations": {
+                    "hubspot": {
+                        "status": "claimed",
+                        "claimed_at": (
+                            timezone.now() - timedelta(minutes=16)
+                        ).isoformat(),
+                        "claim_token": "dead-worker",
+                    },
+                    "slack": "pending",
+                    "mixpanel": "pending",
+                },
+            },
+        }
+        invitee.save(update_fields=["config"])
+
+        with (
+            patch(
+                "accounts.utils.send_hubspot_notification", return_value=(True, None)
+            ) as hubspot,
+            patch("accounts.utils.hubspot_is_configured", return_value=True),
+            patch(
+                "accounts.utils.slack_signup_webhook_is_configured", return_value=True
+            ),
+            patch("accounts.utils.send_slack_notification", return_value=True) as slack,
+            patch("analytics.utils.track_mixpanel_event", return_value=True) as mixpanel,
+        ):
+            _ACTIVITY_REGISTRY[ACTIVITY]["func"](str(invitee.id))
+
+        hubspot.assert_called_once()
+        slack.assert_called_once()
+        mixpanel.assert_called_once()
+        invitee.refresh_from_db()
+        assert invitee.config[INVITE_SIGNUP_REPORTING_KEY]["status"] == "complete"
