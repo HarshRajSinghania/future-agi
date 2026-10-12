@@ -10,10 +10,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from rest_framework.test import APIClient
 
 from simulate.serializers.harness_environment import (
     HarnessEnvironmentContractSerializer,
     HarnessEnvironmentDetailSerializer,
+    HarnessEnvironmentDetailV2Serializer,
     HarnessEnvironmentWorldSerializer,
 )
 from simulate.serializers.harness_job import HarnessStageOutputSerializer
@@ -23,7 +25,10 @@ from simulate.services.harness_environment import (
     _world_section,
     environment_detail,
 )
-from simulate.services.harness_environment_evidence import EnvironmentEvidence
+from simulate.services.harness_environment_evidence import (
+    EnvironmentEvidence,
+    environment_detail_v2,
+)
 from simulate.services.hosted_harness_gateway import (
     _authoring_archive_command,
     authoring_stage_outputs,
@@ -407,10 +412,18 @@ def test_scrubbed_or_mismatched_prompts_never_claim_verbatim_provenance(prompt, 
     assert output["system_prompt_excerpt"] == "Help the caller"
 
 
-def test_schema_secret_defaults_are_redacted_without_losing_property_types():
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://schemas.example.test/params?signature=secret#token",
+        "https://user:password@schemas.example.test/params?signature=secret#token",
+    ],
+)
+def test_schema_secret_defaults_are_redacted_without_losing_property_types(url):
     parameters = {
         "type": "object",
-        "$ref": "https://schemas.example.test/params?version=2",
+        "$ref": url,
+        "$defs": {"local": {"$ref": "#/$defs/order"}},
         "properties": {"api_key": {"type": "string", "default": "real-secret"}},
     }
     output = authoring_stage_outputs(
@@ -424,9 +437,28 @@ def test_schema_secret_defaults_are_redacted_without_losing_property_types():
     assert output["parameters"]["api_key"] == "[redacted]"
     assert output["tool_entrypoints"][0]["provider_function"]["parameters"] == {
         "type": "object",
-        "$ref": "https://schemas.example.test/params?version=2",
+        "$ref": "https://schemas.example.test/params",
+        "$defs": {"local": {"$ref": "#/$defs/order"}},
         "properties": {"api_key": {"type": "string", "default": "[redacted]"}},
     }
+
+
+@pytest.mark.parametrize("digest", [None, "", "a" * 64])
+def test_unverified_full_prompt_is_hidden_in_new_and_stored_artifacts(digest):
+    contract = {
+        "system_prompt": "Help the caller",
+        "system_prompt_origin": {"kind": "file", "path": "prompt.txt"},
+        "system_prompt_excerpt": "Help the caller",
+    }
+    if digest is not None:
+        contract["system_prompt_origin"]["sha256"] = digest
+    output = authoring_stage_outputs(contract, None, None)[0]["data"]
+    assert "system_prompt" not in output
+    assert "system_prompt_origin" not in output
+    actual = _serialized_contract(_evidence(contract))
+    assert actual["system_prompt"] is None
+    assert actual["system_prompt_origin"] is None
+    assert actual["system_prompt_excerpt"] == "Help the caller"
 
 
 def test_ambiguous_table_and_store_identities_do_not_acquire_columns():
@@ -566,3 +598,329 @@ def test_full_detail_serializes_stored_evidence_without_provider_or_storage_read
     assert actual["contract"]["agent"] == "verified"
     assert actual["contract"]["data_schema_columns"]["public.orders"][0]["pk"] is True
     assert actual["contract"]["tool_certification"] == _certification()["tools"]
+
+
+def _detail_job(user, workspace, contract, *, source_model=None, sub_goals=None):
+    from simulate.services.hosted_harness import create_hosted_job
+    from simulate.tests.test_harness_provider import _v1_payload
+
+    job, _ = create_hosted_job(
+        user.organization,
+        _v1_payload(),
+        idempotency_key="th8038-versioned-detail",
+        workspace=workspace,
+    )
+    job.stage_outputs = authoring_stage_outputs(
+        contract, None, None, source_model=source_model, sub_goals=sub_goals
+    )
+    job.save(update_fields=["stage_outputs", "updated_at"])
+    return job
+
+
+@pytest.mark.django_db
+def test_detail_v2_projects_rich_shapes_without_changing_v1_or_persistence(
+    user, workspace
+):
+    origin = {"kind": "file", "path": "agent.py", "line": 12}
+    contract = {
+        "agent": "support",
+        "modality": "chat",
+        "hard_constraints": ["Verify identity"],
+        "hard_constraint_details": [
+            {
+                "text": "Verify identity",
+                "origin": origin,
+                "enforced_by": ["prompt"],
+                "sub_goal": "verified",
+            }
+        ],
+        "real_use_cases": ["Find an order"],
+        "real_use_case_details": [
+            {"text": "Find an order", "short": "Order lookup", "sub_goal": "missing"}
+        ],
+        "data_schema": {"orders": {"id": "INT"}},
+        "data_store": {
+            "kind": "postgres",
+            "configured_by": "DATABASE_URL",
+            "configuration": {"source": "environment", "ref": "DATABASE_URL"},
+            "location": "external_db",
+        },
+        "amendments": ["charge_card: no runnable seam"],
+        "amendment_details": [
+            {
+                "subject": "charge_card",
+                "kind": "unreachable_tool",
+                "reason": "no runnable seam",
+            }
+        ],
+        "tools": [
+            {
+                "name": "lookup_order",
+                "effect": "Reads one order",
+                "effect_kind": "read",
+            },
+            {"name": "unknown", "effect": "Unclassified operation"},
+        ],
+        "tool_entrypoints": [
+            {
+                "tool": "lookup_order",
+                "mode": "import",
+                "implementation_origin": "source",
+                "origin": origin,
+            }
+        ],
+    }
+    job = _detail_job(
+        user,
+        workspace,
+        contract,
+        source_model=_source_model(),
+        sub_goals={"sub_goals": [{"name": "verified", "what": "Identity was checked"}]},
+    )
+    stored_payload, stored_outputs = deepcopy(job.payload), deepcopy(job.stage_outputs)
+    client = APIClient()
+    client.force_authenticate(user=user)
+    url = f"/simulate/api/harness-environments/{job.id}/"
+    with (
+        patch(
+            "simulate.services.hosted_harness_gateway.get_storage_client",
+            side_effect=AssertionError("storage read"),
+        ),
+        patch(
+            "simulate.services.hosted_harness_gateway.get_sandbox_provider",
+            side_effect=AssertionError("provider read"),
+        ),
+    ):
+        omitted = client.get(url, HTTP_X_WORKSPACE_ID=str(workspace.id))
+        legacy = client.get(
+            url, {"contract_version": 1}, HTTP_X_WORKSPACE_ID=str(workspace.id)
+        )
+        rich = client.get(
+            url, {"contract_version": 2}, HTTP_X_WORKSPACE_ID=str(workspace.id)
+        )
+    assert omitted.status_code == legacy.status_code == rich.status_code == 200
+    assert omitted.content == legacy.content
+    old = legacy.json()
+    assert "contract_version" not in old
+    assert old["contract"]["hard_constraints"] == ["Verify identity"]
+    assert old["contract"]["real_use_cases"] == ["Find an order"]
+    assert old["contract"]["data_store"]["configured_by"] == "DATABASE_URL"
+    assert old["contract"]["tools"][0]["effect"] == "Reads one order"
+    assert old["contract"]["tool_entrypoints"][0]["origin"] == origin
+    legacy_serializer = HarnessEnvironmentDetailSerializer(data=old)
+    assert legacy_serializer.is_valid(), legacy_serializer.errors
+    data = rich.json()
+    assert data["contract_version"] == 2
+    assert HarnessEnvironmentDetailV2Serializer(data).data == data
+    actual = data["contract"]
+    assert actual["hard_constraints"][0]["text"] == "Verify identity"
+    assert actual["hard_constraints"][0]["sub_goal"] == "verified"
+    assert actual["hard_constraints"][0]["enforced_by"] == ["prompt"]
+    assert actual["real_use_cases"][0]["short"] == "Order lookup"
+    assert "sub_goal" not in actual["real_use_cases"][0]
+    assert actual["data_schema"]["public.orders"][0]["type"] == ""
+    assert actual["data_schema"]["public.orders"][1]["enum"] == ["open", "closed"]
+    assert actual["data_schema_legacy"] == {"orders": {"id": "INT"}}
+    assert actual["data_store"]["configured_by"]["source"] == "environment"
+    assert actual["data_store"]["configured_by"]["ref"] == "DATABASE_URL"
+    assert actual["data_store"]["configured_by_legacy"] == "DATABASE_URL"
+    assert actual["amendments"] == contract["amendment_details"]
+    assert actual["amendments_legacy"] == old["contract"]["amendments"]
+    assert actual["tools"][0]["effect"] == "read"
+    assert actual["tools"][0]["effect_legacy"] == "Reads one order"
+    assert actual["tools"][1]["effect"] is None
+    assert actual["tool_entrypoints"][0]["origin"] == "source"
+    assert actual["tool_entrypoints"][0]["origin_evidence"]["path"] == "agent.py"
+    job.refresh_from_db()
+    assert job.payload == stored_payload
+    assert job.stage_outputs == stored_outputs
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "legacy_mode", [None, "unreachable", "import", "unreachable_source"]
+)
+def test_provider_entrypoint_companion_only_joins_v2(user, workspace, legacy_mode):
+    legacy_entries = (
+        []
+        if legacy_mode is None
+        else [
+            {
+                "tool": "lookup_order",
+                "mode": legacy_mode,
+                "implementation_origin": "source" if legacy_mode == "import" else None,
+            }
+        ]
+    )
+    if legacy_mode == "unreachable_source":
+        legacy_entries[0].update(
+            {
+                "mode": "unreachable",
+                "source": {
+                    "path": "agent.py",
+                    "line_start": 1,
+                    "line_end": 1,
+                    "code": "def lookup_order(): pass",
+                },
+            }
+        )
+    contract = {
+        "agent": "provider",
+        "modality": "voice",
+        "tool_entrypoints": legacy_entries,
+        "tool_entrypoint_details": [
+            {
+                "tool": "lookup_order",
+                "mode": "provider",
+                "implementation_origin": "provider_custom_function",
+                "origin": {"kind": "tool_list", "field": "model.tools[0]"},
+                "provider_function": {
+                    "url": "https://callback.example.test/tool?signature=secret",
+                    "parameters": {
+                        "$ref": "https://schema.example.test/order?signature=secret"
+                    },
+                },
+            }
+        ],
+    }
+    job = _detail_job(user, workspace, contract)
+    client = APIClient()
+    client.force_authenticate(user=user)
+    url = f"/simulate/api/harness-environments/{job.id}/"
+    legacy = client.get(url, HTTP_X_WORKSPACE_ID=str(workspace.id))
+    rich = client.get(
+        url, {"contract_version": 2}, HTTP_X_WORKSPACE_ID=str(workspace.id)
+    )
+    assert legacy.status_code == rich.status_code == 200
+    assert legacy.json()["contract"]["tool_entrypoints"] == legacy_entries
+    assert "tool_entrypoint_details" not in legacy.json()["contract"]
+    entries = rich.json()["contract"]["tool_entrypoints"]
+    assert len(entries) == 1
+    if legacy_mode == "unreachable_source":
+        assert entries[0]["source"]["path"] == "agent.py"
+        assert entries[0]["origin"] is None
+    elif legacy_mode == "import":
+        assert entries[0]["origin"] == "source"
+    else:
+        assert entries[0]["origin"] == "provider_custom_function"
+        assert entries[0]["provider_function"] == {
+            "url": "https://callback.example.test/tool",
+            "parameters": {"$ref": "https://schema.example.test/order"},
+        }
+    job.refresh_from_db()
+    assert job.stage_outputs[0]["data"]["tool_entrypoints"] == legacy_entries
+    assert bool(job.stage_outputs[0]["data"]["tool_entrypoints"]) == bool(
+        legacy_entries
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("version", ["0", "3", "two", "2.0", ""])
+def test_detail_rejects_invalid_contract_version(user, workspace, version):
+    job = _detail_job(user, workspace, {"agent": "old"})
+    client = APIClient()
+    client.force_authenticate(user=user)
+    response = client.get(
+        f"/simulate/api/harness-environments/{job.id}/",
+        {"contract_version": version},
+        HTTP_X_WORKSPACE_ID=str(workspace.id),
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("authored", [False, True])
+def test_detail_v2_keeps_missing_evidence_unknown(user, workspace, authored):
+    contract = (
+        {
+            "agent": "old",
+            "hard_constraints": ["Be kind"],
+            "real_use_cases": ["Help"],
+            "data_schema": {"orders": {"id": "INT"}},
+            "data_store": {"configured_by": "DATABASE_URL"},
+            "amendments": ["A note without a reason"],
+            "tool_entrypoints": [{"tool": "old", "mode": "import"}],
+        }
+        if authored
+        else None
+    )
+    job = _detail_job(user, workspace, contract)
+    client = APIClient()
+    client.force_authenticate(user=user)
+    response = client.get(
+        f"/simulate/api/harness-environments/{job.id}/",
+        {"contract_version": 2},
+        HTTP_X_WORKSPACE_ID=str(workspace.id),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["contract_version"] == 2
+    if not authored:
+        assert data["contract"] is None
+        return
+    actual = data["contract"]
+    assert actual["hard_constraints"][0]["text"] == "Be kind"
+    assert actual["real_use_cases"][0]["text"] == "Help"
+    assert actual["data_schema"] is None
+    assert actual["data_schema_legacy"] == {"orders": {"id": "INT"}}
+    assert actual["data_store"]["configured_by"] is None
+    assert actual["data_store"]["configured_by_legacy"] == "DATABASE_URL"
+    assert actual["amendments"] == [
+        {"subject": "", "kind": None, "reason": "A note without a reason"}
+    ]
+    assert actual["tool_entrypoints"][0]["origin"] is None
+
+
+def test_v2_does_not_assign_ambiguous_item_evidence_or_mutate_source():
+    detail = {
+        "contract": {
+            "hard_constraints": ["Be kind"],
+            "hard_constraint_details": [
+                {"text": "Be kind", "sub_goal": "one"},
+                {"text": "Be kind", "sub_goal": "two"},
+            ],
+            "amendments": [],
+        }
+    }
+    before = deepcopy(detail)
+    actual = environment_detail_v2(detail, [])
+    assert actual["contract"]["hard_constraints"] == [{"text": "Be kind"}]
+    assert detail == before
+
+
+def test_v2_keeps_unmatched_legacy_and_rich_amendments():
+    detail = {
+        "contract": {
+            "amendments": [
+                {"subject": "charge_card", "note": "No runnable seam"},
+                {"subject": "", "note": "Another legacy note"},
+            ],
+            "amendment_details": [
+                {
+                    "subject": "charge_card",
+                    "kind": "unreachable_tool",
+                    "reason": "No runnable seam",
+                },
+                {
+                    "subject": "orders",
+                    "kind": "contract_change",
+                    "reason": "Source table name corrected",
+                },
+            ],
+        }
+    }
+    actual = environment_detail_v2(detail, [])["contract"]
+    assert actual["amendments"] == [
+        {
+            "subject": "charge_card",
+            "kind": "unreachable_tool",
+            "reason": "No runnable seam",
+        },
+        {
+            "subject": "orders",
+            "kind": "contract_change",
+            "reason": "Source table name corrected",
+        },
+        {"subject": "", "kind": None, "reason": "Another legacy note"},
+    ]
+    assert actual["amendments_legacy"] == detail["contract"]["amendments"]

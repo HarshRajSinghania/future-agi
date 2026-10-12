@@ -37,7 +37,10 @@ from simulate.models import (
     HostedHarnessJob,
     HostedHarnessSecret,
 )
-from simulate.services.harness_environment_evidence import INTERNAL_TABLES
+from simulate.services.harness_environment_evidence import (
+    INTERNAL_TABLES,
+    has_verified_system_prompt,
+)
 from simulate.services.hosted_harness import (
     HostedHarnessError,
     activate_attempt_capability,
@@ -4451,8 +4454,6 @@ def _secret_safe(value: Any, *, key: str = "", schema: bool = False) -> Any:
         try:
             url = urlsplit(value)
             if url.scheme and url.netloc:
-                if schema and "@" not in url.netloc:
-                    return _redact(value, ())
                 return urlunsplit(
                     (url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", "")
                 )
@@ -4574,12 +4575,9 @@ def authoring_stage_outputs(
         tools = contract.get("tools") or []
         safe_contract = _secret_safe(contract)
         prompt = contract.get("system_prompt")
-        origin = contract.get("system_prompt_origin")
-        prompt_digest = origin.get("sha256") if isinstance(origin, dict) else None
-        if safe_contract.get("system_prompt") != prompt or (
-            prompt_digest
-            and isinstance(prompt, str)
-            and prompt_digest != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        if (
+            not has_verified_system_prompt(safe_contract)
+            or safe_contract.get("system_prompt") != prompt
         ):
             safe_contract.pop("system_prompt", None)
             safe_contract.pop("system_prompt_origin", None)

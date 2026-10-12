@@ -24,7 +24,11 @@ from simulate.models import (
     HostedHarnessReceipt,
     HostedHarnessStageOutput,
 )
-from simulate.services.harness_environment_evidence import EnvironmentEvidence
+from simulate.services.harness_environment_evidence import (
+    EnvironmentEvidence,
+    environment_detail_v2,
+    has_verified_system_prompt,
+)
 from simulate.utils.ended_reason import canonical_ended_reasons
 
 # The four states the list's status pill knows. The pipeline reports far finer
@@ -328,7 +332,9 @@ _SETTINGS_FIELDS = ("runtime", "security", "artifacts", "scenario_count", "seed"
 _PERSONA_COLUMNS = ("persona", "situation", "outcome")
 
 
-def environment_detail(job: HostedHarnessJob) -> dict[str, Any]:
+def environment_detail(
+    job: HostedHarnessJob, *, contract_version: int = 1
+) -> dict[str, Any]:
     """The whole environment, section by section, from what the job already holds.
 
     A section is ``None`` until the stage that produces it has finished, so a
@@ -368,7 +374,7 @@ def environment_detail(job: HostedHarnessJob) -> dict[str, Any]:
             "agent": _agent(job),
         }
     )
-    return {
+    detail = {
         "id": str(job.id),
         "overview": overview,
         "contract": _contract_section(job, evidence, schema_tables),
@@ -379,6 +385,11 @@ def environment_detail(job: HostedHarnessJob) -> dict[str, Any]:
         "evaluations": {"selected": selected, "results": _results(receipts)},
         "settings": _settings(job),
     }
+    if contract_version == 2:
+        return environment_detail_v2(
+            detail, contract.get("tool_entrypoint_details") or []
+        )
+    return detail
 
 
 def _environment_evidence(job: HostedHarnessJob) -> EnvironmentEvidence:
@@ -717,6 +728,9 @@ def _contract_section(
     if not contract:
         return None
     section = {field: contract.get(field) for field in _CONTRACT_FIELDS}
+    if not has_verified_system_prompt(contract):
+        section["system_prompt"] = None
+        section["system_prompt_origin"] = None
     agent = (job.payload or {}).get("agent") or {}
     if (
         agent.get("connector") in {"vapi", "retell", "retell_chat"}

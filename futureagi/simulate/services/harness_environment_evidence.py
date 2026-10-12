@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -87,3 +88,84 @@ class EnvironmentEvidence:
                 )
             result.append({**store, "tables": tables})
         return result
+
+
+def has_verified_system_prompt(contract: dict[str, Any]) -> bool:
+    prompt = contract.get("system_prompt")
+    origin = contract.get("system_prompt_origin")
+    return (
+        isinstance(prompt, str)
+        and isinstance(origin, dict)
+        and origin.get("sha256") == hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    )
+
+
+def environment_detail_v2(
+    detail: dict[str, Any], entrypoint_details: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Change response shapes using only the already projected evidence."""
+    original = detail.get("contract")
+    if original is None:
+        return {**detail, "contract_version": 2}
+    contract = dict(original)
+    for field, companion in (
+        ("hard_constraints", "hard_constraint_details"),
+        ("real_use_cases", "real_use_case_details"),
+    ):
+        details = contract.get(companion) or []
+        texts = contract.get(field)
+        if texts is None:
+            contract[field] = details or None
+            continue
+        items = []
+        for text in texts:
+            matches = [item for item in details if item["text"] == text]
+            items.append(dict(matches[0]) if len(matches) == 1 else {"text": text})
+        contract[field] = items
+    contract["data_schema_legacy"] = contract.get("data_schema")
+    contract["data_schema"] = contract.get("data_schema_columns")
+    store = contract.get("data_store")
+    if store is not None:
+        contract["data_store"] = {
+            **store,
+            "configured_by_legacy": store.get("configured_by"),
+            "configured_by": store.get("configuration"),
+        }
+    contract["amendments_legacy"] = contract["amendments"]
+    amendments = [dict(item) for item in contract.get("amendment_details") or []]
+    documented = {(item["subject"], item["reason"]) for item in amendments}
+    contract["amendments"] = amendments + [
+        {"subject": item["subject"], "kind": None, "reason": item["note"]}
+        for item in contract["amendments"]
+        if (item["subject"], item["note"]) not in documented
+    ]
+    tools = contract.get("tools")
+    if tools is not None:
+        contract["tools"] = [
+            {
+                **tool,
+                "effect": tool.get("effect_kind"),
+                "effect_legacy": tool.get("effect"),
+            }
+            for tool in tools
+        ]
+    entries = contract.get("tool_entrypoints")
+    if entries is not None or entrypoint_details:
+        by_tool = {entry["tool"]: entry for entry in entries or []}
+        for entry in entrypoint_details:
+            existing = by_tool.get(entry["tool"])
+            if existing is None or (
+                existing.get("mode") == "unreachable"
+                and not existing.get("source")
+                and existing.get("implementation_origin") != "source"
+            ):
+                by_tool[entry["tool"]] = entry
+        contract["tool_entrypoints"] = [
+            {
+                **entry,
+                "origin": entry.get("implementation_origin"),
+                "origin_evidence": entry.get("origin"),
+            }
+            for entry in by_tool.values()
+        ]
+    return {**detail, "contract_version": 2, "contract": contract}

@@ -50554,12 +50554,28 @@
                 "operationId": "simulate_api_harness-environments_read",
                 "summary": "One environment: overview, contract, world, scenarios, evaluations, settings.",
                 "description": "Same shape whichever door built it. A section the pipeline has not reached\nyet is null, so the client renders \"building\" rather than an empty pane.",
-                "parameters": [],
+                "parameters": [
+                    {
+                        "name": "contract_version",
+                        "in": "query",
+                        "description": "Version 1 preserves legacy field shapes. Version 2 returns rich contract fields, described by the response's x-contract-version-2 schema.",
+                        "required": false,
+                        "type": "integer",
+                        "enum": [
+                            1,
+                            2
+                        ],
+                        "default": 1
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "",
                         "schema": {
                             "$ref": "#/definitions/HarnessEnvironmentDetail"
+                        },
+                        "x-contract-version-2": {
+                            "$ref": "#/definitions/HarnessEnvironmentDetailV2"
                         }
                     },
                     "default": {
@@ -50571,7 +50587,8 @@
                 },
                 "tags": [
                     "simulate"
-                ]
+                ],
+                "x-runtime-request-validation": true
             },
             "patch": {
                 "operationId": "simulate_api_harness-environments_partial_update",
@@ -122896,7 +122913,7 @@
                 "enum": {
                     "type": "array",
                     "items": {
-                        "type": "object"
+                        "type": "string"
                     },
                     "x-nullable": true
                 },
@@ -124044,6 +124061,598 @@
                 },
                 "settings": {
                     "$ref": "#/definitions/HarnessEnvironmentSettings"
+                }
+            }
+        },
+        "HarnessEnvironmentToolV2": {
+            "required": [
+                "name",
+                "effect",
+                "effect_legacy"
+            ],
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "args": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "arg_types": {
+                    "title": "Arg types",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "arg_values": {
+                    "title": "Arg values",
+                    "type": "object"
+                },
+                "description": {
+                    "title": "Description",
+                    "type": "string"
+                },
+                "origin": {
+                    "$ref": "#/definitions/HarnessEnvironmentOrigin"
+                },
+                "effect": {
+                    "title": "Effect",
+                    "type": "string",
+                    "enum": [
+                        "read",
+                        "write",
+                        "external",
+                        "control"
+                    ],
+                    "x-nullable": true
+                },
+                "effect_legacy": {
+                    "title": "Effect legacy",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "effect_kind": {
+                    "title": "Effect kind",
+                    "type": "string",
+                    "enum": [
+                        "read",
+                        "write",
+                        "external",
+                        "control"
+                    ],
+                    "x-nullable": true
+                },
+                "effect_evidence": {
+                    "title": "Effect evidence",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "requires": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessEnvironmentProviderFunction": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "title": "Url",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "parameters": {
+                    "title": "Parameters",
+                    "type": "object",
+                    "x-nullable": true
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessEnvironmentToolEntrypointV2": {
+            "required": [
+                "tool",
+                "origin",
+                "origin_evidence"
+            ],
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "title": "Tool",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "mode": {
+                    "title": "Mode",
+                    "type": "string"
+                },
+                "module": {
+                    "title": "Module",
+                    "type": "string"
+                },
+                "callable": {
+                    "title": "Callable",
+                    "type": "string"
+                },
+                "factory": {
+                    "title": "Factory",
+                    "type": "string"
+                },
+                "first_arg": {
+                    "title": "First arg",
+                    "type": "string"
+                },
+                "service": {
+                    "title": "Service",
+                    "type": "string"
+                },
+                "endpoint": {
+                    "title": "Endpoint",
+                    "type": "string"
+                },
+                "method": {
+                    "title": "Method",
+                    "type": "string"
+                },
+                "notes": {
+                    "title": "Notes",
+                    "type": "string"
+                },
+                "origin": {
+                    "title": "Origin",
+                    "type": "string",
+                    "enum": [
+                        "provider_builtin",
+                        "provider_custom_function",
+                        "source"
+                    ],
+                    "x-nullable": true
+                },
+                "origin_evidence": {
+                    "$ref": "#/definitions/HarnessEnvironmentOrigin"
+                },
+                "implementation_origin": {
+                    "title": "Implementation origin",
+                    "type": "string",
+                    "enum": [
+                        "provider_builtin",
+                        "provider_custom_function",
+                        "source"
+                    ],
+                    "x-nullable": true
+                },
+                "source": {
+                    "title": "Source",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "provider_function": {
+                    "$ref": "#/definitions/HarnessEnvironmentProviderFunction"
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessEnvironmentStoreConfiguration": {
+            "required": [
+                "source",
+                "ref"
+            ],
+            "type": "object",
+            "properties": {
+                "source": {
+                    "title": "Source",
+                    "type": "string",
+                    "enum": [
+                        "environment",
+                        "file",
+                        "provider_field",
+                        "system_prompt"
+                    ]
+                },
+                "ref": {
+                    "title": "Ref",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "section": {
+                    "title": "Section",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessEnvironmentDataStoreV2": {
+            "required": [
+                "configured_by",
+                "configured_by_legacy"
+            ],
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "title": "Kind",
+                    "type": "string"
+                },
+                "version": {
+                    "title": "Version",
+                    "type": "string"
+                },
+                "configured_by": {
+                    "$ref": "#/definitions/HarnessEnvironmentStoreConfiguration"
+                },
+                "configured_by_legacy": {
+                    "title": "Configured by legacy",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "configuration": {
+                    "$ref": "#/definitions/HarnessEnvironmentStoreConfiguration"
+                },
+                "location": {
+                    "title": "Location",
+                    "type": "string",
+                    "enum": [
+                        "external_db",
+                        "in_process",
+                        "prompt_embedded",
+                        "provider_kb",
+                        "none"
+                    ],
+                    "x-nullable": true
+                },
+                "config_key": {
+                    "title": "Config key",
+                    "type": "string"
+                },
+                "host": {
+                    "title": "Host",
+                    "type": "string"
+                },
+                "port": {
+                    "title": "Port",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "database": {
+                    "title": "Database",
+                    "type": "string"
+                },
+                "user": {
+                    "title": "User",
+                    "type": "string"
+                },
+                "password_from": {
+                    "title": "Password from",
+                    "type": "string"
+                },
+                "schema_from": {
+                    "title": "Schema from",
+                    "type": "string"
+                },
+                "loaded_by": {
+                    "title": "Loaded by",
+                    "type": "string"
+                },
+                "loader_module": {
+                    "title": "Loader module",
+                    "type": "string"
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessEnvironmentAmendmentV2": {
+            "required": [
+                "subject",
+                "kind",
+                "reason"
+            ],
+            "type": "object",
+            "properties": {
+                "subject": {
+                    "title": "Subject",
+                    "type": "string"
+                },
+                "kind": {
+                    "title": "Kind",
+                    "type": "string",
+                    "enum": [
+                        "unreachable_tool",
+                        "contract_change"
+                    ],
+                    "x-nullable": true
+                },
+                "reason": {
+                    "title": "Reason",
+                    "type": "string",
+                    "minLength": 1
+                }
+            }
+        },
+        "HarnessEnvironmentContractV2": {
+            "required": [
+                "tools",
+                "real_use_cases",
+                "hard_constraints",
+                "tool_entrypoints",
+                "data_store",
+                "data_schema",
+                "amendments",
+                "sub_goals",
+                "end_conditions",
+                "provenance",
+                "data_schema_legacy",
+                "amendments_legacy"
+            ],
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "title": "Agent",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "one_liner": {
+                    "title": "One liner",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "modality": {
+                    "title": "Modality",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "call_direction": {
+                    "title": "Call direction",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "domain": {
+                    "title": "Domain",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "system_prompt": {
+                    "title": "System prompt",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "system_prompt_origin": {
+                    "$ref": "#/definitions/HarnessEnvironmentOrigin"
+                },
+                "system_prompt_excerpt": {
+                    "title": "System prompt excerpt",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentToolV2"
+                    },
+                    "x-nullable": true
+                },
+                "real_use_cases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentContractItem"
+                    },
+                    "x-nullable": true
+                },
+                "real_use_case_details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentContractItem"
+                    },
+                    "x-nullable": true
+                },
+                "hard_constraints": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentContractItem"
+                    },
+                    "x-nullable": true
+                },
+                "hard_constraint_details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentContractItem"
+                    },
+                    "x-nullable": true
+                },
+                "runtime": {
+                    "title": "Runtime",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    },
+                    "x-nullable": true
+                },
+                "runtime_dependencies": {
+                    "description": "Runtime dependencies with used_by containing only consumers identified by ALK.",
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    },
+                    "x-nullable": true
+                },
+                "implementation": {
+                    "title": "Implementation",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "tool_entrypoints": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentToolEntrypointV2"
+                    },
+                    "x-nullable": true
+                },
+                "data_store": {
+                    "$ref": "#/definitions/HarnessEnvironmentDataStoreV2"
+                },
+                "data_schema": {
+                    "title": "Data schema",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/HarnessEnvironmentSchemaColumn"
+                        }
+                    },
+                    "x-nullable": true
+                },
+                "data_schema_columns": {
+                    "title": "Data schema columns",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/HarnessEnvironmentSchemaColumn"
+                        }
+                    },
+                    "x-nullable": true
+                },
+                "data_schema_tables": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentSchemaTable"
+                    }
+                },
+                "tool_certification": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentToolCertification"
+                    }
+                },
+                "open_questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "x-nullable": true
+                },
+                "amendments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentAmendmentV2"
+                    }
+                },
+                "amendment_details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentAmendmentDetail"
+                    },
+                    "x-nullable": true
+                },
+                "actors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentActor"
+                    },
+                    "x-nullable": true
+                },
+                "sub_goals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentCatalogueSubGoal"
+                    }
+                },
+                "end_conditions": {
+                    "$ref": "#/definitions/HarnessEnvironmentEndConditions"
+                },
+                "notes": {
+                    "title": "Notes",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "chosen_evals": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "x-nullable": true
+                },
+                "provenance": {
+                    "$ref": "#/definitions/HarnessEnvironmentProvenance"
+                },
+                "data_schema_legacy": {
+                    "title": "Data schema legacy",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "amendments_legacy": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentAmendment"
+                    }
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessEnvironmentDetailV2": {
+            "required": [
+                "id",
+                "overview",
+                "contract",
+                "world",
+                "scenarios",
+                "evaluations",
+                "settings",
+                "contract_version"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "overview": {
+                    "$ref": "#/definitions/HarnessEnvironmentOverview"
+                },
+                "contract": {
+                    "$ref": "#/definitions/HarnessEnvironmentContractV2"
+                },
+                "world": {
+                    "$ref": "#/definitions/HarnessEnvironmentWorld"
+                },
+                "scenarios": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessEnvironmentScenario"
+                    }
+                },
+                "evaluations": {
+                    "$ref": "#/definitions/HarnessEnvironmentEvaluations"
+                },
+                "settings": {
+                    "$ref": "#/definitions/HarnessEnvironmentSettings"
+                },
+                "contract_version": {
+                    "title": "Contract version",
+                    "type": "integer",
+                    "enum": [
+                        2
+                    ]
                 }
             }
         },
