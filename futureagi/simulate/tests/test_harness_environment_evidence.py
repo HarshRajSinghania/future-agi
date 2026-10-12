@@ -679,6 +679,51 @@ def _detail_job(user, workspace, contract, *, source_model=None, sub_goals=None)
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("normalized", [False, True])
+def test_historical_list_description_is_scrubbed_without_rewriting_artifacts(
+    user, workspace, normalized
+):
+    from simulate.models import HostedHarnessStageOutput
+
+    contract = {
+        "agent": "old",
+        "one_liner": "Read https://user:password@example.test/help?signature=secret#token before answering.",
+    }
+    job = _detail_job(user, workspace, None)
+    if normalized:
+        artifact = HostedHarnessStageOutput.no_workspace_objects.create(
+            job=job, kind="contract", data=deepcopy(contract)
+        )
+    else:
+        job.stage_outputs = [{"kind": "contract", "data": deepcopy(contract)}]
+        job.save(update_fields=["stage_outputs", "updated_at"])
+    client = APIClient()
+    client.force_authenticate(user=user)
+    with (
+        patch(
+            "simulate.services.hosted_harness_gateway.get_storage_client",
+            side_effect=AssertionError("storage read"),
+        ),
+        patch(
+            "simulate.services.hosted_harness_gateway.get_sandbox_provider",
+            side_effect=AssertionError("provider read"),
+        ),
+    ):
+        response = client.get(
+            "/simulate/api/harness-environments/", HTTP_X_WORKSPACE_ID=str(workspace.id)
+        )
+    assert response.status_code == 200
+    row = next(row for row in response.json()["results"] if row["id"] == str(job.id))
+    assert row["description"] == "Read https://example.test/help before answering."
+    if normalized:
+        artifact.refresh_from_db()
+        assert artifact.data == contract
+    else:
+        job.refresh_from_db()
+        assert job.stage_outputs[0]["data"] == contract
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("normalized", [False, True])
 @pytest.mark.parametrize("version", [1, 2])
 def test_historical_contract_secrets_are_hidden_without_rewriting_artifacts(
     user, workspace, normalized, version

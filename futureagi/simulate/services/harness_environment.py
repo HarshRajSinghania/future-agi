@@ -217,7 +217,7 @@ def _domain(job: HostedHarnessJob) -> str | None:
 def _contract_data(job: HostedHarnessJob) -> dict[str, Any]:
     """The contract snapshot, preferring the verified copy over the live one."""
     data = _row_stage_output(job, "contract")
-    return data if isinstance(data, dict) else {}
+    return _secret_safe(data) if isinstance(data, dict) else {}
 
 
 def _row_stage_output(job: HostedHarnessJob, kind: str) -> Any:
