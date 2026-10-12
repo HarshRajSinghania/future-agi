@@ -135,18 +135,34 @@ _warn_if_egress_is_open()
 
 
 def _nsjail_read_only_binds(interpreter_path: str, script_path: str) -> list[str]:
-    interpreter_prefix = os.path.dirname(os.path.dirname(interpreter_path))
+    """Read-only mounts a dynamically linked interpreter can actually start with.
+
+    Network stays closed: callers must not pass -N. Debian/Ubuntu interpreters
+    need /lib and the dynamic linker, not only the interpreter prefix.
+    """
     script_dir = os.path.dirname(script_path)
-    return [
-        "-R",
-        interpreter_prefix,
-        "-R",
+    binds = [
+        interpreter_path,
+        os.path.dirname(os.path.dirname(interpreter_path)),
         script_dir,
-        "-R",
+        "/lib",
+        "/lib64",
+        "/usr",
+        "/etc/ssl",
+        "/etc/passwd",
         "/dev/null",
-        "-R",
         "/dev/urandom",
+        "/dev/zero",
     ]
+    flags = []
+    seen = set()
+    for path in binds:
+        if not path or path in seen or not os.path.exists(path):
+            continue
+        seen.add(path)
+        flags.extend(["-R", path])
+    flags.extend(["--proc_path", "/proc"])
+    return flags
 
 # Sets the limits (never above an inherited hard limit) and, unless its port
 # list is "-", allows TCP connections to those ports only and no TCP listening

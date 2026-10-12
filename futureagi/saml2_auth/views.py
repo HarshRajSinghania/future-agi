@@ -668,6 +668,8 @@ class IDPUploadViews(viewsets.ModelViewSet):
             if not form.is_valid():
                 return self._gm.bad_request(_format_form_errors(form.errors))
             data = form.cleaned_data
+            data.pop("file", None)
+            data.pop("relay_state", None)
             data["organization"] = organization
             if int(saml_model.identity_type) != int(
                 data.get("identity_type")

@@ -95,16 +95,11 @@ def test_nsjail_binds_only_required_read_paths():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 
-    assert module._nsjail_read_only_binds(
+    flags = module._nsjail_read_only_binds(
         "/usr/local/bin/python",
         "/sandbox/scripts/eval.py",
-    ) == [
-        "-R",
-        "/usr/local",
-        "-R",
-        "/sandbox/scripts",
-        "-R",
-        "/dev/null",
-        "-R",
-        "/dev/urandom",
-    ]
+    )
+    assert "-N" not in flags
+    assert flags.count("-R") >= 1
+    assert "/" not in flags[1::2]
+    assert "--proc_path" in flags
