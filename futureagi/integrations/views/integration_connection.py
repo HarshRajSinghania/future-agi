@@ -13,6 +13,10 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from accounts.utils import get_request_organization
+from agentcc.services.url_safety import (
+    WEBHOOK_PRIVATE_URL_ERROR,
+    ensure_public_http_url,
+)
 from integrations.models import (
     ACTION_ONLY_PLATFORMS,
     ConnectionStatus,
@@ -48,6 +52,16 @@ logger = structlog.get_logger(__name__)
 
 
 integration_errors = swagger_auto_schema(responses=INTEGRATION_ERROR_RESPONSES)
+
+
+def _reject_unsafe_host(host_url: str):
+    if not host_url:
+        return None
+    try:
+        ensure_public_http_url(host_url, WEBHOOK_PRIVATE_URL_ERROR)
+    except ValueError as exc:
+        return _error_response(str(exc))
+    return None
 
 
 def _build_credentials(data: dict) -> dict:
@@ -204,6 +218,9 @@ class IntegrationConnectionViewSet(BaseModelViewSetMixinWithUserOrg, ModelViewSe
             credentials = _build_credentials(data)
             ca_cert = data.get("ca_certificate") or None
             host_url = data.get("host_url") or ""
+            unsafe = _reject_unsafe_host(host_url)
+            if unsafe:
+                return unsafe
 
             validation = service.validate_credentials(
                 host_url=host_url,
@@ -212,9 +229,7 @@ class IntegrationConnectionViewSet(BaseModelViewSetMixinWithUserOrg, ModelViewSe
             )
 
             if not validation.get("valid"):
-                return _error_response(
-                    validation.get("error", "Invalid credentials.")
-                )
+                return _error_response(validation.get("error", "Invalid credentials."))
 
             # Resolve external project name from request or validation
             ext_project_name = data.get("external_project_name") or ""
@@ -389,6 +404,9 @@ class IntegrationConnectionViewSet(BaseModelViewSetMixinWithUserOrg, ModelViewSe
                     new_creds["secret_key"] = data["secret_key"]
 
                 host_url = data.get("host_url", instance.host_url)
+                unsafe = _reject_unsafe_host(host_url)
+                if unsafe:
+                    return unsafe
                 ca_cert = data.get("ca_certificate", instance.ca_certificate) or None
 
                 ensure_services_loaded()
@@ -413,6 +431,9 @@ class IntegrationConnectionViewSet(BaseModelViewSetMixinWithUserOrg, ModelViewSe
                     instance.status_message = ""
 
             if "host_url" in data:
+                unsafe = _reject_unsafe_host(data["host_url"])
+                if unsafe:
+                    return unsafe
                 instance.host_url = data["host_url"]
             if "ca_certificate" in data:
                 instance.ca_certificate = data["ca_certificate"]
@@ -481,8 +502,12 @@ class IntegrationConnectionViewSet(BaseModelViewSetMixinWithUserOrg, ModelViewSe
             credentials = _build_credentials(data)
             ca_cert = data.get("ca_certificate") or None
 
+            host_url = data.get("host_url") or ""
+            unsafe = _reject_unsafe_host(host_url)
+            if unsafe:
+                return unsafe
             result = service.validate_credentials(
-                host_url=data.get("host_url") or "",
+                host_url=host_url,
                 credentials=credentials,
                 ca_certificate=ca_cert,
             )

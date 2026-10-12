@@ -3,6 +3,11 @@ from typing import Any, Optional
 
 import requests
 
+from agentcc.services.url_safety import (
+    WEBHOOK_PRIVATE_URL_ERROR,
+    build_ssrf_safe_session,
+    ensure_public_http_url,
+)
 from integrations.services.base import BaseIntegrationService, register_service
 
 logger = logging.getLogger(__name__)
@@ -34,9 +39,10 @@ class PostHogService(BaseIntegrationService):
                 return {"valid": False, "error": "API key is required."}
 
             host = (host_url or DEFAULT_POSTHOG_HOST).rstrip("/")
+            ensure_public_http_url(host, WEBHOOK_PRIVATE_URL_ERROR)
             url = f"{host}/decide/?v=3"
 
-            resp = requests.post(
+            resp = build_ssrf_safe_session(WEBHOOK_PRIVATE_URL_ERROR).post(
                 url,
                 json={
                     "api_key": api_key,
@@ -63,6 +69,8 @@ class PostHogService(BaseIntegrationService):
                 "error": f"Unexpected response from PostHog (HTTP {resp.status_code}).",
             }
 
+        except ValueError as exc:
+            return {"valid": False, "error": str(exc)}
         except requests.exceptions.ConnectionError:
             return {
                 "valid": False,
@@ -120,6 +128,7 @@ class PostHogService(BaseIntegrationService):
 
         api_key = credentials.get("api_key", "")
         host = (host_url or DEFAULT_POSTHOG_HOST).rstrip("/")
+        ensure_public_http_url(host, WEBHOOK_PRIVATE_URL_ERROR)
         url = f"{host}/batch/"
 
         batch = []
@@ -136,7 +145,7 @@ class PostHogService(BaseIntegrationService):
                 }
             )
 
-        resp = requests.post(
+        resp = build_ssrf_safe_session(WEBHOOK_PRIVATE_URL_ERROR).post(
             url,
             json={"api_key": api_key, "batch": batch},
             headers={"Content-Type": "application/json"},

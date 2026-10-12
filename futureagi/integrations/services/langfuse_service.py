@@ -5,6 +5,11 @@ from typing import Any, Optional
 
 import requests
 
+from agentcc.services.url_safety import (
+    WEBHOOK_PRIVATE_URL_ERROR,
+    build_ssrf_safe_session,
+    ensure_public_http_url,
+)
 from integrations.services.base import BaseIntegrationService, register_service
 
 logger = logging.getLogger(__name__)
@@ -37,6 +42,7 @@ class LangfuseService(BaseIntegrationService):
         params: Optional[dict] = None,
     ) -> requests.Response:
         url = f"{host_url.rstrip('/')}{path}"
+        ensure_public_http_url(host_url, WEBHOOK_PRIVATE_URL_ERROR)
         verify: Any = True
         tmp_path = None
 
@@ -48,7 +54,7 @@ class LangfuseService(BaseIntegrationService):
             verify = tmp_path
 
         try:
-            response = requests.request(
+            response = build_ssrf_safe_session(WEBHOOK_PRIVATE_URL_ERROR).request(
                 method=method,
                 url=url,
                 auth=self._get_auth(credentials),
@@ -126,6 +132,8 @@ class LangfuseService(BaseIntegrationService):
                 "total_traces": total_traces,
             }
 
+        except ValueError as exc:
+            return {"valid": False, "error": str(exc)}
         except requests.exceptions.ConnectionError:
             return {
                 "valid": False,
