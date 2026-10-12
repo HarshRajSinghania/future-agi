@@ -86,6 +86,9 @@ class ModelServingClient:
             'Content-Type': 'application/json',
             'User-Agent': 'ModelServingClient/1.0'
         })
+        service_token = os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip()
+        if service_token:
+            session.headers.update({"Authorization": f"Bearer {service_token}"})
 
         return session
 
@@ -100,6 +103,13 @@ class ModelServingClient:
         url = f"{self.base_url}/model/v1{endpoint}"
         request_timeout = timeout or self.default_timeout
         self._require_serving()
+        service_token = os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip()
+        if service_token:
+            self.session.headers.update(
+                {"Authorization": f"Bearer {service_token}"}
+            )
+        else:
+            self.session.headers.pop("Authorization", None)
 
         try:
             logger.debug(f"Making request to {url}")
