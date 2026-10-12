@@ -35,12 +35,16 @@ func (h *Handlers) AsyncMiddleware(w http.ResponseWriter, r *http.Request, rc *m
 		}
 	}
 
-	// Owner is the org on the key when the request pipeline set it, otherwise
-	// the authenticated key id. An empty owner is not readable once auth is on.
+	// Owner comes from the same key lookup GET and DELETE use. The auth plugin
+	// writes auth_key_id only inside engine.Process, which runs after this
+	// middleware, so that field is not available here.
 	orgID := ""
-	if v, ok := rc.Metadata["org_id"]; ok && v != "" {
-		orgID = v
-	} else if v, ok := rc.Metadata["auth_key_id"]; ok && v != "" {
+	if h.keyStore != nil {
+		scope, scoped := h.asyncCallerScope(r)
+		if scoped && scope != "" && scope[0] != '\x00' {
+			orgID = scope
+		}
+	} else if v, ok := rc.Metadata["org_id"]; ok {
 		orgID = v
 	}
 

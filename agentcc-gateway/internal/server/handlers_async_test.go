@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -193,5 +194,71 @@ func TestGetAsyncJob_AuthDisabledStillReadsByID(t *testing.T) {
 	h.GetAsyncJob(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAsyncMiddleware_KeyWithoutOrgStampsKeyID(t *testing.T) {
+	store := async.NewStore()
+	ks := asyncKeyStore(t,
+		config.AuthKeyConfig{Name: "a", Key: "sk-test-key-a"},
+		config.AuthKeyConfig{Name: "b", Key: "sk-test-key-b"},
+	)
+	owner := ks.Lookup("sk-test-key-a")
+	if owner == nil || owner.ID == "" {
+		t.Fatal("expected key a")
+	}
+	worker := async.NewWorker(store, func(ctx context.Context, req *models.ChatCompletionRequest, metadata map[string]string) (*models.ChatCompletionResponse, map[string]string, error) {
+		t.Fatal("create must not call the provider")
+		return nil, nil, nil
+	}, 1)
+	h := &Handlers{asyncStore: store, asyncWorker: worker, keyStore: ks}
+
+	// auth_key_id is written by the auth plugin, which runs after this middleware.
+	rc := models.AcquireRequestContext()
+	rc.EndpointType = "chat"
+	rc.Request = &models.ChatCompletionRequest{Model: "fixture"}
+	rc.Metadata["authorization"] = "Bearer sk-test-key-a"
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer sk-test-key-a")
+	req.Header.Set("x-agentcc-async", "true")
+	rec := httptest.NewRecorder()
+	if !h.AsyncMiddleware(rec, req, rc) {
+		t.Fatal("expected async create")
+	}
+	rc.Release()
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", rec.Code, rec.Body.String())
+	}
+	var created map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	jobID, _ := created["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("missing job_id")
+	}
+	stored := store.Get(jobID)
+	if stored == nil {
+		t.Fatal("job was not stored")
+	}
+	if stored.OrgID != owner.ID {
+		t.Fatalf("stored owner = %q, want key id %q", stored.OrgID, owner.ID)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/async?job_id="+jobID, nil)
+	getReq.Header.Set("Authorization", "Bearer sk-test-key-a")
+	getRec := httptest.NewRecorder()
+	h.GetAsyncJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("owner GET = %d, want 200; body = %s", getRec.Code, getRec.Body.String())
+	}
+
+	other := httptest.NewRequest(http.MethodGet, "/v1/async?job_id="+jobID, nil)
+	other.Header.Set("Authorization", "Bearer sk-test-key-b")
+	otherRec := httptest.NewRecorder()
+	h.GetAsyncJob(otherRec, other)
+	if otherRec.Code != http.StatusNotFound {
+		t.Fatalf("other key GET = %d, want 404; body = %s", otherRec.Code, otherRec.Body.String())
 	}
 }
