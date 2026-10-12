@@ -2,7 +2,7 @@ import uuid
 
 import structlog
 from django.core.exceptions import ValidationError
-from django.db.models import Q
+from django.db.models import F, Q
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.parsers import JSONParser
 from rest_framework.permissions import IsAuthenticated
@@ -125,25 +125,37 @@ class GetEvalStructureEvalIdView(APIView):
         }
     )
     def get(self, request, eval_id, *args, **kwargs):
-        try:
-            template = EvalTemplate.no_workspace_objects.get(eval_id=eval_id)
-            return self._gm.success_response(
-                {
-                    "id": template.id,
-                    "name": template.name,
-                    "description": template.description,
-                    "organization": template.organization_id,
-                    "owner": template.owner,
-                    "eval_tags": template.eval_tags,
-                    "config": template.config,
-                    "eval_id": template.eval_id,
-                    "criteria": template.criteria,
-                    "choices": template.choices,
-                    "multi_choice": template.multi_choice,
-                }
-            )
-        except EvalTemplate.DoesNotExist:
+        organization = getattr(request, "organization", None) or getattr(
+            request.user, "organization", None
+        )
+        workspace = getattr(request, "workspace", None)
+        readable = Q(organization__isnull=True) | Q(
+            organization=organization, workspace__isnull=True
+        )
+        if workspace is not None:
+            readable |= Q(organization=organization, workspace=workspace)
+        template = (
+            EvalTemplate.no_workspace_objects.filter(readable, eval_id=eval_id)
+            .order_by(F("organization_id").desc(nulls_last=True))
+            .first()
+        )
+        if template is None:
             return self._gm.bad_request(get_error_message("MISSING_EVAL_TEMPLATE"))
+        return self._gm.success_response(
+            {
+                "id": template.id,
+                "name": template.name,
+                "description": template.description,
+                "organization": template.organization_id,
+                "owner": template.owner,
+                "eval_tags": template.eval_tags,
+                "config": template.config,
+                "eval_id": template.eval_id,
+                "criteria": template.criteria,
+                "choices": template.choices,
+                "multi_choice": template.multi_choice,
+            }
+        )
 
 
 class StandaloneEvalView(APIView):

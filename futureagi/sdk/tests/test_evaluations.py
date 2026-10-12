@@ -104,21 +104,11 @@ class TestGetEvalStructureAPI:
     """Tests for /sdk/api/v1/eval/<eval_id>/ endpoint."""
 
     def test_get_eval_structure_unauthenticated(self, api_client, db):
-        """Unauthenticated request fails.
-
-        NOTE: Due to missing permission_classes on view, validation runs first.
-        Returns 400 for validation errors before authentication fails.
-        This is a known bug - should return 401/403.
-        """
-        # Use a known eval_id (doesn't need to exist for auth test)
+        """An anonymous request is rejected before the lookup runs."""
         response = api_client.get("/sdk/api/v1/eval/123/")
-        # 400 is current behavior (validation error before auth check)
-        # Should return 401/403 if proper permission_classes were added
         assert response.status_code in [
-            status.HTTP_400_BAD_REQUEST,
             status.HTTP_401_UNAUTHORIZED,
             status.HTTP_403_FORBIDDEN,
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
         ]
 
     def test_get_eval_structure_with_jwt(self, auth_client, eval_template):
@@ -150,6 +140,125 @@ class TestGetEvalStructureAPI:
         expected_fields = ["id", "name", "description", "eval_id", "config", "owner"]
         for field in expected_fields:
             assert field in result
+
+    def _missing_template_body(self, auth_client):
+        missing = auth_client.get("/sdk/api/v1/eval/999999999/")
+        assert missing.status_code == status.HTTP_400_BAD_REQUEST
+        return missing.json()
+
+    def test_get_eval_structure_hides_other_org(self, auth_client, workspace, db):
+        """Another organization's template is indistinguishable from a missing id."""
+        from accounts.models.organization import Organization
+        from model_hub.models.evals_metric import EvalTemplate
+
+        foreign_org = Organization.objects.create(name="Foreign Eval Org")
+        secret = "foreign-org-criteria-must-not-leak"
+        foreign = EvalTemplate.no_workspace_objects.create(
+            name="foreign_org_template",
+            description="private",
+            eval_id=999101,
+            owner="user",
+            organization=foreign_org,
+            workspace=None,
+            config={"secret": secret},
+            criteria=secret,
+        )
+
+        response = auth_client.get(f"/sdk/api/v1/eval/{foreign.eval_id}/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        body = response.json()
+        assert body == self._missing_template_body(auth_client)
+        assert secret not in response.content.decode()
+
+    def test_get_eval_structure_hides_other_workspace(
+        self, auth_client, user, organization, workspace, db
+    ):
+        """A same-org template bound to another workspace is hidden."""
+        from accounts.models.workspace import Workspace
+        from model_hub.models.evals_metric import EvalTemplate
+
+        other_workspace = Workspace.objects.create(
+            name="Other Eval Workspace",
+            organization=organization,
+            is_active=True,
+            created_by=user,
+        )
+        secret = "other-workspace-criteria-must-not-leak"
+        foreign = EvalTemplate.no_workspace_objects.create(
+            name="other_workspace_template",
+            eval_id=999102,
+            owner="user",
+            organization=organization,
+            workspace=other_workspace,
+            config={"secret": secret},
+            criteria=secret,
+        )
+
+        response = auth_client.get(f"/sdk/api/v1/eval/{foreign.eval_id}/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.json() == self._missing_template_body(auth_client)
+        assert secret not in response.content.decode()
+
+    def test_get_eval_structure_allows_org_shared_template(
+        self, auth_client, organization, db
+    ):
+        """An org-owned template with no workspace is readable in every workspace."""
+        from model_hub.models.evals_metric import EvalTemplate
+
+        shared = EvalTemplate.no_workspace_objects.create(
+            name="org_shared_template",
+            eval_id=999103,
+            owner="user",
+            organization=organization,
+            workspace=None,
+            config={"shared": True},
+            criteria="org-shared-criteria",
+        )
+
+        response = auth_client.get(f"/sdk/api/v1/eval/{shared.eval_id}/")
+        assert response.status_code == status.HTTP_200_OK
+        result = response.json().get("result", response.json())
+        assert result["name"] == shared.name
+        assert result["criteria"] == "org-shared-criteria"
+
+    def test_get_eval_structure_prefers_own_template_on_eval_id_collision(
+        self, auth_client, organization, workspace, db
+    ):
+        """When eval_id is shared, the caller's own template wins over system."""
+        from django.db.models.signals import post_save, pre_save
+        from model_hub.models.evals_metric import EvalTemplate
+        from tfc.utils.signals import auto_assign_workspace, ensure_workspace_after_save
+
+        pre_save.disconnect(auto_assign_workspace)
+        post_save.disconnect(ensure_workspace_after_save)
+        try:
+            system = EvalTemplate.no_workspace_objects.create(
+                name="system_collision_template",
+                eval_id=999104,
+                owner="system",
+                organization=None,
+                workspace=None,
+                config={"which": "system"},
+                criteria="system-collision-criteria",
+            )
+        finally:
+            pre_save.connect(auto_assign_workspace)
+            post_save.connect(ensure_workspace_after_save)
+        own = EvalTemplate.no_workspace_objects.create(
+            name="own_collision_template",
+            eval_id=system.eval_id,
+            owner="user",
+            organization=organization,
+            workspace=workspace,
+            config={"which": "own"},
+            criteria="own-collision-criteria",
+        )
+
+        response = auth_client.get(f"/sdk/api/v1/eval/{system.eval_id}/")
+        assert response.status_code == status.HTTP_200_OK
+        result = response.json().get("result", response.json())
+        assert result["id"] == str(own.id)
+        assert result["criteria"] == "own-collision-criteria"
 
 
 @pytest.mark.integration
