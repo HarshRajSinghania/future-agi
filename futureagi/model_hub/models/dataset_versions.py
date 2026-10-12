@@ -74,11 +74,24 @@ class DatasetVersion(BaseModel):
 
     def clean(self):
         super().clean()
+        errors = {}
+        if self.dataset_id:
+            dataset = self.dataset
+            if self.organization_id != dataset.organization_id:
+                errors["organization"] = (
+                    "Dataset version organization must match its dataset."
+                )
+            if self.workspace_id != dataset.workspace_id:
+                errors["workspace"] = (
+                    "Dataset version workspace must match its dataset."
+                )
         if self.parent_version_id and self.parent_version:
             if self.parent_version.dataset_id != self.dataset_id:
-                raise ValidationError(
-                    {"parent_version": "Parent version must belong to the same dataset."}
+                errors["parent_version"] = (
+                    "Parent version must belong to the same dataset."
                 )
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         # Keep tenant fields aligned when callers construct a version from a
@@ -161,7 +174,9 @@ class DatasetVersionItem(BaseModel):
     @staticmethod
     def calculate_content_hash(*, input, expected, metadata):
         payload = {"input": input, "expected": expected, "metadata": metadata}
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        canonical = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), default=str
+        )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def save(self, *args, **kwargs):

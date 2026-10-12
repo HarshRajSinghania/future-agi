@@ -1,6 +1,7 @@
 import uuid
 
 import pytest
+from django.core.exceptions import ValidationError
 
 from model_hub.models.dataset_versions import DatasetVersion, DatasetVersionItem
 from model_hub.models.develop_dataset import Dataset, Row
@@ -40,7 +41,9 @@ def version_dataset(organization, workspace, user):
 
 
 @pytest.mark.django_db
-def test_version_copies_tenant_fields_and_item_hashes(version_dataset, organization, workspace):
+def test_version_copies_tenant_fields_and_item_hashes(
+    version_dataset, organization, workspace
+):
     version = DatasetVersion.objects.create(dataset=version_dataset)
 
     assert version.organization_id == organization.id
@@ -63,7 +66,9 @@ def test_version_copies_tenant_fields_and_item_hashes(version_dataset, organizat
 @pytest.mark.django_db
 def test_example_identity_can_be_reused_across_versions(version_dataset):
     first = DatasetVersion.objects.create(dataset=version_dataset)
-    second = DatasetVersion.objects.create(dataset=version_dataset, parent_version=first)
+    second = DatasetVersion.objects.create(
+        dataset=version_dataset, parent_version=first
+    )
     example_id = uuid.uuid4()
 
     first_item = DatasetVersionItem.objects.create(
@@ -88,3 +93,23 @@ def test_legacy_row_projection_has_deterministic_identity(version_dataset):
     assert DatasetVersionItem.example_id_for_legacy_row(row.id) == (
         DatasetVersionItem.example_id_for_legacy_row(row.id)
     )
+
+
+@pytest.mark.parametrize("field", ["organization_id", "workspace_id"])
+def test_version_rejects_copied_tenant_mismatch(field):
+    organization_id, workspace_id = uuid.uuid4(), uuid.uuid4()
+    dataset = Dataset(
+        id=uuid.uuid4(),
+        name="dataset",
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+    )
+    version = DatasetVersion(
+        dataset=dataset,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+    )
+    setattr(version, field, uuid.uuid4())
+
+    with pytest.raises(ValidationError, match=field.removesuffix("_id")):
+        version.clean()
