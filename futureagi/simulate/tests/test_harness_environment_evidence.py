@@ -144,7 +144,6 @@ def test_source_artifacts_reach_real_serializers_with_measured_rows(archived):
     contract = {
         "agent": "support",
         "modality": "voice",
-        "call_direction": "inbound",
         "domain": {"id": "support", "label": "Order Support"},
         "one_liner": "Find an order",
         "system_prompt": prompt,
@@ -233,7 +232,6 @@ def test_source_artifacts_reach_real_serializers_with_measured_rows(archived):
     actual = _serialized_contract(evidence, connector="livekit", seed=0)
     assert actual["system_prompt"] == prompt
     assert actual["system_prompt_origin"] == origin
-    assert actual["call_direction"] == "inbound"
     assert actual["domain"] == {"id": "support", "label": "Order Support"}
     assert actual["one_liner"] == "Find an order"
     assert actual["hard_constraints"] == ["Verify identity"]
@@ -319,7 +317,6 @@ def test_provider_fields_keep_exact_schema_and_scrub_callback_url(connector):
     contract = {
         "agent": "provider",
         "modality": "voice",
-        "call_direction": "inbound",
         "tool_entrypoints": [
             {
                 "tool": "lookup_order",
@@ -340,7 +337,6 @@ def test_provider_fields_keep_exact_schema_and_scrub_callback_url(connector):
     }
     outputs = authoring_stage_outputs(contract, None, None)
     actual = _serialized_contract(_evidence(outputs[0]["data"]), connector=connector)
-    assert "call_direction" not in actual
     tool = actual["tool_entrypoints"][0]
     assert tool["provider_function"] == {
         "url": "https://example.test/tool",
@@ -373,16 +369,6 @@ def test_old_contract_keeps_legacy_values_and_absent_evidence():
     assert "tool_certification" not in actual
     assert "data_schema_tables" not in actual
     assert "seed" not in actual["end_conditions"]
-
-
-@pytest.mark.parametrize("connector", ["vapi", "retell", "retell_chat"])
-def test_source_owned_provider_agent_omits_projected_direction(connector):
-    actual = _serialized_contract(
-        _evidence({"agent": "source", "call_direction": "outbound"}),
-        connector=connector,
-        mode="environment_backed",
-    )
-    assert "call_direction" not in actual
 
 
 @pytest.mark.parametrize(

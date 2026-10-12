@@ -445,13 +445,6 @@ class HarnessEnvironmentContractSerializer(serializers.Serializer):
     )
     provenance = HarnessEnvironmentProvenanceSerializer()
 
-    def to_representation(self, instance):
-        result = super().to_representation(instance)
-        if "call_direction" not in instance:
-            result.pop("call_direction", None)
-        return result
-
-
 class HarnessEnvironmentPersonaSerializer(serializers.Serializer):
     """One distinct caller; ALK's persona fields plus the scenarios it appears in."""
 

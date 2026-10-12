@@ -80,7 +80,6 @@ export default function PanelHostedPlatform() {
 
   const chosen = platforms.find((p) => p.id === platform) || platforms[0];
   const isOther = !!chosen?.isOther;
-  const providerOwnsCallDirection = ["vapi", "retell"].includes(chosen?.id);
   // Others has no WebRTC path, so it requires a number regardless of simMode;
   // other voice envs only require it in Phone mode.
   const phoneRequired = agentType === AGENT_TYPES.VOICE && (isOther || simMode === "phone");
@@ -107,12 +106,10 @@ export default function PanelHostedPlatform() {
           const contactMode = isOther ? "phone" : simMode;
           return {
             // Others is always inbound; its toggle is locked on.
-            ...(!providerOwnsCallDirection
-              ? { callDirection: isOther || inboundCalls ? "inbound" : "outbound" }
-              : {}),
+            callDirection: isOther || inboundCalls ? "inbound" : "outbound",
             contact: {
               mode: contactMode,
-              inboundCalls: providerOwnsCallDirection ? true : isOther || inboundCalls,
+              inboundCalls: isOther || inboundCalls,
               agentSpeaksFirst,
               ...(contactMode === "phone"
                 ? {
@@ -209,7 +206,6 @@ export default function PanelHostedPlatform() {
               inboundCalls={inboundCalls} onInboundCalls={set("inboundCalls")}
               agentSpeaksFirst={agentSpeaksFirst} onAgentSpeaksFirst={set("agentSpeaksFirst")}
               phoneOnly={isOther}
-              showCallDirection={!providerOwnsCallDirection}
             />
           )}
           <Field

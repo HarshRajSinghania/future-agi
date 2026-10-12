@@ -732,9 +732,6 @@ def _contract_section(
     if not has_verified_system_prompt(contract):
         section["system_prompt"] = None
         section["system_prompt_origin"] = None
-    agent = (job.payload or {}).get("agent") or {}
-    if agent.get("connector") in {"vapi", "retell", "retell_chat"}:
-        section.pop("call_direction", None)
     if schema_tables is not None:
         section["data_schema_tables"] = schema_tables
         section["data_schema_columns"] = {

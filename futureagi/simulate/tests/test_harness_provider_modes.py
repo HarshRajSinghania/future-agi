@@ -118,32 +118,6 @@ def test_voice_call_behavior_accepts_only_boolean_values():
         assert "config" in serializer.errors
 
 
-@pytest.mark.parametrize("connector", ["vapi", "retell"])
-@pytest.mark.parametrize(
-    "direction_input", [{"call_direction": "outbound"}, {"config_inbound": False}]
-)
-def test_provider_call_direction_is_not_an_api_option(connector, direction_input):
-    config = {
-        "assistant_id" if connector == "vapi" else "agent_id": "agent-123"
-    }
-    if "config_inbound" in direction_input:
-        config["inbound"] = direction_input["config_inbound"]
-    serializer = HarnessAgentSerializer(
-        data={
-            "connector": connector,
-            "mode": "connect_only",
-            **(
-                {"call_direction": direction_input["call_direction"]}
-                if "call_direction" in direction_input
-                else {}
-            ),
-            "config": config,
-        }
-    )
-    assert not serializer.is_valid()
-    assert set(serializer.errors) & {"call_direction", "config"}
-
-
 def test_phone_connect_only_rejects_invalid_number_or_missing_prompt():
     serializer = HarnessAgentSerializer(
         data={

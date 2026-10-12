@@ -36,7 +36,6 @@ export default function ContactInformation({
   agentSpeaksFirst,
   onAgentSpeaksFirst,
   phoneOnly = false,
-  showCallDirection = true,
 }) {
   const effectiveMode = phoneOnly ? "phone" : mode;
   const [contactTouched, setContactTouched] = useState(false);
@@ -101,8 +100,9 @@ export default function ContactInformation({
         </Stack>
       )}
 
-      {/* Others is fixed inbound; providers that own routing do not expose a direction. */}
-      {effectiveMode === "phone" && showCallDirection && (
+      {/* Others is always inbound — the platform dials the agent's number — so
+          its switch is shown locked on; other providers keep the choice. */}
+      {effectiveMode === "phone" && (
         <ToggleRow
           checked={phoneOnly || inboundCalls}
           disabled={phoneOnly}
@@ -135,7 +135,6 @@ ContactInformation.propTypes = {
   agentSpeaksFirst: PropTypes.bool,
   onAgentSpeaksFirst: PropTypes.func,
   phoneOnly: PropTypes.bool,
-  showCallDirection: PropTypes.bool,
 };
 
 // Two-value segmented control; the active pill reuses the tinted selected

@@ -111,14 +111,14 @@ describe("PanelHostedPlatform", () => {
     expect(screen.queryByText("Web simulation (WebRTC)")).toBeNull();
   });
 
-  it("switches Vapi to Phone without offering call direction", () => {
+  it("switches the voice sim to Phone and reveals Country Code + Contact Number + Inbound Calls", () => {
     render(<PanelHostedPlatform />);
     expect(screen.queryByText("Country Code")).toBeNull();
     fireEvent.click(screen.getByText("Phone"));
     expect(screen.getByText("Telephony simulation (PSTN)")).toBeInTheDocument();
     expect(screen.getByText("Country Code")).toBeInTheDocument();
     expect(screen.getByText("Contact Number")).toBeInTheDocument();
-    expect(screen.queryByText("Inbound Calls")).toBeNull();
+    expect(screen.getByText("Inbound Calls")).toBeInTheDocument();
   });
 
   it("selects Others → System prompt instead of ID/key, phone-only contact, gated on the prompt", () => {
@@ -196,6 +196,7 @@ describe("PanelHostedPlatform", () => {
       kind: "platform",
       provider: "vapi",
       agentId: "asst_x",
+      callDirection: "inbound",
       secret_refs: { VAPI_API_KEY: "ref-1" },
     });
     // The raw key is redacted out of the staged draft.
