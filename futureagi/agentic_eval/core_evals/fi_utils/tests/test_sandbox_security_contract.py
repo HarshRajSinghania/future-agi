@@ -71,16 +71,21 @@ def test_local_javascript_argv_uses_node_permission_for_only_the_script(
     monkeypatch.setattr(sandbox.os.path, "isfile", lambda path: True)
     captured = {}
 
-    def capture(argv, script, suffix, timeout, address_space_mb):
-        captured["argv"] = argv("/tmp/eval.js") if callable(argv) else argv
-        return {"status": "success", "data": True}
+    def capture(cmd, **kwargs):
+        captured["cmd"] = cmd
+        class _Result:
+            returncode = 0
+            stdout = '{"status":"success","data":true}'
+            stderr = ""
+        return _Result()
 
-    monkeypatch.setattr(sandbox, "_run_contained", capture)
+    monkeypatch.setattr(sandbox.subprocess, "run", capture)
+    monkeypatch.setattr(sandbox.tempfile, "NamedTemporaryFile", lambda **kwargs: type("F", (), {"__enter__": lambda self: self, "__exit__": lambda self, *a: None, "write": lambda self, text: None, "name": "/tmp/eval.js"})())
 
     sandbox.execute_sandboxed_javascript("function evaluate() {}", {}, timeout=1)
 
-    assert "--permission" in captured["argv"]
-    assert "--allow-fs-read=/tmp/eval.js" in captured["argv"]
+    assert "--permission" in captured["cmd"]
+    assert "--allow-fs-read=/tmp/eval.js" in captured["cmd"]
 
 
 def test_nsjail_binds_only_required_read_paths():
