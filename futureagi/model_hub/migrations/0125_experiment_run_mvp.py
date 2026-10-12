@@ -7,7 +7,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("model_hub", "0124_datasetversionitem_unique_dataset_version_external_id"),
     ]

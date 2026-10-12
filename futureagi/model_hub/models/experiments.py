@@ -202,6 +202,27 @@ class ExperimentRun(BaseModel):
             ),
         ]
 
+    def clean(self):
+        super().clean()
+        if (
+            self.experiment_id
+            and self.dataset_version_id
+            and self.experiment.dataset_id != self.dataset_version.dataset_id
+        ):
+            raise ValidationError(
+                {
+                    "dataset_version": "Run version must belong to the experiment dataset."
+                }
+            )
+        if (
+            self.started_at
+            and self.completed_at
+            and self.completed_at < self.started_at
+        ):
+            raise ValidationError(
+                {"completed_at": "Completion cannot precede the run start."}
+            )
+
 
 class ExperimentRunItem(BaseModel):
     """One dataset example/trial result belonging to an :class:`ExperimentRun`."""
@@ -256,6 +277,20 @@ class ExperimentRunItem(BaseModel):
                 name="exp_run_item_example_idx",
             ),
         ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.trial_number is None or self.trial_number <= 0:
+            errors["trial_number"] = "Trial number must be greater than zero."
+        if self.latency_ms is not None and self.latency_ms < 0:
+            errors["latency_ms"] = "Latency cannot be negative."
+        if self.cost is not None and self.cost < 0:
+            errors["cost"] = "Cost cannot be negative."
+        if not isinstance(self.score_refs, list):
+            errors["score_refs"] = "Score references must be a list."
+        if errors:
+            raise ValidationError(errors)
 
 
 class ExperimentPromptConfig(BaseModel):

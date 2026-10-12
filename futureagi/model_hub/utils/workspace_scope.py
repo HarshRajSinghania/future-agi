@@ -68,13 +68,12 @@ def scoped_dataset_queryset(request=None):
 def scoped_dataset_version_queryset(request=None):
     """Return dataset versions visible in the current org/workspace context."""
 
+    if request_organization(request) is None:
+        return DatasetVersion.no_workspace_objects.none()
     queryset = DatasetVersion.no_workspace_objects.filter(
-        request_workspace_filter(request),
+        dataset__in=scoped_dataset_queryset(request),
         deleted=False,
     )
-    organization = request_organization(request)
-    if organization is not None:
-        queryset = queryset.filter(organization=organization)
     return queryset
 
 

@@ -1,4 +1,5 @@
 # serializers.py
+from django.core.exceptions import ValidationError as ModelValidationError
 from rest_framework import serializers
 
 from agentic_eval.core_evals.run_prompt.litellm_models import LiteLLMModelManager
@@ -45,6 +46,11 @@ class ExperimentRunSerializer(serializers.ModelSerializer):
         source="dataset_version",
         queryset=DatasetVersion.objects.all(),
     )
+    metadata = serializers.DictField(required=False)
+    model_config = serializers.DictField(required=False)
+    evaluator_versions = serializers.ListField(
+        child=serializers.JSONField(), required=False
+    )
 
     class Meta:
         model = ExperimentRun
@@ -76,6 +82,25 @@ class ExperimentRunSerializer(serializers.ModelSerializer):
             deleted=False,
         )
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        candidate = ExperimentRun(
+            **{
+                field: attrs.get(field, getattr(self.instance, field, None))
+                for field in (
+                    "experiment",
+                    "dataset_version",
+                    "started_at",
+                    "completed_at",
+                )
+            }
+        )
+        try:
+            candidate.clean()
+        except ModelValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict) from exc
+        return attrs
+
 
 class ExperimentRunItemSerializer(serializers.ModelSerializer):
     """Stable write/read contract for one example/trial result."""
@@ -84,6 +109,11 @@ class ExperimentRunItemSerializer(serializers.ModelSerializer):
         source="run",
         queryset=ExperimentRun.objects.all(),
     )
+    trial_number = serializers.IntegerField(required=False, min_value=1)
+    latency_ms = serializers.FloatField(required=False, allow_null=True, min_value=0)
+    cost = serializers.FloatField(required=False, allow_null=True, min_value=0)
+    metadata = serializers.DictField(required=False)
+    score_refs = serializers.ListField(child=serializers.JSONField(), required=False)
 
     class Meta:
         model = ExperimentRunItem
