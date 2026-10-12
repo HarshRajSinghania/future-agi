@@ -464,7 +464,15 @@ class TraceNavigationReadUnavailable(RuntimeError):
 
 
 class TraceTagsUpdateSerializer(serializers.Serializer):
-    tags = serializers.ListField(child=serializers.CharField(), allow_empty=True)
+    tags = serializers.ListField(allow_empty=True)
+
+    def validate_tags(self, value):
+        from tracer.services.project_tags import parse_tag_items
+
+        try:
+            return parse_tag_items(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 def _sanitize_nonfinite_floats(value):
@@ -2529,19 +2537,59 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
     @validated_request(request_serializer=TraceTagsUpdateSerializer)
     @action(detail=True, methods=["patch"], url_path="tags")
     def update_tags(self, request, *args, **kwargs):
-        """Update tags for a trace."""
-        try:
-            trace_id = kwargs.get("pk")
-            trace = self.get_queryset().get(id=trace_id)
-            tags = request.validated_data["tags"]
-            trace.tags = tags
-            trace.save(update_fields=["tags", "updated_at"])
-            return self._gm.success_response({"id": str(trace.id), "tags": trace.tags})
-        except Trace.DoesNotExist:
+        """Set a trace's tags on its ClickHouse root span.
+
+        The trace often has no Postgres row after the CH25 cutover. Colour is
+        stored on the project tag definition; the assignment is a name list.
+        """
+        from tracer.models.project import Project
+        from tracer.services.project_tags import (
+            TagNotFound,
+            TagStoreUnavailable,
+            set_trace_tags,
+        )
+
+        trace_id = kwargs.get("pk")
+        project_id = request.query_params.get("project_id")
+        if not project_id:
+            return self._gm.bad_request("project_id is required")
+        organization = _get_request_organization(request)
+        workspace = getattr(request, "workspace", None)
+        project_qs = Project.no_workspace_objects.filter(
+            id=project_id,
+            organization=organization,
+        )
+        if workspace:
+            if getattr(workspace, "is_default", False):
+                project_qs = project_qs.filter(
+                    Q(workspace=workspace)
+                    | Q(
+                        workspace__is_default=True,
+                        workspace__organization=workspace.organization,
+                    )
+                    | Q(workspace__isnull=True)
+                )
+            else:
+                project_qs = project_qs.filter(workspace=workspace)
+        project = project_qs.first() if organization else None
+        if project is None:
             return self._gm.bad_request("Trace not found")
-        except Exception as e:
-            logger.exception(f"Error updating trace tags: {e}")
-            return self._gm.bad_request("Error updating tags")
+        try:
+            names = set_trace_tags(
+                project=project,
+                trace_id=trace_id,
+                raw_tags=request.data.get("tags"),
+            )
+        except TagNotFound:
+            return self._gm.bad_request("Trace not found")
+        except TagStoreUnavailable:
+            return self._gm.custom_error_response(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Tag store is temporarily unavailable",
+            )
+        except ValueError as exc:
+            return self._gm.bad_request(str(exc))
+        return self._gm.success_response({"id": str(trace_id), "tags": names})
 
     @validated_request(responses={200: TracePropertiesResponseSerializer})
     @action(detail=False, methods=["get"], pagination_class=None)
