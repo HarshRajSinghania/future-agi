@@ -333,7 +333,8 @@ def update_definition(
         if not new_name or len(new_name) > _TAG_NAME_MAX:
             raise ValueError("tag name is empty or too long")
     definition = ProjectTagDefinition.objects.filter(project=project, name=name).first()
-    assigned = name in {item["name"] for item in list_definitions(project=project)}
+    current = list_definitions(project=project)
+    assigned = name in {item["name"] for item in current}
     if definition is None and not assigned:
         raise TagNotFound("definition")
     if new_name and new_name != name:
