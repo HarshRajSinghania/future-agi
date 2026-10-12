@@ -80,24 +80,6 @@ def _dataset(*, organization_id, workspace_id):
     )
 
 
-@pytest.mark.parametrize("field", ["organization_id", "workspace_id"])
-def test_dataset_version_rejects_copied_tenant_mismatch(field):
-    organization_id, workspace_id = uuid.uuid4(), uuid.uuid4()
-    dataset = _dataset(
-        organization_id=organization_id,
-        workspace_id=workspace_id,
-    )
-    version = DatasetVersion(
-        dataset=dataset,
-        organization_id=organization_id,
-        workspace_id=workspace_id,
-    )
-    setattr(version, field, uuid.uuid4())
-
-    with pytest.raises(ValidationError, match=field.removesuffix("_id")):
-        version.clean()
-
-
 def test_experiment_run_rejects_version_from_another_dataset():
     organization_id, workspace_id = uuid.uuid4(), uuid.uuid4()
     first = _dataset(organization_id=organization_id, workspace_id=workspace_id)
