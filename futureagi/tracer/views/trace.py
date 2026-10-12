@@ -2551,29 +2551,31 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
 
         trace_id = kwargs.get("pk")
         project_id = request.query_params.get("project_id")
-        if not project_id:
-            return self._gm.bad_request("project_id is required")
         organization = _get_request_organization(request)
         workspace = getattr(request, "workspace", None)
+        from tracer.views.observation_span import _project_workspace_scope_q
+
         project_qs = Project.no_workspace_objects.filter(
-            id=project_id,
+            _project_workspace_scope_q(request, project_prefix=""),
             organization=organization,
         )
-        if workspace:
-            if getattr(workspace, "is_default", False):
-                project_qs = project_qs.filter(
-                    Q(workspace=workspace)
-                    | Q(
-                        workspace__is_default=True,
-                        workspace__organization=workspace.organization,
-                    )
-                    | Q(workspace__isnull=True)
+        if project_id:
+            project = project_qs.filter(id=project_id).first() if organization else None
+            if project is None:
+                return self._gm.bad_request("Trace not found")
+        else:
+            from tracer.services.project_tags import find_root_in_projects
+
+            try:
+                located = find_root_in_projects(
+                    project_ids=[str(item) for item in project_qs.values_list("id", flat=True)],
+                    trace_id=str(trace_id),
                 )
-            else:
-                project_qs = project_qs.filter(workspace=workspace)
-        project = project_qs.first() if organization else None
-        if project is None:
-            return self._gm.bad_request("Trace not found")
+            except TagNotFound:
+                return self._gm.bad_request("Trace not found")
+            project = project_qs.filter(id=located["project_id"]).first()
+            if project is None:
+                return self._gm.bad_request("Trace not found")
         try:
             names = set_trace_tags(
                 project=project,

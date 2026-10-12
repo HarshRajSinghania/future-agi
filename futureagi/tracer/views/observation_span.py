@@ -1763,20 +1763,28 @@ class ObservationSpanView(BaseModelViewSetMixin, ModelViewSet):
         )
         if not span_id:
             return self._gm.bad_request("span_id is required")
-        if not project_id:
-            return self._gm.bad_request("project_id is required")
         organization = _get_request_organization(request)
-        project = (
-            Project.no_workspace_objects.filter(
-                _project_workspace_scope_q(request),
-                id=project_id,
-                organization=organization,
-            ).first()
-            if organization
-            else None
+        project_qs = Project.no_workspace_objects.filter(
+            _project_workspace_scope_q(request, project_prefix=""),
+            organization=organization,
         )
-        if project is None:
-            return self._gm.bad_request("Observation span not found")
+        if project_id:
+            project = project_qs.filter(id=project_id).first() if organization else None
+            if project is None:
+                return self._gm.bad_request("Observation span not found")
+        else:
+            from tracer.services.project_tags import find_span_in_projects
+
+            try:
+                located = find_span_in_projects(
+                    project_ids=[str(item) for item in project_qs.values_list("id", flat=True)],
+                    span_id=str(span_id),
+                )
+            except TagNotFound:
+                return self._gm.bad_request("Observation span not found")
+            project = project_qs.filter(id=located["project_id"]).first()
+            if project is None:
+                return self._gm.bad_request("Observation span not found")
         try:
             names = set_span_tags(
                 project=project,

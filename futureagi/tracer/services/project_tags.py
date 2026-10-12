@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Q
 
 from tracer.models.project import Project, ProjectTagDefinition
 from tracer.services.clickhouse.v2 import get_v2_config
@@ -188,6 +189,71 @@ def find_span(
     }
 
 
+def find_span_in_projects(*, project_ids: list[str], span_id: str) -> dict[str, Any]:
+    """Locate one span inside the caller's projects. Never by span id alone."""
+    if not project_ids or not span_id:
+        raise TagNotFound("span")
+    client = _client()
+    try:
+        rows = _query(
+            client,
+            """
+            SELECT id, start_time, tags, trace_id, project_id
+            FROM spans FINAL
+            WHERE project_id IN {project_ids:Array(UUID)}
+              AND id = {span_id:String}
+              AND is_deleted = 0
+            LIMIT 2
+            """,
+            {"project_ids": [str(item) for item in project_ids], "span_id": str(span_id)},
+        )
+    finally:
+        client.close()
+    if len(rows) != 1:
+        raise TagNotFound("span")
+    found_id, start_time, tags, trace_id, project_id = rows[0]
+    return {
+        "id": str(found_id),
+        "start_time": start_time,
+        "tags": tags if isinstance(tags, str) else json.dumps(tags or []),
+        "trace_id": str(trace_id),
+        "project_id": str(project_id),
+    }
+
+
+def find_root_in_projects(*, project_ids: list[str], trace_id: str) -> dict[str, Any]:
+    """Locate one trace root inside the caller's projects."""
+    if not project_ids or not trace_id:
+        raise TagNotFound("trace")
+    client = _client()
+    try:
+        rows = _query(
+            client,
+            """
+            SELECT id, start_time, tags, project_id
+            FROM spans FINAL
+            WHERE project_id IN {project_ids:Array(UUID)}
+              AND trace_id = {trace_id:String}
+              AND parent_span_id = ''
+              AND is_deleted = 0
+            ORDER BY start_time ASC
+            LIMIT 2
+            """,
+            {"project_ids": [str(item) for item in project_ids], "trace_id": str(trace_id)},
+        )
+    finally:
+        client.close()
+    if len(rows) != 1:
+        raise TagNotFound("trace")
+    found_id, start_time, tags, project_id = rows[0]
+    return {
+        "id": str(found_id),
+        "start_time": start_time,
+        "tags": tags if isinstance(tags, str) else json.dumps(tags or []),
+        "project_id": str(project_id),
+    }
+
+
 def write_assignment(
     *,
     project_id: str,
@@ -339,31 +405,37 @@ def update_definition(
         raise TagNotFound("definition")
     if new_name and new_name != name:
         target = ProjectTagDefinition.objects.filter(project=project, name=new_name).first()
-        rewrite_tag_name(
-            project_id=str(project.id), old_name=name, new_name=new_name
-        )
-        if definition is not None:
-            if target is not None:
-                if color:
-                    target.color = color
-                    target.save(update_fields=["color", "updated_at"])
-                definition.delete()
-                definition = target
-            else:
-                definition.name = new_name
-                if color:
-                    definition.color = color
-                definition.save()
-        elif color:
-            definition = ProjectTagDefinition.objects.create(
-                project=project, name=new_name, color=color
-            )
+        stored_color = color if color is not None else ""
+        with transaction.atomic():
+            if definition is not None:
+                if target is not None:
+                    if color is not None:
+                        target.color = stored_color
+                        target.save(update_fields=["color", "updated_at"])
+                    definition.delete()
+                    definition = target
+                else:
+                    definition.name = new_name
+                    if color is not None:
+                        definition.color = stored_color
+                    definition.save()
+            elif color is not None:
+                definition = ProjectTagDefinition.objects.create(
+                    project=project, name=new_name, color=stored_color
+                )
+            try:
+                rewrite_tag_name(
+                    project_id=str(project.id), old_name=name, new_name=new_name
+                )
+            except TagStoreUnavailable:
+                transaction.set_rollback(True)
+                raise
         name = new_name
     elif definition is None:
         definition = ProjectTagDefinition.objects.create(
-            project=project, name=name, color=color or ""
+            project=project, name=name, color="" if color is None else color
         )
-    elif color:
+    elif color is not None:
         definition.color = color
         definition.save(update_fields=["color", "updated_at"])
     return {
@@ -376,8 +448,13 @@ def delete_definition(*, project: Project, name: str) -> None:
     name = (name or "").strip()
     if not name:
         raise ValueError("name is required")
-    ProjectTagDefinition.objects.filter(project=project, name=name).delete()
-    rewrite_tag_name(project_id=str(project.id), old_name=name, new_name=None)
+    with transaction.atomic():
+        ProjectTagDefinition.objects.filter(project=project, name=name).delete()
+        try:
+            rewrite_tag_name(project_id=str(project.id), old_name=name, new_name=None)
+        except TagStoreUnavailable:
+            transaction.set_rollback(True)
+            raise
 
 
 def set_span_tags(*, project: Project, span_id: str, raw_tags: Any) -> list[str]:

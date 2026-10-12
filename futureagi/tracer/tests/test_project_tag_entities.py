@@ -139,3 +139,24 @@ class TestProjectScopedTagEntities:
             client.close()
         assert "plain-one" not in rows[0][0]
         assert "sdk-only" not in rows[0][0]
+
+    def test_patch_trace_tags_resolves_project_when_client_omits_project_id(
+        self, auth_client, observe_project, ch_seed
+    ):
+        trace_id = str(uuid.uuid4())
+        ch_seed(
+            _ch_only_root(
+                observe_project,
+                span_id=str(uuid.uuid4()),
+                trace_id=trace_id,
+            )
+        )
+
+        response = auth_client.patch(
+            f"/tracer/trace/{trace_id}/tags/",
+            {"tags": ["legacy-caller"]},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert response.data["result"]["tags"] == ["legacy-caller"]
