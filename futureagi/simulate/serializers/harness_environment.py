@@ -272,6 +272,8 @@ class HarnessEnvironmentCatalogueSubGoalSerializer(serializers.Serializer):
     kind = serializers.ChoiceField(choices=("checkpoint", "judge"))
     claim = serializers.CharField(allow_blank=True)
     check = serializers.CharField(allow_blank=True)
+    output = serializers.CharField(allow_blank=True)
+    overlay = serializers.CharField(allow_blank=True)
 
 
 class HarnessEnvironmentOriginSerializer(serializers.Serializer):
@@ -347,6 +349,8 @@ class HarnessEnvironmentEndConditionsSerializer(serializers.Serializer):
     max_duration_seconds = serializers.IntegerField(allow_null=True)
     clock = serializers.ChoiceField(choices=("real-time", "stepped"))
     ended_reasons = serializers.ListField(child=serializers.CharField())
+    terminate_reasons = serializers.ListField(child=serializers.CharField())
+    truncate_reasons = serializers.ListField(child=serializers.CharField())
     seed = HarnessEnvironmentSeedSerializer(required=False)
 
 
@@ -416,6 +420,10 @@ class HarnessEnvironmentContractSerializer(serializers.Serializer):
         help_text="ALK datastore facts. configured_by remains a string; optional location and configuration {source, ref, section} carry observed configuration evidence.",
     )
     data_schema = serializers.JSONField(required=False, allow_null=True)
+    base_environment = serializers.JSONField(required=False, allow_null=True)
+    refusal_signature = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True
+    )
     data_schema_columns = serializers.DictField(
         child=serializers.ListField(child=HarnessEnvironmentSchemaColumnSerializer()),
         required=False,
@@ -491,6 +499,8 @@ class HarnessEnvironmentSubGoalSerializer(serializers.Serializer):
     what = serializers.CharField(required=False, allow_blank=True)
     kind = serializers.ChoiceField(choices=("checkpoint", "judge"), required=False)
     claim = serializers.CharField(required=False, allow_blank=True)
+    output = serializers.CharField(required=False, allow_blank=True)
+    overlay = serializers.CharField(required=False, allow_blank=True)
 
 
 class HarnessEnvironmentScenarioSerializer(serializers.Serializer):

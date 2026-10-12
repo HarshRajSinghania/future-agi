@@ -69,15 +69,24 @@ export const ENV_SHAPE = PropTypes.shape({
   name: PropTypes.string,
   surface: PropTypes.string,
   domain: PropTypes.string,
+  domainTag: PropTypes.shape({ id: PropTypes.string, label: PropTypes.string }),
   description: PropTypes.string,
   tools: PropTypes.arrayOf(
     PropTypes.shape({
       name: PropTypes.string,
       desc: PropTypes.string,
       args: PropTypes.arrayOf(PropTypes.string),
+      origin: PropTypes.shape({
+        kind: PropTypes.string,
+        path: PropTypes.string,
+        field: PropTypes.string,
+        line: PropTypes.number,
+      }),
     })
   ),
   rules: PropTypes.arrayOf(PropTypes.string),
+  ruleDetails: PropTypes.arrayOf(PropTypes.object),
+  useCaseDetails: PropTypes.arrayOf(PropTypes.object),
   parallelism: PropTypes.shape({
     requested: PropTypes.number,
     admitted: PropTypes.number,
@@ -142,10 +151,13 @@ export const packStatsFor = (env) => {
   };
 };
 
-// The rule rows Overview renders. ALK sends the rule text only; per-rule origin
-// is not reported yet, so nothing is derived.
 export const ruleRowsFor = (env) =>
-  (env?.rules || []).map((subject, i) => ({ id: `rule-${i}`, subject }));
+  (env?.rules || []).map((subject, i) => ({
+    id: `rule-${i}`,
+    subject,
+    origin: (env?.ruleDetails || []).find((detail) => detail.text === subject)
+      ?.origin,
+  }));
 
 // The "agent moved ahead" refresh banner copy.
 export const REFRESH_COPY = {

@@ -43,10 +43,34 @@ describe("OverviewPanel", () => {
     expect(screen.getByText("LiveKit")).toBeInTheDocument();
   });
 
-  // The Tools and Hard-rules cards were removed from the Overview panel as
-  // duplicates of the Contract tab, so their panel-level tests went with them.
-  // ToolsCard/HardRulesCard are still exercised where they render (the direct
-  // HardRulesCard test below; ToolsCard on the Contract tab).
+  it("shows the authored domain and item-level origins", () => {
+    renderPanel({
+      env: {
+        ...MOCK_WORLD,
+        domainTag: { id: "guest-booking", label: "Guest Booking" },
+        ruleDetails: [
+          {
+            text: MOCK_WORLD.rules[0],
+            origin: { kind: "provider_system_prompt", field: "system_prompt" },
+          },
+        ],
+        useCases: ["Book a guest ride"],
+        useCaseDetails: [
+          {
+            text: "Book a guest ride",
+            origin: { kind: "provider_tool_list", field: "book_ride" },
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("Domain")).toBeInTheDocument();
+    expect(screen.getByText("Guest Booking")).toBeInTheDocument();
+    expect(screen.getByText("SYSTEM PROMPT")).toBeInTheDocument();
+    expect(screen.getByText("TOOL LIST")).toBeInTheDocument();
+    expect(screen.getByText("system_prompt")).toBeInTheDocument();
+    expect(screen.getByText("book_ride")).toBeInTheDocument();
+  });
 
   it("renders each hard rule as text, with no invented origin chip", () => {
     render(<HardRulesCard env={MOCK_WORLD} />);
@@ -55,8 +79,7 @@ describe("OverviewPanel", () => {
     MOCK_WORLD.rules.forEach((rule) =>
       expect(screen.getByText(rule)).toBeInTheDocument(),
     );
-    // …but ALK reports no per-rule origin, and the chips used to be derived by
-    // position (first two CODE, last PROSE, rest PROMPT). None of them ship.
+    // A legacy environment with no reported origins still gets no fabricated badges.
     expect(screen.queryByText("CODE")).toBeNull();
     expect(screen.queryByText("PROMPT")).toBeNull();
     expect(screen.queryByText("PROSE")).toBeNull();

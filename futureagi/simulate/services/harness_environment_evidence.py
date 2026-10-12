@@ -69,6 +69,8 @@ def _secret_safe(value: Any, *, key: str = "", schema: bool = False) -> Any:
         or normalized.endswith("_secret")
         or any(marker in normalized for marker in secret_markers)
     )
+    if sensitive and value in ("", None):
+        return value
     if sensitive and not (schema and isinstance(value, dict)):
         return "[redacted]"
     if isinstance(value, dict):

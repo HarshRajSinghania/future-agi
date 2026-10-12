@@ -30,7 +30,7 @@ from simulate.services.harness_environment_evidence import (
     environment_detail_v2,
     has_verified_system_prompt,
 )
-from simulate.utils.ended_reason import canonical_ended_reasons
+from simulate.utils.ended_reason import canonical_ended_reasons, ended_reason_groups
 
 # The four states the list's status pill knows. The pipeline reports far finer
 # stages; the raw one travels alongside as ``stage`` so a caller that wants
@@ -298,6 +298,8 @@ _CONTRACT_FIELDS = (
     "data_store",
     "data_schema",
     "data_schema_columns",
+    "base_environment",
+    "refusal_signature",
     "open_questions",
     "amendments",
     "amendment_details",
@@ -491,6 +493,8 @@ def _catalogue_index(catalogue: Any) -> dict[str, dict[str, Any]]:
             "what": str(entry.get("what") or ""),
             "kind": "judge" if entry.get("judged") else "checkpoint",
             "claim": str(entry.get("judged") or ""),
+            "output": str(entry.get("output") or "pass_fail"),
+            "overlay": str(entry.get("overlay") or ""),
         }
     return index
 
@@ -777,6 +781,8 @@ def _catalogue_entries(catalogue: Any) -> list[dict[str, Any]]:
                 "kind": "judge" if judged else "checkpoint",
                 "claim": judged,
                 "check": str(entry.get("check") or ""),
+                "output": str(entry.get("output") or "pass_fail"),
+                "overlay": str(entry.get("overlay") or ""),
             }
         )
     return goals
@@ -799,6 +805,7 @@ def _end_conditions(
         "max_duration_seconds": runtime.get("max_duration_seconds"),
         "clock": "real-time" if voice else "stepped",
         "ended_reasons": canonical_ended_reasons(),
+        **ended_reason_groups(voice=voice),
     }
     seed = (job.payload or {}).get("seed")
     if type(seed) is int:

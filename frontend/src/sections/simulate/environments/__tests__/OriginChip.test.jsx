@@ -11,6 +11,10 @@ describe("OriginChip", () => {
     expect(screen.getByText("POLICY.YAML")).toBeInTheDocument();
     rerender(<OriginChip origin="callGraph" />);
     expect(screen.getByText("CALL-GRAPH")).toBeInTheDocument();
+    rerender(<OriginChip origin="provider_system_prompt" />);
+    expect(screen.getByText("SYSTEM PROMPT")).toBeInTheDocument();
+    rerender(<OriginChip origin="provider_tool_list" />);
+    expect(screen.getByText("TOOL LIST")).toBeInTheDocument();
   });
 
   it("renders nothing for an unknown origin", () => {
@@ -21,6 +25,12 @@ describe("OriginChip", () => {
   it("shows the file:line path when showPath is set", () => {
     render(<OriginChip origin="code" file="agent/policy.py" line={12} />);
     expect(screen.getByText("agent/policy.py:12")).toBeInTheDocument();
+  });
+
+  it("shows a provider field without an undefined line suffix", () => {
+    render(<OriginChip origin="provider_system_prompt" file="system_prompt" />);
+    expect(screen.getByText("system_prompt")).toBeInTheDocument();
+    expect(screen.queryByText("system_prompt:undefined")).toBeNull();
   });
 
   it("hides the file:line path when showPath is false", () => {

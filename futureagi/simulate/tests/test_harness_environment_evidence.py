@@ -16,17 +16,21 @@ from simulate.serializers.harness_environment import (
     HarnessEnvironmentContractSerializer,
     HarnessEnvironmentDetailSerializer,
     HarnessEnvironmentDetailV2Serializer,
+    HarnessEnvironmentSubGoalSerializer,
     HarnessEnvironmentWorldSerializer,
 )
 from simulate.serializers.harness_job import HarnessStageOutputSerializer
 from simulate.services.harness_environment import (
+    _catalogue_index,
     _contract_section,
     _environment_evidence,
+    _provenance,
     _world_section,
     environment_detail,
 )
 from simulate.services.harness_environment_evidence import (
     EnvironmentEvidence,
+    _secret_safe,
     environment_detail_v2,
 )
 from simulate.services.hosted_harness_gateway import (
@@ -144,6 +148,8 @@ def test_source_artifacts_reach_real_serializers_with_measured_rows(archived):
     contract = {
         "agent": "support",
         "modality": "voice",
+        "base_environment": {"orders": [{"id": "order-1"}]},
+        "refusal_signature": "Order not found",
         "domain": {"id": "support", "label": "Order Support"},
         "one_liner": "Find an order",
         "system_prompt": prompt,
@@ -234,6 +240,8 @@ def test_source_artifacts_reach_real_serializers_with_measured_rows(archived):
     assert actual["system_prompt_origin"] == origin
     assert actual["domain"] == {"id": "support", "label": "Order Support"}
     assert actual["one_liner"] == "Find an order"
+    assert actual["base_environment"] == {"orders": [{"id": "order-1"}]}
+    assert actual["refusal_signature"] == "Order not found"
     assert actual["hard_constraints"] == ["Verify identity"]
     assert actual["hard_constraint_details"][0]["sub_goal"] == "identity_checked"
     assert "sub_goal" not in actual["real_use_case_details"][0]
@@ -283,6 +291,16 @@ def test_source_artifacts_reach_real_serializers_with_measured_rows(archived):
         "value": 0,
         "controls": ["scenario_world_rng"],
     }
+    assert actual["end_conditions"]["terminate_reasons"] == [
+        "assistant-ended-call",
+        "customer-ended-call",
+    ]
+    assert actual["end_conditions"]["truncate_reasons"] == [
+        "cancelled",
+        "max-duration-reached",
+        "no-answer",
+        "silence-timed-out",
+    ]
     assert "stop_on_constraint_violation" not in actual["end_conditions"]
     world = HarnessEnvironmentWorldSerializer(
         _world_section(None, [], evidence.store_tables(evidence.schema_tables()))
@@ -369,6 +387,75 @@ def test_old_contract_keeps_legacy_values_and_absent_evidence():
     assert "tool_certification" not in actual
     assert "data_schema_tables" not in actual
     assert "seed" not in actual["end_conditions"]
+
+
+def test_sub_goal_runtime_metadata_reaches_contract_and_scenarios():
+    catalogue = {
+        "sub_goals": [
+            {
+                "name": "identity_checked",
+                "what": "Identity was checked",
+                "judged": "The agent verified identity",
+                "output": "pass_fail",
+                "overlay": "authentication",
+            }
+        ]
+    }
+    evidence = _evidence(sub_goals=catalogue)
+    actual = _serialized_contract(evidence)
+    assert actual["sub_goals"] == [
+        {
+            "name": "identity_checked",
+            "what": "Identity was checked",
+            "kind": "judge",
+            "claim": "The agent verified identity",
+            "check": "",
+            "output": "pass_fail",
+            "overlay": "authentication",
+        }
+    ]
+    scenario_sub_goal = _catalogue_index(catalogue)["identity_checked"]
+    assert HarnessEnvironmentSubGoalSerializer(scenario_sub_goal).data["output"] == (
+        "pass_fail"
+    )
+    assert HarnessEnvironmentSubGoalSerializer(scenario_sub_goal).data["overlay"] == (
+        "authentication"
+    )
+
+
+def test_bundle_manifest_fields_are_available_to_world_and_provenance():
+    output = authoring_stage_outputs(
+        None,
+        {"services": [{"name": "tools-api"}]},
+        None,
+        bundle={
+            "managed": True,
+            "processes": [{"name": "worker"}],
+            "capabilities": ["tools"],
+            "services": [{"name": "bundle-service"}],
+        },
+    )[0]["data"]
+    assert output["services"] == [{"name": "tools-api"}]
+    assert output["managed"] is True
+    assert output["processes"] == [{"name": "worker"}]
+    assert output["capabilities"] == ["tools"]
+    assert output["bundle_manifest"]["managed"] is True
+    assert _world_section(output, [], [])["runtime"]["managed"] is True
+    job = SimpleNamespace(
+        payload={},
+        attempts=SimpleNamespace(
+            order_by=lambda *_args: SimpleNamespace(first=lambda: None)
+        ),
+        bundle_digest=None,
+    )
+    assert _provenance(job, output)["built_by"] == "alk"
+
+
+def test_empty_secret_reference_stays_empty_while_secret_value_is_redacted():
+    assert _secret_safe({"password_from": ""}) == {"password_from": ""}
+    assert _secret_safe({"password_from": "DATABASE_PASSWORD"}) == {
+        "password_from": "[redacted]"
+    }
 
 
 @pytest.mark.parametrize(

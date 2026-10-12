@@ -81,7 +81,7 @@ DependsOnCard.propTypes = {
       name: PropTypes.string,
       kind: PropTypes.string,
       provides: PropTypes.string,
-      usedBy: PropTypes.string,
+      usedBy: PropTypes.oneOfType([PropTypes.string, PropTypes.arrayOf(PropTypes.string)]),
     })
   ),
 };

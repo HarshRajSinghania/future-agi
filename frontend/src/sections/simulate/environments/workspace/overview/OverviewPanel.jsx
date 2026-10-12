@@ -93,6 +93,12 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
         sx={{ my: 2, py: 1.25, px: 2, border: "1px solid", borderColor: "divider", borderRadius: 1.5, rowGap: 1, width: "fit-content", maxWidth: "100%" }}
       >
         <Fact label={OVERVIEW_COPY.facts.channel} value={surface.label} />
+        {env.domainTag?.label && (
+          <Fact
+            label={OVERVIEW_COPY.facts.domain}
+            value={env.domainTag.label}
+          />
+        )}
         <Fact label={OVERVIEW_COPY.facts.connector} value={connectorLabel} />
         {parallelism?.requested ? (
           <Fact label={PARALLELISM_COPY.fact} value={PARALLELISM_COPY.factValue(parallelism)} />
@@ -130,20 +136,25 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
         <NextStepsChecklist env={env} envState={envState} onGo={onGo} />
       )}
 
-      {/* CapabilityGraph moved to the Contract tab — that's where the shape of
-          the environment belongs. Overview keeps the summary, not the definition. */}
+      {/* CapabilityGraph moved to the Contract tab. Overview keeps the
+          source-backed summaries and their evidence. */}
       <GroupHeading>{OVERVIEW_COPY.capabilities}</GroupHeading>
 
-      <SourceReadCard tools={env.tools} rules={env.rules} />
+      <SourceReadCard
+        tools={env.tools}
+        rules={env.rules}
+        ruleDetails={env.ruleDetails}
+      />
 
-      {/* Tools and Hard rules cards were here — removed as duplicates of the
-          Contract tab, which owns the tool inventory and the hard-rule list. */}
       <Grid container spacing={2} alignItems="flex-start" sx={{ mb: 3 }}>
         <Grid item xs={12} md={7}>
           {/* Prefer the real §6 fields (contract.real_use_cases / amendments)
               when the detail endpoint has authored them; fall back to the
               fixture derivation while it has not (or is disabled). */}
-          <UseCasesCard useCases={env.useCases ?? contract.useCases} />
+          <UseCasesCard
+            useCases={env.useCases ?? contract.useCases}
+            details={env.useCaseDetails}
+          />
         </Grid>
         <Grid item xs={12} md={5}>
           {!buildMode && (

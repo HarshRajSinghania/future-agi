@@ -4525,6 +4525,8 @@ def authoring_stage_outputs(
     if isinstance(environment, dict) or isinstance(bundle, dict):
         environment_data = dict(environment or {})
         if isinstance(bundle, dict):
+            for key, value in bundle.items():
+                environment_data.setdefault(key, value)
             environment_data["bundle_manifest"] = bundle
         services = environment_data.get("services") or []
         processes = (bundle or {}).get("processes") if isinstance(bundle, dict) else []

@@ -4,6 +4,7 @@ import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, Collapse, Chip, Tooltip, IconButton } from "@mui/material";
 import { enqueueSnackbar } from "notistack";
 import Iconify from "src/components/iconify";
+import OriginChip from "../../components/OriginChip";
 import SectionCard from "../../components/SectionCard";
 
 const MONO = "ui-monospace, Menlo, monospace";
@@ -208,6 +209,13 @@ function ToolsCard({ tools, entrypoints }) {
                 <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>
                   {tool.desc}
                 </Typography>
+                {tool.origin && (
+                  <OriginChip
+                    origin={tool.origin.kind}
+                    file={tool.origin.path || tool.origin.field}
+                    line={tool.origin.line}
+                  />
+                )}
                 {runsAt && (
                   <Tooltip arrow title={runsAt}>
                     <Chip

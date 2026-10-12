@@ -107,6 +107,31 @@ describe("RlContractPanel", () => {
     expect(screen.getByText(/"callable": "refund"/)).toBeInTheDocument();
   });
 
+  it("shows the reported origin for each tool", () => {
+    renderPanel({
+      env: {
+        ...voiceEnv,
+        tools: [
+          {
+            name: "lookup_account",
+            desc: "Reads the caller's account.",
+            origin: { kind: "code", path: "support/tools.py", line: 18 },
+          },
+          {
+            name: "issue_refund",
+            desc: "Refunds a charge.",
+            origin: { kind: "provider_tool_list", field: "issue_refund" },
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("CODE")).toBeInTheDocument();
+    expect(screen.getByText("TOOL LIST")).toBeInTheDocument();
+    expect(screen.getByText("support/tools.py:18")).toBeInTheDocument();
+    expect(screen.getAllByText("issue_refund").length).toBeGreaterThan(0);
+  });
+
   it("shows the exact tool source when ALK supplied it", () => {
     renderPanel({
       env: {
