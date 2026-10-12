@@ -33,6 +33,9 @@ from tracer.services.clickhouse.v2.query_builders import trace_list as trace_lis
 from tracer.services.clickhouse.v2.query_builders.span_list import (
     SpanListQueryBuilderV2,
 )
+from tracer.services.clickhouse.v2.query_builders.session_list import (
+    SessionListQueryBuilderV2,
+)
 from tracer.services.clickhouse.v2.query_builders.trace_list import (
     _MAX_NGRAM_ANCHOR_BYTES,
     _caseless_ascii_ngram_anchor,
@@ -172,6 +175,23 @@ def _voice_classifier(builder) -> str:
     return _render_driver_sql(sql, params)
 
 
+def _session_builder(operation: str, value, *, typed: bool = False):
+    """Build the bounded Session preview path used by task selection."""
+
+    return SessionListQueryBuilderV2(
+        project_id=PROJECT,
+        filters=[_time_filter(), _attribute_filter(operation, value, typed=typed)],
+        page_number=0,
+        page_size=25,
+        bounded_internal_scan=True,
+    )
+
+
+def _session_candidate(builder) -> str:
+    sql, params = builder.build_candidate_page_query()
+    return _render_driver_sql(sql, params)
+
+
 def _literal(value: str) -> str:
     """The literal a statement carries: the lowercased value, driver-escaped."""
 
@@ -249,6 +269,33 @@ def test_span_classifier_carries_the_measured_values_once_and_parses():
     assert _fits(classifier)
     assert _copies(classifier, FIRST_VALUE) == 1
     assert _copies(classifier, SECOND_VALUE) == 1
+
+
+def test_session_candidate_with_measured_in_values_keeps_one_exact_copy():
+    """Session preview must not inline ~100 KiB values in its witness CTE twice."""
+
+    rendered = _session_candidate(
+        _session_builder("in", [FIRST_VALUE, SECOND_VALUE], typed=True)
+    )
+    assert _fits(rendered)
+    # The candidate CTE uses key/index presence for discovery; the exact
+    # comparison remains in the latest-state classifier once per value.
+    assert _copies(rendered, FIRST_VALUE) == 1
+    assert _copies(rendered, SECOND_VALUE) == 1
+
+
+def test_session_candidate_size_guard_catches_the_second_copy(monkeypatch):
+    """Negative control: restoring the old value witness exceeds max_query_size."""
+
+    monkeypatch.setattr(
+        latest_filter_predicates, "_MAX_TWICE_INLINED_VALUES_RENDERED_BYTES", 1 << 40
+    )
+    rendered = _session_candidate(
+        _session_builder("in", [FIRST_VALUE, SECOND_VALUE], typed=True)
+    )
+    assert _copies(rendered, FIRST_VALUE) == 2
+    assert _copies(rendered, SECOND_VALUE) == 2
+    assert not _fits(rendered)
 
 
 def _span_discovery(builder) -> str:

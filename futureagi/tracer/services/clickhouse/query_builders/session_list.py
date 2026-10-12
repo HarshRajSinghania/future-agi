@@ -1885,8 +1885,19 @@ class SessionListQueryBuilder(BaseQueryBuilder):
                 # The compiler proves this value witness exhaustive even when
                 # missing-key defaults and independent argMax fields matter.
                 # Otherwise retain its conservative necessary raw witness.
+                # The candidate witness is added alongside the complete
+                # latest-state predicate below.  For very large text IN
+                # values, repeating the value comparison in this discovery
+                # CTE pushes the rendered statement past ClickHouse's
+                # ``max_query_size`` before execution.  The compiler exposes
+                # ``population_witness_predicate`` for this exact situation:
+                # it keeps the typed key/index superset when a second inline
+                # copy would not fit, while the latest-state replay remains
+                # authoritative.  Ordinary values retain their graph/value
+                # witness through that property.
                 predicate = (
-                    witness.raw_graph_value_witness_predicate
+                    witness.population_witness_predicate
+                    or witness.raw_graph_value_witness_predicate
                     or witness.raw_witness_predicate
                 )
                 witness_cte = f"""
