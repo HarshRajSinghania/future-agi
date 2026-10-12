@@ -7,7 +7,6 @@ before experiment runs start writing against the contract.
 """
 
 from django.db.models import Count, Q
-from drf_yasg.utils import swagger_auto_schema
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
@@ -17,19 +16,24 @@ from model_hub.serializers.dataset_versions import (
     DatasetVersionDetailResponseSerializer,
     DatasetVersionItemReadSerializer,
     DatasetVersionListResponseSerializer,
+    DatasetVersionPageQuerySerializer,
     DatasetVersionReadSerializer,
 )
-from model_hub.utils.workspace_scope import scoped_dataset_queryset
+from model_hub.utils.workspace_scope import (
+    request_organization,
+    scoped_dataset_queryset,
+)
+from tfc.utils.api_contracts import validated_request
 from tfc.utils.general_methods import GeneralMethods
 
 _gm = GeneralMethods()
-_DEFAULT_ITEM_LIMIT = 100
-_MAX_ITEM_LIMIT = 500
 
 
 def _scoped_version_queryset(request, dataset_id):
     """Return non-deleted versions for a dataset visible to this tenant."""
 
+    if request_organization(request) is None:
+        return DatasetVersion.objects.none()
     return DatasetVersion.objects.filter(
         dataset__in=scoped_dataset_queryset(request).filter(id=dataset_id),
         deleted=False,
@@ -41,13 +45,16 @@ class DatasetVersionListView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @swagger_auto_schema(
+    @validated_request(
+        query_serializer=DatasetVersionPageQuerySerializer,
         responses={
             200: DatasetVersionListResponseSerializer,
             **MODEL_HUB_ERROR_RESPONSES,
-        }
+        },
     )
     def get(self, request, dataset_id):
+        if request_organization(request) is None:
+            return _gm.not_found("Dataset not found")
         dataset = scoped_dataset_queryset(request).filter(id=dataset_id).first()
         if dataset is None:
             return _gm.not_found("Dataset not found")
@@ -63,10 +70,16 @@ class DatasetVersionListView(APIView):
             )
             .order_by("-created_at", "-id")
         )
+        limit = request.validated_query_data["limit"]
+        offset = request.validated_query_data["offset"]
+        page = list(versions[offset : offset + limit + 1])
         return _gm.success_response(
             {
                 "dataset_id": dataset.id,
-                "versions": DatasetVersionReadSerializer(versions, many=True).data,
+                "versions": DatasetVersionReadSerializer(page[:limit], many=True).data,
+                "limit": limit,
+                "offset": offset,
+                "has_more": len(page) > limit,
             }
         )
 
@@ -76,11 +89,12 @@ class DatasetVersionDetailView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @swagger_auto_schema(
+    @validated_request(
+        query_serializer=DatasetVersionPageQuerySerializer,
         responses={
             200: DatasetVersionDetailResponseSerializer,
             **MODEL_HUB_ERROR_RESPONSES,
-        }
+        },
     )
     def get(self, request, dataset_id, version_id):
         version = (
@@ -98,18 +112,8 @@ class DatasetVersionDetailView(APIView):
         if version is None:
             return _gm.not_found("Dataset version not found")
 
-        try:
-            limit = int(request.query_params.get("limit", _DEFAULT_ITEM_LIMIT))
-            offset = int(request.query_params.get("offset", 0))
-        except (TypeError, ValueError):
-            return _gm.bad_request("limit and offset must be integers")
-
-        if limit < 1 or limit > _MAX_ITEM_LIMIT:
-            return _gm.bad_request(
-                f"limit must be between 1 and {_MAX_ITEM_LIMIT}"
-            )
-        if offset < 0:
-            return _gm.bad_request("offset must be greater than or equal to 0")
+        limit = request.validated_query_data["limit"]
+        offset = request.validated_query_data["offset"]
 
         items = DatasetVersionItem.objects.filter(
             dataset_version=version,

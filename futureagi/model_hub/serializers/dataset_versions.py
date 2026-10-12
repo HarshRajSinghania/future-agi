@@ -5,6 +5,11 @@ from rest_framework import serializers
 from model_hub.models.dataset_versions import DatasetVersion, DatasetVersionItem
 
 
+class DatasetVersionPageQuerySerializer(serializers.Serializer):
+    limit = serializers.IntegerField(default=100, min_value=1, max_value=500)
+    offset = serializers.IntegerField(default=0, min_value=0, max_value=2147483647)
+
+
 class DatasetVersionItemReadSerializer(serializers.ModelSerializer):
     """Stable example identity and source provenance for one version item."""
 
@@ -55,6 +60,9 @@ class DatasetVersionReadSerializer(serializers.ModelSerializer):
 class DatasetVersionListResultSerializer(serializers.Serializer):
     dataset_id = serializers.UUIDField()
     versions = DatasetVersionReadSerializer(many=True)
+    limit = serializers.IntegerField()
+    offset = serializers.IntegerField()
+    has_more = serializers.BooleanField()
 
 
 class DatasetVersionListResponseSerializer(serializers.Serializer):
