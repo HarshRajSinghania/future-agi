@@ -1896,8 +1896,9 @@ class SessionListQueryBuilder(BaseQueryBuilder):
                 # authoritative.  Ordinary values retain their graph/value
                 # witness through that property.
                 predicate = (
-                    witness.population_witness_predicate
-                    or witness.raw_graph_value_witness_predicate
+                    witness.raw_population_witness_predicate
+                    if witness.raw_population_witness_predicate is not None
+                    else witness.raw_graph_value_witness_predicate
                     or witness.raw_witness_predicate
                 )
                 witness_cte = f"""

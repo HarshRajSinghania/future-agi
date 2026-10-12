@@ -30,11 +30,11 @@ from tracer.services.clickhouse.query_builders.latest_filter_predicates import (
     compile_span_filter_plans,
 )
 from tracer.services.clickhouse.v2.query_builders import trace_list as trace_list_module
-from tracer.services.clickhouse.v2.query_builders.span_list import (
-    SpanListQueryBuilderV2,
-)
 from tracer.services.clickhouse.v2.query_builders.session_list import (
     SessionListQueryBuilderV2,
+)
+from tracer.services.clickhouse.v2.query_builders.span_list import (
+    SpanListQueryBuilderV2,
 )
 from tracer.services.clickhouse.v2.query_builders.trace_list import (
     _MAX_NGRAM_ANCHOR_BYTES,
