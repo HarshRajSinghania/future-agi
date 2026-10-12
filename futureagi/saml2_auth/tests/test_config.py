@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, force_authenticate
 
 from accounts.models.organization_membership import OrganizationMembership
 from saml2_auth.models import SAMLMetadataModel
@@ -16,28 +16,26 @@ pytestmark = [pytest.mark.django_db, pytest.mark.api]
 
 
 def _bind_org(user, organization):
-    """Match API-key auth: request org plus the workspace ContextVar.
+    """Match API-key auth on the request the handler actually dispatches.
 
-    force_authenticate skips both. SAMLConfigPermission reads the ContextVar,
-    and IDPUploadViews.get_queryset reads request.organization.
+    force_authenticate skips request.organization and the workspace ContextVar.
+    WorkspaceContextMiddleware clears that ContextVar in process_request, which
+    runs inside super().get_response, so the bind has to happen there too.
     """
 
-    def _start(request):
-        request.organization = organization
-        set_workspace_context(organization=organization, user=user, workspace=None)
-
-    def _finish(request):
-        clear_workspace_context()
+    class _Handler(type(APIClient().handler)):
+        def get_response(self, request):
+            force_authenticate(request, user, None)
+            request.organization = organization
+            set_workspace_context(organization=organization, user=user, workspace=None)
+            try:
+                return super().get_response(request)
+            finally:
+                clear_workspace_context()
 
     client = APIClient()
+    client.handler = _Handler(enforce_csrf_checks=client.handler.enforce_csrf_checks)
     client.force_authenticate(user=user)
-    client.handler.load_middleware()
-    client.handler._middleware_chain = None
-    # Insert after the middleware that clears context at process_request,
-    # so the bind survives that clear and is dropped on the response.
-    client.handler._view_middleware.insert(0, _start)
-    client.handler._template_response_middleware.append(_finish)
-    client.handler._exception_middleware.append(_finish)
     return client
 
 
@@ -93,7 +91,7 @@ def test_config_update_foreign_is_404_and_row_stays(saml_tenants, idp_b):
     response = client.put(
         f"/saml2_auth/idp-uploads/{idp_b.id}/",
         {
-            "name": "attacker-supplied-name",
+            "name": "attacker-supplied",
             "identity_type": str(idp_b.identity_type),
             "is_enabled": "true",
             "organization": str(saml_tenants.org_a.id),
