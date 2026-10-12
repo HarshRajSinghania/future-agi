@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import jwt
 import requests
@@ -37,6 +37,7 @@ from simulate.models import (
     HostedHarnessJob,
     HostedHarnessSecret,
 )
+from simulate.services.harness_environment_evidence import INTERNAL_TABLES
 from simulate.services.hosted_harness import (
     HostedHarnessError,
     activate_attempt_capability,
@@ -57,6 +58,7 @@ from simulate.services.hosted_harness_conversation import (
 )
 from simulate.services.hosted_harness_diagnostics import (
     SandboxDiagnostics,
+    _redact,
     cache_attempt_redaction_values,
     cached_attempt_redaction_values,
     forget_attempt_redaction_values,
@@ -1876,8 +1878,7 @@ class HostedHarnessGateway:
             # Later simulation Runs restore this exact snapshot instead of
             # regenerating or re-authoring the environment.
             packed = sandbox.process.exec(
-                "cd /work/authoring && tar -czf /tmp/authoring.tar.gz "
-                "--exclude=__pycache__ --exclude=./cost.json .",
+                _authoring_archive_command("/tmp/authoring.tar.gz"),
                 timeout=180,
             )
             if packed.exit_code:
@@ -3074,11 +3075,10 @@ class HostedHarnessGateway:
 
         def _json(path: str):
             try:
-                return json.loads(
-                    sandbox.fs.download_file(
-                        path, _PROGRESS_FILE_TIMEOUT_SECONDS
-                    ).decode("utf-8")
-                )
+                body = sandbox.fs.download_file(path, _PROGRESS_FILE_TIMEOUT_SECONDS)
+                if len(body) > 8 * 1024 * 1024:
+                    return None
+                return json.loads(body.decode("utf-8"))
             except Exception:  # noqa: BLE001 - an absent/incomplete stage file is expected
                 return None
 
@@ -3124,6 +3124,10 @@ class HostedHarnessGateway:
         # Written when the world is sealed, so it appears later than the authoring
         # documents above and only once a store has actually been built.
         build_output = _json("/work/artifacts/build.json")
+        source_model = _json("/work/authoring/generic-harness/source-model.json")
+        tool_certification = _json(
+            "/work/authoring/generic-harness/tool-certification.json"
+        )
         # Read on every poll, so a sandbox deleted later still leaves its last known total.
         spend = _json("/work/authoring/cost.json")
         coverage = _json("/work/authoring/coverage.json")
@@ -3153,10 +3157,9 @@ class HostedHarnessGateway:
         ):
             try:
                 packed = sandbox.process.exec(
-                    "cd /work/authoring && "
-                    "[ -f contract.json ] && [ -d scenarios ] && "
-                    "tar -czf /tmp/authoring-rerun.tar.gz "
-                    "--exclude=__pycache__ --exclude=./cost.json .",
+                    "[ -f /work/authoring/contract.json ] && "
+                    "[ -d /work/authoring/scenarios ] && "
+                    + _authoring_archive_command("/tmp/authoring-rerun.tar.gz"),
                 )
                 if packed.exit_code:
                     raise RuntimeError(str(packed.result or "authoring pack failed"))
@@ -3177,6 +3180,8 @@ class HostedHarnessGateway:
             sub_goals=sub_goals,
             build_output=build_output,
             coverage=coverage,
+            source_model=source_model,
+            tool_certification=tool_certification,
         )
         activities = _activity_events()
         if activities:
@@ -4176,6 +4181,15 @@ def _bundle_archive_for(job: HostedHarnessJob) -> tuple[bytes | None, dict | Non
     return archive.getvalue(), manifest
 
 
+def _authoring_archive_command(destination: str) -> str:
+    return (
+        "(if [ -f /work/artifacts/build.json ]; then "
+        "set -- -C /work/artifacts build.json; else set --; fi; "
+        f"tar -czf {shlex.quote(destination)} "
+        '--exclude=__pycache__ --exclude=./cost.json -C /work/authoring . "$@")'
+    )
+
+
 def pack_authoring_archive(authoring_root: Path) -> bytes:
     """Pack only the frozen ALK outputs consumed by ``bundle_author_v2``."""
     files: list[Path] = []
@@ -4187,6 +4201,7 @@ def pack_authoring_archive(authoring_root: Path) -> bytes:
         "contract.json",
         "simulator_prompt.md",
         "runtime-validation.json",
+        "build.json",
     ):
         path = authoring_root / name
         if path.is_file() and not path.is_symlink():
@@ -4381,7 +4396,7 @@ def _authored_modality(job: Any) -> str:
     return ""
 
 
-def _secret_safe(value: Any, *, key: str = "") -> Any:
+def _secret_safe(value: Any, *, key: str = "", schema: bool = False) -> Any:
     """Return an authoring document safe to persist and display.
 
     Authoring outputs should normally contain references rather than secret values. This is a
@@ -4406,19 +4421,46 @@ def _secret_safe(value: Any, *, key: str = "") -> Any:
         "credential_json",
         "secret_value",
     )
-    if normalized not in safe_secret_metadata and (
+    sensitive = normalized not in safe_secret_metadata and (
         normalized == "secrets"
         or normalized.endswith("_secret")
         or any(marker in normalized for marker in secret_markers)
-    ):
+    )
+    if sensitive and not (schema and isinstance(value, dict)):
         return "[redacted]"
     if isinstance(value, dict):
         return {
-            str(item_key): _secret_safe(item_value, key=str(item_key))
+            str(item_key): "[redacted]"
+            if sensitive
+            and item_key in {"default", "example", "examples", "const", "enum"}
+            else _secret_safe(
+                item_value,
+                key=str(item_key),
+                schema=schema
+                or normalized in {"parameters", "input_schema", "output_schema"},
+            )
             for item_key, item_value in value.items()
         }
     if isinstance(value, list):
-        return [_secret_safe(item) for item in value]
+        return [_secret_safe(item, schema=schema) for item in value]
+    if (
+        isinstance(value, str)
+        and "://" in value
+        and not any(char.isspace() for char in value)
+    ):
+        try:
+            url = urlsplit(value)
+            if url.scheme and url.netloc:
+                if schema and "@" not in url.netloc:
+                    return _redact(value, ())
+                return urlunsplit(
+                    (url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", "")
+                )
+        except ValueError:
+            return "[redacted]"
+    if isinstance(value, str):
+        value = _redact(value, ())
+        value = re.sub(r"(\w+://)[^\s/@]+:[^\s/@]+@", r"\1[redacted]@", value)
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
@@ -4523,18 +4565,31 @@ def authoring_stage_outputs(
     repair_history: Any = None,
     action_certification: Any = None,
     coverage: Any = None,
+    source_model: Any = None,
+    tool_certification: Any = None,
 ) -> list[dict[str, Any]]:
     """Build the complete, secret-safe snapshots shown by the hosted-run UI."""
     outputs: list[dict[str, Any]] = []
     if isinstance(contract, dict):
         tools = contract.get("tools") or []
+        safe_contract = _secret_safe(contract)
+        prompt = contract.get("system_prompt")
+        origin = contract.get("system_prompt_origin")
+        prompt_digest = origin.get("sha256") if isinstance(origin, dict) else None
+        if safe_contract.get("system_prompt") != prompt or (
+            prompt_digest
+            and isinstance(prompt, str)
+            and prompt_digest != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        ):
+            safe_contract.pop("system_prompt", None)
+            safe_contract.pop("system_prompt_origin", None)
         outputs.append(
             {
                 "id": "00000000-0000-0000-0000-000000000001",
                 "kind": "contract",
                 "title": "Agent contract",
                 "summary": f"{len(tools)} tools · {contract.get('modality') or 'unknown'} modality",
-                "data": _secret_safe(contract),
+                "data": safe_contract,
             }
         )
     if isinstance(environment, dict) or isinstance(bundle, dict):
@@ -4628,6 +4683,48 @@ def authoring_stage_outputs(
                 ),
             }
         )
+    for kind, title, document, version, identifier in (
+        (
+            "source_model",
+            "Source schema",
+            source_model,
+            "futureagi.source-model.v2",
+            "7",
+        ),
+        (
+            "tool_certification",
+            "Tool certification",
+            tool_certification,
+            "futureagi.tool-certification.v1",
+            "8",
+        ),
+    ):
+        if not isinstance(document, dict) or document.get("schema_version") != version:
+            continue
+        if not isinstance(
+            document.get("tables" if kind == "source_model" else "tools"), list
+        ):
+            continue
+        content = {
+            key: value for key, value in document.items() if key != "fingerprint"
+        }
+        encoded = json.dumps(
+            content, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        if (
+            document.get("fingerprint")
+            != "sha256:" + hashlib.sha256(encoded).hexdigest()
+        ):
+            continue
+        outputs.append(
+            {
+                "id": f"00000000-0000-0000-0000-00000000000{identifier}",
+                "kind": kind,
+                "title": title,
+                "summary": "",
+                "data": _secret_safe(document),
+            }
+        )
     return outputs
 
 
@@ -4647,9 +4744,9 @@ def _seeded_stores(build_output: Any) -> list[dict[str, Any]]:
             continue
         counts = record.get("row_counts")
         tables = [
-            {"name": str(name), "rows": int(rows)}
+            {"name": str(name), "rows": rows, "internal": name in INTERNAL_TABLES}
             for name, rows in sorted((counts or {}).items())
-            if isinstance(rows, int)
+            if type(rows) is int and rows >= 0
         ]
         if not tables:
             continue
@@ -4680,6 +4777,9 @@ def authoring_stage_outputs_from_archive(
         "repair-history.json",
         "action-certification.json",
         "coverage.json",
+        "source-model.json",
+        "tool-certification.json",
+        "build.json",
     }
     with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
         for member in archive.getmembers():
@@ -4690,10 +4790,19 @@ def authoring_stage_outputs_from_archive(
                 and len(path.parts) >= 3
                 and path.parts[-3] == "scenarios"
             )
+            evidence_paths = {
+                "source-model.json": {("generic-harness", name), (name,)},
+                "tool-certification.json": {("generic-harness", name), (name,)},
+                "build.json": {("artifacts", name), (name,)},
+            }
             if (
                 (name not in wanted and not is_scenario)
                 or not member.isfile()
                 or member.size > 8 * 1024 * 1024
+                or (
+                    name in evidence_paths
+                    and _archive_parts(member.name) not in evidence_paths[name]
+                )
             ):
                 continue
             source = archive.extractfile(member)
@@ -4726,6 +4835,9 @@ def authoring_stage_outputs_from_archive(
         repair_history=documents.get("repair-history.json"),
         action_certification=documents.get("action-certification.json"),
         coverage=documents.get("coverage.json"),
+        source_model=documents.get("source-model.json"),
+        tool_certification=documents.get("tool-certification.json"),
+        build_output=documents.get("build.json"),
     )
 
 

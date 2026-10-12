@@ -24,6 +24,7 @@ from simulate.models import (
     HostedHarnessReceipt,
     HostedHarnessStageOutput,
 )
+from simulate.services.harness_environment_evidence import EnvironmentEvidence
 from simulate.utils.ended_reason import canonical_ended_reasons
 
 # The four states the list's status pill knows. The pipeline reports far finer
@@ -294,6 +295,8 @@ _CONTRACT_FIELDS = (
     "data_schema_columns",
     "open_questions",
     "amendments",
+    "amendment_details",
+    "actors",
     "notes",
     "chosen_evals",
 )
@@ -332,11 +335,12 @@ def environment_detail(job: HostedHarnessJob) -> dict[str, Any]:
     caller can tell "not built yet" from "built with nothing in it". Nothing is
     computed that ALK did not write; the contract is passed through whole.
     """
-    contract = _contract_data(job)
-    environment = _stage_output(job, "environment")
-    scenario_docs = _stage_output(job, "scenarios")
-    catalogue = _stage_output(job, "sub_goals")
-    stores = _stage_output(job, "stores")
+    evidence = _environment_evidence(job)
+    contract = evidence.contract
+    environment = evidence.environment
+    scenario_docs = evidence.scenarios
+    catalogue = evidence.sub_goals
+    schema_tables = evidence.schema_tables()
     registrations = list(
         job.scenario_registrations.filter(deleted=False)
         .select_related("scenario")
@@ -354,6 +358,8 @@ def environment_detail(job: HostedHarnessJob) -> dict[str, Any]:
             # count is restated from it rather than from the live copy the row
             # fell back to.
             "sub_goals_count": _sub_goals_count(catalogue),
+            "description": _description(contract),
+            "tools_count": _tools_count(contract),
             "flows_count": _count(contract.get("real_use_cases")),
             "guardrails_count": _count(contract.get("hard_constraints")),
             "personas_count": len(personas) if personas else None,
@@ -365,14 +371,42 @@ def environment_detail(job: HostedHarnessJob) -> dict[str, Any]:
     return {
         "id": str(job.id),
         "overview": overview,
-        "contract": _contract_section(
-            job, contract, environment, catalogue, scenario_docs
+        "contract": _contract_section(job, evidence, schema_tables),
+        "world": _world_section(
+            environment, personas, evidence.store_tables(schema_tables)
         ),
-        "world": _world_section(environment, personas, stores),
         "scenarios": scenarios,
         "evaluations": {"selected": selected, "results": _results(receipts)},
         "settings": _settings(job),
     }
+
+
+def _environment_evidence(job: HostedHarnessJob) -> EnvironmentEvidence:
+    kinds = {
+        "contract": dict,
+        "environment": dict,
+        "scenarios": list,
+        "sub_goals": dict,
+        "stores": list,
+        "source_model": dict,
+        "tool_certification": dict,
+    }
+    documents = {
+        output["kind"]: output.get("data")
+        for output in job.stage_outputs or []
+        if isinstance(output, dict) and output.get("kind") in kinds
+    }
+    documents.update(
+        HostedHarnessStageOutput.no_workspace_objects.filter(
+            job=job, kind__in=kinds, deleted=False
+        ).values_list("kind", "data")
+    )
+    values = {
+        kind: value if isinstance(value := documents.get(kind), shape) else None
+        for kind, shape in kinds.items()
+    }
+    values["contract"] = values["contract"] or {}
+    return EnvironmentEvidence(**values)
 
 
 def _stage_output(job: HostedHarnessJob, kind: str) -> Any:
@@ -676,18 +710,41 @@ def _results(receipts: dict[str, HostedHarnessReceipt]) -> list[dict[str, Any]]:
 
 def _contract_section(
     job: HostedHarnessJob,
-    contract: dict[str, Any],
-    environment: Any,
-    catalogue: Any,
-    scenario_docs: Any,
+    evidence: EnvironmentEvidence,
+    schema_tables: list[dict[str, Any]] | None,
 ) -> dict[str, Any] | None:
+    contract = evidence.contract
     if not contract:
         return None
     section = {field: contract.get(field) for field in _CONTRACT_FIELDS}
+    agent = (job.payload or {}).get("agent") or {}
+    if (
+        agent.get("connector") in {"vapi", "retell", "retell_chat"}
+        and agent.get("mode") != "environment_backed"
+    ):
+        section.pop("call_direction", None)
+    if schema_tables is not None:
+        section["data_schema_tables"] = schema_tables
+        section["data_schema_columns"] = {
+            table["name"]: table["columns"] for table in schema_tables
+        }
+    if evidence.tool_certification is not None:
+        section["tool_certification"] = evidence.tool_certification.get("tools", [])
     section["amendments"] = _amendments(contract.get("amendments"))
-    section["sub_goals"] = _catalogue_entries(catalogue)
-    section["end_conditions"] = _end_conditions(job, contract, scenario_docs)
-    section["provenance"] = _provenance(job, environment)
+    section["sub_goals"] = _catalogue_entries(evidence.sub_goals)
+    goal_names = {goal["name"] for goal in section["sub_goals"]}
+    for field in ("hard_constraint_details", "real_use_case_details"):
+        if isinstance(section[field], list):
+            section[field] = [
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key != "sub_goal" or value in goal_names
+                }
+                for item in section[field]
+            ]
+    section["end_conditions"] = _end_conditions(job, contract, evidence.scenarios)
+    section["provenance"] = _provenance(job, evidence.environment)
     return section
 
 
@@ -728,12 +785,16 @@ def _end_conditions(
     """
     runtime = (job.payload or {}).get("runtime") or {}
     voice = agent_type(job, contract) == AGENT_TYPE_VOICE
-    return {
+    conditions = {
         "max_turns": None if voice else _max_turns(scenario_docs),
         "max_duration_seconds": runtime.get("max_duration_seconds"),
         "clock": "real-time" if voice else "stepped",
         "ended_reasons": canonical_ended_reasons(),
     }
+    seed = (job.payload or {}).get("seed")
+    if type(seed) is int:
+        conditions["seed"] = {"value": seed, "controls": ["scenario_world_rng"]}
+    return conditions
 
 
 def _max_turns(docs: Any) -> int | None:
