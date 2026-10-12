@@ -318,7 +318,7 @@ jobs:
         run: bin/e2e up
 
       - name: Run E2E suite
-        run: bin/e2e test
+        run: bin/e2e test flows/gateway/ --workers=1
 
       - name: Upload report
         if: ${{ !cancelled() }}

@@ -803,6 +803,500 @@
 - the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
 - a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
 
+### GW-E2E-901 — FALLIBILITY P1 (declaration stored under org, only declaration) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p01.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-902 — FALLIBILITY P2 (tenant value per row and - for none) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p02.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-903 — FALLIBILITY P3 (no per-row detail call) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p03.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-904 — FALLIBILITY P4 (selection survives reload) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p04.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-905 — FALLIBILITY P5 (reset restores default headers) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p05.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-906 — FALLIBILITY P6 (reset removes only this record) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p06.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-907 — FALLIBILITY P7 (injected 500: no custom name reaches page) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p07.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-908 — FALLIBILITY P8 (injected 500: saved record unchanged) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p08.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-909 — FALLIBILITY P9 (Retry answered by real API) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p09.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-910 — FALLIBILITY P10 (second org never sees saved record) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p10.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-911 — FALLIBILITY P11 (second org never sees declaration) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p11.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-912 — FALLIBILITY P12 (deleted declaration listed as no longer declared) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p12.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
+### GW-E2E-913 — FALLIBILITY P13 (Remove drops stale id, keeps the rest) — a platform engineer adds a declared custom property as a Request Logs column
+
+**Goal:** A platform engineer shows a declared custom property beside the built-in Request Logs columns, keeps that choice across reloads in this browser, and never sees it under another organization  
+**Spec:** `flows/gateway/zz-fallibility/p13.spec.ts:83`  
+**Tags:** —
+
+**User steps:**
+
+1. declare a custom property with a minted `tenant_<suffix>` name in an organization of its own
+2. mint a gateway API key and deliver four gateway requests on the logs webhook, three carrying tenant metadata, one longer than the 80-character cell preview
+3. open Request Logs, Tab to Columns and press Enter to open the picker
+4. by keyboard only, Space hides `Provider`, Enter moves `Model` down twice and `Tokens` to the end of the built-ins and back, Space checks the tenant column, Escape closes the picker
+5. Tab to the truncated tenant value
+6. reload the page
+7. reset to default, then check the tenant column again
+8. hide `Provider`, then reload while the browser fails every declaration list GET with a 500 through page.route, React Query’s automatic retry included
+9. let the declaration list through again and press Retry
+10. open Request Logs as a second identity, in its own organization and browser context, holding a copy of the first preference record
+11. delete the declaration, reopen the picker and remove the entry listed as no longer declared
+
+**Backend state verified:**
+
+- the declaration is stored in PG agentcc_custom_property_schema under the flow’s organization and is its only declaration
+- the table renders the tenant value per row and `-` where the row carries none
+- selecting and reordering columns issues no per-row request-log detail call and at most one declaration list call
+- the selection and order survive a reload for the same user, org and browser
+- reset restores the ten default headers, renders no tenant cell and removes only this preference record
+- while the browser-injected 500 answers every declaration list attempt, the saved built-in columns render and stay usable, no saved custom column name reaches the page and the saved record is unchanged
+- Retry is answered by the real API and restores the tenant column and its row values, leaving the saved record byte-identical
+- the second org never sees the first org’s tenant column, declaration or saved record
+- after the declaration is deleted the saved column is listed as no longer declared and is not rendered
+- Remove drops the stale tenant id from the saved record and keeps the rest of it
+
+**Browser observations:**
+
+- the picker opens, toggles, reorders and closes by keyboard alone: focus stays on the pressed Move button, moves to the opposite Move button when the column reaches the end of its group, and returns to Columns on Escape
+- a tenant value longer than 80 characters shows its preview in the cell, and Tab to it shows the full value in a tooltip
+
 ## observe
 
 ### OBS-E2E-001 — SDK trace appears in Observe with coherent backend state
