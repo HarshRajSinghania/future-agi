@@ -35254,6 +35254,17 @@ export const SimulateApiHarnessEnvironmentsReadParams = zod.object({
   id: zod.string(),
 });
 
+export const simulateApiHarnessEnvironmentsReadQueryContractVersionDefault = 1;
+
+export const SimulateApiHarnessEnvironmentsReadQueryParams = zod.object({
+  contract_version: zod
+    .union([zod.literal(1), zod.literal(2)])
+    .default(simulateApiHarnessEnvironmentsReadQueryContractVersionDefault)
+    .describe(
+      "Version 1 preserves legacy field shapes. Version 2 returns rich contract fields, described by the response's x-contract-version-2 schema.",
+    ),
+});
+
 export const SimulateApiHarnessEnvironmentsReadResponse = zod.object({
   id: zod.string().uuid(),
   overview: zod.object({
@@ -35295,21 +35306,134 @@ export const SimulateApiHarnessEnvironmentsReadResponse = zod.object({
     call_direction: zod.string().optional(),
     domain: zod.object({}).passthrough().optional(),
     system_prompt: zod.string().optional(),
-    system_prompt_origin: zod.object({}).passthrough().optional(),
+    system_prompt_origin: zod
+      .object({
+        kind: zod.string().min(1),
+        path: zod.string().optional(),
+        field: zod.string().optional(),
+        line: zod.number().optional(),
+        sha256: zod.string().min(1).optional(),
+      })
+      .optional(),
     system_prompt_excerpt: zod.string().optional(),
-    tools: zod.array(zod.object({}).passthrough()).optional(),
+    tools: zod
+      .array(zod.object({}).passthrough())
+      .optional()
+      .describe(
+        "ALK tool specifications, including origin, legacy effect text, optional effect_kind (read, write, external, control), and effect_evidence {origin, excerpt}.",
+      ),
     real_use_cases: zod.array(zod.string().min(1)).optional(),
-    real_use_case_details: zod.array(zod.object({}).passthrough()).optional(),
+    real_use_case_details: zod
+      .array(
+        zod.object({
+          text: zod.string().min(1),
+          short: zod.string().min(1).optional(),
+          origin: zod
+            .object({
+              kind: zod.string().min(1),
+              path: zod.string().optional(),
+              field: zod.string().optional(),
+              line: zod.number().optional(),
+              sha256: zod.string().min(1).optional(),
+            })
+            .optional(),
+          enforced_by: zod.array(zod.string().min(1)).optional(),
+          sub_goal: zod.string().optional(),
+        }),
+      )
+      .optional(),
     hard_constraints: zod.array(zod.string().min(1)).optional(),
-    hard_constraint_details: zod.array(zod.object({}).passthrough()).optional(),
+    hard_constraint_details: zod
+      .array(
+        zod.object({
+          text: zod.string().min(1),
+          short: zod.string().min(1).optional(),
+          origin: zod
+            .object({
+              kind: zod.string().min(1),
+              path: zod.string().optional(),
+              field: zod.string().optional(),
+              line: zod.number().optional(),
+              sha256: zod.string().min(1).optional(),
+            })
+            .optional(),
+          enforced_by: zod.array(zod.string().min(1)).optional(),
+          sub_goal: zod.string().optional(),
+        }),
+      )
+      .optional(),
     runtime: zod.object({}).passthrough().optional(),
     dependencies: zod.array(zod.object({}).passthrough()).optional(),
-    runtime_dependencies: zod.array(zod.object({}).passthrough()).optional(),
+    runtime_dependencies: zod
+      .array(zod.object({}).passthrough())
+      .optional()
+      .describe(
+        "Runtime dependencies with used_by containing only consumers identified by ALK.",
+      ),
     implementation: zod.string().optional(),
-    tool_entrypoints: zod.array(zod.object({}).passthrough()).optional(),
-    data_store: zod.object({}).passthrough().optional(),
+    tool_entrypoints: zod
+      .array(zod.object({}).passthrough())
+      .optional()
+      .describe(
+        "Implementation seams with source code where available, implementation_origin, and provider_function {url, parameters} for provider functions. Parameters retain the provider JSON Schema after secret redaction.",
+      ),
+    data_store: zod
+      .object({})
+      .passthrough()
+      .optional()
+      .describe(
+        "ALK datastore facts. configured_by remains a string; optional location and configuration {source, ref, section} carry observed configuration evidence.",
+      ),
     data_schema: zod.object({}).passthrough().optional(),
-    data_schema_columns: zod.object({}).passthrough().optional(),
+    data_schema_columns: zod
+      .record(
+        zod.string(),
+        zod.array(
+          zod.object({
+            name: zod.string().min(1),
+            type: zod.string(),
+            enum: zod.array(zod.string()).optional(),
+            pk: zod.boolean().optional(),
+            nullable: zod.boolean().optional(),
+            references: zod.string().min(1).optional(),
+          }),
+        ),
+      )
+      .optional(),
+    data_schema_tables: zod
+      .array(
+        zod.object({
+          name: zod.string().min(1),
+          columns: zod.array(
+            zod.object({
+              name: zod.string().min(1),
+              type: zod.string(),
+              enum: zod.array(zod.string()).optional(),
+              pk: zod.boolean().optional(),
+              nullable: zod.boolean().optional(),
+              references: zod.string().min(1).optional(),
+            }),
+          ),
+          primary_key: zod.array(zod.string().min(1)),
+          foreign_keys: zod.array(zod.object({}).passthrough()),
+        }),
+      )
+      .optional(),
+    tool_certification: zod
+      .array(
+        zod.object({
+          tool: zod.string().min(1),
+          availability: zod.enum(["certified", "runtime_only", "rejected"]),
+          probe_mode: zod.enum([
+            "read_only",
+            "disposable_world",
+            "provider_sandbox",
+            "runtime_only",
+          ]),
+          reason: zod.string(),
+        }),
+      )
+      .optional(),
     open_questions: zod.array(zod.string().min(1)).optional(),
     amendments: zod.array(
       zod.object({
@@ -35317,6 +35441,30 @@ export const SimulateApiHarnessEnvironmentsReadResponse = zod.object({
         note: zod.string().min(1),
       }),
     ),
+    amendment_details: zod
+      .array(
+        zod.object({
+          subject: zod.string().min(1),
+          kind: zod.enum(["unreachable_tool", "contract_change"]),
+          reason: zod.string().min(1),
+        }),
+      )
+      .optional(),
+    actors: zod
+      .array(
+        zod.object({
+          name: zod.string().min(1),
+          role: zod.string().min(1),
+          origin: zod.object({
+            kind: zod.string().min(1),
+            path: zod.string().optional(),
+            field: zod.string().optional(),
+            line: zod.number().optional(),
+            sha256: zod.string().min(1).optional(),
+          }),
+        }),
+      )
+      .optional(),
     sub_goals: zod.array(
       zod.object({
         name: zod.string().min(1),
@@ -35331,6 +35479,12 @@ export const SimulateApiHarnessEnvironmentsReadResponse = zod.object({
       max_duration_seconds: zod.number(),
       clock: zod.enum(["real-time", "stepped"]),
       ended_reasons: zod.array(zod.string().min(1)),
+      seed: zod
+        .object({
+          value: zod.number(),
+          controls: zod.array(zod.string().min(1)),
+        })
+        .optional(),
     }),
     notes: zod.string().optional(),
     chosen_evals: zod.array(zod.string().min(1)).optional(),
@@ -35360,6 +35514,19 @@ export const SimulateApiHarnessEnvironmentsReadResponse = zod.object({
           zod.object({
             name: zod.string().min(1),
             rows: zod.number(),
+            internal: zod.boolean().optional(),
+            columns: zod
+              .array(
+                zod.object({
+                  name: zod.string().min(1),
+                  type: zod.string(),
+                  enum: zod.array(zod.string()).optional(),
+                  pk: zod.boolean().optional(),
+                  nullable: zod.boolean().optional(),
+                  references: zod.string().min(1).optional(),
+                }),
+              )
+              .optional(),
           }),
         ),
         total_rows: zod.number(),
@@ -35511,21 +35678,134 @@ export const SimulateApiHarnessEnvironmentsPartialUpdateResponse = zod.object({
     call_direction: zod.string().optional(),
     domain: zod.object({}).passthrough().optional(),
     system_prompt: zod.string().optional(),
-    system_prompt_origin: zod.object({}).passthrough().optional(),
+    system_prompt_origin: zod
+      .object({
+        kind: zod.string().min(1),
+        path: zod.string().optional(),
+        field: zod.string().optional(),
+        line: zod.number().optional(),
+        sha256: zod.string().min(1).optional(),
+      })
+      .optional(),
     system_prompt_excerpt: zod.string().optional(),
-    tools: zod.array(zod.object({}).passthrough()).optional(),
+    tools: zod
+      .array(zod.object({}).passthrough())
+      .optional()
+      .describe(
+        "ALK tool specifications, including origin, legacy effect text, optional effect_kind (read, write, external, control), and effect_evidence {origin, excerpt}.",
+      ),
     real_use_cases: zod.array(zod.string().min(1)).optional(),
-    real_use_case_details: zod.array(zod.object({}).passthrough()).optional(),
+    real_use_case_details: zod
+      .array(
+        zod.object({
+          text: zod.string().min(1),
+          short: zod.string().min(1).optional(),
+          origin: zod
+            .object({
+              kind: zod.string().min(1),
+              path: zod.string().optional(),
+              field: zod.string().optional(),
+              line: zod.number().optional(),
+              sha256: zod.string().min(1).optional(),
+            })
+            .optional(),
+          enforced_by: zod.array(zod.string().min(1)).optional(),
+          sub_goal: zod.string().optional(),
+        }),
+      )
+      .optional(),
     hard_constraints: zod.array(zod.string().min(1)).optional(),
-    hard_constraint_details: zod.array(zod.object({}).passthrough()).optional(),
+    hard_constraint_details: zod
+      .array(
+        zod.object({
+          text: zod.string().min(1),
+          short: zod.string().min(1).optional(),
+          origin: zod
+            .object({
+              kind: zod.string().min(1),
+              path: zod.string().optional(),
+              field: zod.string().optional(),
+              line: zod.number().optional(),
+              sha256: zod.string().min(1).optional(),
+            })
+            .optional(),
+          enforced_by: zod.array(zod.string().min(1)).optional(),
+          sub_goal: zod.string().optional(),
+        }),
+      )
+      .optional(),
     runtime: zod.object({}).passthrough().optional(),
     dependencies: zod.array(zod.object({}).passthrough()).optional(),
-    runtime_dependencies: zod.array(zod.object({}).passthrough()).optional(),
+    runtime_dependencies: zod
+      .array(zod.object({}).passthrough())
+      .optional()
+      .describe(
+        "Runtime dependencies with used_by containing only consumers identified by ALK.",
+      ),
     implementation: zod.string().optional(),
-    tool_entrypoints: zod.array(zod.object({}).passthrough()).optional(),
-    data_store: zod.object({}).passthrough().optional(),
+    tool_entrypoints: zod
+      .array(zod.object({}).passthrough())
+      .optional()
+      .describe(
+        "Implementation seams with source code where available, implementation_origin, and provider_function {url, parameters} for provider functions. Parameters retain the provider JSON Schema after secret redaction.",
+      ),
+    data_store: zod
+      .object({})
+      .passthrough()
+      .optional()
+      .describe(
+        "ALK datastore facts. configured_by remains a string; optional location and configuration {source, ref, section} carry observed configuration evidence.",
+      ),
     data_schema: zod.object({}).passthrough().optional(),
-    data_schema_columns: zod.object({}).passthrough().optional(),
+    data_schema_columns: zod
+      .record(
+        zod.string(),
+        zod.array(
+          zod.object({
+            name: zod.string().min(1),
+            type: zod.string(),
+            enum: zod.array(zod.string()).optional(),
+            pk: zod.boolean().optional(),
+            nullable: zod.boolean().optional(),
+            references: zod.string().min(1).optional(),
+          }),
+        ),
+      )
+      .optional(),
+    data_schema_tables: zod
+      .array(
+        zod.object({
+          name: zod.string().min(1),
+          columns: zod.array(
+            zod.object({
+              name: zod.string().min(1),
+              type: zod.string(),
+              enum: zod.array(zod.string()).optional(),
+              pk: zod.boolean().optional(),
+              nullable: zod.boolean().optional(),
+              references: zod.string().min(1).optional(),
+            }),
+          ),
+          primary_key: zod.array(zod.string().min(1)),
+          foreign_keys: zod.array(zod.object({}).passthrough()),
+        }),
+      )
+      .optional(),
+    tool_certification: zod
+      .array(
+        zod.object({
+          tool: zod.string().min(1),
+          availability: zod.enum(["certified", "runtime_only", "rejected"]),
+          probe_mode: zod.enum([
+            "read_only",
+            "disposable_world",
+            "provider_sandbox",
+            "runtime_only",
+          ]),
+          reason: zod.string(),
+        }),
+      )
+      .optional(),
     open_questions: zod.array(zod.string().min(1)).optional(),
     amendments: zod.array(
       zod.object({
@@ -35533,6 +35813,30 @@ export const SimulateApiHarnessEnvironmentsPartialUpdateResponse = zod.object({
         note: zod.string().min(1),
       }),
     ),
+    amendment_details: zod
+      .array(
+        zod.object({
+          subject: zod.string().min(1),
+          kind: zod.enum(["unreachable_tool", "contract_change"]),
+          reason: zod.string().min(1),
+        }),
+      )
+      .optional(),
+    actors: zod
+      .array(
+        zod.object({
+          name: zod.string().min(1),
+          role: zod.string().min(1),
+          origin: zod.object({
+            kind: zod.string().min(1),
+            path: zod.string().optional(),
+            field: zod.string().optional(),
+            line: zod.number().optional(),
+            sha256: zod.string().min(1).optional(),
+          }),
+        }),
+      )
+      .optional(),
     sub_goals: zod.array(
       zod.object({
         name: zod.string().min(1),
@@ -35547,6 +35851,12 @@ export const SimulateApiHarnessEnvironmentsPartialUpdateResponse = zod.object({
       max_duration_seconds: zod.number(),
       clock: zod.enum(["real-time", "stepped"]),
       ended_reasons: zod.array(zod.string().min(1)),
+      seed: zod
+        .object({
+          value: zod.number(),
+          controls: zod.array(zod.string().min(1)),
+        })
+        .optional(),
     }),
     notes: zod.string().optional(),
     chosen_evals: zod.array(zod.string().min(1)).optional(),
@@ -35576,6 +35886,19 @@ export const SimulateApiHarnessEnvironmentsPartialUpdateResponse = zod.object({
           zod.object({
             name: zod.string().min(1),
             rows: zod.number(),
+            internal: zod.boolean().optional(),
+            columns: zod
+              .array(
+                zod.object({
+                  name: zod.string().min(1),
+                  type: zod.string(),
+                  enum: zod.array(zod.string()).optional(),
+                  pk: zod.boolean().optional(),
+                  nullable: zod.boolean().optional(),
+                  references: zod.string().min(1).optional(),
+                }),
+              )
+              .optional(),
           }),
         ),
         total_rows: zod.number(),
@@ -35790,21 +36113,134 @@ export const SimulateApiHarnessEnvironmentsEvaluationsSetToolCallEvaluationRespo
       call_direction: zod.string().optional(),
       domain: zod.object({}).passthrough().optional(),
       system_prompt: zod.string().optional(),
-      system_prompt_origin: zod.object({}).passthrough().optional(),
+      system_prompt_origin: zod
+        .object({
+          kind: zod.string().min(1),
+          path: zod.string().optional(),
+          field: zod.string().optional(),
+          line: zod.number().optional(),
+          sha256: zod.string().min(1).optional(),
+        })
+        .optional(),
       system_prompt_excerpt: zod.string().optional(),
-      tools: zod.array(zod.object({}).passthrough()).optional(),
+      tools: zod
+        .array(zod.object({}).passthrough())
+        .optional()
+        .describe(
+          "ALK tool specifications, including origin, legacy effect text, optional effect_kind (read, write, external, control), and effect_evidence {origin, excerpt}.",
+        ),
       real_use_cases: zod.array(zod.string().min(1)).optional(),
-      real_use_case_details: zod.array(zod.object({}).passthrough()).optional(),
+      real_use_case_details: zod
+        .array(
+          zod.object({
+            text: zod.string().min(1),
+            short: zod.string().min(1).optional(),
+            origin: zod
+              .object({
+                kind: zod.string().min(1),
+                path: zod.string().optional(),
+                field: zod.string().optional(),
+                line: zod.number().optional(),
+                sha256: zod.string().min(1).optional(),
+              })
+              .optional(),
+            enforced_by: zod.array(zod.string().min(1)).optional(),
+            sub_goal: zod.string().optional(),
+          }),
+        )
+        .optional(),
       hard_constraints: zod.array(zod.string().min(1)).optional(),
-      hard_constraint_details: zod.array(zod.object({}).passthrough()).optional(),
+      hard_constraint_details: zod
+        .array(
+          zod.object({
+            text: zod.string().min(1),
+            short: zod.string().min(1).optional(),
+            origin: zod
+              .object({
+                kind: zod.string().min(1),
+                path: zod.string().optional(),
+                field: zod.string().optional(),
+                line: zod.number().optional(),
+                sha256: zod.string().min(1).optional(),
+              })
+              .optional(),
+            enforced_by: zod.array(zod.string().min(1)).optional(),
+            sub_goal: zod.string().optional(),
+          }),
+        )
+        .optional(),
       runtime: zod.object({}).passthrough().optional(),
       dependencies: zod.array(zod.object({}).passthrough()).optional(),
-      runtime_dependencies: zod.array(zod.object({}).passthrough()).optional(),
+      runtime_dependencies: zod
+        .array(zod.object({}).passthrough())
+        .optional()
+        .describe(
+          "Runtime dependencies with used_by containing only consumers identified by ALK.",
+        ),
       implementation: zod.string().optional(),
-      tool_entrypoints: zod.array(zod.object({}).passthrough()).optional(),
-      data_store: zod.object({}).passthrough().optional(),
+      tool_entrypoints: zod
+        .array(zod.object({}).passthrough())
+        .optional()
+        .describe(
+          "Implementation seams with source code where available, implementation_origin, and provider_function {url, parameters} for provider functions. Parameters retain the provider JSON Schema after secret redaction.",
+        ),
+      data_store: zod
+        .object({})
+        .passthrough()
+        .optional()
+        .describe(
+          "ALK datastore facts. configured_by remains a string; optional location and configuration {source, ref, section} carry observed configuration evidence.",
+        ),
       data_schema: zod.object({}).passthrough().optional(),
-      data_schema_columns: zod.object({}).passthrough().optional(),
+      data_schema_columns: zod
+        .record(
+          zod.string(),
+          zod.array(
+            zod.object({
+              name: zod.string().min(1),
+              type: zod.string(),
+              enum: zod.array(zod.string()).optional(),
+              pk: zod.boolean().optional(),
+              nullable: zod.boolean().optional(),
+              references: zod.string().min(1).optional(),
+            }),
+          ),
+        )
+        .optional(),
+      data_schema_tables: zod
+        .array(
+          zod.object({
+            name: zod.string().min(1),
+            columns: zod.array(
+              zod.object({
+                name: zod.string().min(1),
+                type: zod.string(),
+                enum: zod.array(zod.string()).optional(),
+                pk: zod.boolean().optional(),
+                nullable: zod.boolean().optional(),
+                references: zod.string().min(1).optional(),
+              }),
+            ),
+            primary_key: zod.array(zod.string().min(1)),
+            foreign_keys: zod.array(zod.object({}).passthrough()),
+          }),
+        )
+        .optional(),
+      tool_certification: zod
+        .array(
+          zod.object({
+            tool: zod.string().min(1),
+            availability: zod.enum(["certified", "runtime_only", "rejected"]),
+            probe_mode: zod.enum([
+              "read_only",
+              "disposable_world",
+              "provider_sandbox",
+              "runtime_only",
+            ]),
+            reason: zod.string(),
+          }),
+        )
+        .optional(),
       open_questions: zod.array(zod.string().min(1)).optional(),
       amendments: zod.array(
         zod.object({
@@ -35812,6 +36248,30 @@ export const SimulateApiHarnessEnvironmentsEvaluationsSetToolCallEvaluationRespo
           note: zod.string().min(1),
         }),
       ),
+      amendment_details: zod
+        .array(
+          zod.object({
+            subject: zod.string().min(1),
+            kind: zod.enum(["unreachable_tool", "contract_change"]),
+            reason: zod.string().min(1),
+          }),
+        )
+        .optional(),
+      actors: zod
+        .array(
+          zod.object({
+            name: zod.string().min(1),
+            role: zod.string().min(1),
+            origin: zod.object({
+              kind: zod.string().min(1),
+              path: zod.string().optional(),
+              field: zod.string().optional(),
+              line: zod.number().optional(),
+              sha256: zod.string().min(1).optional(),
+            }),
+          }),
+        )
+        .optional(),
       sub_goals: zod.array(
         zod.object({
           name: zod.string().min(1),
@@ -35826,6 +36286,12 @@ export const SimulateApiHarnessEnvironmentsEvaluationsSetToolCallEvaluationRespo
         max_duration_seconds: zod.number(),
         clock: zod.enum(["real-time", "stepped"]),
         ended_reasons: zod.array(zod.string().min(1)),
+        seed: zod
+          .object({
+            value: zod.number(),
+            controls: zod.array(zod.string().min(1)),
+          })
+          .optional(),
       }),
       notes: zod.string().optional(),
       chosen_evals: zod.array(zod.string().min(1)).optional(),
@@ -35855,6 +36321,19 @@ export const SimulateApiHarnessEnvironmentsEvaluationsSetToolCallEvaluationRespo
             zod.object({
               name: zod.string().min(1),
               rows: zod.number(),
+              internal: zod.boolean().optional(),
+              columns: zod
+                .array(
+                  zod.object({
+                    name: zod.string().min(1),
+                    type: zod.string(),
+                    enum: zod.array(zod.string()).optional(),
+                    pk: zod.boolean().optional(),
+                    nullable: zod.boolean().optional(),
+                    references: zod.string().min(1).optional(),
+                  }),
+                )
+                .optional(),
             }),
           ),
           total_rows: zod.number(),
