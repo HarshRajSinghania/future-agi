@@ -1,18 +1,24 @@
 # Dataset and experiment platform design contract
 
-This is the implementation-neutral design contract for the M0 Figma work. It keeps the first release small: three durable objects, three primary screens, and a small set of explicit states.
+This is the target UI handoff for the M0 Figma work, not an implemented screen
+or an approved Figma artifact. The core has three domain primitives:
+`DatasetVersion`, `ExperimentRun`, and `ExperimentRunItem`. Version membership
+uses the persisted `DatasetVersionItem` projection. Selection, trace analysis,
+and evidence below are future derived views, not additional durable primitives.
+Attach actual Figma designs to the Linear issues before UI implementation;
+backend review drafts can proceed while designs are prepared.
 
 ## Primary objects
 
 ```mermaid
 flowchart LR
   D[Dataset] --> V[DatasetVersion]
-  V --> E[DatasetExample]
-  V --> S[Split / filter]
+  V --> E[DatasetVersionItem membership projection]
+  V -.-> S[Future metadata selection]
   V --> R[ExperimentRun]
   R --> I[ExperimentRunItem]
-  I --> T[Trace tree]
-  I --> Q[Scores and evidence]
+  I -.-> T[Future derived trace view]
+  I -.-> Q[Future score and evidence view]
 ```
 
 ## Dataset screen
