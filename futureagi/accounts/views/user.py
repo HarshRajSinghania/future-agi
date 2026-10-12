@@ -397,6 +397,27 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 OrganizationInvite,
             )
 
+            # Signing in is the existing user's accept. A pending invite in
+            # another org is not covered by the home-org update below: that
+            # update never calls accept(), so the membership stays inactive.
+            pending_invites = list(
+                OrganizationInvite.objects.filter(
+                    target_email__iexact=user.email,
+                    status=InviteStatus.PENDING,
+                )
+            )
+            for pending in pending_invites:
+                if pending.is_expired:
+                    continue
+                try:
+                    pending.accept(user)
+                except ValueError:
+                    logger.exception(
+                        "login_invite_accept_failed",
+                        user_id=str(user.id),
+                        organization_id=str(pending.organization_id),
+                    )
+
             OrganizationInvite.objects.filter(
                 target_email__iexact=user.email,
                 organization=_login_org,
