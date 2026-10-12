@@ -344,3 +344,19 @@ def test_empty_inputs_have_no_invented_score_or_pass_rate():
     assert result.baseline.item_count == result.candidate.item_count == 0
     assert result.baseline.score_average is None
     assert result.candidate.pass_rate is None
+
+
+@pytest.mark.parametrize("field", ["scores", "metadata"])
+@pytest.mark.parametrize("malformed", [[], False, 0, "bad"])
+def test_mapping_adapter_rejects_malformed_mapping_fields(field, malformed):
+    item = {"example_id": "x", field: malformed}
+    with pytest.raises(ValueError, match=f"{field}"):
+        summarize_run_items([item])
+
+
+def test_mapping_adapter_allows_explicit_null_mapping_defaults():
+    result = summarize_run_items(
+        [{"example_id": "x", "score": 0.5, "scores": None, "metadata": None}]
+    )
+    assert result.score_count == 1
+    assert result.score_average == 0.5

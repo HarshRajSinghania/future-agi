@@ -114,13 +114,16 @@ class ComparisonSummary:
 
 def _normalise_item(item: RunItemRecord | Mapping[str, Any]) -> RunItemRecord:
     if isinstance(item, Mapping):
+        scores = item.get("scores", {})
+        metadata = item.get("metadata", {})
+        split_names = item.get("split_names", ())
         item = RunItemRecord(
             example_id=item.get("example_id"),
             status=item.get("status", "completed"),
             score=item.get("score"),
-            scores=item.get("scores") or {},
-            split_names=item.get("split_names") or (),
-            metadata=item.get("metadata") or {},
+            scores={} if scores is None else scores,
+            split_names=() if split_names is None else split_names,
+            metadata={} if metadata is None else metadata,
             error=item.get("error"),
             trial_number=item.get("trial_number", 1),
         )
