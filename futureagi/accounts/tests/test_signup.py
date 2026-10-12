@@ -2078,6 +2078,44 @@ class TestOssPasswordResetLink:
         )
         assert stale.status_code == status.HTTP_403_FORBIDDEN, stale.content
 
+    def test_password_login_retires_an_outstanding_reset_link(
+        self, api_client, user, no_outbound_email
+    ):
+        """POST /accounts/token/ mints the session itself. It must retire the
+        reset link, not only the helper that other sign-in paths call."""
+        from urllib.parse import urlparse
+
+        from django.contrib.auth.hashers import check_password
+
+        with _oss():
+            link = api_client.post(
+                "/accounts/password-reset-initiate/",
+                {"email": user.email},
+                format="json",
+            ).json()["result"]["reset_link"]
+
+        login = api_client.post(
+            "/accounts/token/",
+            {"email": user.email, "password": "testpassword123"},
+            format="json",
+        )
+        assert login.status_code == status.HTTP_200_OK, login.content
+        assert "access" in login.json()
+
+        uid_token = urlparse(link).path.split("/auth/jwt/verify/", 1)[1]
+        uidb64, token = uid_token.split("/", 1)
+        stale = api_client.post(
+            f"/accounts/password-reset-confirm/{uidb64}/{token}/",
+            {
+                "new_password": "AfterPasswordLogin123!",
+                "repeat_password": "AfterPasswordLogin123!",
+            },
+            format="json",
+        )
+        assert stale.status_code == status.HTTP_403_FORBIDDEN, stale.content
+        user.refresh_from_db()
+        assert not check_password("AfterPasswordLogin123!", user.password)
+
 
 @pytest.mark.integration
 @pytest.mark.api
