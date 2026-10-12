@@ -1,41 +1,24 @@
-"""Small, storage-free analysis helpers for dataset experiment runs.
+"""Storage-free aggregates and comparisons over experiment example/trial results.
 
-The dataset/experiment platform RFC deliberately keeps analysis derived from
-``ExperimentRunItem`` records.  This module is the first query contract for
-that approach: callers provide run-item records (usually an adapter over ORM
-objects), and receive deterministic aggregates plus baseline/candidate case
-comparisons.  It does not create or mutate database records.
-
-The functions intentionally cover only the first release surface:
-
-* split and exact metadata filtering;
-* item/status and score aggregates; and
-* per-example baseline/candidate statuses.
-
-Percentiles, significance tests, custom query languages, and trace-tree
-analysis belong to later layers.  Keeping this module pure means it can be
-used by API views, background jobs, SDK adapters, and contract tests without
-requiring Django or a database.
+Callers supply records after resolving score references and dataset metadata.
+No database records, API routes, or statistical-analysis storage are added here.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
-from math import isfinite
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from math import fsum, isfinite
 from numbers import Real
 from typing import Any
+from uuid import UUID
 
-# Values are deliberately strings so the result can be emitted directly as a
-# JSON API response and remain forward-compatible with persisted score status
-# values in the RFC evidence envelope.
 ASSESSED = "assessed"
 UNKNOWN = "unknown"
 NOT_ASSESSED = "not_assessed"
 UNSUPPORTED = "unsupported"
 ERROR = "error"
-
 IMPROVED = "improved"
 REGRESSED = "regressed"
 TIE = "tie"
@@ -43,19 +26,19 @@ MISSING = "missing"
 DUPLICATE = "duplicate"
 INVALID = "invalid"
 
+SCORE_STATUSES = frozenset({ASSESSED, UNKNOWN, NOT_ASSESSED, UNSUPPORTED, ERROR})
+COMPLETED_STATUSES = frozenset({"completed", "success", "succeeded"})
+FAILED_STATUSES = frozenset({"failed", "error"})
+UNFINISHED_STATUSES = frozenset(
+    {"pending", "running", "queued", "draft", "partial", "cancelled", "skipped"}
+)
+
 
 @dataclass(frozen=True)
 class RunItemRecord:
-    """The minimal read shape needed by analysis.
+    """Adapter-facing result. Named scores accept scalars or evidence envelopes."""
 
-    An adapter can construct this from a persisted ``ExperimentRunItem``.
-    ``scores`` accepts scalar values or evidence-envelope-like mappings, for
-    example ``{"quality": {"value": 0.8, "status": "assessed"}}``.
-    ``score`` is retained as a convenient default metric for callers that have
-    only one score.
-    """
-
-    example_id: str
+    example_id: str | UUID | None
     status: str = "completed"
     score: float | int | None = None
     scores: Mapping[str, Any] = field(default_factory=dict)
@@ -67,7 +50,7 @@ class RunItemRecord:
 
 @dataclass(frozen=True)
 class AnalysisFilter:
-    """Simple, deterministic filters supported by the first analysis API."""
+    """Exact conditions; one member of a comparison pair must match all of them."""
 
     split_name: str | None = None
     metadata_equals: Mapping[str, Any] = field(default_factory=dict)
@@ -82,7 +65,7 @@ class ScoreResult:
 
 @dataclass(frozen=True)
 class RunAggregate:
-    """Aggregate values over the filtered run items."""
+    """Item counts include duplicates; score aggregates exclude ambiguous identities."""
 
     item_count: int
     completed_count: int
@@ -94,11 +77,12 @@ class RunAggregate:
     pass_count: int | None
     pass_rate: float | None
     status_counts: Mapping[str, int]
+    score_status_counts: Mapping[str, int]
 
 
 @dataclass(frozen=True)
 class CaseComparison:
-    """One baseline/candidate result aligned by stable ``example_id``."""
+    """One pair aligned by (example_id, trial_number), including missing sides."""
 
     example_id: str
     status: str
@@ -108,6 +92,7 @@ class CaseComparison:
     candidate_score: float | None = None
     score_delta: float | None = None
     missing_side: str | None = None
+    trial_number: int = 1
 
 
 @dataclass(frozen=True)
@@ -119,89 +104,158 @@ class ComparisonSummary:
 
     @property
     def comparable_count(self) -> int:
-        """Number of cases with a numeric score on both sides."""
-
         return sum(
-            1
+            case.status in {IMPROVED, REGRESSED, TIE}
+            and case.baseline_score is not None
+            and case.candidate_score is not None
             for case in self.cases
-            if case.status in {IMPROVED, REGRESSED, TIE}
         )
 
 
-def _item_value(item: RunItemRecord | Mapping[str, Any], name: str, default: Any = None) -> Any:
-    """Read a field from a record or mapping for lightweight adapters."""
-
-    if isinstance(item, Mapping):
-        return item.get(name, default)
-    return getattr(item, name, default)
-
-
 def _normalise_item(item: RunItemRecord | Mapping[str, Any]) -> RunItemRecord:
-    """Convert a mapping adapter result into the pure record shape."""
-
-    if isinstance(item, RunItemRecord):
-        return item
-
-    split_names = _item_value(item, "split_names", ()) or ()
-    if isinstance(split_names, str):
-        split_names = (split_names,)
-    metadata = _item_value(item, "metadata", {}) or {}
-    scores = _item_value(item, "scores", {}) or {}
-    return RunItemRecord(
-        example_id=str(_item_value(item, "example_id", "")),
-        status=str(_item_value(item, "status", "completed")),
-        score=_item_value(item, "score"),
-        scores=scores,
-        split_names=tuple(str(value) for value in split_names),
-        metadata=metadata,
-        error=_item_value(item, "error"),
-        trial_number=int(_item_value(item, "trial_number", 1) or 1),
-    )
+    if isinstance(item, Mapping):
+        item = RunItemRecord(
+            example_id=item.get("example_id"),
+            status=item.get("status", "completed"),
+            score=item.get("score"),
+            scores=item.get("scores") or {},
+            split_names=item.get("split_names") or (),
+            metadata=item.get("metadata") or {},
+            error=item.get("error"),
+            trial_number=item.get("trial_number", 1),
+        )
+    if not isinstance(item.example_id, (str, UUID)) or not str(item.example_id).strip():
+        raise ValueError("example_id must be a non-empty string or UUID")
+    if type(item.trial_number) is not int or item.trial_number < 1:
+        raise ValueError("trial_number must be a positive integer")
+    if not isinstance(item.metadata, Mapping) or not isinstance(item.scores, Mapping):
+        raise ValueError("metadata and scores must be mappings")
+    if not isinstance(item.status, str):
+        raise ValueError("item status must be a string")
+    splits = item.split_names
+    if isinstance(splits, str):
+        splits = (splits,)
+    if not isinstance(splits, (tuple, list)) or any(
+        not isinstance(split, str) for split in splits
+    ):
+        raise ValueError("split_names must contain strings")
+    return replace(item, example_id=str(item.example_id), split_names=tuple(splits))
 
 
 def _matches(item: RunItemRecord, filters: AnalysisFilter | None) -> bool:
-    if filters is None:
-        return True
-    if filters.split_name is not None and filters.split_name not in item.split_names:
-        return False
-    if filters.item_statuses is not None and item.status not in filters.item_statuses:
-        return False
-    return all(item.metadata.get(key) == value for key, value in filters.metadata_equals.items())
+    return filters is None or (
+        (filters.split_name is None or filters.split_name in item.split_names)
+        and (filters.item_statuses is None or item.status in filters.item_statuses)
+        and all(
+            key in item.metadata and item.metadata[key] == value
+            for key, value in filters.metadata_equals.items()
+        )
+    )
 
 
-def _filtered_items(
+def _index_items(
     items: Iterable[RunItemRecord | Mapping[str, Any]],
-    filters: AnalysisFilter | None,
-) -> list[RunItemRecord]:
-    return [item for item in (_normalise_item(value) for value in items) if _matches(item, filters)]
+) -> dict[tuple[str, int], list[RunItemRecord]]:
+    grouped: dict[tuple[str, int], list[RunItemRecord]] = {}
+    for raw in items:
+        item = _normalise_item(raw)
+        grouped.setdefault((item.example_id, item.trial_number), []).append(item)
+    return grouped
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        numeric = float(value)
+    except OverflowError:
+        return None
+    return numeric if isfinite(numeric) else None
 
 
 def _score_result(item: RunItemRecord, metric: str) -> ScoreResult:
-    """Extract one score while preserving evidence-envelope status."""
+    if item.status in FAILED_STATUSES:
+        return ScoreResult(None, ERROR)
+    if item.status in UNFINISHED_STATUSES:
+        return ScoreResult(None, NOT_ASSESSED)
+    if item.status not in COMPLETED_STATUSES:
+        return ScoreResult(None, INVALID)
 
-    if metric == "score":
-        raw = item.score
-    else:
-        raw = item.scores.get(metric)
-
+    raw = (
+        item.score
+        if metric == "score" and item.score is not None
+        else item.scores.get(metric)
+    )
     if raw is None:
-        # A failed item is an execution error; a completed item without a
-        # score is deliberately not_assessed rather than an implicit zero.
-        return ScoreResult(None, ERROR if item.status in {"failed", "error"} else NOT_ASSESSED)
-
-    status = ASSESSED
+        return ScoreResult(None, NOT_ASSESSED)
     if isinstance(raw, Mapping):
-        status = str(raw.get("status", ASSESSED if raw.get("value", raw.get("score")) is not None else NOT_ASSESSED))
-        raw = raw.get("value", raw.get("score"))
+        value = raw.get("value", raw.get("score"))
+        status = raw.get("status", ASSESSED if value is not None else NOT_ASSESSED)
+        if not isinstance(status, str) or status not in SCORE_STATUSES:
+            return ScoreResult(None, INVALID)
+        if status != ASSESSED:
+            return ScoreResult(None, status)
+        raw = value
+    numeric = _finite_number(raw)
+    return ScoreResult(numeric, ASSESSED if numeric is not None else INVALID)
 
-    if status != ASSESSED:
-        return ScoreResult(None, status)
-    if isinstance(raw, bool) or not isinstance(raw, Real):
-        return ScoreResult(None, INVALID)
-    value = float(raw)
-    if not isfinite(value):
-        return ScoreResult(None, INVALID)
-    return ScoreResult(value, ASSESSED)
+
+def _validate_options(passing_score: float | None, higher_is_better: bool) -> None:
+    if passing_score is not None and _finite_number(passing_score) is None:
+        raise ValueError("passing_score must be finite and numeric")
+    if not isinstance(higher_is_better, bool):
+        raise ValueError("higher_is_better must be a boolean")
+
+
+def _aggregate(
+    groups: Iterable[list[RunItemRecord]],
+    metric: str,
+    passing_score: float | None,
+    higher_is_better: bool,
+) -> RunAggregate:
+    statuses: Counter[str] = Counter()
+    score_statuses: Counter[str] = Counter()
+    values: list[float] = []
+    for group in groups:
+        for item in group:
+            statuses[item.status] += 1
+            score = (
+                ScoreResult(None, DUPLICATE)
+                if len(group) > 1
+                else _score_result(item, metric)
+            )
+            score_statuses[score.status] += 1
+            if score.value is not None:
+                values.append(score.value)
+    count = len(values)
+    # Scale first: finite inputs must not overflow the mean's intermediate sum.
+    scale = max((abs(value) for value in values), default=0.0)
+    average = (
+        (fsum(value / scale for value in values) / count * scale)
+        if scale
+        else (0.0 if count else None)
+    )
+    passes = (
+        None
+        if passing_score is None
+        else sum(
+            value >= passing_score if higher_is_better else value <= passing_score
+            for value in values
+        )
+    )
+    return RunAggregate(
+        item_count=sum(statuses.values()),
+        completed_count=sum(statuses[status] for status in COMPLETED_STATUSES),
+        failed_count=sum(statuses[status] for status in FAILED_STATUSES),
+        score_count=count,
+        score_average=average,
+        score_min=min(values) if values else None,
+        score_max=max(values) if values else None,
+        pass_count=passes,
+        pass_rate=passes / count if passes is not None and count else None,
+        status_counts=dict(sorted(statuses.items())),
+        score_status_counts=dict(sorted(score_statuses.items())),
+    )
 
 
 def summarize_run_items(
@@ -210,48 +264,71 @@ def summarize_run_items(
     metric: str = "score",
     filters: AnalysisFilter | None = None,
     passing_score: float | None = None,
+    higher_is_better: bool = True,
 ) -> RunAggregate:
-    """Return simple score and execution aggregates for a filtered run.
+    """Summarize selected example/trial identities; invalid identity raises ValueError.
 
-    ``passing_score`` is optional.  If omitted, pass counts/rates stay
-    ``None`` because the analysis layer must not invent a threshold.
+    A filter selects an entire identity, preserving duplicate detection. Score
+    states remain explicit. Pass rates use assessed scores as the denominator;
+    without an explicit threshold, pass count and rate are None.
     """
 
-    filtered = _filtered_items(items, filters)
-    statuses = Counter(item.status for item in filtered)
-    values: list[float] = []
-    pass_count = 0 if passing_score is not None else None
-    for item in filtered:
-        result = _score_result(item, metric)
-        if result.value is None:
-            continue
-        values.append(result.value)
-        if passing_score is not None and result.value >= passing_score:
-            pass_count += 1
-
-    score_count = len(values)
-    average = sum(values) / score_count if values else None
-    pass_rate = (pass_count / score_count) if passing_score is not None and score_count else None
-    return RunAggregate(
-        item_count=len(filtered),
-        completed_count=sum(1 for item in filtered if item.status in {"completed", "success", "succeeded"}),
-        failed_count=sum(1 for item in filtered if item.status in {"failed", "error"}),
-        score_count=score_count,
-        score_average=average,
-        score_min=min(values) if values else None,
-        score_max=max(values) if values else None,
-        pass_count=pass_count,
-        pass_rate=pass_rate,
-        status_counts=dict(sorted(statuses.items())),
+    _validate_options(passing_score, higher_is_better)
+    groups = _index_items(items)
+    selected = (
+        group
+        for group in groups.values()
+        if any(_matches(item, filters) for item in group)
     )
+    return _aggregate(selected, metric, passing_score, higher_is_better)
 
 
-def _by_example(items: Sequence[RunItemRecord]) -> tuple[dict[str, RunItemRecord], set[str]]:
-    grouped: dict[str, list[RunItemRecord]] = {}
-    for item in items:
-        grouped.setdefault(item.example_id, []).append(item)
-    duplicates = {example_id for example_id, values in grouped.items() if len(values) > 1}
-    return {example_id: values[0] for example_id, values in grouped.items()}, duplicates
+def _compare_case(
+    identity: tuple[str, int],
+    baseline: list[RunItemRecord],
+    candidate: list[RunItemRecord],
+    metric: str,
+    higher_is_better: bool,
+) -> CaseComparison:
+    common = {
+        "example_id": identity[0],
+        "trial_number": identity[1],
+        "baseline_status": baseline[0].status if baseline else None,
+        "candidate_status": candidate[0].status if candidate else None,
+    }
+    if len(baseline) > 1 or len(candidate) > 1:
+        return CaseComparison(**common, status=DUPLICATE)
+    if not baseline or not candidate:
+        return CaseComparison(
+            **common,
+            status=MISSING,
+            missing_side="baseline" if not baseline else "candidate",
+        )
+    before = _score_result(baseline[0], metric)
+    after = _score_result(candidate[0], metric)
+    common.update(baseline_status=before.status, candidate_status=after.status)
+    delta = None
+    if before.value is None or after.value is None:
+        status = next(
+            status
+            for status in (INVALID, ERROR, UNKNOWN, UNSUPPORTED, NOT_ASSESSED)
+            if status in {before.status, after.status}
+        )
+    else:
+        delta = after.value - before.value
+        if not isfinite(delta):
+            status, delta = INVALID, None
+        elif delta == 0:
+            status = TIE
+        else:
+            status = IMPROVED if (delta > 0) == higher_is_better else REGRESSED
+    return CaseComparison(
+        **common,
+        status=status,
+        baseline_score=before.value,
+        candidate_score=after.value,
+        score_delta=delta,
+    )
 
 
 def compare_run_items(
@@ -261,92 +338,46 @@ def compare_run_items(
     metric: str = "score",
     filters: AnalysisFilter | None = None,
     passing_score: float | None = None,
+    higher_is_better: bool = True,
 ) -> ComparisonSummary:
-    """Align two runs by stable example ID and classify each case.
+    """Compare by (example_id, trial_number), then filter the aligned pairs.
 
-    Missing examples, duplicate IDs, invalid scores, and unassessed scores
-    remain explicit statuses.  Only numeric scores on both sides become
-    ``improved``, ``regressed``, or ``tie``.
+    A pair is selected when either side matches every filter; both sides remain
+    in the comparison and its aggregates. Duplicate identities stay explicit.
+    ``score_delta`` is candidate minus baseline; set ``higher_is_better=False``
+    for error, cost, or other metrics where smaller scores are improvements.
     """
 
-    baseline = _filtered_items(baseline_items, filters)
-    candidate = _filtered_items(candidate_items, filters)
-    baseline_by_id, baseline_duplicates = _by_example(baseline)
-    candidate_by_id, candidate_duplicates = _by_example(candidate)
-
-    baseline_summary = summarize_run_items(
-        baseline, metric=metric, passing_score=passing_score
-    )
-    candidate_summary = summarize_run_items(
-        candidate, metric=metric, passing_score=passing_score
-    )
-
-    cases: list[CaseComparison] = []
-    for example_id in sorted(set(baseline_by_id) | set(candidate_by_id)):
-        baseline_item = baseline_by_id.get(example_id)
-        candidate_item = candidate_by_id.get(example_id)
-        if example_id in baseline_duplicates or example_id in candidate_duplicates:
-            cases.append(
-                CaseComparison(
-                    example_id=example_id,
-                    status=DUPLICATE,
-                    baseline_status=baseline_item.status if baseline_item else None,
-                    candidate_status=candidate_item.status if candidate_item else None,
-                )
-            )
-            continue
-        if baseline_item is None or candidate_item is None:
-            cases.append(
-                CaseComparison(
-                    example_id=example_id,
-                    status=MISSING,
-                    baseline_status=baseline_item.status if baseline_item else None,
-                    candidate_status=candidate_item.status if candidate_item else None,
-                    missing_side="baseline" if baseline_item is None else "candidate",
-                )
-            )
-            continue
-
-        baseline_score = _score_result(baseline_item, metric)
-        candidate_score = _score_result(candidate_item, metric)
-        if baseline_score.status != ASSESSED or candidate_score.status != ASSESSED:
-            status = (
-                INVALID
-                if INVALID in {baseline_score.status, candidate_score.status}
-                else baseline_score.status
-                if baseline_score.status != ASSESSED
-                else candidate_score.status
-            )
-            cases.append(
-                CaseComparison(
-                    example_id=example_id,
-                    status=status,
-                    baseline_status=baseline_score.status,
-                    candidate_status=candidate_score.status,
-                    baseline_score=baseline_score.value,
-                    candidate_score=candidate_score.value,
-                )
-            )
-            continue
-
-        assert baseline_score.value is not None and candidate_score.value is not None
-        delta = candidate_score.value - baseline_score.value
-        status = IMPROVED if delta > 0 else REGRESSED if delta < 0 else TIE
-        cases.append(
-            CaseComparison(
-                example_id=example_id,
-                status=status,
-                baseline_status=baseline_score.status,
-                candidate_status=candidate_score.status,
-                baseline_score=baseline_score.value,
-                candidate_score=candidate_score.value,
-                score_delta=delta,
-            )
+    _validate_options(passing_score, higher_is_better)
+    baseline = _index_items(baseline_items)
+    candidate = _index_items(candidate_items)
+    identities = [
+        key
+        for key in sorted(baseline.keys() | candidate.keys())
+        if any(
+            _matches(item, filters)
+            for item in baseline.get(key, []) + candidate.get(key, [])
         )
-
+    ]
+    cases = tuple(
+        _compare_case(
+            key, baseline.get(key, []), candidate.get(key, []), metric, higher_is_better
+        )
+        for key in identities
+    )
     return ComparisonSummary(
-        baseline=baseline_summary,
-        candidate=candidate_summary,
-        cases=tuple(cases),
+        baseline=_aggregate(
+            (baseline[key] for key in identities if key in baseline),
+            metric,
+            passing_score,
+            higher_is_better,
+        ),
+        candidate=_aggregate(
+            (candidate[key] for key in identities if key in candidate),
+            metric,
+            passing_score,
+            higher_is_better,
+        ),
+        cases=cases,
         status_counts=dict(sorted(Counter(case.status for case in cases).items())),
     )
