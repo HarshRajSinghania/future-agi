@@ -375,19 +375,21 @@ def test_old_contract_keeps_legacy_values_and_absent_evidence():
     assert "seed" not in actual["end_conditions"]
 
 
-def test_source_owned_provider_agent_keeps_direction():
+@pytest.mark.parametrize("connector", ["vapi", "retell", "retell_chat"])
+def test_source_owned_provider_agent_omits_projected_direction(connector):
     actual = _serialized_contract(
         _evidence({"agent": "source", "call_direction": "outbound"}),
-        connector="vapi",
+        connector=connector,
         mode="environment_backed",
     )
-    assert actual["call_direction"] == "outbound"
+    assert "call_direction" not in actual
 
 
 @pytest.mark.parametrize(
     "prompt,digest",
     [
         ("Call https://user:secret@example.test/endpoint to find the order", None),
+        ("Read https://example.test/help?signature=secret before answering", None),
         ("Use API_KEY=secret-value to authenticate", None),
         ("Help the caller", "a" * 64),
     ],
@@ -413,13 +415,33 @@ def test_scrubbed_or_mismatched_prompts_never_claim_verbatim_provenance(prompt, 
 
 
 @pytest.mark.parametrize(
-    "url",
+    "url,expected_url",
     [
-        "https://schemas.example.test/params?signature=secret#token",
-        "https://user:password@schemas.example.test/params?signature=secret#token",
+        (
+            "https://schemas.example.test/params?signature=secret#token",
+            "https://schemas.example.test/params",
+        ),
+        (
+            "https://user:password@schemas.example.test/params?signature=secret#token",
+            "https://schemas.example.test/params",
+        ),
+        (
+            "https://schemas.example.test/params?version=2",
+            "https://schemas.example.test/params?version=2",
+        ),
+        (
+            "https://user:password@schemas.example.test/params?version=2&signature=secret&v=1.3&token=hidden#token",
+            "https://schemas.example.test/params?version=2&v=1.3",
+        ),
+        (
+            "https://schemas.example.test/params?version=secret-token",
+            "https://schemas.example.test/params",
+        ),
     ],
 )
-def test_schema_secret_defaults_are_redacted_without_losing_property_types(url):
+def test_schema_secret_defaults_are_redacted_without_losing_property_types(
+    url, expected_url
+):
     parameters = {
         "type": "object",
         "$ref": url,
@@ -437,10 +459,48 @@ def test_schema_secret_defaults_are_redacted_without_losing_property_types(url):
     assert output["parameters"]["api_key"] == "[redacted]"
     assert output["tool_entrypoints"][0]["provider_function"]["parameters"] == {
         "type": "object",
-        "$ref": "https://schemas.example.test/params",
+        "$ref": expected_url,
         "$defs": {"local": {"$ref": "#/$defs/order"}},
         "properties": {"api_key": {"type": "string", "default": "[redacted]"}},
     }
+
+
+def test_embedded_signed_urls_are_scrubbed_in_nested_evidence():
+    output = authoring_stage_outputs(
+        {
+            "notes": "Read (https://user:password@example.test/help?signature=secret#token), then https://other.test/docs?version=2.",
+            "tools": [
+                {
+                    "effect_evidence": {
+                        "excerpt": "Call `HTTPS://example.test/action?signature=secret` before returning."
+                    }
+                }
+            ],
+            "tool_entrypoints": [
+                {
+                    "source": {
+                        "code": "requests.get('https://x.test/a?signature=secret')"
+                    }
+                }
+            ],
+        },
+        None,
+        None,
+    )[0]["data"]
+    assert (
+        output["notes"]
+        == "Read (https://example.test/help), then https://other.test/docs."
+    )
+    assert (
+        output["tools"][0]["effect_evidence"]["excerpt"]
+        == "Call `https://example.test/action` before returning."
+    )
+    assert (
+        output["tool_entrypoints"][0]["source"]["code"]
+        == "requests.get('https://x.test/a')"
+    )
+    assert "secret" not in json.dumps(output)
+    assert "password" not in json.dumps(output)
 
 
 @pytest.mark.parametrize("digest", [None, "", "a" * 64])
@@ -618,6 +678,117 @@ def _detail_job(user, workspace, contract, *, source_model=None, sub_goals=None)
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("normalized", [False, True])
+@pytest.mark.parametrize("version", [1, 2])
+def test_historical_contract_secrets_are_hidden_without_rewriting_artifacts(
+    user, workspace, normalized, version
+):
+    from simulate.models import HostedHarnessStageOutput
+
+    prompt = "Read https://example.test/help?signature=secret before answering."
+    origin = {"kind": "file", "path": "agent.py", "line": 1}
+    contract = {
+        "agent": "old",
+        "modality": "chat",
+        "system_prompt": prompt,
+        "system_prompt_origin": {
+            **origin,
+            "sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+        },
+        "system_prompt_excerpt": "Help the caller",
+        "notes": "Read https://example.test/help?signature=secret before answering.",
+        "tools": [
+            {
+                "name": "lookup",
+                "effect": "Reads an order",
+                "effect_kind": "read",
+                "effect_evidence": {
+                    "origin": origin,
+                    "excerpt": "Read https://example.test/help?signature=secret",
+                },
+            }
+        ],
+        "tool_entrypoints": [
+            {
+                "tool": "lookup",
+                "mode": "import",
+                "implementation_origin": "source",
+                "source": {
+                    "path": "agent.py",
+                    "line_start": 1,
+                    "line_end": 1,
+                    "code": "requests.get('https://x.test/a?signature=secret')",
+                },
+            }
+        ],
+        "tool_entrypoint_details": [
+            {
+                "tool": "provider_tool",
+                "mode": "provider",
+                "implementation_origin": "provider_custom_function",
+                "provider_function": {
+                    "url": "https://callback.test/tool?signature=secret",
+                    "parameters": {
+                        "$ref": "https://schemas.test/tool?version=2&signature=secret"
+                    },
+                },
+            }
+        ],
+    }
+    job = _detail_job(user, workspace, None)
+    if normalized:
+        artifact = HostedHarnessStageOutput.no_workspace_objects.create(
+            job=job, kind="contract", data=deepcopy(contract)
+        )
+    else:
+        job.stage_outputs = [{"kind": "contract", "data": deepcopy(contract)}]
+        job.save(update_fields=["stage_outputs", "updated_at"])
+    client = APIClient()
+    client.force_authenticate(user=user)
+    with (
+        patch(
+            "simulate.services.hosted_harness_gateway.get_storage_client",
+            side_effect=AssertionError("storage read"),
+        ),
+        patch(
+            "simulate.services.hosted_harness_gateway.get_sandbox_provider",
+            side_effect=AssertionError("provider read"),
+        ),
+    ):
+        response = client.get(
+            f"/simulate/api/harness-environments/{job.id}/",
+            {"contract_version": version},
+            HTTP_X_WORKSPACE_ID=str(workspace.id),
+        )
+    assert response.status_code == 200
+    actual = response.json()["contract"]
+    assert actual["system_prompt"] is None
+    assert actual["system_prompt_origin"] is None
+    assert actual["system_prompt_excerpt"] == "Help the caller"
+    assert actual["notes"] == "Read https://example.test/help before answering."
+    assert (
+        actual["tools"][0]["effect_evidence"]["excerpt"]
+        == "Read https://example.test/help"
+    )
+    assert (
+        actual["tool_entrypoints"][0]["source"]["code"]
+        == "requests.get('https://x.test/a')"
+    )
+    if version == 2:
+        assert actual["tool_entrypoints"][1]["provider_function"] == {
+            "url": "https://callback.test/tool",
+            "parameters": {"$ref": "https://schemas.test/tool?version=2"},
+        }
+    assert "secret" not in json.dumps(actual)
+    if normalized:
+        artifact.refresh_from_db()
+        assert artifact.data == contract
+    else:
+        job.refresh_from_db()
+        assert job.stage_outputs[0]["data"] == contract
+
+
+@pytest.mark.django_db
 def test_detail_v2_projects_rich_shapes_without_changing_v1_or_persistence(
     user, workspace
 ):
@@ -658,6 +829,10 @@ def test_detail_v2_projects_rich_shapes_without_changing_v1_or_persistence(
                 "name": "lookup_order",
                 "effect": "Reads one order",
                 "effect_kind": "read",
+                "effect_evidence": {
+                    "origin": origin,
+                    "excerpt": "SELECT * FROM orders",
+                },
             },
             {"name": "unknown", "effect": "Unclassified operation"},
         ],
@@ -728,6 +903,8 @@ def test_detail_v2_projects_rich_shapes_without_changing_v1_or_persistence(
     assert actual["amendments_legacy"] == old["contract"]["amendments"]
     assert actual["tools"][0]["effect"] == "read"
     assert actual["tools"][0]["effect_legacy"] == "Reads one order"
+    assert actual["tools"][0]["effect_evidence"]["excerpt"] == "SELECT * FROM orders"
+    assert actual["tools"][0]["effect_evidence"]["origin"]["path"] == "agent.py"
     assert actual["tools"][1]["effect"] is None
     assert actual["tool_entrypoints"][0]["origin"] == "source"
     assert actual["tool_entrypoints"][0]["origin_evidence"]["path"] == "agent.py"

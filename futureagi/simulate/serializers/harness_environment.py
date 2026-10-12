@@ -646,6 +646,13 @@ class HarnessEnvironmentProviderFunctionSerializer(serializers.Serializer):
     parameters = serializers.JSONField(required=False, allow_null=True)
 
 
+class HarnessEnvironmentToolSourceSerializer(serializers.Serializer):
+    path = serializers.CharField()
+    line_start = serializers.IntegerField(min_value=1)
+    line_end = serializers.IntegerField(min_value=1)
+    code = serializers.CharField(trim_whitespace=False)
+
+
 class HarnessEnvironmentToolEntrypointV2Serializer(serializers.Serializer):
     tool = serializers.CharField()
     mode = serializers.CharField(required=False, allow_blank=True)
@@ -667,7 +674,7 @@ class HarnessEnvironmentToolEntrypointV2Serializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
-    source = serializers.JSONField(required=False, allow_null=True)
+    source = HarnessEnvironmentToolSourceSerializer(required=False, allow_null=True)
     provider_function = HarnessEnvironmentProviderFunctionSerializer(
         required=False, allow_null=True
     )
@@ -680,6 +687,11 @@ class HarnessEnvironmentAmendmentV2Serializer(serializers.Serializer):
         allow_null=True,
     )
     reason = serializers.CharField()
+
+
+class HarnessEnvironmentEffectEvidenceSerializer(serializers.Serializer):
+    origin = HarnessEnvironmentOriginSerializer()
+    excerpt = serializers.CharField(trim_whitespace=False)
 
 
 class HarnessEnvironmentToolV2Serializer(serializers.Serializer):
@@ -698,7 +710,9 @@ class HarnessEnvironmentToolV2Serializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
-    effect_evidence = serializers.JSONField(required=False, allow_null=True)
+    effect_evidence = HarnessEnvironmentEffectEvidenceSerializer(
+        required=False, allow_null=True
+    )
     requires = serializers.ListField(child=serializers.CharField(), required=False)
 
 

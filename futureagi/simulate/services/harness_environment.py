@@ -26,6 +26,7 @@ from simulate.models import (
 )
 from simulate.services.harness_environment_evidence import (
     EnvironmentEvidence,
+    _secret_safe,
     environment_detail_v2,
     has_verified_system_prompt,
 )
@@ -416,7 +417,7 @@ def _environment_evidence(job: HostedHarnessJob) -> EnvironmentEvidence:
         kind: value if isinstance(value := documents.get(kind), shape) else None
         for kind, shape in kinds.items()
     }
-    values["contract"] = values["contract"] or {}
+    values["contract"] = _secret_safe(values["contract"] or {})
     return EnvironmentEvidence(**values)
 
 
@@ -732,10 +733,7 @@ def _contract_section(
         section["system_prompt"] = None
         section["system_prompt_origin"] = None
     agent = (job.payload or {}).get("agent") or {}
-    if (
-        agent.get("connector") in {"vapi", "retell", "retell_chat"}
-        and agent.get("mode") != "environment_backed"
-    ):
+    if agent.get("connector") in {"vapi", "retell", "retell_chat"}:
         section.pop("call_direction", None)
     if schema_tables is not None:
         section["data_schema_tables"] = schema_tables
@@ -956,7 +954,6 @@ def _run_link(job: HostedHarnessJob) -> dict[str, Any]:
 def _settings(job: HostedHarnessJob) -> dict[str, Any]:
     """The build request with every secret value removed, plus the one key a person can set."""
     from simulate.services.harness_credentials import is_credential_file_ref
-    from simulate.services.hosted_harness_gateway import _secret_safe
 
     payload = job.payload or {}
     agent = payload.get("agent") or {}

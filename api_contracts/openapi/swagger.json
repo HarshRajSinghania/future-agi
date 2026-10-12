@@ -124064,6 +124064,24 @@
                 }
             }
         },
+        "HarnessEnvironmentEffectEvidence": {
+            "required": [
+                "origin",
+                "excerpt"
+            ],
+            "type": "object",
+            "properties": {
+                "origin": {
+                    "$ref": "#/definitions/HarnessEnvironmentOrigin"
+                },
+                "excerpt": {
+                    "title": "Excerpt",
+                    "type": "string",
+                    "minLength": 1
+                }
+            },
+            "x-nullable": true
+        },
         "HarnessEnvironmentToolV2": {
             "required": [
                 "name",
@@ -124131,9 +124149,7 @@
                     "x-nullable": true
                 },
                 "effect_evidence": {
-                    "title": "Effect evidence",
-                    "type": "object",
-                    "x-nullable": true
+                    "$ref": "#/definitions/HarnessEnvironmentEffectEvidence"
                 },
                 "requires": {
                     "type": "array",
@@ -124141,6 +124157,38 @@
                         "type": "string",
                         "minLength": 1
                     }
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessEnvironmentToolSource": {
+            "required": [
+                "path",
+                "line_start",
+                "line_end",
+                "code"
+            ],
+            "type": "object",
+            "properties": {
+                "path": {
+                    "title": "Path",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "line_start": {
+                    "title": "Line start",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "line_end": {
+                    "title": "Line end",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "code": {
+                    "title": "Code",
+                    "type": "string",
+                    "minLength": 1
                 }
             },
             "x-nullable": true
@@ -124235,9 +124283,7 @@
                     "x-nullable": true
                 },
                 "source": {
-                    "title": "Source",
-                    "type": "object",
-                    "x-nullable": true
+                    "$ref": "#/definitions/HarnessEnvironmentToolSource"
                 },
                 "provider_function": {
                     "$ref": "#/definitions/HarnessEnvironmentProviderFunction"

@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlparse
 
 import jwt
 import requests
@@ -39,6 +39,7 @@ from simulate.models import (
 )
 from simulate.services.harness_environment_evidence import (
     INTERNAL_TABLES,
+    _secret_safe,
     has_verified_system_prompt,
 )
 from simulate.services.hosted_harness import (
@@ -61,7 +62,6 @@ from simulate.services.hosted_harness_conversation import (
 )
 from simulate.services.hosted_harness_diagnostics import (
     SandboxDiagnostics,
-    _redact,
     cache_attempt_redaction_values,
     cached_attempt_redaction_values,
     forget_attempt_redaction_values,
@@ -4397,74 +4397,6 @@ def _authored_modality(job: Any) -> str:
             if authored in {"text", "voice"}:
                 return authored
     return ""
-
-
-def _secret_safe(value: Any, *, key: str = "", schema: bool = False) -> Any:
-    """Return an authoring document safe to persist and display.
-
-    Authoring outputs should normally contain references rather than secret values. This is a
-    second boundary check so a malformed/generated environment cannot leak a credential into the
-    job JSON or API response.
-    """
-    normalized = key.lower()
-    safe_secret_metadata = {
-        "secret_purposes",
-        "secret_refs",
-        "required_secrets",
-        "required_credentials",
-    }
-    secret_markers = (
-        "api_key",
-        "api_secret",
-        "password",
-        "private_key",
-        "access_token",
-        "refresh_token",
-        "client_secret",
-        "credential_json",
-        "secret_value",
-    )
-    sensitive = normalized not in safe_secret_metadata and (
-        normalized == "secrets"
-        or normalized.endswith("_secret")
-        or any(marker in normalized for marker in secret_markers)
-    )
-    if sensitive and not (schema and isinstance(value, dict)):
-        return "[redacted]"
-    if isinstance(value, dict):
-        return {
-            str(item_key): "[redacted]"
-            if sensitive
-            and item_key in {"default", "example", "examples", "const", "enum"}
-            else _secret_safe(
-                item_value,
-                key=str(item_key),
-                schema=schema
-                or normalized in {"parameters", "input_schema", "output_schema"},
-            )
-            for item_key, item_value in value.items()
-        }
-    if isinstance(value, list):
-        return [_secret_safe(item, schema=schema) for item in value]
-    if (
-        isinstance(value, str)
-        and "://" in value
-        and not any(char.isspace() for char in value)
-    ):
-        try:
-            url = urlsplit(value)
-            if url.scheme and url.netloc:
-                return urlunsplit(
-                    (url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", "")
-                )
-        except ValueError:
-            return "[redacted]"
-    if isinstance(value, str):
-        value = _redact(value, ())
-        value = re.sub(r"(\w+://)[^\s/@]+:[^\s/@]+@", r"\1[redacted]@", value)
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
 
 
 def _read_harness_usage(attempt: HostedHarnessAttempt, sandbox) -> None:

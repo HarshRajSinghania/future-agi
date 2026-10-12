@@ -3,10 +3,107 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from simulate.services.hosted_harness_diagnostics import _redact
 
 INTERNAL_TABLES = frozenset({"_alk_tool_trace", "harness_seed_sentinel"})
+
+
+def _secret_safe_url(value: str, *, schema: bool = False) -> str:
+    address = value.rstrip(".,;!?)")
+    try:
+        url = urlsplit(address)
+        if not url.scheme or not url.netloc:
+            return value
+        query = (
+            urlencode(
+                [
+                    (key, item)
+                    for key, item in parse_qsl(url.query)
+                    if key in {"version", "v"}
+                    and re.fullmatch(r"v?[0-9]{1,8}(?:[.-][0-9]{1,8}){0,3}", item)
+                ]
+            )
+            if schema
+            else ""
+        )
+        return (
+            urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, query, ""))
+            + value[len(address) :]
+        )
+    except ValueError:
+        return "[redacted]"
+
+
+def _secret_safe(value: Any, *, key: str = "", schema: bool = False) -> Any:
+    """Return an authoring document safe to persist and display.
+
+    Authoring outputs should normally contain references rather than secret values. This is a
+    second boundary check so a malformed/generated environment cannot leak a credential into the
+    job JSON or API response.
+    """
+    normalized = key.lower()
+    safe_secret_metadata = {
+        "secret_purposes",
+        "secret_refs",
+        "required_secrets",
+        "required_credentials",
+    }
+    secret_markers = (
+        "api_key",
+        "api_secret",
+        "password",
+        "private_key",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "credential_json",
+        "secret_value",
+    )
+    sensitive = normalized not in safe_secret_metadata and (
+        normalized == "secrets"
+        or normalized.endswith("_secret")
+        or any(marker in normalized for marker in secret_markers)
+    )
+    if sensitive and not (schema and isinstance(value, dict)):
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {
+            str(item_key): "[redacted]"
+            if sensitive
+            and item_key in {"default", "example", "examples", "const", "enum"}
+            else _secret_safe(
+                item_value,
+                key=str(item_key),
+                schema=schema
+                or normalized in {"parameters", "input_schema", "output_schema"},
+            )
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_secret_safe(item, schema=schema) for item in value]
+    if (
+        isinstance(value, str)
+        and re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value)
+        and not any(char.isspace() for char in value)
+    ):
+        return _secret_safe_url(value, schema=schema)
+    if isinstance(value, str):
+        value = re.sub(
+            r"https?://[^\s<>\"'`]+",
+            lambda match: _secret_safe_url(match.group()),
+            value,
+            flags=re.IGNORECASE,
+        )
+        value = _redact(value, ())
+        value = re.sub(r"(\w+://)[^\s/@]+:[^\s/@]+@", r"\1[redacted]@", value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 @dataclass(frozen=True)
