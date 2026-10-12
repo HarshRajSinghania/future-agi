@@ -203,17 +203,27 @@ class TestGetEvalStructureAPI:
         self, auth_client, organization, db
     ):
         """An org-owned template with no workspace is readable in every workspace."""
+        from django.db.models.signals import post_save, pre_save
         from model_hub.models.evals_metric import EvalTemplate
+        from tfc.utils.signals import auto_assign_workspace, ensure_workspace_after_save
 
-        shared = EvalTemplate.no_workspace_objects.create(
-            name="org_shared_template",
-            eval_id=999103,
-            owner="user",
-            organization=organization,
-            workspace=None,
-            config={"shared": True},
-            criteria="org-shared-criteria",
-        )
+        pre_save.disconnect(auto_assign_workspace)
+        post_save.disconnect(ensure_workspace_after_save)
+        try:
+            shared = EvalTemplate.no_workspace_objects.create(
+                name="org_shared_template",
+                eval_id=999103,
+                owner="user",
+                organization=organization,
+                workspace=None,
+                config={"shared": True},
+                criteria="org-shared-criteria",
+            )
+        finally:
+            pre_save.connect(auto_assign_workspace)
+            post_save.connect(ensure_workspace_after_save)
+        shared.refresh_from_db()
+        assert shared.workspace_id is None
 
         response = auth_client.get(f"/sdk/api/v1/eval/{shared.eval_id}/")
         assert response.status_code == status.HTTP_200_OK
@@ -259,6 +269,49 @@ class TestGetEvalStructureAPI:
         result = response.json().get("result", response.json())
         assert result["id"] == str(own.id)
         assert result["criteria"] == "own-collision-criteria"
+
+    def test_get_eval_structure_tie_break_is_newest_then_id(
+        self, auth_client, organization, workspace, db
+    ):
+        """Two readable rows in the same workspace: newest created_at wins, then id."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        from model_hub.models.evals_metric import EvalTemplate
+
+        older = EvalTemplate.no_workspace_objects.create(
+            name="tie_break_older",
+            eval_id=999105,
+            owner="user",
+            organization=organization,
+            workspace=workspace,
+            criteria="older-tie-break",
+        )
+        newer = EvalTemplate.no_workspace_objects.create(
+            name="tie_break_newer",
+            eval_id=999105,
+            owner="user",
+            organization=organization,
+            workspace=workspace,
+            criteria="newer-tie-break",
+        )
+        EvalTemplate.no_workspace_objects.filter(id=older.id).update(
+            created_at=timezone.now() - timedelta(days=1)
+        )
+
+        response = auth_client.get("/sdk/api/v1/eval/999105/")
+        assert response.status_code == status.HTTP_200_OK
+        result = response.json().get("result", response.json())
+        assert result["id"] == str(newer.id)
+
+        same_time = timezone.now()
+        EvalTemplate.no_workspace_objects.filter(id__in=[older.id, newer.id]).update(
+            created_at=same_time
+        )
+        expected = str(min(older.id, newer.id))
+        response = auth_client.get("/sdk/api/v1/eval/999105/")
+        result = response.json().get("result", response.json())
+        assert result["id"] == expected
 
 
 @pytest.mark.integration

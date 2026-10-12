@@ -136,7 +136,7 @@ class GetEvalStructureEvalIdView(APIView):
             readable |= Q(organization=organization, workspace=workspace)
         template = (
             EvalTemplate.no_workspace_objects.filter(readable, eval_id=eval_id)
-            .order_by(F("organization_id").desc(nulls_last=True))
+            .order_by(F("organization_id").desc(nulls_last=True), "-created_at", "id")
             .first()
         )
         if template is None:
