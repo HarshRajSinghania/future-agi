@@ -125,9 +125,15 @@ class GetEvalStructureEvalIdView(APIView):
         }
     )
     def get(self, request, eval_id, *args, **kwargs):
-        organization = getattr(request, "organization", None) or getattr(
-            request.user, "organization", None
-        )
+        # request.organization is set by APIKeyAuthentication, including to None
+        # for a removed member whose user.organization FK was never cleared.
+        # Substituting that FK would hand the removed member this org's
+        # workspace-null templates. A missing attribute is the only case that
+        # falls back, and only for a caller who still has an organization.
+        if hasattr(request, "organization"):
+            organization = request.organization
+        else:
+            organization = getattr(request.user, "organization", None)
         workspace = getattr(request, "workspace", None)
         readable = Q(organization__isnull=True) | Q(
             organization=organization, workspace__isnull=True

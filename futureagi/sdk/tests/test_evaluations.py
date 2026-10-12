@@ -313,6 +313,51 @@ class TestGetEvalStructureAPI:
         result = response.json().get("result", response.json())
         assert result["id"] == expected
 
+    def test_removed_member_cannot_read_org_shared_template(
+        self, api_client, user, organization, db
+    ):
+        """A removed member keeps the user.organization FK and must not read with it."""
+        from django.db.models.signals import post_save, pre_save
+
+        from accounts.models.organization_membership import OrganizationMembership
+        from model_hub.models.evals_metric import EvalTemplate
+        from tfc.utils.signals import auto_assign_workspace, ensure_workspace_after_save
+
+        pre_save.disconnect(auto_assign_workspace)
+        post_save.disconnect(ensure_workspace_after_save)
+        try:
+            shared = EvalTemplate.no_workspace_objects.create(
+                name="removed_member_shared",
+                eval_id=999106,
+                owner="user",
+                organization=organization,
+                workspace=None,
+                config={"secret": "removed-member-must-not-read"},
+                criteria="removed-member-must-not-read",
+            )
+        finally:
+            pre_save.connect(auto_assign_workspace)
+            post_save.connect(ensure_workspace_after_save)
+        shared.refresh_from_db()
+        assert shared.workspace_id is None
+
+        OrganizationMembership.no_workspace_objects.filter(
+            user=user, organization=organization
+        ).update(is_active=False)
+        user.refresh_from_db()
+        assert user.organization_id == organization.id
+
+        login = api_client.post(
+            "/accounts/token/",
+            {"email": user.email, "password": "testpassword123"},
+            format="json",
+        )
+        assert login.status_code == status.HTTP_200_OK
+        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.json()['access']}")
+        response = api_client.get(f"/sdk/api/v1/eval/{shared.eval_id}/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "removed-member-must-not-read" not in response.content.decode()
+
 
 @pytest.mark.integration
 @pytest.mark.api
