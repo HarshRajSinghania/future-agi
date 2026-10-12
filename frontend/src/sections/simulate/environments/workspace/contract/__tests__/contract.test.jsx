@@ -25,6 +25,9 @@ const voiceEnv = {
   dataSchema: {
     customers: { id: "TEXT PRIMARY KEY", status: "TEXT NOT NULL" },
   },
+  dataSchemaColumns: {
+    audits: [{ name: "event_id", type: "UUID", pk: true, nullable: false }],
+  },
 };
 
 const renderPanel = (props = {}) =>
@@ -60,6 +63,9 @@ describe("RlContractPanel", () => {
     fireEvent.click(screen.getByText("customers"));
     expect(screen.getByText("TEXT PRIMARY KEY")).toBeInTheDocument();
     expect(screen.getByText("TEXT NOT NULL")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("audits"));
+    expect(screen.getByText("UUID · PK · NOT NULL")).toBeInTheDocument();
   });
 
   it("renders the run end conditions — terminate, truncate, clock and seed", () => {
@@ -99,6 +105,32 @@ describe("RlContractPanel", () => {
     fireEvent.click(screen.getAllByText("issue_refund")[0]);
     expect(screen.getAllByText("Tool contract and entrypoint").length).toBeGreaterThan(0);
     expect(screen.getByText(/"callable": "refund"/)).toBeInTheDocument();
+  });
+
+  it("shows the exact tool source when ALK supplied it", () => {
+    renderPanel({
+      env: {
+        ...voiceEnv,
+        toolEntrypoints: [
+          {
+            tool: "issue_refund",
+            module: "billing",
+            callable: "refund",
+            source: {
+              path: "billing.py",
+              line_start: 8,
+              line_end: 9,
+              code: "def refund(charge_id):\n    return ledger.refund(charge_id)",
+            },
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getAllByText("issue_refund")[0]);
+    expect(screen.getByText("Source snippet")).toBeInTheDocument();
+    expect(screen.getByText("billing.py")).toBeInTheDocument();
+    expect(screen.getByText(/ledger\.refund/)).toBeInTheDocument();
   });
 
   it("no longer mounts the dummy Actors section (commented out, to be picked up later)", () => {

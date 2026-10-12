@@ -33,6 +33,8 @@ const toWorldTool = (tool) =>
         desc: tool?.description || tool?.name || "",
         argTypes: tool?.arg_types || undefined,
         requires: tool?.requires || undefined,
+        origin: tool?.origin || undefined,
+        effect: tool?.effect || undefined,
       };
 
 // world.stores[] → the seed.tables[] shape the SeededDataCard / schema surfaces
@@ -106,7 +108,11 @@ export function harnessDetailToEnvironment(detail) {
     id: detail.id || overview.id,
     name: overview.name || environmentName({ job_id: detail.id }),
     description,
-    domain: overview.domain ?? null,
+    domain: contract?.domain?.label || contract?.domain || overview.domain || null,
+    domainTag:
+      contract?.domain && typeof contract.domain === "object"
+        ? contract.domain
+        : null,
     agentType: AGENT_TYPE[overview.agent_type] || overview.agent_type || null,
     surface: contract?.modality || overview.agent_type || undefined,
     status: overview.status
@@ -129,15 +135,20 @@ export function harnessDetailToEnvironment(detail) {
     subGoals: contract?.sub_goals || null,
     endConditions: contract?.end_conditions || null,
     useCases: contract?.real_use_cases || null,
+    useCaseDetails: contract?.real_use_case_details || null,
+    ruleDetails: contract?.hard_constraint_details || null,
     personas: world?.personas || null,
     stores: world?.stores || null,
     callDirection: contract?.call_direction ?? null,
     // Real per-table field types and per-tool callables, when ALK read them
     // from source. Empty for provider agents, which have neither.
     dataSchema: contract?.data_schema || null,
+    dataSchemaColumns: contract?.data_schema_columns || null,
     dataStore: contract?.data_store || null,
     toolEntrypoints: contract?.tool_entrypoints || null,
     systemPromptExcerpt: contract?.system_prompt_excerpt || null,
+    systemPrompt: contract?.system_prompt || null,
+    systemPromptOrigin: contract?.system_prompt_origin || null,
     counts: {
       flows: overview.flows_count ?? null,
       guardrails: overview.guardrails_count ?? null,

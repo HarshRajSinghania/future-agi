@@ -91867,6 +91867,21 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "string",
           "x-nullable": true,
         },
+        domain: {
+          title: "Domain",
+          type: "object",
+          "x-nullable": true,
+        },
+        system_prompt: {
+          title: "System prompt",
+          type: "string",
+          "x-nullable": true,
+        },
+        system_prompt_origin: {
+          title: "System prompt origin",
+          type: "object",
+          "x-nullable": true,
+        },
         system_prompt_excerpt: {
           title: "System prompt excerpt",
           type: "string",
@@ -91887,11 +91902,25 @@ export const OPENAPI_CONTRACT = Object.freeze({
           },
           "x-nullable": true,
         },
+        real_use_case_details: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+          "x-nullable": true,
+        },
         hard_constraints: {
           type: "array",
           items: {
             type: "string",
             minLength: 1,
+          },
+          "x-nullable": true,
+        },
+        hard_constraint_details: {
+          type: "array",
+          items: {
+            type: "object",
           },
           "x-nullable": true,
         },
@@ -91933,6 +91962,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         data_schema: {
           title: "Data schema",
+          type: "object",
+          "x-nullable": true,
+        },
+        data_schema_columns: {
+          title: "Data schema columns",
           type: "object",
           "x-nullable": true,
         },

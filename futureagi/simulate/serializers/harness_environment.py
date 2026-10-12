@@ -288,6 +288,11 @@ class HarnessEnvironmentContractSerializer(serializers.Serializer):
     call_direction = serializers.CharField(
         required=False, allow_null=True, allow_blank=True
     )
+    domain = serializers.JSONField(required=False, allow_null=True)
+    system_prompt = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True
+    )
+    system_prompt_origin = serializers.JSONField(required=False, allow_null=True)
     system_prompt_excerpt = serializers.CharField(
         required=False, allow_null=True, allow_blank=True
     )
@@ -297,8 +302,14 @@ class HarnessEnvironmentContractSerializer(serializers.Serializer):
     real_use_cases = serializers.ListField(
         child=serializers.CharField(), required=False, allow_null=True
     )
+    real_use_case_details = serializers.ListField(
+        child=serializers.JSONField(), required=False, allow_null=True
+    )
     hard_constraints = serializers.ListField(
         child=serializers.CharField(), required=False, allow_null=True
+    )
+    hard_constraint_details = serializers.ListField(
+        child=serializers.JSONField(), required=False, allow_null=True
     )
     runtime = serializers.JSONField(required=False, allow_null=True)
     dependencies = serializers.ListField(
@@ -315,6 +326,7 @@ class HarnessEnvironmentContractSerializer(serializers.Serializer):
     )
     data_store = serializers.JSONField(required=False, allow_null=True)
     data_schema = serializers.JSONField(required=False, allow_null=True)
+    data_schema_columns = serializers.JSONField(required=False, allow_null=True)
     open_questions = serializers.ListField(
         child=serializers.CharField(), required=False, allow_null=True
     )

@@ -183,6 +183,8 @@ function platformPayload(draft, name) {
   if (!connector) return { skipped: `\`${draft.provider}\` is not a preflight connector yet` };
 
   const contact = draft.contact;
+  const providerOwnsDirection = [PREFLIGHT_CONNECTOR.VAPI, PREFLIGHT_CONNECTOR.RETELL]
+    .includes(connector);
   const usesPhone = connector === PREFLIGHT_CONNECTOR.PHONE || contact?.mode === "phone";
   const phoneNumber = usesPhone ? e164(contact) : "";
   if (usesPhone && !phoneNumber) {
@@ -205,13 +207,19 @@ function platformPayload(draft, name) {
     config = {
       [idKey]: draft.agentId,
       ...(phoneNumber ? { phone_number: phoneNumber } : {}),
-      ...callBehaviour(contact),
+      ...(providerOwnsDirection && contact
+        ? { target_speaks_first: Boolean(contact.agentSpeaksFirst) }
+        : callBehaviour(contact)),
     };
   }
   // Others is always inbound (the platform dials the number), so it sends that
   // direction rather than whatever the toggle last held.
   const callDirection =
-    connector === PREFLIGHT_CONNECTOR.PHONE ? "inbound" : draft.callDirection;
+    connector === PREFLIGHT_CONNECTOR.PHONE
+      ? "inbound"
+      : providerOwnsDirection
+        ? undefined
+        : draft.callDirection;
   const base = envelope(draft, name);
   // The provider's own name for the agent (read back by preflight) labels the
   // environment; `name`/`authoring_key` keep the ID as the stable identity.

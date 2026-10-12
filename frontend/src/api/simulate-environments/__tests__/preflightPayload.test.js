@@ -154,9 +154,19 @@ describe("draftToPreflightPayload — platform", () => {
     expect(payload.metadata.name).toBe("asst_1");
   });
 
-  it("emits agent.call_direction when the panel collected one (inert backend-side)", () => {
+  it("drops call_direction for Vapi and Retell even when an old draft contains it", () => {
     const { payload } = draftToPreflightPayload(platformDraft({ callDirection: "outbound" }));
-    expect(payload.agent.call_direction).toBe("outbound");
+    expect(payload.agent.call_direction).toBeUndefined();
+
+    const retell = draftToPreflightPayload(
+      platformDraft({ provider: "retell", callDirection: "outbound" }),
+    ).payload;
+    expect(retell.agent.call_direction).toBeUndefined();
+
+    const livekit = draftToPreflightPayload(
+      platformDraft({ provider: "livekit", callDirection: "outbound" }),
+    ).payload;
+    expect(livekit.agent.call_direction).toBe("outbound");
   });
 
   it("omits call_direction when the draft has none", () => {
@@ -240,7 +250,7 @@ describe("draftToPreflightPayload — platform", () => {
     expect(payload.agent.call_direction).toBe("inbound");
   });
 
-  it("Vapi in phone mode keeps the toggle's direction (only Others is locked)", () => {
+  it("Vapi in phone mode omits every call-direction input", () => {
     const { payload } = draftToPreflightPayload(
       platformDraft({
         contact: {
@@ -253,8 +263,8 @@ describe("draftToPreflightPayload — platform", () => {
         callDirection: "outbound",
       }),
     );
-    expect(payload.agent.config.inbound).toBe(false);
-    expect(payload.agent.call_direction).toBe("outbound");
+    expect(payload.agent.config.inbound).toBeUndefined();
+    expect(payload.agent.call_direction).toBeUndefined();
   });
 
   it("skips a provider outside the connector enum", () => {

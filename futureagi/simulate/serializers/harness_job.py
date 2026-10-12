@@ -220,6 +220,18 @@ class HarnessAgentSerializer(serializers.Serializer):
                     )
                 }
             )
+        if attrs.get("call_direction") and connector in {"vapi", "retell"}:
+            raise serializers.ValidationError(
+                {
+                    "call_direction": (
+                        "Vapi and Retell own call direction; omit call_direction"
+                    )
+                }
+            )
+        if connector in {"vapi", "retell"} and "inbound" in config:
+            raise serializers.ValidationError(
+                {"config": "Vapi and Retell own call direction; omit inbound"}
+            )
         if "phone_number" in config and connector != "phone":
             if connector not in {"vapi", "retell"} or mode != "connect_only":
                 raise serializers.ValidationError(

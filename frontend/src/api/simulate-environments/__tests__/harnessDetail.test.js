@@ -34,7 +34,10 @@ const DETAIL = {
     agent: "Customer Support Agent",
     one_liner: "Handles refund conversations",
     modality: "voice",
+    domain: { id: "order-support", label: "Order Support" },
     call_direction: "inbound",
+    system_prompt: "You are a support agent. Never invent availability.",
+    system_prompt_origin: { kind: "prompt", path: "support/prompt.txt", line: 1 },
     system_prompt_excerpt: "You are a support agent…",
     tools: [
       {
@@ -43,10 +46,24 @@ const DETAIL = {
         arg_types: { order_id: "str" },
         description: "Look an order up",
         requires: [],
+        origin: { kind: "code", path: "support/agent.py", line: 12 },
+        effect: "Reads one order without changing it",
       },
     ],
     real_use_cases: ["Fetch order by ID", "Refund up to the order total"],
     hard_constraints: ["Refunds above $200 need supervisor approval"],
+    hard_constraint_details: [
+      {
+        text: "Refunds above $200 need supervisor approval",
+        origin: { kind: "prompt", field: "system_prompt" },
+      },
+    ],
+    real_use_case_details: [
+      {
+        text: "Fetch order by ID",
+        origin: { kind: "provider_tool_list", field: "lookup_order" },
+      },
+    ],
     amendments: [
       { subject: "tool removed - lookup_order", note: "no runnable seam in the source" },
       { subject: "", note: "a line that carries no reason" },
@@ -78,6 +95,9 @@ const DETAIL = {
       orders: { id: "TEXT PRIMARY KEY", status: "TEXT NOT NULL" },
       refunds: { id: "TEXT PRIMARY KEY", order_id: "TEXT NOT NULL" },
     },
+    data_schema_columns: {
+      orders: [{ name: "id", type: "TEXT", pk: true, nullable: false }],
+    },
     tool_entrypoints: [
       {
         tool: "lookup_order",
@@ -86,6 +106,12 @@ const DETAIL = {
         callable: "SupportAgent.lookup_order",
         factory: "SupportAgent(state)",
         first_arg: "self",
+        source: {
+          path: "support/agent.py",
+          line_start: 12,
+          line_end: 13,
+          code: "def lookup_order(self, order_id):\n    return self.orders[order_id]",
+        },
       },
     ],
   },
@@ -143,7 +169,8 @@ describe("harnessDetailToEnvironment", () => {
     const { env } = harnessDetailToEnvironment(DETAIL);
     expect(env.id).toBe("0b1c");
     expect(env.name).toBe("ride-voice-agent");
-    expect(env.domain).toBe("Logistics");
+    expect(env.domain).toBe("Order Support");
+    expect(env.domainTag).toEqual({ id: "order-support", label: "Order Support" });
     expect(env.agentType).toBe("voice");
     expect(env.surface).toBe("voice");
     expect(env.buildStatus).toBe("ready");
@@ -177,7 +204,15 @@ describe("harnessDetailToEnvironment", () => {
     expect(env.endConditions).toMatchObject({ max_turns: 12, clock: "real-time" });
     expect(env.subGoals[0].name).toBe("refund_refused_on_expired_card");
     expect(env.useCases).toContain("Refund up to the order total");
+    expect(env.useCaseDetails[0].origin.kind).toBe("provider_tool_list");
+    expect(env.ruleDetails[0].origin.kind).toBe("prompt");
     expect(env.callDirection).toBe("inbound");
+    expect(env.systemPrompt).toBe("You are a support agent. Never invent availability.");
+    expect(env.systemPromptOrigin).toEqual({
+      kind: "prompt",
+      path: "support/prompt.txt",
+      line: 1,
+    });
     expect(env.systemPromptExcerpt).toBe("You are a support agent…");
     expect(env.evalPreset).toEqual(["cs_policy"]);
   });
@@ -200,6 +235,8 @@ describe("harnessDetailToEnvironment", () => {
       id: "TEXT PRIMARY KEY",
       status: "TEXT NOT NULL",
     });
+    expect(env.dataSchemaColumns.orders[0]).toMatchObject({ name: "id", pk: true });
+    expect(env.tools[0].origin.path).toBe("support/agent.py");
     expect(env.toolEntrypoints[0]).toMatchObject({
       tool: "lookup_order",
       callable: "SupportAgent.lookup_order",

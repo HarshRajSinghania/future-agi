@@ -17269,7 +17269,21 @@ export interface HarnessEnvironmentProvenanceApi {
   authored_at: HarnessEnvironmentProvenanceApiAuthoredAt;
 }
 
+export type HarnessEnvironmentContractApiDomain = { [key: string]: unknown };
+
+export type HarnessEnvironmentContractApiSystemPromptOrigin = {
+  [key: string]: unknown;
+};
+
 export type HarnessEnvironmentContractApiToolsItem = { [key: string]: unknown };
+
+export type HarnessEnvironmentContractApiRealUseCaseDetailsItem = {
+  [key: string]: unknown;
+};
+
+export type HarnessEnvironmentContractApiHardConstraintDetailsItem = {
+  [key: string]: unknown;
+};
 
 export type HarnessEnvironmentContractApiRuntime = { [key: string]: unknown };
 
@@ -17291,15 +17305,24 @@ export type HarnessEnvironmentContractApiDataSchema = {
   [key: string]: unknown;
 };
 
+export type HarnessEnvironmentContractApiDataSchemaColumns = {
+  [key: string]: unknown;
+};
+
 export interface HarnessEnvironmentContractApi {
   agent?: string;
   one_liner?: string;
   modality?: string;
   call_direction?: string;
+  domain?: HarnessEnvironmentContractApiDomain;
+  system_prompt?: string;
+  system_prompt_origin?: HarnessEnvironmentContractApiSystemPromptOrigin;
   system_prompt_excerpt?: string;
   tools?: HarnessEnvironmentContractApiToolsItem[];
   real_use_cases?: string[];
+  real_use_case_details?: HarnessEnvironmentContractApiRealUseCaseDetailsItem[];
   hard_constraints?: string[];
+  hard_constraint_details?: HarnessEnvironmentContractApiHardConstraintDetailsItem[];
   runtime?: HarnessEnvironmentContractApiRuntime;
   dependencies?: HarnessEnvironmentContractApiDependenciesItem[];
   runtime_dependencies?: HarnessEnvironmentContractApiRuntimeDependenciesItem[];
@@ -17307,6 +17330,7 @@ export interface HarnessEnvironmentContractApi {
   tool_entrypoints?: HarnessEnvironmentContractApiToolEntrypointsItem[];
   data_store?: HarnessEnvironmentContractApiDataStore;
   data_schema?: HarnessEnvironmentContractApiDataSchema;
+  data_schema_columns?: HarnessEnvironmentContractApiDataSchemaColumns;
   open_questions?: string[];
   amendments: HarnessEnvironmentAmendmentApi[];
   sub_goals: HarnessEnvironmentCatalogueSubGoalApi[];

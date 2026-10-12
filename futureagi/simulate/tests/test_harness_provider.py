@@ -1644,13 +1644,26 @@ def test_environment_detail_preserves_data_schema_for_contract_ui(user, workspac
                 "agent": "support-agent",
                 "one_liner": "Looks orders up",
                 "modality": "chat",
-                "tools": [{"name": "lookup_order", "args": ["order_id"]}],
+                "domain": {"id": "order-support", "label": "Order Support"},
+                "tools": [
+                    {
+                        "name": "lookup_order",
+                        "args": ["order_id"],
+                        "origin": {"kind": "code", "path": "support/tools.py", "line": 4},
+                    }
+                ],
                 "tool_entrypoints": [
                     {
                         "tool": "lookup_order",
                         "mode": "import",
                         "module": "support.tools",
                         "callable": "lookup_order",
+                        "source": {
+                            "path": "support/tools.py",
+                            "line_start": 4,
+                            "line_end": 5,
+                            "code": "def lookup_order(order_id):\n    return orders[order_id]",
+                        },
                     }
                 ],
                 "data_store": {
@@ -1663,6 +1676,11 @@ def test_environment_detail_preserves_data_schema_for_contract_ui(user, workspac
                         "id": "TEXT PRIMARY KEY",
                         "status": "TEXT NOT NULL",
                     }
+                },
+                "data_schema_columns": {
+                    "orders": [
+                        {"name": "id", "type": "TEXT", "pk": True, "nullable": False}
+                    ]
                 },
             },
         }
@@ -1684,6 +1702,10 @@ def test_environment_detail_preserves_data_schema_for_contract_ui(user, workspac
     assert contract["data_schema"] == {
         "orders": {"id": "TEXT PRIMARY KEY", "status": "TEXT NOT NULL"}
     }
+    assert contract["domain"]["label"] == "Order Support"
+    assert contract["data_schema_columns"]["orders"][0]["pk"] is True
+    assert contract["tools"][0]["origin"]["path"] == "support/tools.py"
+    assert contract["tool_entrypoints"][0]["source"]["line_start"] == 4
     assert contract["tool_entrypoints"][0]["callable"] == "lookup_order"
 
 

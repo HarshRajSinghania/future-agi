@@ -20,11 +20,16 @@ export default function WorldInternalsSection({ env }) {
   const tools = env?.tools || [];
   const entrypoints = entrypointsByTool(env);
   const totalRows = schema.reduce((a, t) => a + (t.rows || 0), 0);
+  const hasRowCounts = schema.some((table) => table.rows != null);
 
   return (
     <Stack spacing={2} sx={{ mb: 2 }}>
       {(schema.length > 0 || env?.dataStore) && (
-        <SchemaCard schema={schema} totalRows={totalRows} dataStore={env?.dataStore} />
+        <SchemaCard
+          schema={schema}
+          totalRows={hasRowCounts ? totalRows : null}
+          dataStore={env?.dataStore}
+        />
       )}
       {tools.length > 0 && <ToolsCard tools={tools} entrypoints={entrypoints} />}
     </Stack>
@@ -42,13 +47,30 @@ WorldInternalsSection.propTypes = {
 function schemaRows(env) {
   const tables = env?.seed?.tables || [];
   const dataSchema = env?.dataSchema || {};
-  return tables.map((t) => {
-    const fields = dataSchema[t.name];
+  const richColumns = env?.dataSchemaColumns || {};
+  const tableNames = [
+    ...new Set([
+      ...tables.map((table) => table.name),
+      ...Object.keys(dataSchema),
+      ...Object.keys(richColumns),
+    ]),
+  ];
+  return tableNames.map((name) => {
+    const table = tables.find((candidate) => candidate.name === name) || {};
+    const fields = dataSchema[name];
+    const authoredColumns = richColumns[name];
     const cols =
-      fields && typeof fields === "object" && !Array.isArray(fields)
+      Array.isArray(authoredColumns)
+        ? authoredColumns.map((column) => ({
+            ...column,
+            type: [column.type, column.pk ? "PK" : null, column.nullable === false ? "NOT NULL" : null]
+              .filter(Boolean)
+              .join(" · "),
+          }))
+        : fields && typeof fields === "object" && !Array.isArray(fields)
         ? Object.entries(fields).map(([name, type]) => ({ name, type: String(type) }))
         : null;
-    return { name: t.name, rows: t.rows, note: t.note, cols };
+    return { name, rows: table.rows ?? null, note: table.note, cols };
   });
 }
 
@@ -73,7 +95,8 @@ function SchemaCard({ schema, totalRows, dataStore }) {
       subtitle="The tables this environment's world holds"
       action={
         <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-          {schema.length} tables · {totalRows.toLocaleString()} rows
+          {schema.length} tables
+          {totalRows != null ? ` · ${totalRows.toLocaleString()} rows` : ""}
         </Typography>
       }
     >
@@ -117,7 +140,7 @@ function SchemaCard({ schema, totalRows, dataStore }) {
                   {[expandable ? `${t.cols.length} fields` : null, t.note].filter(Boolean).join(" · ")}
                 </Typography>
                 <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
-                  {(t.rows || 0).toLocaleString()} rows
+                  {t.rows != null ? `${t.rows.toLocaleString()} rows` : ""}
                 </Typography>
               </Stack>
               {expandable && (
@@ -212,8 +235,9 @@ function ToolsCard({ tools, entrypoints }) {
 ToolsCard.propTypes = { tools: PropTypes.array, entrypoints: PropTypes.object };
 
 function ToolDetail({ tool, entry }) {
-  const sourceCode = entry?.source_code || entry?.code || tool?.source_code || tool?.code;
-  const file = entry?.module || entry?.service || "contract.json";
+  const sourceCode = entry?.source?.code
+    || entry?.source_code || entry?.code || tool?.source_code || tool?.code;
+  const file = entry?.source?.path || entry?.module || entry?.service || "contract.json";
   const contractSnippet = JSON.stringify(
     {
       name: tool.name,
