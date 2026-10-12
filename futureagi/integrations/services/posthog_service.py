@@ -5,7 +5,6 @@ import requests
 
 from agentcc.services.url_safety import (
     WEBHOOK_PRIVATE_URL_ERROR,
-    build_ssrf_safe_session,
     ensure_public_http_url,
 )
 from integrations.services.base import BaseIntegrationService, register_service
@@ -39,10 +38,12 @@ class PostHogService(BaseIntegrationService):
                 return {"valid": False, "error": "API key is required."}
 
             host = (host_url or DEFAULT_POSTHOG_HOST).rstrip("/")
-            ensure_public_http_url(host, WEBHOOK_PRIVATE_URL_ERROR)
+            ensure_public_http_url(
+                host, WEBHOOK_PRIVATE_URL_ERROR, allow_unresolvable=True
+            )
             url = f"{host}/decide/?v=3"
 
-            resp = build_ssrf_safe_session(WEBHOOK_PRIVATE_URL_ERROR).post(
+            resp = requests.post(
                 url,
                 json={
                     "api_key": api_key,
@@ -128,7 +129,9 @@ class PostHogService(BaseIntegrationService):
 
         api_key = credentials.get("api_key", "")
         host = (host_url or DEFAULT_POSTHOG_HOST).rstrip("/")
-        ensure_public_http_url(host, WEBHOOK_PRIVATE_URL_ERROR)
+        ensure_public_http_url(
+            host, WEBHOOK_PRIVATE_URL_ERROR, allow_unresolvable=True
+        )
         url = f"{host}/batch/"
 
         batch = []
@@ -145,7 +148,7 @@ class PostHogService(BaseIntegrationService):
                 }
             )
 
-        resp = build_ssrf_safe_session(WEBHOOK_PRIVATE_URL_ERROR).post(
+        resp = requests.post(
             url,
             json={"api_key": api_key, "batch": batch},
             headers={"Content-Type": "application/json"},

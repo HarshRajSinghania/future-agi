@@ -862,7 +862,11 @@ class AgentccGatewayViewSet(ViewSet):
             webhook_url = guardrail_config.get("url")
             if isinstance(webhook_url, str) and webhook_url:
                 try:
-                    ensure_public_http_url(webhook_url, WEBHOOK_PRIVATE_URL_ERROR)
+                    ensure_public_http_url(
+                        webhook_url,
+                        WEBHOOK_PRIVATE_URL_ERROR,
+                        allow_unresolvable=True,
+                    )
                 except ValueError as exc:
                     return self._gm.bad_request(str(exc))
 

@@ -7,7 +7,6 @@ import requests
 
 from agentcc.services.url_safety import (
     WEBHOOK_PRIVATE_URL_ERROR,
-    build_ssrf_safe_session,
     ensure_public_http_url,
 )
 from integrations.services.base import BaseIntegrationService, register_service
@@ -42,7 +41,9 @@ class LangfuseService(BaseIntegrationService):
         params: Optional[dict] = None,
     ) -> requests.Response:
         url = f"{host_url.rstrip('/')}{path}"
-        ensure_public_http_url(host_url, WEBHOOK_PRIVATE_URL_ERROR)
+        ensure_public_http_url(
+            host_url, WEBHOOK_PRIVATE_URL_ERROR, allow_unresolvable=True
+        )
         verify: Any = True
         tmp_path = None
 
@@ -54,7 +55,7 @@ class LangfuseService(BaseIntegrationService):
             verify = tmp_path
 
         try:
-            response = build_ssrf_safe_session(WEBHOOK_PRIVATE_URL_ERROR).request(
+            response = requests.request(
                 method=method,
                 url=url,
                 auth=self._get_auth(credentials),
