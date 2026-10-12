@@ -134,6 +134,23 @@ def _warn_if_egress_is_open() -> None:
 _warn_if_egress_is_open()
 
 
+def _node_permission_args(script_path: str) -> list[str]:
+    """Node 20+ permission model. Debian bookworm Node 18 exits on --permission."""
+    major = 0
+    if NODE_PATH:
+        probe = subprocess.run(
+            [NODE_PATH, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        raw = (probe.stdout or "").strip().lstrip("v")
+        major = int(raw.split(".", 1)[0] or 0) if raw[:1].isdigit() else 0
+    if major >= 20:
+        return ["--permission", f"--allow-fs-read={script_path}"]
+    return []
+
+
 def _nsjail_read_only_binds(interpreter_path: str, script_path: str) -> list[str]:
     """Read-only mounts a dynamically linked interpreter can actually start with.
 
@@ -388,8 +405,7 @@ def _execute_javascript(code: str, input_data: dict, timeout: int) -> dict:
         return _run_contained(
             lambda script_path: [
                 NODE_PATH,
-                "--permission",
-                f"--allow-fs-read={script_path}",
+                *_node_permission_args(script_path),
                 "--max-old-space-size=64",
             ],
             script,
@@ -421,8 +437,7 @@ def _execute_javascript(code: str, input_data: dict, timeout: int) -> dict:
             "/tmp:size=16777216",
             "--",
             NODE_PATH,
-            "--permission",
-            f"--allow-fs-read={script_path}",
+            *_node_permission_args(script_path),
             "--max-old-space-size=64",
             script_path,
         ]
