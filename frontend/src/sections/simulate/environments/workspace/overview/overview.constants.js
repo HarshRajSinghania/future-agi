@@ -31,8 +31,10 @@ export const OVERVIEW_COPY = {
   amendmentsEmpty: "No amendments. Nothing was changed after reading.",
   seededTitle: "Seeded data",
   dependsTitle: "What it depends on",
-  dependsSubtitle: "Built and torn down with the environment",
+  dependsSubtitle: "What the environment builds, and the services the agent calls",
   dependsEmpty: "No dependencies recorded for this environment.",
+  dependsBuilt: "Built and torn down with the environment",
+  dependsRuntime: "Services the agent calls",
   seedBlurb: (rows) =>
     `${rows.toLocaleString()} rows that fill this environment before your agent arrives: the world it actually works in. Rebuilt for every task, so nothing carries over.`,
   usedBy: (name) => `used by ${Array.isArray(name) ? name.join(", ") : name}`,
@@ -60,6 +62,16 @@ export const AGENT_SUMMARY_COPY = {
   fork: "Fork to edit",
   manage: "Manage versions",
   attach: "Attach agent",
+  viewPrompt: "View prompt",
+  promptTitle: (name) => `${name || "Agent"} · prompt`,
+  promptLines: (n) => `${n} ${n === 1 ? "line" : "lines"}`,
+  copyPrompt: "Copy prompt",
+  copied: "Copied to clipboard",
+};
+
+export const RULE_TARGET_COPY = {
+  enforcedBy: (kinds) => `enforced by ${kinds.join(", ")}`,
+  checkedBy: (subGoal) => `checked by ${subGoal}`,
 };
 
 // The environment shape Overview reads. Local PropTypes.shape (Phase-2 owns the

@@ -24,9 +24,9 @@ import { BUILD_STATUS } from "src/sections/simulate/environments/myEnvironments.
 const AGENT_TYPE = { voice: "voice", chat: "text" };
 
 // contract.tools[] → the { name, args, desc } shape stageOutputsToWorld emits.
-const toWorldTool = (tool) =>
+const toWorldTool = (tool, certifications = {}) =>
   typeof tool === "string"
-    ? { name: tool, args: [], desc: tool }
+    ? { name: tool, args: [], desc: tool, certification: certifications[tool] || null }
     : {
         name: tool?.name,
         args: tool?.args || [],
@@ -35,19 +35,48 @@ const toWorldTool = (tool) =>
         requires: tool?.requires || undefined,
         origin: tool?.origin || undefined,
         effect: tool?.effect || undefined,
+        effectKind: tool?.effect_kind || null,
+        effectEvidence: tool?.effect_evidence || null,
+        certification: certifications[tool?.name] || null,
       };
+
+const certificationsByTool = (certifications) =>
+  Object.fromEntries(
+    (Array.isArray(certifications) ? certifications : [])
+      .filter((entry) => entry?.tool)
+      .map((entry) => [entry.tool, entry]),
+  );
+
+const runtimeExtras = (runtime) => {
+  const { services, ...rest } = runtime || {};
+  return Object.keys(rest).length ? rest : null;
+};
 
 // world.stores[] → the seed.tables[] shape the SeededDataCard / schema surfaces
 // read: one row per table with { name, rows, note }. The note carries the
 // store's capability + engine so the provenance is legible.
 const storeTables = (stores = []) =>
   (Array.isArray(stores) ? stores : []).flatMap((store) =>
-    (Array.isArray(store?.tables) ? store.tables : []).map((table) => ({
-      name: table?.name,
-      rows: table?.rows,
-      note: [store?.capability, store?.engine].filter(Boolean).join(" · "),
-    })),
+    (Array.isArray(store?.tables) ? store.tables : [])
+      .filter((table) => !table?.internal)
+      .map((table) => ({
+        name: table?.name,
+        rows: table?.rows,
+        note: [store?.capability, store?.engine].filter(Boolean).join(" · "),
+      })),
   );
+
+const internalTableNames = (contract, world) =>
+  new Set(
+    [...(world?.stores || []).flatMap((store) => store?.tables || []), ...(contract?.data_schema_tables || [])]
+      .filter((table) => table?.internal)
+      .map((table) => table.name),
+  );
+
+const withoutTables = (tables, names) =>
+  tables && typeof tables === "object" && !Array.isArray(tables)
+    ? Object.fromEntries(Object.entries(tables).filter(([name]) => !names.has(name)))
+    : null;
 
 // §6 scenario → the flat scenario-pool row the ScenarioTable/Detail read. Real
 // per-scenario sub_goals become `subTasks` (the row's real-first source that
@@ -68,6 +97,8 @@ const toScenarioRow = (row) => ({
     id: sg?.name,
     label: sg?.what || sg?.name,
     kind: sg?.kind,
+    ...(sg?.output && { output: sg.output }),
+    ...(sg?.overlay && { overlay: sg.overlay }),
   })),
 });
 
@@ -86,13 +117,17 @@ export function harnessDetailToEnvironment(detail) {
   const world = detail.world || null;
   const settings = detail.settings || {};
 
-  const tools = contract?.tools ? contract.tools.map(toWorldTool).filter((t) => t.name) : null;
+  const certifications = certificationsByTool(contract?.tool_certification);
+  const tools = contract?.tools
+    ? contract.tools.map((tool) => toWorldTool(tool, certifications)).filter((t) => t.name)
+    : null;
   const rules = contract?.hard_constraints
     ? contract.hard_constraints.map(String).filter(Boolean)
     : null;
   const description = contract?.one_liner || overview.description || null;
   const services = world?.runtime?.services || null;
   const seedTables = world?.stores ? storeTables(world.stores) : null;
+  const internalTables = internalTableNames(contract, world);
 
   // Only set world keys we actually have, so the caller can overlay fixtures for
   // the rest (same contract as stageOutputsToWorld's partial world).
@@ -142,13 +177,17 @@ export function harnessDetailToEnvironment(detail) {
     callDirection: contract?.call_direction ?? null,
     // Real per-table field types and per-tool callables, when ALK read them
     // from source. Empty for provider agents, which have neither.
-    dataSchema: contract?.data_schema || null,
-    dataSchemaColumns: contract?.data_schema_columns || null,
+    dataSchema: withoutTables(contract?.data_schema, internalTables),
+    dataSchemaColumns: withoutTables(contract?.data_schema_columns, internalTables),
     dataStore: contract?.data_store || null,
     toolEntrypoints: contract?.tool_entrypoints || null,
     systemPromptExcerpt: contract?.system_prompt_excerpt || null,
     systemPrompt: contract?.system_prompt || null,
     systemPromptOrigin: contract?.system_prompt_origin || null,
+    baseEnvironment: contract?.base_environment ?? null,
+    refusalSignature: contract?.refusal_signature || null,
+    actors: contract?.actors || null,
+    runtime: runtimeExtras(world?.runtime),
     counts: {
       flows: overview.flows_count ?? null,
       guardrails: overview.guardrails_count ?? null,

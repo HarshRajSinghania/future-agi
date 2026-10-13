@@ -11,9 +11,24 @@ import {
 import { BUILDING_TABS, DERIVING_LABEL } from "../build.constants";
 
 describe("provenance constants", () => {
-  const ids = ["code", "config", "prompt", "doc", "callGraph", "policy", "fixture", "inferred"];
+  const ids = [
+    "code",
+    "config",
+    "prompt",
+    "provider_system_prompt",
+    "provider_tool_list",
+    "system_prompt",
+    "tool_list",
+    "file",
+    "platform_builtin",
+    "doc",
+    "callGraph",
+    "policy",
+    "fixture",
+    "inferred",
+  ];
 
-  it("declares the eight origin kinds", () => {
+  it("declares every origin kind", () => {
     expect(Object.keys(ORIGIN_KINDS)).toEqual(ids);
   });
 

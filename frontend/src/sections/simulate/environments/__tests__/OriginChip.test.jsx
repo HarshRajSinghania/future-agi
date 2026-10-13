@@ -17,6 +17,17 @@ describe("OriginChip", () => {
     expect(screen.getByText("TOOL LIST")).toBeInTheDocument();
   });
 
+  it("renders the origin kinds ALK writes for prompts, tool lists and files", () => {
+    const { rerender } = render(<OriginChip origin="system_prompt" />);
+    expect(screen.getByText("SYSTEM PROMPT")).toBeInTheDocument();
+    rerender(<OriginChip origin="tool_list" />);
+    expect(screen.getByText("TOOL LIST")).toBeInTheDocument();
+    rerender(<OriginChip origin="file" />);
+    expect(screen.getByText("FILE")).toBeInTheDocument();
+    rerender(<OriginChip origin="platform_builtin" />);
+    expect(screen.getByText("BUILT-IN")).toBeInTheDocument();
+  });
+
   it("renders nothing for an unknown origin", () => {
     const { container } = render(<OriginChip origin="mystery" />);
     expect(container.firstChild).toBeNull();
