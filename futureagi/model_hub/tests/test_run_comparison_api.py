@@ -951,3 +951,49 @@ def test_case_release_gate_preserves_authenticated_read_scope(
     )
     if access == "viewer":
         assert response.json()["result"]["release_gate"]["verdict"] == "fail"
+
+
+@pytest.mark.django_db
+def test_compare_route_metadata_slice_reports_selection(
+    auth_client, comparison_api_fixture
+):
+    fixture = comparison_api_fixture
+    item = ExperimentRunItem.no_workspace_objects.get(
+        run=fixture["baseline"], example_id=fixture["examples"][0].example_id
+    )
+    item.metadata = {"cohort": "A", "split_name": "holdout"}
+    item.save(update_fields=["metadata"])
+    response = auth_client.post(
+        reverse("experiment-run-compare"),
+        {
+            **fixture["scope"],
+            "metadata_equals": {"cohort": "A"},
+            "split_name": "holdout",
+        },
+        format="json",
+    )
+    assert response.status_code == status.HTTP_200_OK
+    result = response.json()["result"]
+    assert result["selection"] == {
+        "total_plan_count": 2,
+        "selected_count": 1,
+        "metadata_equals": {"cohort": "A"},
+        "split_name": "holdout",
+    }
+    assert result["baseline_counts"]["expected"] == 1
+    assert len(result["comparison"]["cases"]) == 1
+
+
+@pytest.mark.django_db
+def test_compare_route_rejects_metadata_slice_over_bound(
+    auth_client, comparison_api_fixture
+):
+    response = auth_client.post(
+        reverse("experiment-run-compare"),
+        {
+            **comparison_api_fixture["scope"],
+            "metadata_equals": {str(index): index for index in range(21)},
+        },
+        format="json",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
