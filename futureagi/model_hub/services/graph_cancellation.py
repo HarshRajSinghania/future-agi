@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from uuid import UUID
 
 from django.db.models import QuerySet
 from django.utils import timezone
@@ -37,7 +38,7 @@ def _workflow_ids(items: QuerySet[ExperimentRunItem]) -> tuple[str, ...]:
     for item in items:
         metadata = _envelope(item.metadata)
         link = metadata[_RUN_KEY].get("graph_execution")
-        workflow_id = link.get("workflow_id") if isinstance(link, dict) else None
+        workflow_id = link.get("workflow_id") if isinstance(link, Mapping) else None
         if isinstance(workflow_id, str) and workflow_id.strip():
             result.add(workflow_id)
     return tuple(sorted(result))
@@ -48,7 +49,10 @@ async def _request_cancellation(
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     if not workflow_ids:
         return (), (), ()
-    client = await get_client()
+    try:
+        client = await get_client()
+    except Exception as exc:
+        return (), (), (f"client:{type(exc).__name__}",)
     cancelled: list[str] = []
     missing: list[str] = []
     errors: list[str] = []
@@ -72,9 +76,9 @@ async def _request_cancellation(
 @primary_required
 def cancel_graph_experiment(
     *,
-    run_id: Any,
-    organization_id: Any,
-    workspace_id: Any = None,
+    run_id: UUID | str,
+    organization_id: UUID | str,
+    workspace_id: UUID | str | None = None,
 ) -> GraphCancellationResult:
     """Durably fence a graph run, then request Temporal workflow cancellation.
 
