@@ -12,6 +12,7 @@ import copy
 import logging
 import re
 from typing import Any
+from uuid import uuid4
 
 from django.conf import settings
 from django.db import transaction
@@ -1047,13 +1048,17 @@ def _scenario_row(reg, number: int | None = None) -> dict:
     }
 
 
-def _authoring_revision(job: HostedHarnessJob) -> str:
-    return str(
-        ((job.payload or {}).get("metadata") or {}).get("authoring_revision") or ""
+def _suite_revision(job: HostedHarnessJob) -> tuple[str, str]:
+    metadata = (job.payload or {}).get("metadata") or {}
+    return (
+        str(metadata.get("authoring_revision") or ""),
+        str(metadata.get("suite_edit") or ""),
     )
 
 
-def _deliver_committed_suite(job_id, suite: list[dict], revision: str) -> bool:
+def _deliver_committed_suite(
+    job_id, suite: list[dict], revision: tuple[str, str]
+) -> bool:
     """Bring saved chat workspaces and live sandboxes to a committed suite.
 
     The job lock serializes deliveries and a suite a later edit replaced is skipped, so
@@ -1070,7 +1075,7 @@ def _deliver_committed_suite(job_id, suite: list[dict], revision: str) -> bool:
             .filter(id=job_id)
             .first()
         )
-        if job is None or _authoring_revision(job) != revision:
+        if job is None or _suite_revision(job) != revision:
             logger.info("harness_superseded_delivery_skipped job_id=%s", job_id)
             return False
         try:
@@ -2169,6 +2174,14 @@ class HostedHarnessProvider:
                     # One savepoint: the snapshot, the scenarios output and the rows move together.
                     with transaction.atomic():
                         rewrite_authoring_scenarios(job, suite)
+                        # Every accepted edit is fenced, archived or not, so an older one never delivers.
+                        payload = dict(job.payload or {})
+                        payload["metadata"] = {
+                            **(payload.get("metadata") or {}),
+                            "suite_edit": uuid4().hex,
+                        }
+                        job.payload = payload
+                        job.save(update_fields=["payload", "updated_at"])
                         if output is not None:
                             output.data = suite
                             output.summary = f"{len(suite)} pre-authored scenarios"
@@ -2192,7 +2205,7 @@ class HostedHarnessProvider:
                 committed = suite
         if committed is not None:
             delivered = _deliver_committed_suite(
-                job.id, committed, _authoring_revision(job)
+                job.id, committed, _suite_revision(job)
             )
             if delivered:
                 receipts = [

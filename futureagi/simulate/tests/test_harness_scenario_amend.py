@@ -411,10 +411,12 @@ def _sealing():
     return seal
 
 
+@pytest.mark.parametrize("archived", [True, False])
 def test_an_edit_superseded_before_it_delivers_never_reaches_the_sandbox(
-    user, workspace
+    user, workspace, archived
 ):
     from simulate.services import harness_provider
+    from simulate.services.hosted_harness_gateway import rewrite_authoring_scenarios
 
     job = _job(user, workspace, SUITE)
     deliver = harness_provider._deliver_committed_suite
@@ -450,7 +452,7 @@ def test_an_edit_superseded_before_it_delivers_never_reaches_the_sandbox(
         ),
         patch(
             "simulate.services.hosted_harness_gateway.rewrite_authoring_scenarios",
-            side_effect=_sealing(),
+            side_effect=_sealing() if archived else rewrite_authoring_scenarios,
         ),
         patch.object(
             harness_provider, "_deliver_committed_suite", side_effect=in_order
