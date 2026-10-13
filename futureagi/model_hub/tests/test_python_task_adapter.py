@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -6,10 +8,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from model_hub.models.dataset_versions import DatasetVersion, DatasetVersionItem
 from model_hub.models.develop_dataset import Dataset
 from model_hub.models.experiments import ExperimentRun
+from model_hub.services.experiment_run_creation import create_experiment_run
 from model_hub.services.experiment_run_writes import (
     RunWriteError,
     claim_run_item,
-    pin_run_plan,
     record_run_item_result,
     transition_run,
 )
@@ -35,19 +37,17 @@ def external_run(organization, workspace, user):
             dataset_version=version, input={"question": "two"}, expected={"answer": "2"}
         ),
     ]
-    run = ExperimentRun.objects.create(
-        dataset_version=version,
-        task_kind=ExperimentRun.TaskKind.EXTERNAL,
-    )
     scope = {"organization_id": organization.id, "workspace_id": workspace.id}
-    pin_run_plan(
-        run_id=run.id,
+    run = create_experiment_run(
+        run_id=uuid.uuid4(),
+        dataset_version=version,
+        created_by=user,
+        task_kind="external",
         expected_items=[
             (examples[0].example_id, 1),
             (examples[0].example_id, 2),
             (examples[1].example_id, 1),
         ],
-        **scope,
     )
     return run, examples, scope
 
@@ -116,10 +116,17 @@ def test_adapter_runs_trials_traces_nested_work_and_resumes_terminal_rows(extern
     }
     for tool in (span for span in children if span.name == "tool"):
         assert tool.parent.span_id == retrievals[tool.context.trace_id].context.span_id
-    assert all(
-        item.trace_id and item.root_span_id
-        for item in ExperimentRun.objects.get(id=run.id).items.all()
-    )
+    roots_by_case = {
+        (
+            span.attributes["futureagi.example.id"],
+            span.attributes["futureagi.trial.number"],
+        ): span
+        for span in roots
+    }
+    for item in ExperimentRun.objects.get(id=run.id).items.all():
+        root = roots_by_case[(str(item.example_id), item.trial_number)]
+        assert item.trace_id == f"{root.context.trace_id:032x}"
+        assert item.root_span_id == f"{root.context.span_id:016x}"
 
     replay_calls = []
     replay = run_python_experiment(
@@ -171,8 +178,9 @@ def test_deleted_item_requires_recovery_without_reinvoking_callback(external_run
     run, examples, scope = external_run
     transition_run(run_id=run.id, status="queued", **scope)
     transition_run(run_id=run.id, status="running", **scope)
+    first_example = min(examples, key=lambda example: example.example_id)
     item = claim_run_item(
-        run_id=run.id, example_id=examples[0].example_id, receipt_key="old", **scope
+        run_id=run.id, example_id=first_example.example_id, receipt_key="old", **scope
     )
     record_run_item_result(
         item_id=item.id,
