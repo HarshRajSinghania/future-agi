@@ -159,6 +159,34 @@ def test_compare_route_returns_cases_counts_missing_and_traces(
 
 
 @pytest.mark.django_db
+def test_compare_route_can_project_trial_stability_without_changing_default_shape(
+    auth_client, comparison_api_fixture
+):
+    fixture = comparison_api_fixture
+    response = auth_client.post(
+        reverse("experiment-run-compare"),
+        {**fixture["scope"], "include_trial_stability": True},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    contract = RunComparisonResponseSerializer(data=response.json())
+    assert contract.is_valid(), contract.errors
+    rows = response.json()["result"]["trial_stability"]
+    assert [row["example_id"] for row in rows] == sorted(
+        row["example_id"] for row in rows
+    )
+    assert {row["expected_trial_count"] for row in rows} == {1}
+    assert {row["baseline"]["recorded_trial_count"] for row in rows} == {1}
+    assert {row["candidate"]["recorded_trial_count"] for row in rows} == {1}
+    assert {row["baseline"]["assessed_trial_count"] for row in rows} == {1}
+    assert {row["candidate"]["assessed_trial_count"] for row in rows} == {1}
+    assert all(row["baseline"]["score_stddev"] is None for row in rows)
+    assert all(row["candidate"]["score_stddev"] is None for row in rows)
+    assert all(row["paired"]["paired_trial_count"] == 1 for row in rows)
+
+
+@pytest.mark.django_db
 def test_compare_route_does_not_expose_other_organization(
     auth_client, comparison_api_fixture, user, workspace
 ):
