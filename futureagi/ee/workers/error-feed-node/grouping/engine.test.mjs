@@ -1,3 +1,5 @@
+import {addCompanionEvidence} from './f6/companion-context.mjs';
+import {ViewIndex, selectPrototypes} from './f6/retrieval.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {adaptGroupingSnapshot} from './snapshot.mjs';
@@ -265,7 +267,7 @@ test('a paused investigation emits no publishable commands and resumes from its 
   assert.deepEqual(replayed.commands, completed.commands);
 });
 
-test('reconciliation merge creates a new target with exact member coverage', async () => {
+test('reconciliation merge keeps a source identity with exact member coverage', async () => {
   const setup = fixture();
   const second = addSecondFinding(setup);
   const rows = [setup.row, second];
@@ -288,8 +290,34 @@ test('reconciliation merge creates a new target with exact member coverage', asy
   assert.equal(merged.admission.group_index,0);
   assert.deepEqual(merged.source_issue_ids.slice().sort(),
     result.commands.slice(0, 2).map(command => command.temporary_id).sort());
-  assert.deepEqual(result.registry.issues.find(issue => issue.id === merged.temporary_id).members,
+  assert.ok(merged.source_issue_ids.includes(merged.survivor_issue_id));
+  assert.deepEqual(result.registry.issues.find(issue => issue.id === merged.survivor_issue_id).members,
     rows.map(row => row.id).sort());
+  assert.deepEqual(result.registry.issues.find(issue => issue.id === merged.survivor_issue_id).aliases.sort(),
+    merged.source_issue_ids.filter(id => id !== merged.survivor_issue_id).sort());
+  assert.equal(result.registry.issues.filter(issue => issue.active).length, 1);
+
+  // A completed checkpoint from the previous worker has a newly created
+  // merge target and two inactive sources. Its event is still replayable, so
+  // resuming it must publish the legacy command instead of crashing.
+  const checkpoint = structuredClone(setup.files.get('checkpoint.json'));
+  const event = checkpoint.registry.events.at(-1);
+  assert.equal(event.command.type, 'merge');
+  const oldTarget = {...structuredClone(event.after.issues.find(issue =>
+    issue.id === merged.survivor_issue_id)), id: 'legacy-merge-target', aliases: []};
+  event.after.issues = event.after.issues.map(issue =>
+    merged.source_issue_ids.includes(issue.id) ? {...issue, active: false} : issue);
+  event.after.issues.push(oldTarget);
+  const {hash, ...unsigned} = event;
+  event.hash = digest(unsigned);
+  checkpoint.registry.issues = structuredClone(event.after.issues);
+  await setup.store.save('checkpoint.json', checkpoint);
+  const resumed = await runGrouping({rows, pendingIds: rows.map(row => row.id),
+    features: setup.features, candidateWindow: setup.candidateWindow, store: setup.store,
+    investigate: async () => { throw new Error('completed checkpoint called provider'); }});
+  assert.equal(resumed.status, 'complete');
+  assert.equal(resumed.commands[2].temporary_id, oldTarget.id);
+  assert.ok(!('survivor_issue_id' in resumed.commands[2]));
 });
 
 test('discovery and reconciliation prompts ask for plain-language titles and descriptions', async () => {
@@ -338,6 +366,7 @@ test('reconciliation split retires the source and partitions all current members
   assert.equal(result.commands[0].admissions[0].primary_receipt_id,
     result.commands[0].admissions[1].primary_receipt_id);
   assert.equal(result.registry.issues.find(issue => issue.id === 'issue-existing').active, false);
+  assert.equal(result.registry.issues.filter(issue => issue.active && issue.aliases.includes('issue-existing')).length, 1);
 });
 
 test('a protected issue cannot be split by model review', async () => {
@@ -396,7 +425,8 @@ test('large source counts no longer block a sampled merge',async()=>{
   assert.equal(result.commands.filter(item=>item.type==='merge').length,1);
   const merge=result.commands.find(item=>item.type==='merge');
   assert.equal(merge.reviewed_occurrence_ids.length,2);
-  const target=result.registry.issues.find(item=>item.id===merge.temporary_id);
+  assert.equal(merge.survivor_issue_id,'issue-a');
+  const target=result.registry.issues.find(item=>item.id===merge.survivor_issue_id);
   assert.equal(target.member_count,25);
   assert.equal(target.membership_complete,false);
 });
@@ -468,4 +498,65 @@ test('sampled policy attaches to a reviewed issue without refreshing or changing
   assert.equal(current.mechanism_revision,issue.revision);
   assert.equal(current.title,issue.mechanism.title);
   assert.equal(current.member_count,2);
+});
+
+test('loading ranked prototypes preserves their order without manufacturing a refresh', async () => {
+  const setup = fixture();
+  const ownedRows = Array.from({length: 8}, (_, i) => {
+    const row = addSecondFinding(setup);
+    row.id = `${i + 1}0000000-0000-4000-8000-000000000000`;
+    row.occurrence_id = row.id;
+    row.upstream_finding_id = 'owned-' + i;
+    const feature = structuredClone(setup.features.rows['99999999-9999-4999-8999-999999999999']);
+    const angle = [0, .15, .3, .45, .6, 1, 1.3, 1.5][i];
+    feature.views.semantics.vector = Array.from({length: 384}, (_, d) => d === 0 ? Math.cos(angle) : d === 1 ? Math.sin(angle) : 0);
+    setup.features.rows[row.id] = feature;
+    return row;
+  });
+  const pending = addThirdFinding(setup);
+  const issue = offeredIssue(ownedRows);
+  const index = new ViewIndex(ownedRows, setup.features, F6_MINILM_POLICY);
+  issue.prototype_occurrence_ids = selectPrototypes(ownedRows.map(row => row.id), index, F6_MINILM_POLICY.prototypes);
+  assert.notDeepEqual(issue.prototype_occurrence_ids, [...issue.prototype_occurrence_ids].sort());
+  const result = await runGrouping({rows: [...ownedRows, pending], pendingIds: [pending.id], features: setup.features,
+    candidateWindow: {...setup.candidateWindow, issues: [issue]}, store: setup.store,
+    investigate: withReceipts(async prompt => ({groups: [], deferred: prompt.findings.map(item =>
+      ({finding_id: item.id, reason: 'No supported assignment'}))}))});
+  assert.equal(result.status, 'complete');
+  assert.ok(!result.commands.some(command => command.type === 'refresh'));
+  // Reproduce the previous release's sorted registry and its sealed binding.
+  const checkpoint = await setup.store.read('checkpoint.json');
+  assert.equal(checkpoint.registry.events.length, 0);
+  for (const item of checkpoint.registry.issues) item.prototypes.sort();
+  const preparedRows = addCompanionEvidence([...ownedRows, pending], F6_MINILM_POLICY);
+  const preparedFeatures = structuredClone(setup.features);
+  for (const row of preparedRows) {
+    preparedFeatures.rows[row.id].source_digest = row.source_digest;
+    preparedFeatures.rows[row.id].evidence_revision = row.evidence_revision;
+  }
+  checkpoint.binding = digest({rows: preparedRows, pendingIds: [pending.id], features: preparedFeatures,
+    cannotLinks: [], policy: F6_MINILM_POLICY, pairRelease: null, initialRegistry: checkpoint.registry,
+    inputBinding: {registry_revision: setup.candidateWindow.registry_revision,
+      omitted_candidates: setup.candidateWindow.omitted_candidates}});
+  await setup.store.save('checkpoint.json', checkpoint);
+  const resume = window => runGrouping({rows: [...ownedRows, pending], pendingIds: [pending.id],
+    features: setup.features, candidateWindow: window, store: setup.store,
+    investigate: async () => {throw new Error('Completed checkpoint must not call the model');}});
+  assert.equal((await resume({...setup.candidateWindow, issues: [issue]})).status, 'complete');
+  await assert.rejects(() => resume({...setup.candidateWindow, issues: [issue],
+    registry_revision: setup.candidateWindow.registry_revision + 1}), /Checkpoint input\/policy mismatch/);
+});
+
+test('protected issues retain their examples even when the selector would replace them', async () => {
+  const setup = fixture();
+  const second = addSecondFinding(setup);
+  const pending = addThirdFinding(setup);
+  const issue = offeredIssue([setup.row, second], true);
+  issue.prototype_occurrence_ids = [setup.row.id];
+  const result = await runGrouping({rows: [setup.row, second, pending], pendingIds: [pending.id], features: setup.features,
+    candidateWindow: {...setup.candidateWindow, issues: [issue]}, store: setup.store,
+    investigate: withReceipts(async prompt => ({groups: [], deferred: prompt.findings.map(item =>
+      ({finding_id: item.id, reason: 'No supported assignment'}))}))});
+  assert.equal(result.status, 'complete');
+  assert.ok(!result.commands.some(command => command.type === 'refresh'));
 });

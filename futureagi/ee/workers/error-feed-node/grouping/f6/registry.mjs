@@ -85,17 +85,30 @@ export function commitCommand(registry, command, context) {
         }
       } else assert.deepEqual(unique(command.group.member_ids), represented, 'Merge lost/invented members');
       assert.equal(command.group.target_issue_id, null);
-      const target = newIssue(command.group, command.receipt, 'merge');
+      validateMembers(command.group.member_ids, byId, constraints);
+      const admission = validateReceipt(command.receipt, command.group.member_ids, context, next);
+      assert.equal(digest(command.receipt.group), digest(command.group), 'Issue semantics not bound to evidence receipt');
+      const target = sources.reduce((best, issue) =>
+        (issue.member_count ?? issue.members.length) > (best.member_count ?? best.members.length) ? issue : best);
+      target.title = command.group.title;
+      target.mechanism = command.group.mechanism;
+      target.fix_hypothesis = command.group.fix_hypothesis;
+      target.falsifier = command.group.falsifier;
+      target.prototypes = context.selectPrototypes(command.group.member_ids);
+      target.evidence_state = admission.state;
+      target.admission = admission;
+      target.members = represented;
+      target.mechanism_revision++;
+      target.membership_sequence = next.sequence + 1;
       if (context.policy.sampled_merge_reviews) {
         // The registry carries shown rows, not unseen authoritative members.
         // Publication resolves the complete source union under database locks.
         validateMembers(represented, byId, constraints);
-        target.members = represented;
         target.member_count = sources.reduce((n, item) => n + item.member_count, 0);
         target.membership_complete = target.member_count === target.members.length;
       }
-      target.aliases = unique(sources.flatMap(i => [i.id, ...i.aliases]));
-      sources.forEach(i => { i.active = false; i.mechanism_revision++; });
+      target.aliases = unique(sources.flatMap(i => i.id === target.id ? i.aliases : [i.id, ...i.aliases]));
+      sources.filter(i => i.id !== target.id).forEach(i => { i.active = false; i.mechanism_revision++; });
       break;
     }
     case 'split': {
@@ -103,7 +116,13 @@ export function commitCommand(registry, command, context) {
       assert.ok(command.groups.length >= 2 && command.groups.length === command.receipts.length);
       assert.deepEqual(unique(command.groups.flatMap(g => g.member_ids)), unique(source.members), 'Split lost/invented members');
       assert.equal(command.groups.flatMap(g => g.member_ids).length, source.members.length, 'Split children must partition parent');
-      command.groups.forEach((g, i) => { assert.equal(g.target_issue_id, null); newIssue(g, command.receipts[i], `split-${i}`); });
+      const redirectIndex = command.groups.reduce((best, group, index) =>
+        group.member_ids.length > command.groups[best].member_ids.length ? index : best, 0);
+      command.groups.forEach((g, i) => {
+        assert.equal(g.target_issue_id, null);
+        const child = newIssue(g, command.receipts[i], `split-${i}`);
+        if (i === redirectIndex) child.aliases = unique([source.id, ...source.aliases]);
+      });
       source.active = false; source.mechanism_revision++; break;
     }
     case 'remove': {

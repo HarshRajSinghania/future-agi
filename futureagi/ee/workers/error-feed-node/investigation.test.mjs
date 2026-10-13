@@ -5,8 +5,8 @@ import {mkdtemp, rm, readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {investigateTrace, investigateSimulation, validateAssessment, canonicalDigest, failureDiagnostic} from './investigation.mjs';
-import {storeEvidence} from './evidence-store.mjs';
+import {investigateTrace, investigateSimulation, validateAssessment, canonicalDigest, failureDiagnostic, deriveOutcome} from './investigation.mjs';
+import {storeEvidence, EvidenceReadError} from './evidence-store.mjs';
 
 function makeClaim() {
   return {organization_id: randomUUID(), workspace_id: null, project_id: randomUUID(), trace_id: randomUUID(),
@@ -30,6 +30,7 @@ test('failure diagnostics classify host budget errors without exposing upstream 
     ['Gateway request aborted', 'gateway_request_aborted'],
     ['Gateway transport failed', 'gateway_transport_failed'],
     ['Gateway response could not be processed', 'gateway_response_invalid'],
+    ['ClickHouse evidence read failed', 'clickhouse_read_failed'],
   ]) {
     const result = failureDiagnostic(new Error(message), 'verifier', 'attempt');
     assert.equal(result.reason, code);
@@ -63,12 +64,116 @@ for (const malformed of ['{', '{"action":"finish"}']) {
             {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0.000100'}});
           }}});
       assert.equal(result.execution_status, 'completed');
+      assert.ok(!('error_message' in result));
       assert.equal(result.outcome, 'unknown');
       assert.deepEqual(calls, [{verifier: false, repairing: false},
         {verifier: false, repairing: true}, {verifier: true, repairing: false}]);
       assert.equal(result.usage.model_calls, 3);
     } finally { await rm(scratch, {recursive: true, force: true}); }
   });
+}
+
+test('a trace investigation hands its control client to the evidence read', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-conversation-evidence-test-'));
+  try {
+    const claim = {...makeClaim(), lease_token: 'fixture-lease', evidence_source: 'conversation'};
+    const row = {id: 'call-span', project_id: claim.project_id, trace_id: claim.trace_id, parent_span_id: '',
+      name: 'Call Log', conversation: {turns: []}};
+    const assessment = {outcome: 'unknown', findings: [], requirement_checks: []};
+    const result = await investigateTrace(claim, {scratchRoot: scratch,
+      control: async () => ({rows: [row]}),
+      clickhouse: {baseUrl: 'http://clickhouse:8123', database: 'default', username: 'readonly', password: 'fixture',
+        fetchImpl: async () => assert.fail('the stored span must not be read')},
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async (_url, init) => {
+          const system = JSON.parse(init.body).messages.find(message => message.role === 'system').content;
+          const content = JSON.stringify(system.includes('Independently check') ? assessment
+            : {action: 'finish', question: '', child_instructions: '', assessment});
+          return new Response(JSON.stringify({choices: [{message: {role: 'assistant', content},
+            finish_reason: 'stop'}], usage: {prompt_tokens: 10, completion_tokens: 10}}),
+          {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0.000100'}});
+        }}});
+    assert.equal(result.execution_status, 'completed');
+    assert.equal(result.coverage.observed_span_count, 1);
+  } finally { await rm(scratch, {recursive: true, force: true}); }
+});
+
+test('an attempt the backend no longer holds as active ends before any stored-span read or model call', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-conversation-evidence-test-'));
+  try {
+    const claim = {...makeClaim(), lease_token: 'fixture-lease', evidence_source: 'conversation'};
+    let reads = 0, modelCalls = 0;
+    const result = await investigateTrace(claim, {scratchRoot: scratch,
+      control: async () => { throw Object.assign(new Error('Control request failed'), {status: 409}); },
+      clickhouse: {baseUrl: 'http://clickhouse:8123', database: 'default', username: 'readonly', password: 'fixture',
+        fetchImpl: async () => {
+          reads++;
+          return new Response(JSON.stringify({id: 'stored-span', project_id: claim.project_id,
+            trace_id: claim.trace_id, parent_span_id: ''}) + '\n');
+        }},
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async () => { modelCalls++; throw new TypeError('fetch failed'); }}});
+    assert.deepEqual([reads, modelCalls, result.usage.model_calls], [0, 0, 0]);
+    assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'attempt_inactive');
+  } finally { await rm(scratch, {recursive: true, force: true}); }
+});
+
+for (const [name, broken, fixed = {}] of [
+  ['a recovery outside the allowed values', {recovery: 'Halted and delivered the full message before the caller hung up'}],
+  ['a kind longer than its declared bound', {kind: 'k'.repeat(65)}],
+  // The backend counts characters. The repair is 64 of them, which is 65 UTF-16 units.
+  ['a kind one emoji over its declared bound', {kind: 'k'.repeat(64) + '👋'}, {kind: 'k'.repeat(63) + '👋'}]]) {
+  for (const repaired of [true, false]) {
+    test(`${name} is ${repaired ? 'repaired once' : 'a failed investigation when the repair breaks it too'}`, async () => {
+      const scratch = await mkdtemp(join(tmpdir(), 'omega-output-bounds-test-'));
+      try {
+        const claim = makeClaim();
+        const row = {id: '1234567890abcdef', project_id: claim.project_id, trace_id: claim.trace_id,
+          parent_span_id: '', name: 'refund', input: 'Refund exactly 10', output: 'Refunded 5'};
+        const raw = JSON.stringify(row);
+        const evidenceId = `${row.id}:0:${Buffer.byteLength(raw)}`;
+        const unknownRole = {status: 'unknown', span_id: null, evidence_ids: []};
+        const assessment = overrides => ({outcome: 'failure', requirement_checks: [{requirement_id: 'refund-amount',
+          requirement: 'Refund 10', status: 'violated', evidence_ids: [evidenceId]}],
+        findings: [{finding_id: 'f1', kind: 'incorrect refund amount', statement: 'Only 5 refunded instead of 10',
+          requirement_id: 'refund-amount', recovery: 'unrecovered', evidence_ids: [evidenceId],
+          attribution: {origin: {status: 'supported', span_id: row.id, evidence_ids: [evidenceId],
+            explanation: 'The refund span records 5 refunded against the request for 10.'},
+          decisive: unknownRole, symptom: unknownRole}, ...overrides}]});
+        let verdicts = 0;
+        const result = await investigateTrace(claim, {scratchRoot: scratch,
+          fetchEvidence: async (c, path) => storeEvidence([Buffer.from(raw + '\n')], path, c),
+          gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+            fetchImpl: async (_url, init) => {
+              const request = JSON.parse(init.body);
+              const system = request.messages.find(message => message.role === 'system').content;
+              assert.match(system, /Set recovery to "recovered" when a later recorded step corrected the mistake/);
+              let message;
+              if (!request.messages.some(item => item.role === 'tool')) message = {role: 'assistant', content: '',
+                tool_calls: [{id: 'read', type: 'function', function: {name: 'read_span',
+                  arguments: JSON.stringify({span_id: row.id, offset: 0, length: 4096})}}]};
+              else if (!system.includes('Independently check')) message = {role: 'assistant', content: JSON.stringify(
+                {action: 'finish', question: '', child_instructions: '', assessment: assessment({})})};
+              else message = {role: 'assistant', content: JSON.stringify(
+                assessment(verdicts++ === 0 || !repaired ? broken : fixed))};
+              return new Response(JSON.stringify({choices: [{message}], usage: {prompt_tokens: 10, completion_tokens: 5}}),
+                {headers: {'Content-Type': 'application/json', 'x-agentcc-cost': '0'}});
+            }}});
+        // The first verdict breaks the schema; exactly one repair follows.
+        assert.equal(verdicts, 2);
+        if (repaired) {
+          assert.equal(result.execution_status, 'completed');
+          assert.deepEqual(result.findings.map(item => [item.kind, item.recovery]),
+            [[fixed.kind ?? 'incorrect refund amount', 'unrecovered']]);
+        } else {
+          // A report Django would reject never leaves the worker as a completed one.
+          assert.equal(result.execution_status, 'failed');
+          assert.deepEqual(result.findings, []);
+        }
+      } finally { await rm(scratch, {recursive: true, force: true}); }
+    });
+  }
 }
 
 test('controller and verifier ask for plain-language finding statements', async () => {
@@ -94,6 +199,12 @@ test('controller and verifier ask for plain-language finding statements', async 
     assert.equal(result.execution_status, 'completed');
     assert.equal(systems.length, 2);
     for (const system of systems) {
+      assert.match(system, /A goal that this situation made impossible to meet or to break is not a requirement of this trace/);
+      assert.doesNotMatch(system, /whose stage the call never reached/);
+      assert.match(system, /Obligations toward whoever or whatever did respond still apply/);
+      // Conduct no requirement covers is still reported, as a finding with no requirement.
+      assert.match(system, /Meeting its requirements does not settle how the agent did/);
+      assert.match(system, /Conduct that failed them or wasted the interaction is a finding even when no requirement covers it: report it with requirement_id null\./);
       assert.match(system, /finding statement in plain words for a product reader/);
       assert.match(system, /short sentences of at most 25 words, one idea each, in active voice/);
       assert.match(system, /Never stack more than three nouns in a row/);
@@ -112,9 +223,30 @@ test('upstream HTTP status is retained in a failed investigation receipt', async
       gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
         fetchImpl: async () => new Response('private upstream body', {status: 503})}});
     assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'gateway_upstream_error:http_503');
     assert.equal(result.gateway_accounting.length, 1);
     assert.equal(result.gateway_accounting[0].raw.http_status, 503);
     assert.ok(!JSON.stringify(result).includes('private upstream body'));
+  } finally { await rm(scratch, {recursive: true, force: true}); }
+});
+
+test('a failed evidence read publishes its reason and ClickHouse code inside the signed report', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-evidence-failure-test-'));
+  try {
+    const result = await investigateTrace(makeClaim(), {scratchRoot: scratch,
+      fetchEvidence: async () => { throw new EvidenceReadError(241); },
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async () => assert.fail('no model call may follow a failed evidence read')}});
+    assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'clickhouse_read_failed:code_241');
+    assert.equal(result.usage.model_calls, 0);
+    assert.equal(result.coverage.observed_span_count, 0);
+    const {result_digest: digest, ...signed} = result;
+    assert.equal(digest, canonicalDigest(signed));
+    assert.equal((await investigateTrace(makeClaim(), {scratchRoot: scratch,
+      fetchEvidence: async () => { throw new EvidenceReadError(null); },
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture'}})).error_message,
+    'clickhouse_read_failed');
   } finally { await rm(scratch, {recursive: true, force: true}); }
 });
 
@@ -141,6 +273,7 @@ test('verifier call-budget exhaustion without an assessment remains a technical 
           {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0.000100'}});
         }}});
     assert.equal(result.execution_status, 'failed');
+    assert.equal(result.error_message, 'call_budget_exhausted');
     assert.equal(result.outcome, 'unknown');
     assert.equal(result.usage.model_calls, 4);
   } finally { await rm(scratch, {recursive: true, force: true}); }
@@ -322,7 +455,7 @@ test('real Omega controller, child, return and verifier use file tools and prese
     const assessment = {outcome: 'failure', requirement_checks: [{requirement_id: 'refund-amount',
       requirement: 'Refund 10', status: 'violated', evidence_ids: [evidenceId]}],
       findings: [{finding_id: 'f1', kind: 'incorrect refund amount', statement: 'Only 5 refunded instead of 10',
-        requirement_id: 'refund-amount', recovery: 'not_recovered', evidence_ids: [evidenceId],
+        requirement_id: 'refund-amount', recovery: 'unrecovered', evidence_ids: [evidenceId],
         attribution: {origin: {status: 'supported', span_id: row.id, evidence_ids: [evidenceId],
           explanation: 'The refund span records 5 refunded against the request for 10, making it the first observed mismatch.'},
         decisive: unknownRole, symptom: unknownRole}}]};
@@ -403,6 +536,20 @@ test('Node report digest matches the Django wire fixture', () => {
   'sha256:c0c2d86a98393d4a34d1ec1f7aabff4b5c134d06c7fb568185f607bbb91e09c8');
 });
 
+test('a failed simulation report carries no failure code', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-simulation-investigation-test-'));
+  try {
+    const claim = {...makeClaim(), workload_type: 'simulation_test_execution',
+      contract_version: 'omega-simulation/v1', test_execution_id: randomUUID(), lease_token: 'fixture-lease'};
+    const result = await investigateSimulation(claim, {scratchRoot: scratch,
+      control: async () => { throw new Error('control plane unavailable'); },
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async () => assert.fail('no model call may follow a failed evidence read')}});
+    assert.equal(result.execution_status, 'failed');
+    assert.ok(!('error_message' in result));
+  } finally { await rm(scratch, {recursive: true, force: true}); }
+});
+
 test('simulation investigation reads call evidence and returns a scoped report', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'omega-simulation-investigation-test-'));
   try {
@@ -432,6 +579,13 @@ test('simulation investigation reads call evidence and returns a scoped report',
           systems.push(system);
           const verifier = system.includes('Independently check');
           const toolMessage = request.messages.find(message => message.role === 'tool');
+          if (!verifier && !toolMessage) {
+            // The trace-only changes leave a simulation stage input and its tools as they were.
+            assert.equal(JSON.parse(request.messages.find(message => message.role === 'user').content)
+              .coverage.read_complete, false);
+            assert.deepEqual(request.tools.map(item => item.function.name),
+              ['list_simulation_calls', 'read_simulation_call']);
+          }
           const message = !toolMessage
             ? {role: 'assistant', content: '', tool_calls: [{id: 'read-call', type: 'function',
               function: {name: 'read_simulation_call', arguments: JSON.stringify({
@@ -450,11 +604,70 @@ test('simulation investigation reads call evidence and returns a scoped report',
       body: {lease_token: claim.lease_token, cursor: 0}}]);
     assert.ok(systems.length > 0);
     for (const system of systems) {
+      assert.doesNotMatch(system, /impossible to meet or to break/);
+      assert.doesNotMatch(system, /Conduct that failed them or wasted the interaction/);
+      // A sub-goal the call never reached is left out, so it cannot leave the call without a verdict.
+      assert.match(system, /check each one the call put to the test/);
+      assert.match(system, /A sub-goal whose stage the call never reached, or whose trigger never occurred, could be neither met nor broken: it is not a requirement of this call, so do not list it\./);
+      assert.match(system, /Obligations toward the caller in the situation that did occur still apply/);
       assert.match(system, /finding statement in plain words for a product reader/);
       assert.match(system, /short sentences of at most 25 words, one idea each, in active voice/);
       assert.match(system, /Never stack more than three nouns in a row/);
     }
   } finally {
+    await rm(scratch, {recursive: true, force: true});
+  }
+});
+
+test('a simulation failure claimed without a violated sub-goal publishes what its checks support', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-simulation-investigation-test-'));
+  const events = [];
+  const write = process.stderr.write;
+  process.stderr.write = chunk => {
+    try { events.push(JSON.parse(chunk)); } catch { /* not a worker event */ }
+    return true;
+  };
+  try {
+    const claim = {...makeClaim(), workload_type: 'simulation_test_execution',
+      contract_version: 'omega-simulation/v1', test_execution_id: randomUUID(), lease_token: 'fixture-lease'};
+    const row = {call_execution_id: randomUUID(), status: 'completed',
+      simulation_call_type: 'conversation', scenario: 'Ask for help',
+      call_summary: 'Agent answered', error_message: null, ended_reason: null,
+      transcript: [{id: randomUUID(), speaker: 'assistant', content: 'How can I help?', start_time: 1, end_time: 2}],
+      goals: {use_case: 'Get help', sub_goals: ['greeting'], expected_outcome: 'The agent greets the caller'}};
+    const evidenceId = `${row.call_execution_id}:0:${Buffer.byteLength(JSON.stringify(row))}`;
+    const unknownRole = {status: 'unknown', call_execution_id: null, evidence_ids: []};
+    // The verifier saw the call go wrong for a reason no authored sub-goal covers.
+    const assessment = {outcome: 'failure',
+      findings: [{finding_id: 'f1', kind: 'caller_left_waiting', statement: 'The agent left the caller waiting.',
+        requirement_id: null, evidence_ids: [evidenceId], recovery: 'unrecovered',
+        attribution: {origin: unknownRole, decisive: unknownRole, symptom: unknownRole}}],
+      requirement_checks: [{requirement_id: 'greeting', requirement: 'Agent greets the caller', status: 'satisfied',
+        evidence_ids: [evidenceId]}]};
+    const result = await investigateSimulation(claim, {scratchRoot: scratch,
+      control: async () => ({calls: [row], next_cursor: 1, total_calls: 1}),
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async (_url, init) => {
+          const request = JSON.parse(init.body);
+          const verifier = request.messages.find(m => m.role === 'system').content.includes('Independently check');
+          const message = !request.messages.some(m => m.role === 'tool')
+            ? {role: 'assistant', content: '', tool_calls: [{id: 'read-call', type: 'function',
+              function: {name: 'read_simulation_call', arguments: JSON.stringify({
+                call_execution_id: row.call_execution_id, offset: 0, length: 4096})}}]}
+            : {role: 'assistant', content: JSON.stringify(verifier ? assessment
+              : {action: 'finish', question: '', child_instructions: '', assessment})};
+          return new Response(JSON.stringify({choices: [{message}], usage: {prompt_tokens: 10, completion_tokens: 5}}),
+            {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0'}});
+        }}});
+    // This answer used to end the attempt with no report, and the call showed as not analysed.
+    assert.equal(result.execution_status, 'completed');
+    assert.equal(result.outcome, 'success');
+    assert.deepEqual(result.findings.map(item => [item.finding_id, item.requirement_id, item.recovery]),
+      [['f1', null, 'unrecovered']]);
+    assert.deepEqual(events.filter(event => event.event === 'omega_outcome_derived'), [{event: 'omega_outcome_derived',
+      attempt_id: claim.attempt_id, phase: 'verifier', model_outcome: 'failure', derived_outcome: 'success'}]);
+  } finally {
+    process.stderr.write = write;
     await rm(scratch, {recursive: true, force: true});
   }
 });
@@ -479,7 +692,7 @@ test('unresolved external payloads preserve findings supported by inline evidenc
     (evidenceId, spanId) => ({outcome: 'failure', requirement_checks: [{requirement_id: 'refund',
       requirement: 'Refund 10', status: 'violated', evidence_ids: [evidenceId]}],
     findings: [{finding_id: 'f1', kind: 'incorrect refund amount', statement: 'Only 5 was refunded',
-      requirement_id: 'refund', evidence_ids: [evidenceId], recovery: 'not_recovered',
+      requirement_id: 'refund', evidence_ids: [evidenceId], recovery: 'unrecovered',
       attribution: {origin: {status: 'supported', span_id: spanId, evidence_ids: [evidenceId]},
         decisive: unknownRole, symptom: unknownRole}}]}));
 
@@ -571,6 +784,102 @@ test('verifier rechecks an unread child after an unsupported success', async () 
   } finally { await rm(scratch, {recursive: true, force: true}); }
 });
 
+test('the requirement checks decide the outcome', () => {
+  const checks = (...statuses) => ({requirement_checks: statuses.map(status => ({status}))});
+  const complete = {read_complete: true};
+  assert.equal(deriveOutcome(checks('satisfied', 'violated'), complete), 'failure');
+  assert.equal(deriveOutcome(checks('violated'), {read_complete: false}), 'failure');
+  assert.equal(deriveOutcome(checks('satisfied', 'satisfied'), complete), 'success');
+  assert.equal(deriveOutcome(checks('satisfied', 'unknown'), complete), 'unknown');
+  assert.equal(deriveOutcome(checks(), complete), 'unknown');
+  assert.equal(deriveOutcome(checks('satisfied'), {read_complete: false}), 'unknown');
+});
+
+// A clean trace: the controller reads the first span once, then both stages answer.
+async function investigateCleanTrace(verifierAnswer, {extraSpans = 0} = {}) {
+  const scratch = await mkdtemp(join(tmpdir(), 'omega-verdict-test-'));
+  const requests = [], events = [];
+  const write = process.stderr.write;
+  process.stderr.write = chunk => {
+    try { events.push(JSON.parse(chunk)); } catch { /* not a worker event */ }
+    return true;
+  };
+  try {
+    const claim = makeClaim();
+    const row = {id: 'first-span', project_id: claim.project_id, trace_id: claim.trace_id,
+      parent_span_id: '', input: 'Refund 10', output: 'Refunded 10'};
+    const raw = JSON.stringify(row);
+    const rows = [raw, ...Array.from({length: extraSpans}, (_, index) => JSON.stringify(
+      {...row, id: 'later-span-' + index, parent_span_id: row.id}))].join('\n') + '\n';
+    const answer = verifierAnswer(`${row.id}:0:${Buffer.byteLength(raw)}`);
+    const result = await investigateTrace(claim, {scratchRoot: scratch,
+      fetchEvidence: async (c, path) => storeEvidence([Buffer.from(rows)], path, c),
+      gatewayConfig: {baseUrl: 'http://fixture/v1', model: 'fixture', apiKey: 'fixture',
+        fetchImpl: async (_url, init) => {
+          const request = JSON.parse(init.body);
+          const verifier = request.messages.find(m => m.role === 'system').content.includes('Independently check');
+          requests.push({verifier, tools: (request.tools ?? []).map(item => item.function.name),
+            input: JSON.parse(request.messages.find(m => m.role === 'user').content)});
+          const message = !verifier && !request.messages.some(m => m.role === 'tool')
+            ? {role: 'assistant', content: '', tool_calls: [{id: 'read-first', type: 'function',
+              function: {name: 'read_span', arguments: JSON.stringify({span_id: row.id, offset: 0, length: 4096})}}]}
+            : {role: 'assistant', content: JSON.stringify(verifier ? answer
+              : {action: 'finish', question: '', child_instructions: '', assessment: answer})};
+          return new Response(JSON.stringify({choices: [{message}], usage: {prompt_tokens: 10, completion_tokens: 5}}),
+            {headers: {'content-type': 'application/json', 'x-agentcc-cost': '0'}});
+        }}});
+    return {result, requests, events, claim};
+  } finally {
+    process.stderr.write = write;
+    await rm(scratch, {recursive: true, force: true});
+  }
+}
+
+const refundCheck = (status, evidenceIds) => ({requirement_id: 'refund', requirement: 'Refund 10', status,
+  evidence_ids: evidenceIds});
+
+test('a fully read trace with every check satisfied is a success whatever outcome the verifier chose', async () => {
+  const {result, events, claim} = await investigateCleanTrace(evidenceId => ({outcome: 'unknown', findings: [],
+    requirement_checks: [refundCheck('satisfied', [evidenceId])]}));
+  assert.equal(result.execution_status, 'completed');
+  assert.equal(result.outcome, 'success');
+  assert.deepEqual(events.filter(event => event.event === 'omega_outcome_derived'), [{event: 'omega_outcome_derived',
+    attempt_id: claim.attempt_id, phase: 'verifier', model_outcome: 'unknown', derived_outcome: 'success'}]);
+});
+
+test('a failure claimed without a violated requirement publishes what its checks support', async () => {
+  const {result, events} = await investigateCleanTrace(evidenceId => ({outcome: 'failure', findings: [],
+    requirement_checks: [refundCheck('satisfied', [evidenceId]),
+      {requirement_id: 'receipt', requirement: 'Send a receipt', status: 'unknown', evidence_ids: []}]}));
+  // This answer used to end the attempt with missing_violated_requirement and no report.
+  assert.equal(result.execution_status, 'completed');
+  assert.ok(!('error_message' in result));
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(events.filter(event => event.event === 'omega_outcome_derived')[0].model_outcome, 'failure');
+});
+
+test('a stage is not told the evidence is unread before it has read it', async () => {
+  const {requests} = await investigateCleanTrace(() => ({outcome: 'unknown', findings: [], requirement_checks: []}));
+  const controller = requests.find(request => !request.verifier).input;
+  assert.ok(!('read_complete' in controller.coverage));
+  assert.equal(controller.coverage.observed_span_count, 1);
+  assert.equal(requests.find(request => request.verifier).input.coverage.read_complete, true);
+});
+
+test('a trace inventory of one page replaces the list tool', async () => {
+  const answer = () => ({outcome: 'unknown', findings: [], requirement_checks: []});
+  for (const request of (await investigateCleanTrace(answer)).requests) {
+    assert.deepEqual(request.tools, ['read_span']);
+    assert.deepEqual(request.input.available_capabilities, ['read_span']);
+  }
+  const paged = (await investigateCleanTrace(answer, {extraSpans: 20})).requests;
+  assert.equal(paged[0].input.inventory.more, true);
+  for (const request of paged) {
+    assert.deepEqual(request.tools, ['list_spans', 'read_span']);
+    assert.deepEqual(request.input.available_capabilities, ['list_spans', 'read_span']);
+  }
+});
+
 test('an audio-grounded finding survives the verifier and publishes its audio receipt', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'omega-audio-evidence-test-'));
   try {
@@ -639,6 +948,7 @@ test('an audio-grounded finding survives the verifier and publishes its audio re
     assert.match(verifierSystem, /must cite evidence IDs returned by read_span or inspect_audio\./);
     assert.match(verifierSystem, /an audio receipt supports what the audio model heard even when no span text contains it/);
     assert.doesNotMatch(verifierSystem, /returned by read_span\. /);
+    assert.match(verifierSystem, /A goal that this situation made impossible to meet or to break is not a requirement of this trace/);
   } finally {await rm(scratch, {recursive: true, force: true});}
 });
 

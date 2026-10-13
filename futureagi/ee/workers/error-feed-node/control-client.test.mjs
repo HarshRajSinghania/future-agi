@@ -9,7 +9,7 @@ test('control routes include simulation evidence without widening unrelated inve
     calls.push({url:String(url),init});return Response.json({ok:true});
   }});
   for(const path of ['/notifications/','/claims/','/reports/',`/attempts/${id}/`,
-    `/attempts/${id}/simulation-evidence/`,
+    `/attempts/${id}/simulation-evidence/`,`/attempts/${id}/conversation-evidence/`,
     '/grouping/feature-claims/','/grouping/claims/',`/grouping/feature-attempts/${id}/complete/`,
     '/grouping/severity/claims/',`/grouping/severity/attempts/${id}/`,
     ...['reserve','settle','publish'].map(part=>`/grouping/severity/attempts/${id}/${part}/`),
@@ -84,4 +84,16 @@ test('network and cancelled requests retain safe diagnostics',async()=>{
       return true;
     });
   }
+});
+
+test('disconnect after successful response headers remains a network failure',async()=>{
+  const failure=new Error('private response transport failure');
+  const client=createControlClient({baseUrl:'http://django',token:'private-token',
+    fetchImpl:async()=>new Response(new ReadableStream({start(controller){controller.error(failure);}}))});
+  await assert.rejects(()=>client('/grouping/claims/',{}),error=>{
+    assert.equal(error,failure);
+    assert.equal(controlFailureDetails(error).failure_code,'control_network_error');
+    assert.doesNotMatch(JSON.stringify(controlFailureDetails(error)),/private/);
+    return true;
+  });
 });
