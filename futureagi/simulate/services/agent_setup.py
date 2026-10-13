@@ -53,7 +53,7 @@ def agent_summary(
 def stored_agent(
     agent_version_id: UUID,
     *,
-    with_extension: bool = False,
+    with_raw_setup: bool = False,
     include_stale: bool = False,
 ) -> dict | None:
     raise NotImplementedError("stored_agent is not implemented yet")
