@@ -39,6 +39,9 @@ class RunJsonObjectField(RunJsonValueField):
 
 
 class ExternalRunIdentitySerializer(StrictInputSerializer):
+    class Meta:
+        swagger_schema_fields = {"additionalProperties": False}
+
     example_id = serializers.UUIDField()
     trial_number = serializers.IntegerField(
         default=1, min_value=1, max_value=2147483647
@@ -46,10 +49,13 @@ class ExternalRunIdentitySerializer(StrictInputSerializer):
 
 
 class ExternalRunCreateRequestSerializer(StrictInputSerializer):
+    class Meta:
+        swagger_schema_fields = {"additionalProperties": False}
+
     run_id = serializers.UUIDField()
     dataset_version_id = serializers.UUIDField()
-    expected_items = ExternalRunIdentitySerializer(
-        many=True, allow_empty=False, max_length=10000
+    expected_items = serializers.ListField(
+        child=ExternalRunIdentitySerializer(), min_length=1, max_length=10000
     )
     evaluator_metric_ids = serializers.ListField(
         child=serializers.UUIDField(), max_length=100, default=list
@@ -117,6 +123,9 @@ class ExternalRunCreateResponseSerializer(serializers.Serializer):
 
 
 class ExternalRunScoreSerializer(StrictInputSerializer):
+    class Meta:
+        swagger_schema_fields = {"additionalProperties": False}
+
     metric_id = serializers.UUIDField()
     evaluator_version_id = serializers.UUIDField()
     status = serializers.ChoiceField(
@@ -157,8 +166,8 @@ class ExternalRunResultSerializer(ExternalRunIdentitySerializer):
     )
     token_usage = RunJsonValueField(required=False, allow_null=True, default=None)
     cost = FiniteScoreField(required=False, allow_null=True, min_value=0, default=None)
-    score_refs = ExternalRunScoreSerializer(
-        many=True, required=False, default=list, max_length=100
+    score_refs = serializers.ListField(
+        child=ExternalRunScoreSerializer(), required=False, default=list, max_length=100
     )
 
     def validate(self, attrs):
@@ -176,18 +185,31 @@ class ExternalRunResultSerializer(ExternalRunIdentitySerializer):
 
 
 class ExternalRunResultsRequestSerializer(StrictInputSerializer):
+    class Meta:
+        swagger_schema_fields = {"additionalProperties": False}
+
     def to_internal_value(self, data):
         try:
             encoded = _canonical(data)
         except RunWriteError as exc:
-            raise serializers.ValidationError(str(exc)) from exc
+            raise serializers.ValidationError({"non_field_errors": [str(exc)]}) from exc
         if len(encoded.encode("utf-8")) > 2097152:
             raise serializers.ValidationError(
-                "Result batch must not exceed 2097152 bytes."
+                {"non_field_errors": ["Result batch must not exceed 2097152 bytes."]}
             )
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            if any(
+                len(_canonical(item).encode("utf-8")) > 1048576
+                for item in data["items"]
+            ):
+                raise serializers.ValidationError(
+                    {"items": ["Result item must not exceed 1048576 bytes."]}
+                )
         return super().to_internal_value(data)
 
-    items = ExternalRunResultSerializer(many=True, allow_empty=False, max_length=100)
+    items = serializers.ListField(
+        child=ExternalRunResultSerializer(), min_length=1, max_length=100
+    )
 
     def validate_items(self, items):
         identities = [(item["example_id"], item["trial_number"]) for item in items]

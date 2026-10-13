@@ -726,3 +726,45 @@ def test_deleted_and_competing_running_claims_are_not_overwritten(
     )
     assert deleted.status_code == 409
     assert "explicit recovery" in str(deleted.json())
+
+
+def test_external_result_body_parser_enforces_inclusive_raw_bound():
+    import io
+
+    from rest_framework.exceptions import ParseError
+
+    from model_hub.views.experiment_run_api import ExternalRunResultsJSONParser
+
+    parser = ExternalRunResultsJSONParser()
+    prefix = b'{"items":[]}'
+    exact = prefix + b" " * (parser.max_body_bytes - len(prefix))
+    assert parser.parse(io.BytesIO(exact)) == {"items": []}
+    with pytest.raises(ParseError, match="at most 2097152 bytes"):
+        parser.parse(io.BytesIO(exact + b" "))
+
+
+def test_oversized_individual_result_is_a_request_validation_error():
+    from model_hub.serializers.experiment_run_api import (
+        ExternalRunResultsRequestSerializer,
+    )
+
+    ref = {
+        "metric_id": str(uuid.uuid4()),
+        "evaluator_version_id": str(uuid.uuid4()),
+        "status": "unknown",
+        "explanation": "x" * 16000,
+    }
+    serializer = ExternalRunResultsRequestSerializer(
+        data={
+            "items": [
+                {
+                    "example_id": str(uuid.uuid4()),
+                    "receipt_key": "oversize",
+                    "status": "completed",
+                    "score_refs": [ref] * 70,
+                }
+            ]
+        }
+    )
+    assert not serializer.is_valid()
+    assert "1048576 bytes" in str(serializer.errors)

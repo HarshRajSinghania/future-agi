@@ -26,6 +26,7 @@ from model_hub.services.experiment_run_ingestion import (
     ingest_external_run_results,
 )
 from model_hub.services.experiment_run_writes import _RUN_KEY, RunWriteError
+from model_hub.utils.json_parser import BoundedJSONParser
 from model_hub.utils.workspace_scope import scoped_dataset_queryset
 from tfc.routers import primary_required
 from tfc.utils.api_contracts import validated_request
@@ -72,6 +73,7 @@ def _conflict(exc: RunWriteError) -> Response:
 
 class ExternalRunCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [BoundedJSONParser]
 
     @validated_request(
         request_serializer=ExternalRunCreateRequestSerializer,
@@ -81,7 +83,7 @@ class ExternalRunCreateView(APIView):
         },
         reject_unknown_fields=True,
         operation_id="external_experiment_runs_create",
-        operation_description="Create or replay a pinned external-task run. Both first creation and identical UUID replay return 200; no task is executed. Tenant, workspace and actor come from authentication. Configuration and code revision metadata are caller-supplied provenance, not executable-code attestation.",
+        operation_description="Create or replay a pinned external-task run. Both first creation and identical UUID replay return 200; no task is executed. Tenant, workspace and actor come from authentication. Creation body is limited to 10485760 bytes; JSON config/metadata fields to 262144 bytes. Configuration and code revision metadata are caller-supplied provenance, not executable-code attestation.",
     )
     @primary_required
     def post(self, request: Request) -> Response:
@@ -132,8 +134,13 @@ class ExternalRunCreateView(APIView):
         return _gm.success_response(ExternalRunHeaderSerializer(_header(run)).data)
 
 
+class ExternalRunResultsJSONParser(BoundedJSONParser):
+    max_body_bytes = 2 * 1024 * 1024
+
+
 class ExternalRunResultsView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [ExternalRunResultsJSONParser]
 
     @validated_request(
         request_serializer=ExternalRunResultsRequestSerializer,
@@ -143,7 +150,7 @@ class ExternalRunResultsView(APIView):
         },
         reject_unknown_fields=True,
         operation_id="external_experiment_run_results_ingest",
-        operation_description="Atomically ingest 1–100 caller-executed results for a pinned external run. Identical receipt/payload replay is a no-op, including after completion. Conflicts roll back the whole batch. Finalization is derived only when every planned identity is terminal. This endpoint does not execute tasks or attest trace/evaluator provenance.",
+        operation_description="Atomically ingest 1–100 caller-executed results for a pinned external run. Identical receipt/payload replay is a no-op, including after completion. Conflicts roll back the whole batch. Finalization is derived only when every planned identity is terminal. Body is limited to 2097152 bytes, each item to 1048576 bytes and each output/error/usage JSON field to 262144 bytes. This endpoint does not execute tasks or attest trace/evaluator provenance.",
     )
     @primary_required
     def post(self, request: Request, run_id: UUID) -> Response:
