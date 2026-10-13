@@ -511,3 +511,128 @@ def test_selected_metric_must_be_unambiguously_pinned(comparison_fixture, change
             metric_id=metric_id,
             **scope,
         )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_snapshot_header_task_evaluator_and_persisted_comparison_flow(
+    comparison_fixture, user, organization, workspace
+):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from model_hub.models.evals_metric import (
+        EvalTemplate,
+        EvalTemplateVersion,
+        UserEvalMetric,
+    )
+    from model_hub.services.dataset_version_service import (
+        DatasetVersionItemInput,
+        create_dataset_version,
+    )
+    from model_hub.services.experiment_run_creation import create_experiment_run
+    from model_hub.services.python_task_adapter import (
+        EvaluatorResult,
+        run_python_experiment,
+    )
+
+    dataset, _, _, _, _, _, _, scope = comparison_fixture
+    example_ids = [uuid.uuid4(), uuid.uuid4()]
+    version = create_dataset_version(
+        dataset=dataset,
+        created_by=user,
+        items=[
+            DatasetVersionItemInput(
+                example_id=example_id,
+                input={"case": index},
+                expected={"answer": "correct"},
+            )
+            for index, example_id in enumerate(example_ids)
+        ],
+    )
+    template = EvalTemplate.objects.create(
+        name="comparison-flow-evaluator",
+        organization=organization,
+        workspace=workspace,
+        owner="user",
+        eval_type="code",
+    )
+    evaluator_version = EvalTemplateVersion.objects.create(
+        eval_template=template,
+        version_number=1,
+        is_default=True,
+        organization=organization,
+        workspace=workspace,
+        config_snapshot={"expected_key": "answer"},
+    )
+    metric = UserEvalMetric.objects.create(
+        name="answer-match",
+        organization=organization,
+        workspace=workspace,
+        template=template,
+        dataset=dataset,
+        user=user,
+    )
+    baseline, candidate = [
+        create_experiment_run(
+            run_id=uuid.uuid4(),
+            dataset_version=version,
+            created_by=user,
+            task_kind="external",
+            expected_items=[(example_id, 1) for example_id in example_ids],
+            evaluator_metrics=[metric],
+        )
+        for _ in range(2)
+    ]
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("persisted-comparison-flow")
+
+    def evaluator(output, context):
+        assert context.evaluator_version_id == evaluator_version.id
+        assert context.snapshot["config_snapshot"]["expected_key"] == "answer"
+        return EvaluatorResult(
+            status="assessed", value=float(output == context.expected)
+        )
+
+    def task(value, context):
+        with context.tracer.start_as_current_span("retrieval"):
+            with context.tracer.start_as_current_span("tool"):
+                correct = value["case"] == (0 if context.run_id == baseline.id else 1)
+                return {"answer": "correct" if correct else "incorrect"}
+
+    for run in (baseline, candidate):
+        completed = run_python_experiment(
+            run_id=run.id,
+            task=task,
+            evaluators={metric.id: evaluator},
+            tracer=tracer,
+            **scope,
+        )
+        assert completed.status == "completed"
+    result = compare_experiment_runs(
+        baseline_run_id=baseline.id,
+        candidate_run_id=candidate.id,
+        metric_id=metric.id,
+        passing_score=0.5,
+        **scope,
+    )
+    by_id = {case.example_id: case for case in result.comparison.cases}
+    assert by_id[str(example_ids[0])].status == "regressed"
+    assert by_id[str(example_ids[1])].status == "improved"
+    assert (
+        result.baseline_counts == result.candidate_counts == RunCounts(2, 2, 0, 2, 0, 2)
+    )
+    assert result.missing_by_side == {"baseline": (), "candidate": ()}
+    roots = {
+        f"{span.context.trace_id:032x}": f"{span.context.span_id:016x}"
+        for span in exporter.get_finished_spans()
+        if span.name == "futureagi.experiment.python_task"
+    }
+    assert len(roots) == 4
+    for refs in result.trace_refs:
+        assert roots[refs.baseline.trace_id] == refs.baseline.root_span_id
+        assert roots[refs.candidate.trace_id] == refs.candidate.root_span_id
