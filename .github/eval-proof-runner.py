@@ -280,7 +280,8 @@ def validate_report(report, returncode, e2e, relative, title, case=None):
     error = result.get('error') or {}
     message = no_ansi(error.get('message', ''))
     # Never accept a marker found only in a nearby source code frame or stack.
-    require(message.split('\n', 1)[0] == case['marker'], 'raw assertion message does not start with the proof marker')
+    require(message.split('\n', 1)[0].removeprefix('Error: ') == case['marker'],
+            'raw assertion message does not start with the proof marker')
     require('expect(received).' + case['matcher'] + '(expected)' in message, 'wrong assertion matcher')
     require('Expected' in message and 'Received' in message, 'assertion has no expected/received diff')
     require(not re.search(r'timeout|timed\s*out|interrupted|network error', message, re.I), 'timeout/runtime error is not proof')
