@@ -6,7 +6,7 @@ import type {
   RunCaseTraceReferencesApi,
   RunComparisonRequestApi,
   RunTraceReferenceApi,
-} from "../../../generated/api-contracts/api.schemas";
+} from "../../src/generated/api-contracts/api.schemas";
 
 const item: DatasetVersionItemReadApi = {
   input: ["text", null],
