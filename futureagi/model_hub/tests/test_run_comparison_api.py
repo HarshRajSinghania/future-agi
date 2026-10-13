@@ -637,6 +637,8 @@ def test_compare_route_has_typed_checked_in_contract():
         "include_trial_stability",
         "release_gate",
         "diff_case",
+        "metadata_equals",
+        "split_name",
     }
     assert operation["responses"]["200"]["schema"] == {
         "$ref": "#/definitions/RunComparisonResponse"
@@ -655,6 +657,7 @@ def test_compare_route_has_typed_checked_in_contract():
         "release_gate",
         "trial_stability",
         "case_diff",
+        "selection",
     }
     assert (
         "comparable_count"

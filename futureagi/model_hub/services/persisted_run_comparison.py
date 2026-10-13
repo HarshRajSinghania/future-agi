@@ -371,12 +371,12 @@ def compare_experiment_runs(
     selected_baseline_records = [
         record
         for record in baseline_records
-        if (record.example_id, record.trial_number) in selected_plan
+        if (str(record.example_id), record.trial_number) in selected_plan
     ]
     selected_candidate_records = [
         record
         for record in candidate_records
-        if (record.example_id, record.trial_number) in selected_plan
+        if (str(record.example_id), record.trial_number) in selected_plan
     ]
     case_diff = None
     if diff_case is not None:
@@ -398,6 +398,8 @@ def compare_experiment_runs(
         if selected_identity not in selected_plan:
             raise RunComparisonError(
                 "diff_case identity is not in the selected comparison"
+                if filters is not None
+                else "diff_case identity is not in the pinned run plan"
             )
         baseline_selected = _selected_item(baseline, selected_identity)
         candidate_selected = _selected_item(candidate, selected_identity)

@@ -68,12 +68,17 @@ class RunComparisonRequestSerializer(serializers.Serializer):
     include_trial_stability = serializers.BooleanField(default=False)
     release_gate = ReleaseGatePolicySerializer(required=False)
     diff_case = DiffCaseRequestSerializer(required=False)
-    metadata_equals = serializers.DictField(
-        child=JsonValueField(), required=False, max_length=20
-    )
+    metadata_equals = serializers.DictField(child=JsonValueField(), required=False)
     split_name = serializers.CharField(
         required=False, allow_blank=False, max_length=255
     )
+
+    def validate_metadata_equals(self, value):
+        if len(value) > 20:
+            raise serializers.ValidationError(
+                "metadata_equals supports at most 20 keys"
+            )
+        return value
 
 
 class RunAggregateSerializer(serializers.Serializer):
