@@ -426,6 +426,7 @@ def test_compare_route_has_typed_checked_in_contract():
         "metric_id",
         "passing_score",
         "higher_is_better",
+        "release_gate",
     }
     assert operation["responses"]["200"]["schema"] == {
         "$ref": "#/definitions/RunComparisonResponse"
@@ -441,6 +442,7 @@ def test_compare_route_has_typed_checked_in_contract():
         "candidate_counts",
         "missing_by_side",
         "trace_refs",
+        "release_gate",
     }
     assert (
         "comparable_count"
