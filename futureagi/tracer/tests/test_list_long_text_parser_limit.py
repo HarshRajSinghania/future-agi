@@ -18,10 +18,12 @@ means the guard can fail, not that it cannot see.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 
 import pytest
 
+from tracer.serializers.trace_session import TraceSessionListQuerySerializer
 from tracer.services.clickhouse.query_builders import latest_filter_predicates
 from tracer.services.clickhouse.query_builders.latest_filter_predicates import (
     _CLICKHOUSE_MAX_QUERY_SIZE_BYTES,
@@ -296,6 +298,56 @@ def test_session_candidate_size_guard_catches_the_second_copy(monkeypatch):
     assert _copies(rendered, FIRST_VALUE) == 2
     assert _copies(rendered, SECOND_VALUE) == 2
     assert not _fits(rendered)
+
+
+def test_session_candidate_combines_supported_large_leaves_under_parser_limit():
+    """The public serializer permits several large leaves in one request.
+
+    Each leaf stays below its individual config budget, but their exact
+    comparisons share one ClickHouse statement. The discovery witness must
+    therefore stand down its value copy based on the combined request budget.
+    """
+
+    first = [f"{index}{'x' * 16_383}" for index in range(6)]
+    second = [f"{index}{'y' * 16_383}" for index in range(6)]
+    filters = [
+        _time_filter(),
+        _attribute_filter("in", first, typed=True),
+        {
+            **_attribute_filter("in", second, typed=True),
+            "column_id": "other_key",
+        },
+        {
+            "column_id": "total_tokens",
+            "filter_config": {
+                "col_type": "SYSTEM_METRIC",
+                "filter_type": "number",
+                "filter_op": "greater_than",
+                "filter_value": 0,
+            },
+        },
+    ]
+    serializer = TraceSessionListQuerySerializer(
+        data={
+            "project_id": PROJECT,
+            "filters": json.dumps(filters),
+            "cursor_mode": False,
+            "page_size": 25,
+        }
+    )
+    assert serializer.is_valid(), serializer.errors
+    builder = SessionListQueryBuilderV2(
+        project_id=PROJECT,
+        filters=serializer.validated_data["filters"],
+        page_number=0,
+        page_size=25,
+        bounded_internal_scan=True,
+    )
+    assert builder.prefers_bounded_filter_page() is False
+    rendered = _session_candidate(builder)
+    assert _fits(rendered)
+    for value in [*first, *second]:
+        assert _copies(rendered, value) == 1
 
 
 def _span_discovery(builder) -> str:
