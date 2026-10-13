@@ -1,4 +1,4 @@
-name: E2E CI
+name: Eval Assertion Proof
 
 on:
   pull_request:
@@ -317,15 +317,16 @@ jobs:
       - name: Boot the e2e stack
         run: bin/e2e up
 
-      - name: Run E2E suite
-        run: bin/e2e test
+      - name: Prove eval assertion failures
+        run: |
+          python3 -I .github/eval-proof-runner.py --repo "$GITHUB_WORKSPACE" --node "$(command -v node)" --out "$RUNNER_TEMP/eval-proof" --execute
 
       - name: Upload report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.stack == 'standalone' && 'playwright-report-standalone' || 'playwright-report' }}
-          path: e2e/playwright-report
+          name: eval-assertion-proof
+          path: ${{ runner.temp }}/eval-proof
           retention-days: 7
           # A job that dies before the suite runs has no report; the real
           # failure is upstream and must not be buried by an upload error.
