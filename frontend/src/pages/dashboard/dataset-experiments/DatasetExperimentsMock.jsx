@@ -218,6 +218,8 @@ function LineageView() {
                       version.id === "v12"
                         ? "success.lighter"
                         : "background.paper",
+                    color:
+                      version.id === "v12" ? "success.darker" : "text.primary",
                   }}
                 >
                   <Stack
