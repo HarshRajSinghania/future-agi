@@ -1,12 +1,13 @@
 """R-16, R-17: attempt identities and usage units, with mocked emission."""
 
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
 from ee.evals.llm.jev_evaluator.evaluator import JevEvaluator
-from ee.jev.metering import build_usage_events
+from ee.jev.metering import build_usage_events, calculate_actual_cost
 
 pytestmark = pytest.mark.requires_ee
 
@@ -51,11 +52,18 @@ def test_r17_usage_properties_and_attempt_ids():
         "mapping_revision": instance().last_jev["mapping_revision"],
         "input_tokens": 412,
         "output_tokens": 6,
+        "raw_cost_usd": "0.000017304",
         "attempt": 2,
         "outcome": "success",
     }
     assert events[0].properties["actual_model"] is None
     assert events[0].properties["outcome"] == "error"
+
+
+def test_type_safe_cost_is_input_tokens_only():
+    assert calculate_actual_cost(
+        {"input_tokens": 1_000_000, "output_tokens": 999_999}
+    ) == Decimal("0.042")
 
 
 def test_r17_completed_result_redelivery_has_same_idempotency_keys():

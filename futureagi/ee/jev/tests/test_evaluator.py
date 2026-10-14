@@ -119,7 +119,7 @@ def test_r06_r13_result_metadata_actual_alias_and_no_reason(caplog):
         "completion_tokens": 6,
         "total_tokens": 418,
     }
-    assert instance.cost["total_cost"] == 0
+    assert instance.cost["total_cost"] == pytest.approx(412 * 0.042 / 1_000_000)
     assert "PRIVATE-CANARY" not in caplog.text
 
 

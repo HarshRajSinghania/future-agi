@@ -18,6 +18,7 @@ from ee.jev.mapping import (
     mapping_revision,
     validate_jev_mapping,
 )
+from ee.jev.metering import calculate_actual_cost
 from ee.jev.validation import validate_response
 from tfc.ee_gates import is_jev_model
 
@@ -220,6 +221,18 @@ class JevEvaluator(LLM):
             "completion_tokens": usage["output_tokens"],
             "total_tokens": usage["input_tokens"] + usage["output_tokens"],
         }
+        # TypeSafe charges only input tokens ($0.042 / million); output is
+        # free. BillingConfig applies the deployment's platform markup when
+        # converting this cost to credits.
+        actual_cost = calculate_actual_cost(usage)
+        self.cost.update(
+            {
+                "model": response["model"],
+                "prompt_cost": float(actual_cost),
+                "completion_cost": 0.0,
+                "total_cost": float(actual_cost),
+            }
+        )
         runtime = int((time.monotonic() - started) * 1000)
         jev = {
             "requested_model": self._model,
