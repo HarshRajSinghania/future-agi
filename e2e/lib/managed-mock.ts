@@ -116,7 +116,7 @@ export function requiredMockValues(topology: MockTopology, evalBackground: boole
   if (!evalBackground) return pins;
   return { ...pins, MODEL_SERVING_URL: MOCK_SERVING_BASE, ENV_TYPE: 'local', EE_LICENSE_KEY: '',
     NO_STARTUP_DB_MUTATIONS: 'true', OTEL_ENABLED: 'false', TEMPORAL_HOST: topology.temporal,
-    TEMPORAL_NAMESPACE: 'default', DJANGO_SETTINGS_MODULE: 'tfc.settings.settings', MAILGUN_API_KEY: '' };
+    TEMPORAL_NAMESPACE: 'default', DJANGO_SETTINGS_MODULE: 'tfc.settings.e2e', MAILGUN_API_KEY: '' };
 }
 
 /** Required values are checked even when absent. No license or generic-provider
@@ -329,6 +329,13 @@ function distributedMockStack(evalBackground: boolean): MockStack {
         'agentic_eval/core/embeddings/serving_client.py', 'agentic_eval/core/embeddings/embedding_manager.py',
         'agentic_eval/core/utils/model_config.py'];
       const sourceHashes = Object.fromEntries(paths.map(path => [path, hash(readFileSync(`${root}futureagi/${path}`))]));
+      for (const [packaged, source] of Object.entries({
+        'tfc/settings/e2e.py': 'settings_e2e.py',
+        'tfc/urls_e2e.py': 'urls_e2e.py',
+        'tracer/views/e2e_feed_issue.py': 'e2e_feed_issue.py',
+      })) {
+        sourceHashes[packaged] = hash(readFileSync(`${root}e2e/stack/backend/${source}`));
+      }
       const probeSource = readFileSync(`${root}e2e/lib/managed-mock-background.py`, 'utf8');
       const addresses = Object.fromEntries(['temporal', 'mock-llm', 'agentcc-gateway'].map(service =>
         [service, selected[service].NetworkSettings.Networks[network].IPAddress]));
