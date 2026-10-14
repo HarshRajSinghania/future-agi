@@ -168,10 +168,13 @@ describe("RlContractPanel contract facts", () => {
     });
     expect(screen.getByText("in_process")).toBeInTheDocument();
     expect(screen.queryByText("password from")).toBeNull();
+    expect(screen.queryByText("[redacted]")).toBeNull();
     unmount();
 
     renderPanel({ dataStore: { kind: "postgres", password_from: "DB_PASSWORD" } });
     expect(screen.getByText("password from")).toBeInTheDocument();
+    expect(screen.queryByText("DB_PASSWORD")).toBeNull();
+    expect(screen.getByText("••••••")).toBeInTheDocument();
   });
 
   it("lists the actors with their role and origin", () => {
