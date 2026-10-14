@@ -182,6 +182,10 @@ const CASES = [
     diff: "Added the final-sale exception and a clear next step.",
     trace: "Available",
     traceDetail: "12 spans · retrieval and policy evaluator linked",
+    taskStatus: "Completed",
+    evaluatorStatus: "Assessed",
+    traceSource: "Observed",
+    trialAgreement: true,
   },
   {
     id: "cancel-031",
@@ -200,6 +204,10 @@ const CASES = [
     diff: "Changed the policy window from anytime to after the trial.",
     trace: "Available",
     traceDetail: "12 spans · retrieval miss for cancellation policy",
+    taskStatus: "Completed",
+    evaluatorStatus: "Assessed",
+    traceSource: "Observed",
+    trialAgreement: false,
   },
   {
     id: "invoice-027",
@@ -217,6 +225,10 @@ const CASES = [
     diff: "No material output change.",
     trace: "Available",
     traceDetail: "8 spans · citation check passed",
+    taskStatus: "Completed",
+    evaluatorStatus: "Assessed",
+    traceSource: "Observed",
+    trialAgreement: true,
   },
   {
     id: "delivery-102",
@@ -234,6 +246,10 @@ const CASES = [
     diff: "Candidate timed out after 30 seconds.",
     trace: "Unavailable",
     traceDetail: "No trace was persisted for this case",
+    taskStatus: "Timeout",
+    evaluatorStatus: "Not assessed",
+    traceSource: "Unavailable",
+    trialAgreement: null,
   },
   {
     id: "exchange-044",
@@ -251,6 +267,10 @@ const CASES = [
     diff: "Added size and time-window constraints.",
     trace: "Available",
     traceDetail: "10 spans · human review note attached",
+    taskStatus: "Completed",
+    evaluatorStatus: "Human-reviewed",
+    traceSource: "Submitted",
+    trialAgreement: true,
   },
 ];
 
@@ -276,6 +296,46 @@ const STATUS = {
     icon: "solar:danger-triangle-bold",
   },
 };
+
+function comparisonGrade(items) {
+  const counts = items.reduce((result, item) => {
+    result[item.status] = (result[item.status] || 0) + 1;
+    return result;
+  }, {});
+  if (counts.missing) {
+    return {
+      label: "Inconclusive",
+      color: "warning",
+      detail: `${counts.improved || 0} improved, ${counts.regressed || 0} regressed, and ${counts.missing} incomplete; the candidate cannot be released from this comparison.`,
+    };
+  }
+  if (counts.improved && counts.regressed) {
+    return {
+      label: "Tradeoff",
+      color: "info",
+      detail: `${counts.improved} cases improved while ${counts.regressed} regressed; review the changed cases.`,
+    };
+  }
+  if (counts.regressed) {
+    return {
+      label: "Regression",
+      color: "error",
+      detail: `${counts.regressed} case regressed against the baseline.`,
+    };
+  }
+  if (counts.improved) {
+    return {
+      label: "Improvement",
+      color: "success",
+      detail: `${counts.improved} cases improved with no observed regressions.`,
+    };
+  }
+  return {
+    label: "Tie",
+    color: "default",
+    detail: "No material output difference was observed.",
+  };
+}
 
 const RUN_SHAPE = PropTypes.shape({
   id: PropTypes.string.isRequired,
@@ -317,6 +377,10 @@ const CASE_SHAPE = PropTypes.shape({
   diff: PropTypes.string.isRequired,
   trace: PropTypes.string.isRequired,
   traceDetail: PropTypes.string.isRequired,
+  taskStatus: PropTypes.string.isRequired,
+  evaluatorStatus: PropTypes.string.isRequired,
+  traceSource: PropTypes.string.isRequired,
+  trialAgreement: PropTypes.bool,
 });
 
 function OutcomeChip({ status }) {
@@ -532,6 +596,34 @@ function CaseDrawer({
         <Tab value="review" label="Review" />
       </Tabs>
       <Box sx={{ p: 2.5, overflowY: "auto" }}>
+        <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+          <Typography variant="caption" color="text.secondary" fontWeight={750}>
+            Evidence authority
+          </Typography>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={{ xs: 0.75, sm: 2 }}
+            sx={{ mt: 0.75 }}
+          >
+            <Typography variant="caption">
+              <strong>Task:</strong> {item.taskStatus}
+            </Typography>
+            <Typography variant="caption">
+              <strong>Evaluator:</strong> {item.evaluatorStatus}
+            </Typography>
+            <Typography variant="caption">
+              <strong>Trace:</strong> {item.traceSource}
+            </Typography>
+            <Typography variant="caption">
+              <strong>Trials:</strong>{" "}
+              {item.trialAgreement == null
+                ? "Not assessed"
+                : item.trialAgreement
+                  ? "Stable"
+                  : "Varied"}
+            </Typography>
+          </Stack>
+        </Paper>
         {tab === "preview" && (
           <Stack spacing={2}>
             <Box>
@@ -1830,6 +1922,18 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
   const incompleteCount = CASES.filter(
     (item) => item.status === "missing",
   ).length;
+  const assessedCount = CASES.filter(
+    (item) => item.candidateScore != null,
+  ).length;
+  const trialChecked = CASES.filter((item) => item.trialAgreement != null);
+  const trialAgreementPercent = trialChecked.length
+    ? Math.round(
+        (trialChecked.filter((item) => item.trialAgreement).length /
+          trialChecked.length) *
+          100,
+      )
+    : null;
+  const grade = comparisonGrade(CASES);
   return (
     <>
       <HeaderComponent
@@ -1884,6 +1988,12 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
               label={`Review required · ${regressionCount} regression · ${incompleteCount} incomplete`}
             />
           </Stack>
+          <Alert
+            severity={grade.color === "default" ? "info" : grade.color}
+            sx={{ mt: 2 }}
+          >
+            <strong>{grade.label}:</strong> {grade.detail}
+          </Alert>
           <Stack
             direction={{ xs: "column", md: "row" }}
             spacing={1.5}
@@ -1975,6 +2085,12 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
               detail={`${incompleteCount} incomplete evidence`}
               tone="error"
             />
+            <Metric
+              label="Evidence complete"
+              value={`${assessedCount}/${CASES.length}`}
+              detail={`${incompleteCount} incomplete sample`}
+              tone={incompleteCount ? "warning" : "success"}
+            />
           </Stack>
           <Paper variant="outlined" sx={{ mt: 1.5, px: 1.5, py: 1 }}>
             <Stack
@@ -1982,11 +2098,15 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
               spacing={{ xs: 0.5, sm: 3 }}
             >
               <Typography variant="caption" color="text.secondary">
-                <strong>Trial stability</strong> · 96% of paired cases agree
+                <strong>Trial stability</strong> ·{" "}
+                {trialAgreementPercent == null
+                  ? "Not assessed"
+                  : `${trialAgreementPercent}% of sampled cases agree`}{" "}
                 across 2 trials
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                <strong>Evidence coverage</strong> · 1,247 / 1,248 assessed · 1
+                <strong>Evidence coverage</strong> · {assessedCount} /{" "}
+                {CASES.length} sampled cases assessed · {incompleteCount}{" "}
                 incomplete blocker
               </Typography>
             </Stack>
