@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import {
   Alert,
@@ -81,6 +81,7 @@ const INITIAL_RUNS = [
     targetType: "GraphVersion",
     dataset: "v12",
     evaluator: "Groundedness v4 · Policy v2",
+    planKey: "support-v12|2|groundedness-v4|policy-v2",
     status: "Completed",
     progress: 100,
     planned: 1248,
@@ -94,11 +95,12 @@ const INITIAL_RUNS = [
   },
   {
     id: "run-001",
-    name: "Support agent · v11",
+    name: "Support agent · baseline",
     target: "Prompt · support-router v12",
     targetType: "Prompt / model",
-    dataset: "v11",
+    dataset: "v12",
     evaluator: "Groundedness v4 · Policy v2",
+    planKey: "support-v12|2|groundedness-v4|policy-v2",
     status: "Completed",
     progress: 100,
     planned: 1248,
@@ -117,11 +119,12 @@ const INITIAL_RUNS = [
     targetType: "GraphVersion",
     dataset: "v12",
     evaluator: "Policy v2",
-    status: "Completed",
-    progress: 100,
+    planKey: "support-v12|2|policy-v2",
+    status: "Partial",
+    progress: 94,
     planned: 1248,
-    completed: 1248,
-    errors: 0,
+    completed: 1175,
+    errors: 8,
     quality: 84,
     cost: "$0.19",
     latency: "1.3s",
@@ -135,14 +138,15 @@ const INITIAL_RUNS = [
     targetType: "External / SDK",
     dataset: "v12",
     evaluator: "Groundedness v4",
-    status: "Partial",
-    progress: 94,
+    planKey: "support-v12|2|groundedness-v4",
+    status: "Waiting for results",
+    progress: 0,
     planned: 1248,
-    completed: 1175,
-    errors: 8,
-    quality: 80,
+    completed: 0,
+    errors: 0,
+    quality: 0,
     cost: "—",
-    latency: "2.0s",
+    latency: "—",
     created: "Jun 17, 09:03",
     compatible: false,
   },
@@ -268,6 +272,7 @@ const RUN_SHAPE = PropTypes.shape({
   targetType: PropTypes.string.isRequired,
   dataset: PropTypes.string.isRequired,
   evaluator: PropTypes.string.isRequired,
+  planKey: PropTypes.string.isRequired,
   status: PropTypes.string.isRequired,
   progress: PropTypes.number.isRequired,
   planned: PropTypes.number.isRequired,
@@ -326,7 +331,9 @@ function RunStatus({ status }) {
           ? "success"
           : status === "Partial"
             ? "warning"
-            : "default"
+            : status === "Waiting for results"
+              ? "info"
+              : "default"
       }
       variant="outlined"
     />
@@ -334,7 +341,7 @@ function RunStatus({ status }) {
 }
 RunStatus.propTypes = { status: PropTypes.string.isRequired };
 
-function VersionDrawer({ version, onClose, onUse }) {
+function VersionDrawer({ version, onClose, onUse, onCreate }) {
   if (!version) return null;
   return (
     <Drawer
@@ -406,6 +413,9 @@ function VersionDrawer({ version, onClose, onUse }) {
         <Button variant="contained" onClick={() => onUse(version.id)}>
           Use this version for a new run
         </Button>
+        <Button variant="outlined" onClick={() => onCreate(version.id)}>
+          Create child version
+        </Button>
       </Stack>
     </Drawer>
   );
@@ -422,9 +432,17 @@ VersionDrawer.propTypes = {
   }),
   onClose: PropTypes.func.isRequired,
   onUse: PropTypes.func.isRequired,
+  onCreate: PropTypes.func.isRequired,
 };
 
-function CaseDrawer({ item, items, onClose, onNavigate }) {
+function CaseDrawer({
+  item,
+  items,
+  baselineLabel = "Baseline",
+  candidateLabel = "Candidate",
+  onClose,
+  onNavigate,
+}) {
   const [tab, setTab] = useState("preview");
   const [message, setMessage] = useState("");
   if (!item) return null;
@@ -525,7 +543,11 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
                 </Typography>
               </Paper>
             </Box>
-            <OutputPair item={item} />
+            <OutputPair
+              item={item}
+              baselineLabel={baselineLabel}
+              candidateLabel={candidateLabel}
+            />
           </Stack>
         )}
         {tab === "diff" && (
@@ -668,11 +690,13 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
 CaseDrawer.propTypes = {
   item: CASE_SHAPE,
   items: PropTypes.arrayOf(CASE_SHAPE).isRequired,
+  baselineLabel: PropTypes.string,
+  candidateLabel: PropTypes.string,
   onClose: PropTypes.func.isRequired,
   onNavigate: PropTypes.func.isRequired,
 };
 
-function OutputPair({ item }) {
+function OutputPair({ item, baselineLabel, candidateLabel }) {
   return (
     <Box>
       <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 1 }}>
@@ -681,7 +705,7 @@ function OutputPair({ item }) {
       <Stack spacing={1}>
         <Paper variant="outlined" sx={{ p: 1.5, bgcolor: "grey.50" }}>
           <Typography variant="caption" color="text.secondary" fontWeight={750}>
-            BASELINE · v11
+            BASELINE · {baselineLabel}
           </Typography>
           <Typography variant="body2" sx={{ mt: 0.75, lineHeight: 1.6 }}>
             {item.baseline}
@@ -701,7 +725,7 @@ function OutputPair({ item }) {
             color={item.status === "regressed" ? "error.main" : "success.dark"}
             fontWeight={750}
           >
-            CANDIDATE · v12
+            CANDIDATE · {candidateLabel}
           </Typography>
           <Typography variant="body2" sx={{ mt: 0.75, lineHeight: 1.6 }}>
             {item.candidate}
@@ -711,7 +735,11 @@ function OutputPair({ item }) {
     </Box>
   );
 }
-OutputPair.propTypes = { item: CASE_SHAPE.isRequired };
+OutputPair.propTypes = {
+  item: CASE_SHAPE.isRequired,
+  baselineLabel: PropTypes.string.isRequired,
+  candidateLabel: PropTypes.string.isRequired,
+};
 
 function RunSetupDrawer({ open, onClose, onCreated, datasetVersion }) {
   const [step, setStep] = useState(0);
@@ -722,6 +750,7 @@ function RunSetupDrawer({ open, onClose, onCreated, datasetVersion }) {
   const [concurrency, setConcurrency] = useState("8");
   const [strict, setStrict] = useState(true);
   const [name, setName] = useState("Support agent · candidate");
+  useEffect(() => setVersion(datasetVersion), [datasetVersion]);
   const targetLabel =
     target === "prompt"
       ? "Prompt · support-router v12"
@@ -1053,8 +1082,13 @@ function RunDetailDrawer({ run, onClose, onUpdate, onNotice }) {
     run.status === "Cancelled";
   const isExternal = run.targetType === "External / SDK";
   const phaseFor = (phase) => {
-    if (run.status === "Queued")
-      return phase === "Plan pinned" ? "done" : "pending";
+    if (run.status === "Queued" || run.status === "Waiting for results") {
+      return phase === "Plan pinned"
+        ? "done"
+        : phase === "Waiting for SDK results"
+          ? "warning"
+          : "pending";
+    }
     if (run.status === "Partial") {
       if (phase === "Plan pinned" || phase === "Execution") return "done";
       if (phase === "Evaluation") return "warning";
@@ -1177,11 +1211,13 @@ function RunDetailDrawer({ run, onClose, onUpdate, onNotice }) {
                 color="text.secondary"
                 sx={{ display: "block", mt: 0.75 }}
               >
-                {run.errors
-                  ? `${run.errors} items need retry or review.`
-                  : terminal
-                    ? "Every planned item reached a terminal state."
-                    : "Items are still being processed."}
+                {run.status === "Waiting for results"
+                  ? "Waiting for the caller to upload result items; Future AGI does not execute this run."
+                  : run.errors
+                    ? `${run.errors} items need retry or review.`
+                    : terminal
+                      ? "Every planned item reached a terminal state."
+                      : "Items are still being processed."}
               </Typography>
             </Box>
             <Paper variant="outlined" sx={{ p: 1.5 }}>
@@ -1247,12 +1283,21 @@ function RunDetailDrawer({ run, onClose, onUpdate, onNotice }) {
             <Typography variant="subtitle2" fontWeight={800}>
               Item state sample
             </Typography>
-            {[
-              "Completed · refund-014",
-              "Completed · cancel-031",
-              run.errors ? "Failed · delivery-102" : "Completed · invoice-027",
-              "Pending · exchange-044",
-            ].map((item) => (
+            {(run.status === "Waiting for results"
+              ? [
+                  "Waiting · all planned items",
+                  "No caller result receipts yet",
+                  "Trace refs not attested",
+                ]
+              : [
+                  "Completed · refund-014",
+                  "Completed · cancel-031",
+                  run.errors
+                    ? "Failed · delivery-102"
+                    : "Completed · invoice-027",
+                  "Pending · exchange-044",
+                ]
+            ).map((item) => (
               <Paper variant="outlined" sx={{ p: 1.25 }} key={item}>
                 <Typography variant="body2">{item}</Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -1456,7 +1501,9 @@ function RunsView({
   const selectedRuns = runs.filter((run) => selectedIds.includes(run.id));
   const canCompare =
     selectedRuns.length === 2 &&
-    selectedRuns.every((run) => run.status === "Completed" && run.compatible);
+    selectedRuns.every((run) => run.status === "Completed" && run.compatible) &&
+    selectedRuns[0].dataset === selectedRuns[1].dataset &&
+    selectedRuns[0].planKey === selectedRuns[1].planKey;
   return (
     <Stack spacing={2}>
       <Card
@@ -1505,8 +1552,8 @@ function RunsView({
           </Stack>
           {selectedRuns.length === 2 && !canCompare && (
             <Alert severity="warning" sx={{ mt: 1.5 }}>
-              These runs cannot be compared. Both must be complete and have the
-              same pinned plan and evaluator bindings.
+              These runs cannot be compared. Both must be complete, use the same
+              dataset version, and have the same pinned trial/evaluator plan.
             </Alert>
           )}
           {selectedRuns.length > 0 && (
@@ -1562,6 +1609,9 @@ function RunsView({
                   <MenuItem value="Completed">Completed</MenuItem>
                   <MenuItem value="Partial">Partial</MenuItem>
                   <MenuItem value="Queued">Queued</MenuItem>
+                  <MenuItem value="Waiting for results">
+                    Waiting for results
+                  </MenuItem>
                 </Select>
               </FormControl>
             </Stack>
@@ -1642,7 +1692,7 @@ function RunsView({
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" fontWeight={750}>
-                        {run.quality}%
+                        {run.quality ? `${run.quality}%` : "—"}
                       </Typography>
                     </TableCell>
                     <TableCell>{run.latency}</TableCell>
@@ -1719,6 +1769,20 @@ Metric.propTypes = {
   tone: PropTypes.oneOf(["default", "success", "error", "warning"]),
 };
 
+function numericCost(value) {
+  const parsed = Number.parseFloat(String(value).replace(/[^0-9.]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function numericLatency(value) {
+  const parsed = Number.parseFloat(String(value).replace(/[^0-9.]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function signed(value, suffix = "") {
+  return `${value >= 0 ? "+" : ""}${value}${suffix}`;
+}
+
 function CompareView({ baseline, candidate, onBack, onOpenCase }) {
   const [outcome, setOutcome] = useState("regressed");
   const [split, setSplit] = useState("all");
@@ -1732,6 +1796,25 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
           .toLowerCase()
           .includes(query.toLowerCase())),
   );
+  const qualityDelta = candidate.quality - baseline.quality;
+  const baselineCost = numericCost(baseline.cost);
+  const candidateCost = numericCost(candidate.cost);
+  const costDelta =
+    baselineCost && candidateCost
+      ? Math.round(((candidateCost - baselineCost) / baselineCost) * 100)
+      : null;
+  const baselineLatency = numericLatency(baseline.latency);
+  const candidateLatency = numericLatency(candidate.latency);
+  const latencyDelta =
+    baselineLatency && candidateLatency
+      ? Math.round((candidateLatency - baselineLatency) * 10) / 10
+      : null;
+  const regressionCount = CASES.filter(
+    (item) => item.status === "regressed",
+  ).length;
+  const incompleteCount = CASES.filter(
+    (item) => item.status === "missing",
+  ).length;
   return (
     <>
       <HeaderComponent
@@ -1780,7 +1863,7 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
             <Chip
               color="warning"
               variant="outlined"
-              label="Review required · 1 regression · 1 incomplete"
+              label={`Review required · ${regressionCount} regression · ${incompleteCount} incomplete`}
             />
           </Stack>
           <Stack
@@ -1832,26 +1915,46 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
           >
             <Metric
               label="Quality"
-              value="86%"
-              detail="+4.2 points"
-              tone="success"
+              value={`${candidate.quality}%`}
+              detail={`${signed(qualityDelta, " points")} vs baseline`}
+              tone={qualityDelta >= 0 ? "success" : "error"}
             />
             <Metric
               label="Cost / 1k"
-              value="$0.34"
-              detail="−29%"
-              tone="success"
+              value={candidate.cost}
+              detail={
+                costDelta == null
+                  ? "Unavailable"
+                  : `${signed(costDelta, "%")} vs baseline`
+              }
+              tone={
+                costDelta == null
+                  ? "default"
+                  : costDelta <= 0
+                    ? "success"
+                    : "error"
+              }
             />
             <Metric
               label="Median latency"
-              value="1.8s"
-              detail="−0.3s"
-              tone="success"
+              value={candidate.latency}
+              detail={
+                latencyDelta == null
+                  ? "Unavailable"
+                  : `${signed(latencyDelta, "s")} vs baseline`
+              }
+              tone={
+                latencyDelta == null
+                  ? "default"
+                  : latencyDelta <= 0
+                    ? "success"
+                    : "error"
+              }
             />
             <Metric
               label="Regressions"
-              value="1"
-              detail="Critical"
+              value={`${regressionCount}`}
+              detail={`${incompleteCount} incomplete evidence`}
               tone="error"
             />
           </Stack>
@@ -2193,7 +2296,9 @@ export default function DatasetExperimentsMock() {
     selectedRunIds.length === 2 &&
     [baseline, candidate].every(
       (run) => run.status === "Completed" && run.compatible,
-    );
+    ) &&
+    baseline.dataset === candidate.dataset &&
+    baseline.planKey === candidate.planKey;
   const toggleRun = (id) =>
     setSelectedRunIds((current) =>
       current.includes(id)
@@ -2207,7 +2312,10 @@ export default function DatasetExperimentsMock() {
       ...INITIAL_RUNS[3],
       ...payload,
       id: `run-${runs.length + 1}`,
-      status: "Queued",
+      status:
+        payload.targetType === "External / SDK"
+          ? "Waiting for results"
+          : "Queued",
       progress: 0,
       planned: DATASET.count,
       completed: 0,
@@ -2218,6 +2326,7 @@ export default function DatasetExperimentsMock() {
       created: "Just now",
       compatible: true,
       evaluator: "Groundedness v4 · Policy v2",
+      planKey: `${payload.dataset}|2|groundedness-v4|policy-v2`,
     };
     setRuns((current) => [newRun, ...current]);
     setNotice(
@@ -2252,6 +2361,8 @@ export default function DatasetExperimentsMock() {
         <CaseDrawer
           item={selectedCase}
           items={CASES}
+          baselineLabel={baseline.name}
+          candidateLabel={candidate.name}
           onClose={() => setSelectedCase(null)}
           onNavigate={setSelectedCase}
         />
@@ -2405,6 +2516,10 @@ export default function DatasetExperimentsMock() {
           setDatasetVersion(version);
           setSelectedVersion(null);
           setRunSetupOpen(true);
+        }}
+        onCreate={(version) => {
+          setNotice(`Child version draft created from ${version} (mock).`);
+          setSelectedVersion(null);
         }}
       />
       <RunSetupDrawer
