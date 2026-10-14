@@ -21,6 +21,7 @@ describe("provenance constants", () => {
     "tool_list",
     "file",
     "platform_builtin",
+    "provider_field",
     "doc",
     "callGraph",
     "policy",

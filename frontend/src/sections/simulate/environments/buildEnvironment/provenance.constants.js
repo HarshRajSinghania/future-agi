@@ -69,6 +69,13 @@ export const ORIGIN_KINDS = {
     color: BUILD_TONES.blue,
     note: "A tool the hosted agent platform provides itself, not one the agent defines.",
   },
+  provider_field: {
+    id: "provider_field",
+    label: "from the provider's agent config",
+    short: "PROVIDER FIELD",
+    color: BUILD_TONES.blue,
+    note: "Read from a field of the agent's config on the hosted agent provider.",
+  },
   doc: {
     id: "doc",
     label: "prose only",
@@ -116,6 +123,7 @@ export const ORIGIN_ID = {
   TOOL_LIST: "tool_list",
   FILE: "file",
   PLATFORM_BUILTIN: "platform_builtin",
+  PROVIDER_FIELD: "provider_field",
   DOC: "doc",
   CALL_GRAPH: "callGraph",
   POLICY: "policy",

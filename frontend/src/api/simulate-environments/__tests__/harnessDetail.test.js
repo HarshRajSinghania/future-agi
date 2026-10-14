@@ -431,4 +431,14 @@ describe("harnessDetailToEnvironment", () => {
     expect(env.actors).toBeNull();
     expect(env.runtime).toBeNull();
   });
+
+  it("treats the empty world facts a provider build sends as absent", () => {
+    const { env } = harnessDetailToEnvironment({
+      ...DETAIL,
+      contract: { ...DETAIL.contract, base_environment: {}, refusal_signature: "" },
+    });
+
+    expect(env.baseEnvironment).toBeNull();
+    expect(env.refusalSignature).toBeNull();
+  });
 });

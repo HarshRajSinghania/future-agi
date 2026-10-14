@@ -47,6 +47,10 @@ const certificationsByTool = (certifications) =>
       .map((entry) => [entry.tool, entry]),
   );
 
+// ALK sends `{}` rather than null when an environment has no starting data.
+const nonEmpty = (value) =>
+  value && Object.keys(value).length ? value : null;
+
 const runtimeExtras = (runtime) => {
   const { services, ...rest } = runtime || {};
   return Object.keys(rest).length ? rest : null;
@@ -184,7 +188,7 @@ export function harnessDetailToEnvironment(detail) {
     systemPromptExcerpt: contract?.system_prompt_excerpt || null,
     systemPrompt: contract?.system_prompt || null,
     systemPromptOrigin: contract?.system_prompt_origin || null,
-    baseEnvironment: contract?.base_environment ?? null,
+    baseEnvironment: nonEmpty(contract?.base_environment),
     refusalSignature: contract?.refusal_signature || null,
     actors: contract?.actors || null,
     runtime: runtimeExtras(world?.runtime),
