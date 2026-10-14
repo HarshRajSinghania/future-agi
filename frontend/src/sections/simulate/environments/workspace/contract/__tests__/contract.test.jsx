@@ -68,13 +68,13 @@ describe("RlContractPanel", () => {
     expect(screen.getByText("UUID · PK · NOT NULL")).toBeInTheDocument();
   });
 
-  it("renders the run end conditions — terminate, truncate, clock and seed", () => {
+  it("renders the run end conditions with terminate and truncate, and hides clock and seed", () => {
     renderPanel();
     expect(screen.getByText("Run end conditions")).toBeInTheDocument();
     expect(screen.getByText("Terminate")).toBeInTheDocument();
     expect(screen.getByText("Truncate")).toBeInTheDocument();
-    expect(screen.getByText(/^Clock ·/)).toBeInTheDocument();
-    expect(screen.getByText("Deterministic seed")).toBeInTheDocument();
+    expect(screen.queryByText(/^Clock ·/)).toBeNull();
+    expect(screen.queryByText(/^Deterministic seed/)).toBeNull();
   });
 
   it("lists each declared tool with its description and no inferred effect chip", () => {

@@ -12,7 +12,7 @@ import { PARALLELISM_COPY, degradeReasonCopy } from "../../parallelism.constants
 // (AGENT_SUMMARY_COPY dropped from the overview.constants import with it)
 import { GroupHeading, Fact } from "./OverviewPrimitives";
 import AgentSummarySection from "./AgentSummarySection";
-import SourceReadCard from "./SourceReadCard";
+import SourceToSandboxMap from "./SourceToSandboxMap";
 import AgentRefreshBanner from "./AgentRefreshBanner";
 import NextStepsChecklist from "./NextStepsChecklist";
 import StateSummary from "./StateSummary";
@@ -118,7 +118,11 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
         </Box>
       )}
 
-      <AgentSummarySection subject={env.testSubject} />
+      <AgentSummarySection
+        subject={env.testSubject}
+        systemPrompt={env.systemPrompt}
+        systemPromptOrigin={env.systemPromptOrigin}
+      />
 
       {/* Optional re-derive prompt when the attached agent has moved ahead of
           the world; only an unlocked env can re-derive. */}
@@ -140,11 +144,7 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
           source-backed summaries and their evidence. */}
       <GroupHeading>{OVERVIEW_COPY.capabilities}</GroupHeading>
 
-      <SourceReadCard
-        tools={env.tools}
-        rules={env.rules}
-        ruleDetails={env.ruleDetails}
-      />
+      <SourceToSandboxMap env={env} stores={backedWorld?.stores} />
 
       <Grid container spacing={2} alignItems="flex-start" sx={{ mb: 3 }}>
         <Grid item xs={12} md={7}>
@@ -173,6 +173,7 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
         <Grid item xs={12} md={7}>
           <DependsOnCard
             dependsOn={backedWorld ? dependsFromContract(backedWorld.dependencies) : contract.dependsOn}
+            runtimeDependsOn={backedWorld ? dependsFromContract(backedWorld.runtimeDependencies) : []}
           />
         </Grid>
       </Grid>
@@ -204,5 +205,6 @@ OverviewPanel.propTypes = {
     stores: PropTypes.array,
     amendments: PropTypes.array,
     dependencies: PropTypes.array,
+    runtimeDependencies: PropTypes.array,
   }),
 };

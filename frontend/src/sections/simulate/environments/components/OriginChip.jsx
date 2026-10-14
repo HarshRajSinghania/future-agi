@@ -1,6 +1,7 @@
 import PropTypes from "prop-types";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Stack, Typography } from "@mui/material";
+import CustomTooltip from "src/components/tooltip";
 import { ORIGIN_KINDS } from "../buildEnvironment/provenance.constants";
 
 // A single provenance chip: the short origin tag with a tooltip that spells out
@@ -14,11 +15,13 @@ export default function OriginChip({ origin, file, line, showPath = true }) {
     .join(":");
 
   return (
-    <Tooltip
+    <CustomTooltip
+      show
       arrow
+      size="small"
       placement="top"
       title={
-        <Box sx={{ maxWidth: 300, py: 0.5 }}>
+        <Box sx={{ maxWidth: 300 }}>
           <Typography sx={{ typography: "s3", fontWeight: "fontWeightBold", mb: 0.25 }}>{meta.label}</Typography>
           <Typography sx={{ typography: "s3" }}>{meta.note}</Typography>
           {location && (
@@ -51,7 +54,7 @@ export default function OriginChip({ origin, file, line, showPath = true }) {
           {meta.short}
         </Typography>
       </Stack>
-    </Tooltip>
+    </CustomTooltip>
   );
 }
 OriginChip.propTypes = {

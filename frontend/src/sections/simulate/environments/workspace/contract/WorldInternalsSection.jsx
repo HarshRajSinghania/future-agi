@@ -6,6 +6,8 @@ import { enqueueSnackbar } from "notistack";
 import Iconify from "src/components/iconify";
 import OriginChip from "../../components/OriginChip";
 import SectionCard from "../../components/SectionCard";
+import ToneChip from "./ToneChip";
+import { TOOL_AVAILABILITY, TOOL_EFFECTS, WORLD_FACTS_COPY } from "./contract.constants";
 
 const MONO = "ui-monospace, Menlo, monospace";
 
@@ -22,14 +24,19 @@ export default function WorldInternalsSection({ env }) {
   const entrypoints = entrypointsByTool(env);
   const totalRows = schema.reduce((a, t) => a + (t.rows || 0), 0);
   const hasRowCounts = schema.some((table) => table.rows != null);
+  const hasWorldFacts =
+    env?.baseEnvironment != null || !!env?.refusalSignature || !!env?.runtime;
 
   return (
     <Stack spacing={2} sx={{ mb: 2 }}>
-      {(schema.length > 0 || env?.dataStore) && (
+      {(schema.length > 0 || env?.dataStore || hasWorldFacts) && (
         <SchemaCard
           schema={schema}
           totalRows={hasRowCounts ? totalRows : null}
           dataStore={env?.dataStore}
+          baseEnvironment={env?.baseEnvironment}
+          refusalSignature={env?.refusalSignature}
+          runtime={env?.runtime}
         />
       )}
       {tools.length > 0 && <ToolsCard tools={tools} entrypoints={entrypoints} />}
@@ -49,11 +56,13 @@ function schemaRows(env) {
   const tables = env?.seed?.tables || [];
   const dataSchema = env?.dataSchema || {};
   const richColumns = env?.dataSchemaColumns || {};
+  const starting = startingCollections(env?.baseEnvironment);
   const tableNames = [
     ...new Set([
       ...tables.map((table) => table.name),
       ...Object.keys(dataSchema),
       ...Object.keys(richColumns),
+      ...Object.keys(starting),
     ]),
   ];
   return tableNames.map((name) => {
@@ -68,11 +77,37 @@ function schemaRows(env) {
               .filter(Boolean)
               .join(" · "),
           }))
-        : fields && typeof fields === "object" && !Array.isArray(fields)
-        ? Object.entries(fields).map(([name, type]) => ({ name, type: String(type) }))
-        : null;
-    return { name, rows: table.rows ?? null, note: table.note, cols };
+        : schemaFields(fields);
+    const startingRows = table.rows == null ? starting[name] ?? null : null;
+    return {
+      name,
+      rows: table.rows ?? startingRows,
+      fromStartingData: startingRows != null,
+      note: table.note,
+      cols,
+    };
   });
+}
+
+function startingCollections(baseEnvironment) {
+  if (!baseEnvironment || typeof baseEnvironment !== "object" || Array.isArray(baseEnvironment)) return {};
+  return Object.fromEntries(
+    Object.entries(baseEnvironment)
+      .filter(([, rows]) => Array.isArray(rows))
+      .map(([name, rows]) => [name, rows.length]),
+  );
+}
+
+function schemaFields(fields) {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return null;
+  const properties = fields.properties;
+  if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+    return Object.entries(properties).map(([name, property]) => ({
+      name,
+      type: typeof property === "object" && property !== null ? String(property.type ?? "") : String(property),
+    }));
+  }
+  return Object.entries(fields).map(([name, type]) => ({ name, type: String(type) }));
 }
 
 function entrypointsByTool(env) {
@@ -85,10 +120,11 @@ function entrypointsByTool(env) {
 
 /* ── tables ─────────────────────────────────────────────────────────── */
 
-function SchemaCard({ schema, totalRows, dataStore }) {
+function SchemaCard({ schema, totalRows, dataStore, baseEnvironment, refusalSignature, runtime }) {
   const [openTable, setOpenTable] = useState(null);
+  const embeddedStore = EMBEDDED_STORE_KINDS.has(dataStore?.kind);
   const storeDetails = Object.entries(dataStore || {}).filter(
-    ([, value]) => value !== "" && value != null,
+    ([key, value]) => value !== "" && value != null && !(embeddedStore && SECRET_KEY.test(key)),
   );
   return (
     <SectionCard
@@ -141,7 +177,11 @@ function SchemaCard({ schema, totalRows, dataStore }) {
                   {[expandable ? `${t.cols.length} fields` : null, t.note].filter(Boolean).join(" · ")}
                 </Typography>
                 <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
-                  {t.rows != null ? `${t.rows.toLocaleString()} rows` : ""}
+                  {t.rows == null
+                    ? ""
+                    : t.fromStartingData
+                    ? WORLD_FACTS_COPY.startingRows(t.rows)
+                    : WORLD_FACTS_COPY.rows(t.rows)}
                 </Typography>
               </Stack>
               {expandable && (
@@ -162,10 +202,67 @@ function SchemaCard({ schema, totalRows, dataStore }) {
           );
         })}
       </Stack>
+      {refusalSignature && (
+        <Box sx={{ px: 2.5, py: 1.375, borderTop: "1px solid", borderColor: "divider" }}>
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{WORLD_FACTS_COPY.refusalLabel}</Typography>
+          <Typography sx={{ typography: "s2", fontFamily: MONO, fontWeight: 600 }}>{refusalSignature}</Typography>
+        </Box>
+      )}
+      {baseEnvironment != null && (
+        <ExpandableCode
+          label={WORLD_FACTS_COPY.startingData}
+          file={WORLD_FACTS_COPY.startingDataFile}
+          value={baseEnvironment}
+        />
+      )}
+      {runtime && (
+        <ExpandableCode label={WORLD_FACTS_COPY.runtimeLabel} file={WORLD_FACTS_COPY.runtimeFile} value={runtime} />
+      )}
     </SectionCard>
   );
 }
-SchemaCard.propTypes = { schema: PropTypes.array, totalRows: PropTypes.number, dataStore: PropTypes.object };
+SchemaCard.propTypes = {
+  schema: PropTypes.array,
+  totalRows: PropTypes.number,
+  dataStore: PropTypes.object,
+  baseEnvironment: PropTypes.oneOfType([PropTypes.object, PropTypes.array, PropTypes.string]),
+  refusalSignature: PropTypes.string,
+  runtime: PropTypes.object,
+};
+
+function ExpandableCode({ label, file, value }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Box sx={{ borderTop: "1px solid", borderColor: "divider" }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1.5}
+        onClick={() => setOpen(!open)}
+        sx={{ px: 2.5, py: 1.375, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+      >
+        <Iconify
+          icon={open ? "solar:alt-arrow-down-linear" : "solar:alt-arrow-right-linear"}
+          width={13}
+          sx={{ color: "text.subtitle", flexShrink: 0 }}
+        />
+        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{label}</Typography>
+      </Stack>
+      <Collapse in={open}>
+        <CodeBlock
+          file={file}
+          label={label}
+          code={typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+        />
+      </Collapse>
+    </Box>
+  );
+}
+ExpandableCode.propTypes = {
+  label: PropTypes.string.isRequired,
+  file: PropTypes.string,
+  value: PropTypes.oneOfType([PropTypes.object, PropTypes.array, PropTypes.string]).isRequired,
+};
 
 /* ── tools ──────────────────────────────────────────────────────────── */
 
@@ -209,6 +306,7 @@ function ToolsCard({ tools, entrypoints }) {
                 <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>
                   {tool.desc}
                 </Typography>
+                <ToolStatusChips tool={tool} />
                 {tool.origin && (
                   <OriginChip
                     origin={tool.origin.kind}
@@ -242,6 +340,25 @@ function ToolsCard({ tools, entrypoints }) {
 }
 ToolsCard.propTypes = { tools: PropTypes.array, entrypoints: PropTypes.object };
 
+function ToolStatusChips({ tool }) {
+  const effect = TOOL_EFFECTS[tool.effectKind];
+  const certification = tool.certification;
+  const availability = TOOL_AVAILABILITY[certification?.availability];
+  return (
+    <>
+      {effect && <ToneChip label={effect.label} color={effect.color} icon={effect.icon} />}
+      {availability && (
+        <ToneChip
+          label={availability.label}
+          color={availability.color}
+          tooltip={WORLD_FACTS_COPY.availabilityTooltip(certification.probe_mode, certification.reason)}
+        />
+      )}
+    </>
+  );
+}
+ToolStatusChips.propTypes = { tool: PropTypes.object.isRequired };
+
 function ToolDetail({ tool, entry }) {
   const sourceCode = entry?.source?.code
     || entry?.source_code || entry?.code || tool?.source_code || tool?.code;
@@ -260,12 +377,23 @@ function ToolDetail({ tool, entry }) {
     2,
   );
 
+  const evidence = tool.effectEvidence;
+  const effect = TOOL_EFFECTS[tool.effectKind];
   return (
-    <CodeBlock
-      file={file}
-      label={sourceCode ? "Source snippet" : "Tool contract and entrypoint"}
-      code={sourceCode || contractSnippet}
-    />
+    <>
+      {evidence?.excerpt && effect && (
+        <CodeBlock
+          file={evidence.origin?.path || evidence.origin?.field || ""}
+          label={WORLD_FACTS_COPY.effectWhy(effect.label)}
+          code={evidence.excerpt}
+        />
+      )}
+      <CodeBlock
+        file={file}
+        label={sourceCode ? "Source snippet" : "Tool contract and entrypoint"}
+        code={sourceCode || contractSnippet}
+      />
+    </>
   );
 }
 ToolDetail.propTypes = { tool: PropTypes.object.isRequired, entry: PropTypes.object };
@@ -315,7 +443,10 @@ CodeBlock.propTypes = { file: PropTypes.string, label: PropTypes.string, code: P
 
 const toolSafeLabel = (value) => String(value || "tool").replace(/[^a-zA-Z0-9_-]+/g, " ").trim();
 
+const SECRET_KEY = /(password|secret|token|credential|api[_-]?key)/i;
+const EMBEDDED_STORE_KINDS = new Set(["in_process", "in_memory", "none"]);
+
 const storeValue = (key, value) => {
-  if (/(password|secret|token|credential|api[_-]?key)/i.test(key)) return "••••••";
+  if (SECRET_KEY.test(key)) return "••••••";
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 };

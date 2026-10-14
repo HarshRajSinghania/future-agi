@@ -228,6 +228,55 @@ describe("harnessDetailToEnvironment", () => {
     expect(env.personas[0].name).toBe("Priya Raman");
   });
 
+  it("leaves ALK's internal tables out of the seed tables", () => {
+    const { env } = harnessDetailToEnvironment({
+      ...DETAIL,
+      world: {
+        ...DETAIL.world,
+        stores: [
+          {
+            capability: "world_db",
+            engine: "postgres",
+            tables: [
+              { name: "_alk_tool_trace", rows: 0, internal: true },
+              { name: "harness_seed_sentinel", rows: 1, internal: true },
+              { name: "bookings", rows: 12, internal: false },
+            ],
+          },
+        ],
+      },
+    });
+    expect(env.seed.tables.map((table) => table.name)).toEqual(["bookings"]);
+  });
+
+  it("leaves ALK's internal tables out of the seed tables and the schema", () => {
+    const { env } = harnessDetailToEnvironment({
+      ...DETAIL,
+      contract: {
+        ...DETAIL.contract,
+        data_schema: { bookings: { id: "string" }, _alk_tool_trace: null },
+        data_schema_columns: { bookings: [{ name: "id" }], harness_seed_sentinel: null },
+      },
+      world: {
+        ...DETAIL.world,
+        stores: [
+          {
+            capability: "world_db",
+            engine: "postgres",
+            tables: [
+              { name: "_alk_tool_trace", rows: 0, internal: true },
+              { name: "harness_seed_sentinel", rows: 1, internal: true },
+              { name: "bookings", rows: 12, internal: false },
+            ],
+          },
+        ],
+      },
+    });
+    expect(env.seed.tables.map((table) => table.name)).toEqual(["bookings"]);
+    expect(Object.keys(env.dataSchema)).toEqual(["bookings"]);
+    expect(Object.keys(env.dataSchemaColumns)).toEqual(["bookings"]);
+  });
+
   it("keeps real datastore, schema and tool-entrypoint details for Contract", () => {
     const { env } = harnessDetailToEnvironment(DETAIL);
     expect(env.dataStore).toMatchObject({ kind: "postgres", database: "support" });
@@ -314,5 +363,82 @@ describe("harnessDetailToEnvironment", () => {
       world: null,
     };
     expect(harnessDetailToEnvironment(running).env.buildStatus).toBe("ready");
+  });
+
+  it("passes tool effect, certification, world facts and actors through", () => {
+    const evidence = {
+      origin: { kind: "file", path: "tools.py", line: 3 },
+      excerpt: "SELECT * FROM orders",
+    };
+    const certification = {
+      tool: "lookup_order",
+      availability: "runtime_only",
+      probe_mode: "runtime_only",
+      reason: "Observed during the call only",
+    };
+    const actor = {
+      name: "supervisor",
+      role: "approves refunds over $200",
+      origin: { kind: "system_prompt", field: "general_prompt" },
+    };
+    const detail = {
+      ...DETAIL,
+      contract: {
+        ...DETAIL.contract,
+        tools: [{ ...DETAIL.contract.tools[0], effect_kind: "read", effect_evidence: evidence }],
+        tool_certification: [certification],
+        base_environment: { orders: [{ id: "order-1" }] },
+        refusal_signature: "Order not found",
+        actors: [actor],
+      },
+      world: {
+        ...DETAIL.world,
+        runtime: { services: ["agent"], readiness: { path: "/health" } },
+      },
+      scenarios: [
+        {
+          ...DETAIL.scenarios[0],
+          sub_goals: [
+            { name: "identity_checked", what: "Identity was checked", kind: "judge", output: "pass_fail", overlay: "authentication" },
+          ],
+        },
+      ],
+    };
+
+    const { env, envState } = harnessDetailToEnvironment(detail);
+
+    expect(env.tools[0]).toMatchObject({
+      effectKind: "read",
+      effectEvidence: evidence,
+      certification,
+    });
+    expect(env.baseEnvironment).toEqual({ orders: [{ id: "order-1" }] });
+    expect(env.refusalSignature).toBe("Order not found");
+    expect(env.actors).toEqual([actor]);
+    expect(env.runtime).toEqual({ readiness: { path: "/health" } });
+    expect(envState.scenarios[0].subTasks[0]).toMatchObject({
+      output: "pass_fail",
+      overlay: "authentication",
+    });
+  });
+
+  it("leaves the new fields empty when the contract does not carry them", () => {
+    const { env } = harnessDetailToEnvironment(DETAIL);
+
+    expect(env.tools[0]).toMatchObject({ effectKind: null, effectEvidence: null, certification: null });
+    expect(env.baseEnvironment).toBeNull();
+    expect(env.refusalSignature).toBeNull();
+    expect(env.actors).toBeNull();
+    expect(env.runtime).toBeNull();
+  });
+
+  it("treats the empty world facts a provider build sends as absent", () => {
+    const { env } = harnessDetailToEnvironment({
+      ...DETAIL,
+      contract: { ...DETAIL.contract, base_environment: {}, refusal_signature: "" },
+    });
+
+    expect(env.baseEnvironment).toBeNull();
+    expect(env.refusalSignature).toBeNull();
   });
 });
