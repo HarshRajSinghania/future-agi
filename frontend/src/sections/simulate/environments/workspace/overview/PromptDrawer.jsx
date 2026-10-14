@@ -14,9 +14,13 @@ export default function PromptDrawer({
   prompt,
   origin,
 }) {
-  const copy = () => {
-    navigator.clipboard?.writeText(prompt);
-    enqueueSnackbar(AGENT_SUMMARY_COPY.copied, { variant: "info" });
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      enqueueSnackbar(AGENT_SUMMARY_COPY.copied, { variant: "info" });
+    } catch {
+      enqueueSnackbar(AGENT_SUMMARY_COPY.copyFailed, { variant: "error" });
+    }
   };
   return (
     <SideDrawer open={open} onClose={onClose} width={640}>

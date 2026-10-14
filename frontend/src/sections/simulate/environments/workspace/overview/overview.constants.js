@@ -58,6 +58,7 @@ export const AGENT_SUMMARY_COPY = {
   promptLines: (n) => `${n} ${n === 1 ? "line" : "lines"}`,
   copyPrompt: "Copy prompt",
   copied: "Copied to clipboard",
+  copyFailed: "Couldn't copy the prompt",
 };
 
 // The environment shape Overview reads. Local PropTypes.shape (Phase-2 owns the
