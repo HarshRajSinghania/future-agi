@@ -59,9 +59,9 @@ const CREDENTIAL_OVERRIDE = /^(EE_LICENSE_KEY|SENTRY_DSN|SLACK_.*|DEPLOYMENT_TEL
 
 /** Where the gateway, the API it syncs from and Temporal listen: their own
  * services in Distributed, loopback inside Standalone's one `app` container. */
-export interface MockTopology { gateway: string; controlPlane: string; temporal: string }
+export interface MockTopology { gateway: string; controlPlane: string; temporal: string; settingsModule: string }
 const DISTRIBUTED: MockTopology = { gateway: 'http://agentcc-gateway:8080', controlPlane: 'http://backend',
-  temporal: 'temporal:7233' };
+  temporal: 'temporal:7233', settingsModule: 'tfc.settings.e2e' };
 
 function gatewayValues({ gateway, controlPlane }: MockTopology) {
   const allowed: Record<string, string> = { AGENTCC_INTERNAL_API_KEY: MOCK_KEY,
@@ -116,7 +116,7 @@ export function requiredMockValues(topology: MockTopology, evalBackground: boole
   if (!evalBackground) return pins;
   return { ...pins, MODEL_SERVING_URL: MOCK_SERVING_BASE, ENV_TYPE: 'local', EE_LICENSE_KEY: '',
     NO_STARTUP_DB_MUTATIONS: 'true', OTEL_ENABLED: 'false', TEMPORAL_HOST: topology.temporal,
-    TEMPORAL_NAMESPACE: 'default', DJANGO_SETTINGS_MODULE: 'tfc.settings.e2e', MAILGUN_API_KEY: '' };
+    TEMPORAL_NAMESPACE: 'default', DJANGO_SETTINGS_MODULE: topology.settingsModule, MAILGUN_API_KEY: '' };
 }
 
 /** Required values are checked even when absent. No license or generic-provider
