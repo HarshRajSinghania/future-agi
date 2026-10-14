@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import PropTypes from "prop-types";
 import {
   Alert,
@@ -86,8 +86,8 @@ const INITIAL_RUNS = [
     planned: 1248,
     completed: 1248,
     errors: 0,
-    quality: "86%",
-    cost: "$0.34 / 1k",
+    quality: 86,
+    cost: "$0.34",
     latency: "1.8s",
     created: "Today, 10:08",
     compatible: true,
@@ -104,8 +104,8 @@ const INITIAL_RUNS = [
     planned: 1248,
     completed: 1248,
     errors: 0,
-    quality: "82%",
-    cost: "$0.48 / 1k",
+    quality: 82,
+    cost: "$0.48",
     latency: "2.1s",
     created: "Yesterday, 16:24",
     compatible: true,
@@ -122,15 +122,15 @@ const INITIAL_RUNS = [
     planned: 1248,
     completed: 1248,
     errors: 0,
-    quality: "84%",
-    cost: "$0.19 / 1k",
+    quality: 84,
+    cost: "$0.19",
     latency: "1.3s",
     created: "Jun 18, 11:12",
     compatible: true,
   },
   {
     id: "run-004",
-    name: "Support agent · v12 retry",
+    name: "Support agent · retry",
     target: "External / SDK · build 9f21",
     targetType: "External / SDK",
     dataset: "v12",
@@ -140,7 +140,7 @@ const INITIAL_RUNS = [
     planned: 1248,
     completed: 1175,
     errors: 8,
-    quality: "80%",
+    quality: 80,
     cost: "—",
     latency: "2.0s",
     created: "Jun 17, 09:03",
@@ -238,33 +238,6 @@ const CASES = [
   },
 ];
 
-const EVALUATORS = [
-  {
-    name: "Groundedness",
-    version: "v4",
-    type: "LLM judge",
-    mapped: "4 / 4 variables",
-    runs: 18,
-    state: "Ready",
-  },
-  {
-    name: "Policy compliance",
-    version: "v2",
-    type: "Code evaluator",
-    mapped: "3 / 3 variables",
-    runs: 12,
-    state: "Ready",
-  },
-  {
-    name: "Human review",
-    version: "Queue",
-    type: "Annotation queue",
-    mapped: "On demand",
-    runs: 4,
-    state: "Available",
-  },
-];
-
 const STATUS = {
   improved: {
     label: "Improved",
@@ -300,7 +273,7 @@ const RUN_SHAPE = PropTypes.shape({
   planned: PropTypes.number.isRequired,
   completed: PropTypes.number.isRequired,
   errors: PropTypes.number.isRequired,
-  quality: PropTypes.string.isRequired,
+  quality: PropTypes.number.isRequired,
   cost: PropTypes.string.isRequired,
   latency: PropTypes.string.isRequired,
   created: PropTypes.string.isRequired,
@@ -343,96 +316,112 @@ OutcomeChip.propTypes = {
     .isRequired,
 };
 
-function MetricCard({
-  label,
-  value,
-  detail,
-  tone = "default",
-  onClick,
-  active,
-}) {
-  const color =
-    tone === "success"
-      ? "success.main"
-      : tone === "error"
-        ? "error.main"
-        : tone === "warning"
-          ? "warning.main"
-          : "text.primary";
+function RunStatus({ status }) {
   return (
-    <Card
+    <Chip
+      size="small"
+      label={status}
+      color={
+        status === "Completed"
+          ? "success"
+          : status === "Partial"
+            ? "warning"
+            : "default"
+      }
       variant="outlined"
-      onClick={onClick}
-      sx={{
-        flex: 1,
-        minWidth: 160,
-        borderRadius: 2,
-        cursor: onClick ? "pointer" : "default",
-        borderColor: active ? "primary.main" : "divider",
-        bgcolor: active ? alpha("#5d5fef", 0.05) : "background.paper",
-      }}
-    >
-      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>
-          {label}
-        </Typography>
-        <Typography variant="h5" fontWeight={800} sx={{ mt: 0.65, color }}>
-          {value}
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          {detail}
-        </Typography>
-      </CardContent>
-    </Card>
+    />
   );
 }
-MetricCard.propTypes = {
-  label: PropTypes.string.isRequired,
-  value: PropTypes.string.isRequired,
-  detail: PropTypes.string.isRequired,
-  tone: PropTypes.oneOf(["default", "success", "error", "warning"]),
-  onClick: PropTypes.func,
-  active: PropTypes.bool,
-};
+RunStatus.propTypes = { status: PropTypes.string.isRequired };
 
-function RunPicker({ run, kind, onSet }) {
+function VersionDrawer({ version, onClose, onUse }) {
+  if (!version) return null;
   return (
-    <Paper
-      variant="outlined"
-      sx={{
-        p: 1.25,
-        flex: 1,
-        borderColor: kind === "candidate" ? "success.main" : "primary.main",
-        bgcolor: kind === "candidate" ? "success.50" : "primary.50",
-      }}
+    <Drawer
+      anchor="right"
+      open={Boolean(version)}
+      onClose={onClose}
+      PaperProps={{ sx: { width: { xs: "100%", sm: 440 }, p: 2.5 } }}
     >
-      <Stack direction="row" spacing={1} alignItems="center">
-        <Iconify
-          icon={kind === "candidate" ? "solar:flag-2-bold" : "solar:flag-bold"}
-          color={kind === "candidate" ? "success.main" : "primary.main"}
-        />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="caption" color="text.secondary" fontWeight={750}>
-            {kind.toUpperCase()}
+      <Stack
+        direction="row"
+        justifyContent="space-between"
+        alignItems="flex-start"
+      >
+        <Box>
+          <Typography variant="overline" color="text.secondary">
+            Dataset version
           </Typography>
-          <Typography variant="body2" fontWeight={750} noWrap>
-            {run.name}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {run.target} · {run.dataset}
+          <Typography variant="h6" fontWeight={800}>
+            {DATASET.name} · {version.id}
           </Typography>
         </Box>
-        <Button size="small" onClick={onSet}>
-          Change
+        <IconButton aria-label="Close version" onClick={onClose}>
+          <Iconify icon="solar:close-circle-linear" />
+        </IconButton>
+      </Stack>
+      <Chip
+        label="Immutable snapshot"
+        color="success"
+        variant="outlined"
+        size="small"
+        sx={{ mt: 1 }}
+      />
+      <Divider sx={{ my: 2 }} />
+      <Stack spacing={1.5}>
+        <Paper variant="outlined" sx={{ p: 1.5 }}>
+          <Typography variant="caption" color="text.secondary">
+            Membership
+          </Typography>
+          <Typography variant="body2" fontWeight={700}>
+            {version.items.toLocaleString()} immutable examples
+          </Typography>
+        </Paper>
+        <Paper variant="outlined" sx={{ p: 1.5 }}>
+          <Typography variant="caption" color="text.secondary">
+            Created / provenance
+          </Typography>
+          <Typography variant="body2" fontWeight={700}>
+            {version.created}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {version.source} · {version.hash}
+          </Typography>
+        </Paper>
+        <Paper variant="outlined" sx={{ p: 1.5 }}>
+          <Typography variant="caption" color="text.secondary">
+            Schema / parent
+          </Typography>
+          <Typography variant="body2" fontWeight={700}>
+            {version.schema}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Child of {version.parent}
+          </Typography>
+        </Paper>
+        <Alert severity="info">
+          Runs pinned to this version do not change when the live dataset is
+          edited.
+        </Alert>
+        <Button variant="contained" onClick={() => onUse(version.id)}>
+          Use this version for a new run
         </Button>
       </Stack>
-    </Paper>
+    </Drawer>
   );
 }
-RunPicker.propTypes = {
-  run: RUN_SHAPE.isRequired,
-  kind: PropTypes.oneOf(["baseline", "candidate"]).isRequired,
-  onSet: PropTypes.func.isRequired,
+VersionDrawer.propTypes = {
+  version: PropTypes.shape({
+    id: PropTypes.string.isRequired,
+    items: PropTypes.number.isRequired,
+    created: PropTypes.string.isRequired,
+    source: PropTypes.string.isRequired,
+    hash: PropTypes.string.isRequired,
+    parent: PropTypes.string.isRequired,
+    schema: PropTypes.string.isRequired,
+  }),
+  onClose: PropTypes.func.isRequired,
+  onUse: PropTypes.func.isRequired,
 };
 
 function CaseDrawer({ item, items, onClose, onNavigate }) {
@@ -440,7 +429,7 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
   const [message, setMessage] = useState("");
   if (!item) return null;
   const index = items.findIndex((entry) => entry.id === item.id);
-  const showMessage = (text) => setMessage(text);
+  const action = (text) => setMessage(text);
   return (
     <Drawer
       anchor="right"
@@ -471,9 +460,25 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
               />
             </Stack>
           </Box>
-          <IconButton aria-label="Close case" onClick={onClose}>
-            <Iconify icon="solar:close-circle-linear" />
-          </IconButton>
+          <Stack direction="row" spacing={0.25}>
+            <IconButton
+              aria-label="Previous case"
+              disabled={index <= 0}
+              onClick={() => onNavigate(items[index - 1])}
+            >
+              <Iconify icon="solar:alt-arrow-left-linear" />
+            </IconButton>
+            <IconButton
+              aria-label="Next case"
+              disabled={index < 0 || index >= items.length - 1}
+              onClick={() => onNavigate(items[index + 1])}
+            >
+              <Iconify icon="solar:alt-arrow-right-linear" />
+            </IconButton>
+            <IconButton aria-label="Close case" onClick={onClose}>
+              <Iconify icon="solar:close-circle-linear" />
+            </IconButton>
+          </Stack>
         </Stack>
       </Box>
       <Divider />
@@ -483,7 +488,7 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
           setTab(value);
           setMessage("");
         }}
-        variant="fullWidth"
+        variant="scrollable"
       >
         <Tab value="preview" label="Preview" />
         <Tab value="diff" label="Diff" />
@@ -491,7 +496,7 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
         <Tab value="trace" label="Trace" />
         <Tab value="review" label="Review" />
       </Tabs>
-      <Box sx={{ p: 2.5, overflowY: "auto", flex: 1 }}>
+      <Box sx={{ p: 2.5, overflowY: "auto" }}>
         {tab === "preview" && (
           <Stack spacing={2}>
             <Box>
@@ -520,58 +525,7 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
                 </Typography>
               </Paper>
             </Box>
-            <Box>
-              <Typography variant="subtitle2" fontWeight={750}>
-                Outputs
-              </Typography>
-              <Stack spacing={1} sx={{ mt: 0.75 }}>
-                <Paper variant="outlined" sx={{ p: 1.5 }}>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    fontWeight={750}
-                  >
-                    BASELINE · v11
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    sx={{ mt: 0.65, lineHeight: 1.6 }}
-                  >
-                    {item.baseline}
-                  </Typography>
-                </Paper>
-                <Paper
-                  variant="outlined"
-                  sx={{
-                    p: 1.5,
-                    borderColor:
-                      item.status === "regressed"
-                        ? "error.light"
-                        : "success.light",
-                    bgcolor:
-                      item.status === "regressed" ? "error.50" : "success.50",
-                  }}
-                >
-                  <Typography
-                    variant="caption"
-                    color={
-                      item.status === "regressed"
-                        ? "error.main"
-                        : "success.dark"
-                    }
-                    fontWeight={750}
-                  >
-                    CANDIDATE · v12
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    sx={{ mt: 0.65, lineHeight: 1.6 }}
-                  >
-                    {item.candidate}
-                  </Typography>
-                </Paper>
-              </Stack>
-            </Box>
+            <OutputPair item={item} />
           </Stack>
         )}
         {tab === "diff" && (
@@ -602,8 +556,7 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
               </Box>
             </Paper>
             <Typography variant="caption" color="text.secondary">
-              Diff is computed from the pinned outputs. Missing output is not
-              treated as a zero score.
+              Missing output is not treated as a zero score.
             </Typography>
           </Stack>
         )}
@@ -630,20 +583,9 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
                   color={item.status === "regressed" ? "error" : "success"}
                   sx={{ height: 8, borderRadius: 4 }}
                 />
-                <Divider />
-                <Stack direction="row" justifyContent="space-between">
-                  <Typography variant="body2">Policy compliance</Typography>
-                  <Typography
-                    variant="body2"
-                    color="success.main"
-                    fontWeight={700}
-                  >
-                    {item.status === "regressed" ? "Not assessed" : "Pass"}
-                  </Typography>
-                </Stack>
                 <Typography variant="caption" color="text.secondary">
                   Scores are pinned to the evaluator versions used by the run.
-                  Not assessed and evaluator errors stay explicit.
+                  Not assessed and evaluator errors remain visible.
                 </Typography>
               </>
             )}
@@ -664,25 +606,11 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
               disabled={item.trace !== "Available"}
               startIcon={<Iconify icon="solar:link-linear" />}
               onClick={() =>
-                showMessage("Opened the verified trace in a new tab (mock).")
+                action("Opened the verified trace in Observe (mock).")
               }
             >
               Open trace
             </Button>
-            <Paper variant="outlined" sx={{ p: 1.5 }}>
-              <Typography variant="caption" color="text.secondary">
-                Trace identity
-              </Typography>
-              <Typography
-                variant="body2"
-                fontFamily="monospace"
-                sx={{ mt: 0.5 }}
-              >
-                {item.trace === "Available"
-                  ? `trace_${item.id}_candidate`
-                  : "Not recorded"}
-              </Typography>
-            </Paper>
           </Stack>
         )}
         {tab === "review" && (
@@ -695,21 +623,9 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
             />
             <Button
               variant="contained"
-              onClick={() =>
-                showMessage("Case sent to the review queue (mock).")
-              }
+              onClick={() => action("Review saved to the case (mock).")}
             >
-              Send to review
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={() =>
-                showMessage(
-                  "Created a child dataset version with this case (mock).",
-                )
-              }
-            >
-              Add to dataset
+              Save review
             </Button>
           </Stack>
         )}
@@ -718,34 +634,34 @@ function CaseDrawer({ item, items, onClose, onNavigate }) {
             {message}
           </Alert>
         )}
+        <Divider sx={{ my: 2.5 }} />
+        <Stack direction="row" spacing={1} flexWrap="wrap">
+          <Button
+            variant="outlined"
+            onClick={() => {
+              setTab("review");
+              action("Annotation mode is ready (mock).");
+            }}
+          >
+            Annotate
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() =>
+              action("Case added to a child dataset version (mock).")
+            }
+          >
+            Add to dataset
+          </Button>
+          <Button
+            variant="outlined"
+            color="error"
+            onClick={() => action("Case sent to the review queue (mock).")}
+          >
+            Send to review
+          </Button>
+        </Stack>
       </Box>
-      <Divider />
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        sx={{ p: 1.5 }}
-      >
-        <Button
-          size="small"
-          disabled={index <= 0}
-          startIcon={<Iconify icon="solar:arrow-left-linear" />}
-          onClick={() => onNavigate(items[index - 1])}
-        >
-          Previous
-        </Button>
-        <Typography variant="caption" color="text.secondary">
-          {index + 1} of {items.length}
-        </Typography>
-        <Button
-          size="small"
-          disabled={index === -1 || index >= items.length - 1}
-          endIcon={<Iconify icon="solar:arrow-right-linear" />}
-          onClick={() => onNavigate(items[index + 1])}
-        >
-          Next
-        </Button>
-      </Stack>
     </Drawer>
   );
 }
@@ -756,179 +672,51 @@ CaseDrawer.propTypes = {
   onNavigate: PropTypes.func.isRequired,
 };
 
-function VersionDrawer({ version, onClose, onCreate }) {
-  if (!version) return null;
+function OutputPair({ item }) {
   return (
-    <Drawer
-      anchor="right"
-      open={Boolean(version)}
-      onClose={onClose}
-      PaperProps={{ sx: { width: { xs: "100%", sm: 440 } } }}
-    >
-      <Box sx={{ p: 2.5 }}>
-        <Stack direction="row" justifyContent="space-between">
-          <Box>
-            <Typography variant="overline" color="text.secondary">
-              Dataset version
-            </Typography>
-            <Typography variant="h6" fontWeight={800}>
-              {version.id}
-            </Typography>
-          </Box>
-          <IconButton onClick={onClose}>
-            <Iconify icon="solar:close-circle-linear" />
-          </IconButton>
-        </Stack>
-        <Chip
-          label="Immutable snapshot"
-          color="success"
+    <Box>
+      <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 1 }}>
+        Outputs
+      </Typography>
+      <Stack spacing={1}>
+        <Paper variant="outlined" sx={{ p: 1.5, bgcolor: "grey.50" }}>
+          <Typography variant="caption" color="text.secondary" fontWeight={750}>
+            BASELINE · v11
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 0.75, lineHeight: 1.6 }}>
+            {item.baseline}
+          </Typography>
+        </Paper>
+        <Paper
           variant="outlined"
-          size="small"
-          sx={{ mt: 1 }}
-        />
-      </Box>
-      <Divider />
-      <Box sx={{ p: 2.5 }}>
-        <Stack spacing={2}>
-          <Box>
-            <Typography variant="caption" color="text.secondary">
-              Items
-            </Typography>
-            <Typography variant="body2" fontWeight={700}>
-              {version.items.toLocaleString()}
-            </Typography>
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary">
-              Content hash
-            </Typography>
-            <Typography variant="body2" fontFamily="monospace">
-              {version.hash}
-            </Typography>
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary">
-              Parent / source
-            </Typography>
-            <Typography variant="body2">
-              {version.parent} · {version.source}
-            </Typography>
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary">
-              Schema
-            </Typography>
-            <Typography variant="body2">{version.schema}</Typography>
-          </Box>
-          <Alert severity="info">
-            Runs pin this exact snapshot so later edits cannot change their
-            evidence.
-          </Alert>
-          <Button
-            variant="contained"
-            startIcon={<Iconify icon="solar:copy-linear" />}
-            onClick={onCreate}
+          sx={{
+            p: 1.5,
+            borderColor:
+              item.status === "regressed" ? "error.light" : "success.light",
+            bgcolor: item.status === "regressed" ? "error.50" : "success.50",
+          }}
+        >
+          <Typography
+            variant="caption"
+            color={item.status === "regressed" ? "error.main" : "success.dark"}
+            fontWeight={750}
           >
-            Create child version
-          </Button>
-        </Stack>
-      </Box>
-    </Drawer>
-  );
-}
-VersionDrawer.propTypes = {
-  version: PropTypes.shape({
-    id: PropTypes.string.isRequired,
-    items: PropTypes.number.isRequired,
-    created: PropTypes.string.isRequired,
-    source: PropTypes.string.isRequired,
-    hash: PropTypes.string.isRequired,
-    parent: PropTypes.string.isRequired,
-    schema: PropTypes.string.isRequired,
-  }),
-  onClose: PropTypes.func.isRequired,
-  onCreate: PropTypes.func.isRequired,
-};
-
-function FalconDrawer({ open, onClose, onAction }) {
-  return (
-    <Drawer
-      anchor="right"
-      open={open}
-      onClose={onClose}
-      PaperProps={{ sx: { width: { xs: "100%", sm: 390 } } }}
-    >
-      <Box sx={{ p: 2.5 }}>
-        <Stack direction="row" justifyContent="space-between">
-          <Box>
-            <Typography variant="overline" color="text.secondary">
-              Quick actions
-            </Typography>
-            <Typography variant="h6" fontWeight={800}>
-              Falcon
-            </Typography>
-          </Box>
-          <IconButton onClick={onClose}>
-            <Iconify icon="solar:close-circle-linear" />
-          </IconButton>
-        </Stack>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Shortcuts for the dataset → run → review loop. All actions use mock
-          data in this prototype.
-        </Typography>
-      </Box>
-      <Divider />
-      <Stack spacing={1} sx={{ p: 2.5 }}>
-        <Button
-          fullWidth
-          variant="outlined"
-          sx={{ justifyContent: "flex-start", py: 1.25 }}
-          startIcon={<Iconify icon="solar:play-circle-linear" />}
-          onClick={() => onAction("Run a new experiment")}
-        >
-          Run a new experiment
-        </Button>
-        <Button
-          fullWidth
-          variant="outlined"
-          sx={{ justifyContent: "flex-start", py: 1.25 }}
-          startIcon={<Iconify icon="solar:danger-triangle-linear" />}
-          onClick={() => onAction("Opened regressions")}
-        >
-          Open regressions
-        </Button>
-        <Button
-          fullWidth
-          variant="outlined"
-          sx={{ justifyContent: "flex-start", py: 1.25 }}
-          startIcon={<Iconify icon="solar:inbox-linear" />}
-          onClick={() => onAction("Review queue opened")}
-        >
-          Review queue
-        </Button>
-        <Button
-          fullWidth
-          variant="outlined"
-          sx={{ justifyContent: "flex-start", py: 1.25 }}
-          startIcon={<Iconify icon="solar:code-square-linear" />}
-          onClick={() => onAction("SDK snippets copied")}
-        >
-          Copy SDK run snippet
-        </Button>
+            CANDIDATE · v12
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 0.75, lineHeight: 1.6 }}>
+            {item.candidate}
+          </Typography>
+        </Paper>
       </Stack>
-    </Drawer>
+    </Box>
   );
 }
-FalconDrawer.propTypes = {
-  open: PropTypes.bool.isRequired,
-  onClose: PropTypes.func.isRequired,
-  onAction: PropTypes.func.isRequired,
-};
+OutputPair.propTypes = { item: CASE_SHAPE.isRequired };
 
-function RunWizard({ open, onClose, onCreate }) {
+function RunSetupDrawer({ open, onClose, onCreated, datasetVersion }) {
   const [step, setStep] = useState(0);
   const [target, setTarget] = useState("graph");
-  const [version, setVersion] = useState("v12");
+  const [version, setVersion] = useState(datasetVersion);
   const [evaluator, setEvaluator] = useState("Groundedness v4 · Policy v2");
   const [trials, setTrials] = useState("2");
   const [concurrency, setConcurrency] = useState("8");
@@ -940,7 +728,7 @@ function RunWizard({ open, onClose, onCreate }) {
       : target === "graph"
         ? "GraphVersion · support-router v31"
         : "External / SDK upload";
-  const closeAndReset = () => {
+  const resetClose = () => {
     setStep(0);
     onClose();
   };
@@ -948,7 +736,7 @@ function RunWizard({ open, onClose, onCreate }) {
     <Drawer
       anchor="right"
       open={open}
-      onClose={closeAndReset}
+      onClose={resetClose}
       PaperProps={{ sx: { width: { xs: "100%", sm: 600 } } }}
     >
       <Box sx={{ p: 2.5 }}>
@@ -961,27 +749,31 @@ function RunWizard({ open, onClose, onCreate }) {
               Run against {DATASET.name}
             </Typography>
           </Box>
-          <IconButton onClick={closeAndReset}>
+          <IconButton onClick={resetClose}>
             <Iconify icon="solar:close-circle-linear" />
           </IconButton>
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
-          Mock setup · no provider call is made.
+          Four-step setup · mock data only
         </Typography>
         <Stack direction="row" spacing={0.5} sx={{ mt: 2 }}>
-          {["Target", "Dataset", "Run settings", "Review"].map(
-            (label, index) => (
+          {["Target", "Dataset", "Settings", "Review"].map((label, index) => (
+            <Box key={label} sx={{ flex: 1 }}>
               <Box
-                key={label}
                 sx={{
-                  flex: 1,
                   height: 4,
                   borderRadius: 2,
                   bgcolor: index <= step ? "primary.main" : "divider",
                 }}
               />
-            ),
-          )}
+              <Typography
+                variant="caption"
+                color={index === step ? "primary.main" : "text.disabled"}
+              >
+                {label}
+              </Typography>
+            </Box>
+          ))}
         </Stack>
       </Box>
       <Divider />
@@ -992,8 +784,8 @@ function RunWizard({ open, onClose, onCreate }) {
               Where should this run execute?
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Choose the execution owner. GraphVersion runs use the existing
-              agent workflow; SDK runs wait for your caller to upload results.
+              Choose who executes the task. GraphVersion uses the existing agent
+              workflow; SDK runs wait for your caller to upload results.
             </Typography>
             {[
               {
@@ -1081,19 +873,19 @@ function RunWizard({ open, onClose, onCreate }) {
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 Input columns: question, account_tier, order_status · Expected:
-                answer · Metadata and split filters available after pinning.
+                answer
               </Typography>
             </Paper>
             <Alert severity="info">
-              4 variables mapped · strict variable validation is available in
-              the next step.
+              4 variables mapped · strict variable validation is configured
+              next.
             </Alert>
           </Stack>
         )}
         {step === 2 && (
           <Stack spacing={2}>
             <Typography variant="subtitle1" fontWeight={800}>
-              Evaluation and execution settings
+              Evaluation and run settings
             </Typography>
             <FormControl fullWidth size="small">
               <Typography
@@ -1111,9 +903,7 @@ function RunWizard({ open, onClose, onCreate }) {
                   Groundedness v4 · Policy v2
                 </MenuItem>
                 <MenuItem value="Groundedness v4">Groundedness v4</MenuItem>
-                <MenuItem value="None">
-                  No evaluator (review outputs only)
-                </MenuItem>
+                <MenuItem value="None">No evaluator</MenuItem>
               </Select>
             </FormControl>
             <Stack direction="row" spacing={1.5}>
@@ -1123,7 +913,7 @@ function RunWizard({ open, onClose, onCreate }) {
                 label="Trials"
                 value={trials}
                 onChange={(event) => setTrials(event.target.value)}
-                helperText="Repeat cases to measure variance"
+                helperText="Measure variance"
               />
               <TextField
                 fullWidth
@@ -1131,7 +921,7 @@ function RunWizard({ open, onClose, onCreate }) {
                 label="Max concurrency"
                 value={concurrency}
                 onChange={(event) => setConcurrency(event.target.value)}
-                helperText="Provider rate-limit cap"
+                helperText="Provider cap"
               />
             </Stack>
             <FormControlLabel
@@ -1163,47 +953,20 @@ function RunWizard({ open, onClose, onCreate }) {
             </Alert>
             <Paper variant="outlined" sx={{ p: 1.5 }}>
               <Stack spacing={1}>
-                <Stack direction="row" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Target
-                  </Typography>
-                  <Typography variant="body2" fontWeight={700}>
-                    {targetLabel}
-                  </Typography>
-                </Stack>
-                <Stack direction="row" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Dataset
-                  </Typography>
-                  <Typography variant="body2" fontWeight={700}>
-                    {DATASET.name} · {version} ·{" "}
-                    {DATASET.count.toLocaleString()} cases
-                  </Typography>
-                </Stack>
-                <Stack direction="row" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Evaluators
-                  </Typography>
-                  <Typography variant="body2" fontWeight={700}>
-                    {evaluator}
-                  </Typography>
-                </Stack>
-                <Stack direction="row" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Trials / concurrency
-                  </Typography>
-                  <Typography variant="body2" fontWeight={700}>
-                    {trials} / {concurrency}
-                  </Typography>
-                </Stack>
-                <Stack direction="row" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Expected evidence
-                  </Typography>
-                  <Typography variant="body2" fontWeight={700}>
-                    Outputs · scores · latency · cost · trace refs
-                  </Typography>
-                </Stack>
+                <SummaryRow label="Target" value={targetLabel} />
+                <SummaryRow
+                  label="Dataset"
+                  value={`${DATASET.name} · ${version} · ${DATASET.count.toLocaleString()} cases`}
+                />
+                <SummaryRow label="Evaluators" value={evaluator} />
+                <SummaryRow
+                  label="Trials / concurrency"
+                  value={`${trials} / ${concurrency}`}
+                />
+                <SummaryRow
+                  label="Expected evidence"
+                  value="Outputs · scores · latency · cost · trace refs"
+                />
               </Stack>
             </Paper>
             <Typography variant="caption" color="text.secondary">
@@ -1211,7 +974,7 @@ function RunWizard({ open, onClose, onCreate }) {
                 ? "Strict variable validation is on."
                 : "Runs may proceed with missing variables."}{" "}
               {target === "external" &&
-                "External / SDK runs will show Waiting for results until the caller uploads items."}
+                "External / SDK runs wait for uploaded results."}
             </Typography>
           </Stack>
         )}
@@ -1236,8 +999,18 @@ function RunWizard({ open, onClose, onCreate }) {
             variant="contained"
             startIcon={<Iconify icon="solar:play-circle-linear" />}
             onClick={() => {
-              onCreate({ name, targetLabel, dataset: version });
-              closeAndReset();
+              onCreated({
+                name: name || "New experiment run",
+                target: targetLabel,
+                targetType:
+                  target === "prompt"
+                    ? "Prompt / model"
+                    : target === "graph"
+                      ? "GraphVersion"
+                      : "External / SDK",
+                dataset: version,
+              });
+              resetClose();
             }}
           >
             Create run
@@ -1247,544 +1020,38 @@ function RunWizard({ open, onClose, onCreate }) {
     </Drawer>
   );
 }
-RunWizard.propTypes = {
+RunSetupDrawer.propTypes = {
   open: PropTypes.bool.isRequired,
   onClose: PropTypes.func.isRequired,
-  onCreate: PropTypes.func.isRequired,
+  onCreated: PropTypes.func.isRequired,
+  datasetVersion: PropTypes.string.isRequired,
 };
 
-function RunsView({
-  runs,
-  selectedIds,
-  baselineId,
-  candidateId,
-  onToggle,
-  onBaseline,
-  onCandidate,
-  onCompare,
-  compareVisible,
-  search,
-  setSearch,
-  statusFilter,
-  setStatusFilter,
-  onOpenCase,
-}) {
-  const selectedRuns = selectedIds
-    .map((id) => runs.find((run) => run.id === id))
-    .filter(Boolean);
-  const baseline = runs.find((run) => run.id === baselineId) || runs[1];
-  const candidate = runs.find((run) => run.id === candidateId) || runs[0];
-  const filteredRuns = runs.filter(
-    (run) =>
-      (statusFilter === "all" || run.status.toLowerCase() === statusFilter) &&
-      (!search ||
-        `${run.name} ${run.target} ${run.dataset}`
-          .toLowerCase()
-          .includes(search.toLowerCase())),
-  );
+function SummaryRow({ label, value }) {
   return (
-    <Stack spacing={2}>
-      <Card variant="outlined" sx={{ borderRadius: 2 }}>
-        <CardContent
-          sx={{
-            p: { xs: 2, md: 2.5 },
-            "&:last-child": { pb: { xs: 2, md: 2.5 } },
-          }}
-        >
-          <Stack
-            direction={{ xs: "column", md: "row" }}
-            justifyContent="space-between"
-            spacing={2}
-          >
-            <Box>
-              <Typography variant="h6" fontWeight={800}>
-                Runs
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Select two compatible runs to compare their pinned outputs and
-                evaluator evidence.
-              </Typography>
-            </Box>
-            <Button
-              variant="contained"
-              disabled={
-                selectedRuns.length !== 2 ||
-                !selectedRuns.every((run) => run.compatible)
-              }
-              onClick={onCompare}
-              startIcon={<Iconify icon="solar:chart-2-linear" />}
-            >
-              Compare {selectedRuns.length === 2 ? "selected" : "runs"}
-            </Button>
-          </Stack>
-          {selectedRuns.length > 0 && (
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={1.25}
-              sx={{ mt: 2 }}
-            >
-              <RunPicker
-                run={baseline}
-                kind="baseline"
-                onSet={() => onBaseline(candidateId)}
-              />
-              <RunPicker
-                run={candidate}
-                kind="candidate"
-                onSet={() => onCandidate(baselineId)}
-              />
-            </Stack>
-          )}
-          {selectedRuns.length === 2 &&
-            !selectedRuns.every((run) => run.compatible) && (
-              <Alert severity="warning" sx={{ mt: 1.5 }}>
-                Cannot compare: run plans differ. Select runs with the same
-                dataset and evaluator plan.
-              </Alert>
-            )}
-        </CardContent>
-      </Card>
-      <Card variant="outlined" sx={{ borderRadius: 2 }}>
-        <CardContent
-          sx={{
-            p: { xs: 2, md: 2.5 },
-            "&:last-child": { pb: { xs: 2, md: 2.5 } },
-          }}
-        >
-          <Stack
-            direction={{ xs: "column", md: "row" }}
-            justifyContent="space-between"
-            spacing={1.5}
-          >
-            <Box>
-              <Typography variant="subtitle1" fontWeight={800}>
-                Experiment history
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {runs.length} runs · mock data
-              </Typography>
-            </Box>
-            <Stack direction="row" spacing={1}>
-              <TextField
-                size="small"
-                placeholder="Search runs"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                sx={{ width: 190 }}
-              />
-              <FormControl size="small" sx={{ minWidth: 125 }}>
-                <Select
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
-                >
-                  <MenuItem value="all">All statuses</MenuItem>
-                  <MenuItem value="completed">Completed</MenuItem>
-                  <MenuItem value="partial">Partial</MenuItem>
-                  <MenuItem value="running">Running</MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-          </Stack>
-          <TableContainer sx={{ mt: 1.5 }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell padding="checkbox" />
-                  <TableCell>Run</TableCell>
-                  <TableCell>Target</TableCell>
-                  <TableCell>Dataset</TableCell>
-                  <TableCell>Progress</TableCell>
-                  <TableCell>Evaluator</TableCell>
-                  <TableCell>Quality</TableCell>
-                  <TableCell>Cost / latency</TableCell>
-                  <TableCell align="right"> </TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filteredRuns.map((run) => (
-                  <TableRow
-                    key={run.id}
-                    hover
-                    selected={selectedIds.includes(run.id)}
-                  >
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        checked={selectedIds.includes(run.id)}
-                        onChange={() => onToggle(run.id)}
-                        inputProps={{ "aria-label": `Select ${run.name}` }}
-                      />
-                    </TableCell>
-                    <TableCell sx={{ minWidth: 190 }}>
-                      <Typography variant="body2" fontWeight={750}>
-                        {run.name}
-                      </Typography>
-                      <Stack direction="row" spacing={0.5} alignItems="center">
-                        <Chip
-                          size="small"
-                          label={run.status}
-                          color={
-                            run.status === "Completed" ? "success" : "warning"
-                          }
-                          variant="outlined"
-                        />
-                        <Typography variant="caption" color="text.secondary">
-                          {run.created}
-                        </Typography>
-                      </Stack>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption" color="text.secondary">
-                        {run.targetType}
-                      </Typography>
-                      <Typography variant="body2" noWrap sx={{ maxWidth: 180 }}>
-                        {run.target.replace(`${run.targetType} · `, "")}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={run.dataset}
-                      />
-                    </TableCell>
-                    <TableCell sx={{ minWidth: 120 }}>
-                      <Typography variant="caption">
-                        {run.completed.toLocaleString()} /{" "}
-                        {run.planned.toLocaleString()}
-                      </Typography>
-                      <LinearProgress
-                        variant="determinate"
-                        value={run.progress}
-                        color={run.status === "Partial" ? "warning" : "success"}
-                        sx={{ height: 5, borderRadius: 3, mt: 0.5 }}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption">{run.evaluator}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" fontWeight={750}>
-                        {run.quality}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption">{run.cost}</Typography>
-                      <Typography
-                        variant="caption"
-                        display="block"
-                        color="text.secondary"
-                      >
-                        {run.latency}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title="Set as baseline">
-                        <IconButton
-                          size="small"
-                          onClick={() => onBaseline(run.id)}
-                        >
-                          <Iconify icon="solar:flag-linear" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Open run">
-                        <IconButton
-                          size="small"
-                          onClick={() => onCandidate(run.id)}
-                        >
-                          <Iconify icon="solar:arrow-right-up-linear" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {filteredRuns.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={9}>
-                      <Typography
-                        color="text.secondary"
-                        sx={{ py: 4, textAlign: "center" }}
-                      >
-                        No runs match this search.
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: "block", mt: 1 }}
-          >
-            Select rows with the checkbox. Baseline and candidate labels update
-            the comparison context.
-          </Typography>
-        </CardContent>
-      </Card>
-      {compareVisible && <CompareView onOpenCase={onOpenCase} />}
+    <Stack direction="row" justifyContent="space-between" spacing={2}>
+      <Typography variant="body2" color="text.secondary">
+        {label}
+      </Typography>
+      <Typography variant="body2" fontWeight={700} textAlign="right">
+        {value}
+      </Typography>
     </Stack>
   );
 }
-RunsView.propTypes = {
-  runs: PropTypes.arrayOf(RUN_SHAPE).isRequired,
-  selectedIds: PropTypes.arrayOf(PropTypes.string).isRequired,
-  baselineId: PropTypes.string.isRequired,
-  candidateId: PropTypes.string.isRequired,
-  onToggle: PropTypes.func.isRequired,
-  onBaseline: PropTypes.func.isRequired,
-  onCandidate: PropTypes.func.isRequired,
-  onCompare: PropTypes.func.isRequired,
-  compareVisible: PropTypes.bool.isRequired,
-  search: PropTypes.string.isRequired,
-  setSearch: PropTypes.func.isRequired,
-  statusFilter: PropTypes.string.isRequired,
-  setStatusFilter: PropTypes.func.isRequired,
-  onOpenCase: PropTypes.func.isRequired,
+SummaryRow.propTypes = {
+  label: PropTypes.string.isRequired,
+  value: PropTypes.string.isRequired,
 };
 
-function CompareView({ onOpenCase }) {
-  const [outcome, setOutcome] = useState("all");
-  const [split, setSplit] = useState("all");
-  const filtered = CASES.filter(
+function ItemsView({ onOpenVersion }) {
+  const [query, setQuery] = useState("");
+  const items = CASES.filter(
     (item) =>
-      (outcome === "all" || item.status === outcome) &&
-      (split === "all" || item.split === split),
-  );
-  return (
-    <Stack spacing={2}>
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
-        <MetricCard
-          label="Quality"
-          value="86%"
-          detail="+4.2 pts vs baseline"
-          tone="success"
-          onClick={() => setOutcome("improved")}
-          active={outcome === "improved"}
-        />
-        <MetricCard
-          label="Cost / 1k"
-          value="$0.34"
-          detail="−29% vs baseline"
-          tone="success"
-        />
-        <MetricCard
-          label="Median latency"
-          value="1.8s"
-          detail="−0.3s vs baseline"
-          tone="success"
-        />
-        <MetricCard
-          label="Regressions"
-          value="2"
-          detail="2 of 1,248 cases"
-          tone="error"
-          onClick={() => setOutcome("regressed")}
-          active={outcome === "regressed"}
-        />
-        <MetricCard
-          label="Incomplete"
-          value="1"
-          detail="Trace/evidence missing"
-          tone="warning"
-          onClick={() => setOutcome("missing")}
-          active={outcome === "missing"}
-        />
-      </Stack>
-      <Card variant="outlined" sx={{ borderRadius: 2 }}>
-        <CardContent
-          sx={{
-            p: { xs: 2, md: 2.5 },
-            "&:last-child": { pb: { xs: 2, md: 2.5 } },
-          }}
-        >
-          <Stack
-            direction={{ xs: "column", md: "row" }}
-            justifyContent="space-between"
-            spacing={1.5}
-          >
-            <Box>
-              <Typography variant="h6" fontWeight={800}>
-                Comparison
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Baseline <strong>Support agent · v11</strong> → Candidate{" "}
-                <strong>Support agent · v12</strong>
-              </Typography>
-            </Box>
-            <Stack direction="row" spacing={1}>
-              <FormControl size="small" sx={{ minWidth: 125 }}>
-                <Select
-                  value={outcome}
-                  onChange={(event) => setOutcome(event.target.value)}
-                >
-                  <MenuItem value="all">All outcomes</MenuItem>
-                  <MenuItem value="regressed">Regressions</MenuItem>
-                  <MenuItem value="improved">Improvements</MenuItem>
-                  <MenuItem value="unchanged">Ties</MenuItem>
-                  <MenuItem value="missing">Incomplete</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl size="small" sx={{ minWidth: 110 }}>
-                <Select
-                  value={split}
-                  onChange={(event) => setSplit(event.target.value)}
-                >
-                  <MenuItem value="all">All splits</MenuItem>
-                  <MenuItem value="returns">Returns</MenuItem>
-                  <MenuItem value="billing">Billing</MenuItem>
-                  <MenuItem value="shipping">Shipping</MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-          </Stack>
-          <TableContainer sx={{ mt: 1.5 }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Case</TableCell>
-                  <TableCell>Metadata / split</TableCell>
-                  <TableCell>Baseline</TableCell>
-                  <TableCell>Candidate</TableCell>
-                  <TableCell>Delta</TableCell>
-                  <TableCell>Trace</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filtered.map((item) => (
-                  <TableRow
-                    key={item.id}
-                    hover
-                    onClick={() => onOpenCase(item)}
-                    sx={{ cursor: "pointer" }}
-                  >
-                    <TableCell sx={{ minWidth: 220 }}>
-                      <Typography variant="body2" fontWeight={750}>
-                        {item.question}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {item.id}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={item.split}
-                      />
-                      <Typography
-                        variant="caption"
-                        display="block"
-                        color="text.secondary"
-                      >
-                        {item.metadata}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption" color="text.secondary">
-                        {item.baselineScore == null
-                          ? "Not assessed"
-                          : `${item.baselineScore}%`}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography
-                        variant="caption"
-                        color={
-                          item.status === "regressed"
-                            ? "error.main"
-                            : item.status === "missing"
-                              ? "warning.main"
-                              : "success.main"
-                        }
-                      >
-                        {item.candidateScore == null
-                          ? "No result"
-                          : `${item.candidateScore}%`}
-                      </Typography>
-                      <Box sx={{ mt: 0.4 }}>
-                        <OutcomeChip status={item.status} />
-                      </Box>
-                    </TableCell>
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        fontWeight={750}
-                        color={
-                          item.status === "improved"
-                            ? "success.main"
-                            : item.status === "regressed"
-                              ? "error.main"
-                              : "text.secondary"
-                        }
-                      >
-                        {item.delta}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip title={item.traceDetail}>
-                        <Iconify
-                          icon={
-                            item.trace === "Available"
-                              ? "solar:check-circle-bold"
-                              : "solar:minus-circle-linear"
-                          }
-                          color={
-                            item.trace === "Available"
-                              ? "success.main"
-                              : "text.disabled"
-                          }
-                        />
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {filtered.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={6}>
-                      <Typography
-                        color="text.secondary"
-                        sx={{ py: 4, textAlign: "center" }}
-                      >
-                        No cases match this filter.
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          <Stack
-            direction="row"
-            justifyContent="space-between"
-            sx={{ mt: 1.5 }}
-          >
-            <Typography variant="caption" color="text.secondary">
-              Showing {filtered.length} changed or sampled cases · full plan
-              1,248 cases × 2 trials
-            </Typography>
-            <Button
-              size="small"
-              endIcon={<Iconify icon="solar:arrow-right-linear" />}
-            >
-              Open full analysis
-            </Button>
-          </Stack>
-        </CardContent>
-      </Card>
-    </Stack>
-  );
-}
-CompareView.propTypes = { onOpenCase: PropTypes.func.isRequired };
-
-function ItemsView({ onOpenCase, onVersion }) {
-  const [search, setSearch] = useState("");
-  const visible = CASES.filter(
-    (item) =>
-      !search ||
-      `${item.question} ${item.id}`
+      !query ||
+      `${item.question} ${item.id} ${item.metadata}`
         .toLowerCase()
-        .includes(search.toLowerCase()),
+        .includes(query.toLowerCase()),
   );
   return (
     <Card variant="outlined" sx={{ borderRadius: 2 }}>
@@ -1792,74 +1059,73 @@ function ItemsView({ onOpenCase, onVersion }) {
         <Stack
           direction={{ xs: "column", md: "row" }}
           justifyContent="space-between"
-          spacing={1.5}
+          spacing={2}
         >
           <Box>
             <Typography variant="h6" fontWeight={800}>
               Items
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Immutable examples used by every run. Select an item to inspect
-              expected output and provenance.
+              Pinned examples used by every run. Use Experiments to inspect a
+              case comparison.
             </Typography>
           </Box>
           <Stack direction="row" spacing={1}>
             <TextField
               size="small"
               placeholder="Search items"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
             />
-            <Button variant="outlined" onClick={onVersion}>
+            <Button size="small" variant="outlined" onClick={onOpenVersion}>
               Create version
             </Button>
           </Stack>
         </Stack>
-        <TableContainer sx={{ mt: 1.5 }}>
+        <TableContainer sx={{ mt: 2 }}>
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>Input</TableCell>
                 <TableCell>Split</TableCell>
-                <TableCell>Expected</TableCell>
-                <TableCell>Latest evidence</TableCell>
+                <TableCell>Metadata</TableCell>
+                <TableCell>Expected output</TableCell>
+                <TableCell>Latest result</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {visible.map((item) => (
-                <TableRow
-                  hover
-                  key={item.id}
-                  onClick={() => onOpenCase(item)}
-                  sx={{ cursor: "pointer" }}
-                >
+              {items.map((item) => (
+                <TableRow hover key={item.id} sx={{ cursor: "default" }}>
                   <TableCell>
                     <Typography variant="body2" fontWeight={700}>
                       {item.question}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {item.id} · {item.metadata}
+                      {item.id}
                     </Typography>
                   </TableCell>
                   <TableCell>
                     <Chip size="small" variant="outlined" label={item.split} />
                   </TableCell>
-                  <TableCell>
-                    <Typography variant="caption">{item.reference}</Typography>
+                  <TableCell>{item.metadata}</TableCell>
+                  <TableCell sx={{ maxWidth: 300 }}>
+                    <Typography variant="body2" noWrap>
+                      {item.reference}
+                    </Typography>
                   </TableCell>
                   <TableCell>
                     <OutcomeChip status={item.status} />
                   </TableCell>
                 </TableRow>
               ))}
-              {visible.length === 0 && (
+              {items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4}>
+                  <TableCell colSpan={5}>
                     <Typography
                       color="text.secondary"
                       sx={{ py: 4, textAlign: "center" }}
                     >
-                      No items match your search.
+                      No items match this search.
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -1872,196 +1138,312 @@ function ItemsView({ onOpenCase, onVersion }) {
   );
 }
 ItemsView.propTypes = {
-  onOpenCase: PropTypes.func.isRequired,
-  onVersion: PropTypes.func.isRequired,
+  onOpenVersion: PropTypes.func.isRequired,
 };
 
-function VersionsView({ onOpenVersion }) {
+function RunsView({
+  runs,
+  selectedIds,
+  onToggle,
+  onCompare,
+  onEvaluator,
+  search,
+  setSearch,
+  statusFilter,
+  setStatusFilter,
+}) {
+  const visibleRuns = runs.filter(
+    (run) =>
+      (statusFilter === "all" || run.status === statusFilter) &&
+      (!search ||
+        `${run.name} ${run.target} ${run.dataset}`
+          .toLowerCase()
+          .includes(search.toLowerCase())),
+  );
+  const selectedRuns = runs.filter((run) => selectedIds.includes(run.id));
+  const canCompare =
+    selectedRuns.length === 2 &&
+    selectedRuns.every((run) => run.status === "Completed" && run.compatible);
   return (
-    <Card variant="outlined" sx={{ borderRadius: 2 }}>
-      <CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          alignItems="center"
+    <Stack spacing={2}>
+      <Card
+        variant="outlined"
+        sx={{
+          borderRadius: 2,
+          position: "sticky",
+          top: 72,
+          zIndex: 2,
+          bgcolor: "background.paper",
+        }}
+      >
+        <CardContent
+          sx={{
+            p: { xs: 2, md: 2.5 },
+            "&:last-child": { pb: { xs: 2, md: 2.5 } },
+          }}
         >
-          <Box>
-            <Typography variant="h6" fontWeight={800}>
-              Version history
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Immutable snapshots keep experiment evidence reproducible.
-            </Typography>
-          </Box>
-          <Button variant="contained">Create version</Button>
-        </Stack>
-        <TableContainer sx={{ mt: 1.5 }}>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Version</TableCell>
-                <TableCell>Items</TableCell>
-                <TableCell>Source</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell>Schema</TableCell>
-                <TableCell align="right"> </TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {VERSIONS.map((version) => (
-                <TableRow hover key={version.id}>
-                  <TableCell>
-                    <Typography variant="body2" fontWeight={750}>
-                      {version.id}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {version.hash}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>{version.items.toLocaleString()}</TableCell>
-                  <TableCell>{version.source}</TableCell>
-                  <TableCell>{version.created}</TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      label={version.schema}
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Button size="small" onClick={() => onOpenVersion(version)}>
-                      Inspect
-                    </Button>
-                  </TableCell>
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            justifyContent="space-between"
+            spacing={2}
+            alignItems={{ md: "center" }}
+          >
+            <Box>
+              <Typography variant="h6" fontWeight={800}>
+                Runs
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Choose two completed runs when you are ready to compare them.
+              </Typography>
+            </Box>
+            <Stack direction="row" spacing={1}>
+              <Button variant="outlined" size="small" onClick={onEvaluator}>
+                Evaluator library
+              </Button>
+              <Button
+                variant="contained"
+                disabled={!canCompare}
+                onClick={onCompare}
+                startIcon={<Iconify icon="solar:chart-2-linear" />}
+              >
+                Compare {selectedRuns.length === 2 ? "2 runs" : "runs"}
+              </Button>
+            </Stack>
+          </Stack>
+          {selectedRuns.length === 2 && !canCompare && (
+            <Alert severity="warning" sx={{ mt: 1.5 }}>
+              These runs cannot be compared. Both must be complete and have the
+              same pinned plan and evaluator bindings.
+            </Alert>
+          )}
+          {selectedRuns.length > 0 && (
+            <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+              <Chip
+                color="primary"
+                variant="outlined"
+                label={`${selectedRuns.length} selected`}
+                onDelete={() => onToggle(selectedIds[0])}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ alignSelf: "center" }}
+              >
+                Select exactly two rows to enable Compare.
+              </Typography>
+            </Stack>
+          )}
+        </CardContent>
+      </Card>
+      <Card variant="outlined" sx={{ borderRadius: 2 }}>
+        <CardContent
+          sx={{ p: { xs: 2, md: 2.5 }, "&:last-child": { pb: 2.5 } }}
+        >
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            justifyContent="space-between"
+            spacing={1.5}
+          >
+            <Box>
+              <Typography variant="subtitle1" fontWeight={800}>
+                Experiment history
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {runs.length} runs · newest first
+              </Typography>
+            </Box>
+            <Stack direction="row" spacing={1}>
+              <TextField
+                size="small"
+                placeholder="Search runs"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                sx={{ width: 200 }}
+              />
+              <FormControl size="small" sx={{ minWidth: 135 }}>
+                <Select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                >
+                  <MenuItem value="all">All statuses</MenuItem>
+                  <MenuItem value="Completed">Completed</MenuItem>
+                  <MenuItem value="Partial">Partial</MenuItem>
+                  <MenuItem value="Queued">Queued</MenuItem>
+                </Select>
+              </FormControl>
+            </Stack>
+          </Stack>
+          <TableContainer sx={{ mt: 1.5 }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell padding="checkbox" />
+                  <TableCell>Run</TableCell>
+                  <TableCell>Target</TableCell>
+                  <TableCell>Dataset</TableCell>
+                  <TableCell>Status / progress</TableCell>
+                  <TableCell>Evaluator</TableCell>
+                  <TableCell>Quality</TableCell>
+                  <TableCell>Latency</TableCell>
+                  <TableCell>Cost</TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </CardContent>
-    </Card>
+              </TableHead>
+              <TableBody>
+                {visibleRuns.map((run) => (
+                  <TableRow
+                    key={run.id}
+                    hover
+                    selected={selectedIds.includes(run.id)}
+                  >
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        size="small"
+                        checked={selectedIds.includes(run.id)}
+                        onChange={() => onToggle(run.id)}
+                        inputProps={{ "aria-label": `Select ${run.name}` }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 190 }}>
+                      <Typography variant="body2" fontWeight={750}>
+                        {run.name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {run.created}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 180 }}>
+                      <Typography variant="body2">{run.target}</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {run.targetType}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={run.dataset}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 130 }}>
+                      <RunStatus status={run.status} />
+                      <Typography
+                        variant="caption"
+                        display="block"
+                        color="text.secondary"
+                      >
+                        {run.completed.toLocaleString()} /{" "}
+                        {run.planned.toLocaleString()}
+                      </Typography>
+                      <LinearProgress
+                        variant="determinate"
+                        value={run.progress}
+                        color={run.status === "Partial" ? "warning" : "success"}
+                        sx={{ mt: 0.5, height: 5, borderRadius: 3 }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="caption">{run.evaluator}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" fontWeight={750}>
+                        {run.quality}%
+                      </Typography>
+                    </TableCell>
+                    <TableCell>{run.latency}</TableCell>
+                    <TableCell>{run.cost}</TableCell>
+                  </TableRow>
+                ))}
+                {visibleRuns.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={9}>
+                      <Typography
+                        color="text.secondary"
+                        sx={{ py: 4, textAlign: "center" }}
+                      >
+                        No runs match these filters.
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </CardContent>
+      </Card>
+    </Stack>
   );
 }
-VersionsView.propTypes = { onOpenVersion: PropTypes.func.isRequired };
+RunsView.propTypes = {
+  runs: PropTypes.arrayOf(RUN_SHAPE).isRequired,
+  selectedIds: PropTypes.arrayOf(PropTypes.string).isRequired,
+  onToggle: PropTypes.func.isRequired,
+  onCompare: PropTypes.func.isRequired,
+  onEvaluator: PropTypes.func.isRequired,
+  search: PropTypes.string.isRequired,
+  setSearch: PropTypes.func.isRequired,
+  statusFilter: PropTypes.string.isRequired,
+  setStatusFilter: PropTypes.func.isRequired,
+};
 
-function EvaluatorsView() {
+function Metric({ label, value, detail, tone }) {
   return (
-    <Card variant="outlined" sx={{ borderRadius: 2 }}>
-      <CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
-        <Stack direction="row" justifyContent="space-between">
-          <Box>
-            <Typography variant="h6" fontWeight={800}>
-              Evaluators
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Pinned evaluator versions are applied to each run and remain
-              comparable.
-            </Typography>
-          </Box>
-          <Button variant="outlined">Manage evaluators</Button>
-        </Stack>
-        <TableContainer sx={{ mt: 1.5 }}>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Evaluator</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell>Mapping</TableCell>
-                <TableCell>Runs</TableCell>
-                <TableCell>Status</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {EVALUATORS.map((evaluator) => (
-                <TableRow hover key={evaluator.name}>
-                  <TableCell>
-                    <Typography variant="body2" fontWeight={750}>
-                      {evaluator.name} · {evaluator.version}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>{evaluator.type}</TableCell>
-                  <TableCell>{evaluator.mapped}</TableCell>
-                  <TableCell>{evaluator.runs}</TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      color="success"
-                      variant="outlined"
-                      label={evaluator.state}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+    <Card variant="outlined" sx={{ flex: 1, minWidth: 155, borderRadius: 2 }}>
+      <CardContent sx={{ p: 1.75, "&:last-child": { pb: 1.75 } }}>
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+          {label}
+        </Typography>
+        <Typography
+          variant="h5"
+          fontWeight={850}
+          color={
+            tone === "error"
+              ? "error.main"
+              : tone === "warning"
+                ? "warning.main"
+                : tone === "success"
+                  ? "success.main"
+                  : "text.primary"
+          }
+          sx={{ mt: 0.5 }}
+        >
+          {value}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {detail}
+        </Typography>
       </CardContent>
     </Card>
   );
 }
+Metric.propTypes = {
+  label: PropTypes.string.isRequired,
+  value: PropTypes.string.isRequired,
+  detail: PropTypes.string.isRequired,
+  tone: PropTypes.oneOf(["default", "success", "error", "warning"]),
+};
 
-export default function DatasetExperimentsMock() {
-  const [tab, setTab] = useState("runs");
-  const [runs, setRuns] = useState(INITIAL_RUNS);
-  const [selectedIds, setSelectedIds] = useState(["run-001", "run-002"]);
-  const [baselineId, setBaselineId] = useState("run-001");
-  const [candidateId, setCandidateId] = useState("run-002");
-  const [compareVisible, setCompareVisible] = useState(true);
-  const [selectedCase, setSelectedCase] = useState(null);
-  const [selectedVersion, setSelectedVersion] = useState(null);
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const [falconOpen, setFalconOpen] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-
-  const selectedRun = useMemo(
-    () => runs.find((run) => run.id === candidateId),
-    [candidateId, runs],
+function CompareView({ baseline, candidate, onBack, onOpenCase }) {
+  const [outcome, setOutcome] = useState("regressed");
+  const [split, setSplit] = useState("all");
+  const [query, setQuery] = useState("");
+  const cases = CASES.filter(
+    (item) =>
+      (outcome === "all" || item.status === outcome) &&
+      (split === "all" || item.split === split) &&
+      (!query ||
+        `${item.id} ${item.question} ${item.metadata}`
+          .toLowerCase()
+          .includes(query.toLowerCase())),
   );
-  const handleToggle = (id) =>
-    setSelectedIds((current) =>
-      current.includes(id)
-        ? current.filter((value) => value !== id)
-        : current.length < 2
-          ? [...current, id]
-          : current,
-    );
-  const handleCreateRun = (payload) => {
-    const id = `run-${runs.length + 1}`;
-    setRuns((current) => [
-      {
-        ...INITIAL_RUNS[3],
-        ...payload,
-        id,
-        name: payload.name || "New experiment run",
-        status: "Queued",
-        progress: 0,
-        completed: 0,
-        created: "Just now",
-        compatible: true,
-      },
-      ...current,
-    ]);
-    setNotice(
-      "Run created and queued. The run list will update as items complete (mock).",
-    );
-    setTab("runs");
-  };
-  const handleFalcon = (message) => {
-    setNotice(message);
-    setFalconOpen(false);
-    if (message === "Run a new experiment") setWizardOpen(true);
-  };
-
   return (
     <>
-      <Helmet>
-        <title>{DATASET.name} · Datasets</title>
-      </Helmet>
       <HeaderComponent
-        links={[{ name: "Datasets", href: "/" }, { name: DATASET.name }]}
-        routeDepth={2}
+        links={[
+          { name: "Datasets", href: "/" },
+          { name: DATASET.name, href: "/design/dataset-experiments" },
+          { name: "Compare" },
+        ]}
+        routeDepth={3}
       />
       <Box
         sx={{
@@ -2071,7 +1453,509 @@ export default function DatasetExperimentsMock() {
           py: { xs: 2, md: 3 },
         }}
       >
-        <Box sx={{ maxWidth: 1500, mx: "auto" }}>
+        <Box sx={{ maxWidth: 1480, mx: "auto" }}>
+          <Button
+            size="small"
+            startIcon={<Iconify icon="solar:arrow-left-linear" />}
+            onClick={onBack}
+            sx={{ mb: 1.5 }}
+          >
+            Back to runs
+          </Button>
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            justifyContent="space-between"
+            alignItems={{ md: "center" }}
+            spacing={2}
+          >
+            <Box>
+              <Typography variant="h5" fontWeight={850}>
+                Compare runs
+              </Typography>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mt: 0.5 }}
+              >
+                Review the candidate against a pinned baseline before release.
+              </Typography>
+            </Box>
+            <Chip
+              color="warning"
+              variant="outlined"
+              label="Review required · 1 regression · 1 incomplete"
+            />
+          </Stack>
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            spacing={1.5}
+            sx={{ mt: 2 }}
+          >
+            <Paper
+              variant="outlined"
+              sx={{ p: 1.5, flex: 1, borderColor: "primary.main" }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                fontWeight={750}
+              >
+                BASELINE
+              </Typography>
+              <Typography variant="body2" fontWeight={800} sx={{ mt: 0.4 }}>
+                {baseline.name}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {baseline.dataset} · {baseline.target} · {baseline.evaluator}
+              </Typography>
+            </Paper>
+            <Paper
+              variant="outlined"
+              sx={{ p: 1.5, flex: 1, borderColor: "success.main" }}
+            >
+              <Typography
+                variant="caption"
+                color="success.dark"
+                fontWeight={750}
+              >
+                CANDIDATE
+              </Typography>
+              <Typography variant="body2" fontWeight={800} sx={{ mt: 0.4 }}>
+                {candidate.name}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {candidate.dataset} · {candidate.target} · {candidate.evaluator}
+              </Typography>
+            </Paper>
+          </Stack>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={1.5}
+            sx={{ mt: 2 }}
+          >
+            <Metric
+              label="Quality"
+              value="86%"
+              detail="+4.2 points"
+              tone="success"
+            />
+            <Metric
+              label="Cost / 1k"
+              value="$0.34"
+              detail="−29%"
+              tone="success"
+            />
+            <Metric
+              label="Median latency"
+              value="1.8s"
+              detail="−0.3s"
+              tone="success"
+            />
+            <Metric
+              label="Regressions"
+              value="1"
+              detail="Critical"
+              tone="error"
+            />
+          </Stack>
+          <Card variant="outlined" sx={{ mt: 2, borderRadius: 2 }}>
+            <CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
+              <Stack
+                direction={{ xs: "column", md: "row" }}
+                justifyContent="space-between"
+                spacing={1.5}
+                alignItems={{ md: "center" }}
+              >
+                <Box>
+                  <Typography variant="h6" fontWeight={800}>
+                    Case review
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Click a case to inspect inputs, outputs, evaluator evidence,
+                    and trace status.
+                  </Typography>
+                </Box>
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    size="small"
+                    placeholder="Search cases"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    sx={{ width: 180 }}
+                  />
+                  <FormControl size="small" sx={{ minWidth: 130 }}>
+                    <Select
+                      value={outcome}
+                      onChange={(event) => setOutcome(event.target.value)}
+                    >
+                      <MenuItem value="regressed">Regressions</MenuItem>
+                      <MenuItem value="all">All outcomes</MenuItem>
+                      <MenuItem value="improved">Improvements</MenuItem>
+                      <MenuItem value="unchanged">Ties</MenuItem>
+                      <MenuItem value="missing">Incomplete</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <FormControl size="small" sx={{ minWidth: 110 }}>
+                    <Select
+                      value={split}
+                      onChange={(event) => setSplit(event.target.value)}
+                    >
+                      <MenuItem value="all">All splits</MenuItem>
+                      <MenuItem value="returns">Returns</MenuItem>
+                      <MenuItem value="billing">Billing</MenuItem>
+                      <MenuItem value="shipping">Shipping</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+              </Stack>
+              <Alert severity="info" sx={{ mt: 1.5 }}>
+                Showing {outcome === "all" ? "all outcomes" : outcome}. Missing,
+                evaluator-error, and failed cases remain explicit release
+                evidence.
+              </Alert>
+              <TableContainer sx={{ mt: 2 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Case</TableCell>
+                      <TableCell>Split / metadata</TableCell>
+                      <TableCell>Baseline output</TableCell>
+                      <TableCell>Candidate output</TableCell>
+                      <TableCell>Outcome</TableCell>
+                      <TableCell>Score Δ</TableCell>
+                      <TableCell>Trace</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {cases.map((item) => (
+                      <TableRow
+                        key={item.id}
+                        hover
+                        onClick={() => onOpenCase(item)}
+                        sx={{
+                          cursor: "pointer",
+                          "&:hover": { bgcolor: alpha("#5d5fef", 0.05) },
+                        }}
+                      >
+                        <TableCell sx={{ minWidth: 210 }}>
+                          <Typography variant="body2" fontWeight={700}>
+                            {item.question}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {item.id}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={item.split}
+                          />
+                          <Typography
+                            variant="caption"
+                            display="block"
+                            color="text.secondary"
+                          >
+                            {item.metadata}
+                          </Typography>
+                        </TableCell>
+                        <TableCell sx={{ maxWidth: 220 }}>
+                          <Typography variant="body2" noWrap>
+                            {item.baseline}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {item.baselineScore == null
+                              ? "Not assessed"
+                              : `${item.baselineScore}%`}
+                          </Typography>
+                        </TableCell>
+                        <TableCell sx={{ maxWidth: 240 }}>
+                          <Typography variant="body2" noWrap>
+                            {item.candidate}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color={
+                              item.status === "regressed"
+                                ? "error.main"
+                                : item.status === "missing"
+                                  ? "warning.main"
+                                  : "success.main"
+                            }
+                          >
+                            {item.candidateScore == null
+                              ? "No result"
+                              : `${item.candidateScore}%`}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <OutcomeChip status={item.status} />
+                        </TableCell>
+                        <TableCell>
+                          <Typography
+                            fontWeight={800}
+                            color={
+                              item.status === "improved"
+                                ? "success.main"
+                                : item.status === "regressed"
+                                  ? "error.main"
+                                  : "text.secondary"
+                            }
+                          >
+                            {item.delta}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={item.traceDetail}>
+                            <Iconify
+                              icon={
+                                item.trace === "Available"
+                                  ? "solar:check-circle-bold"
+                                  : "solar:minus-circle-linear"
+                              }
+                              color={
+                                item.trace === "Available"
+                                  ? "success.main"
+                                  : "text.disabled"
+                              }
+                            />
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {cases.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7}>
+                          <Typography
+                            color="text.secondary"
+                            sx={{ py: 4, textAlign: "center" }}
+                          >
+                            No cases match these filters.
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                sx={{ mt: 1.5 }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  Showing {cases.length} of 1,248 pinned cases · plan identity
+                  verified
+                </Typography>
+                <Button size="small" onClick={() => setOutcome("all")}>
+                  Show all cases
+                </Button>
+              </Stack>
+            </CardContent>
+          </Card>
+        </Box>
+      </Box>
+    </>
+  );
+}
+CompareView.propTypes = {
+  baseline: RUN_SHAPE.isRequired,
+  candidate: RUN_SHAPE.isRequired,
+  onBack: PropTypes.func.isRequired,
+  onOpenCase: PropTypes.func.isRequired,
+};
+
+function SummaryView() {
+  return (
+    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+      <CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
+        <Typography variant="h6" fontWeight={800}>
+          Summary
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          A quick view of the selected dataset version and its experiment
+          evidence.
+        </Typography>
+        <Stack
+          direction={{ xs: "column", md: "row" }}
+          spacing={1.5}
+          sx={{ mt: 2 }}
+        >
+          <Paper variant="outlined" sx={{ p: 1.75, flex: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              Dataset version
+            </Typography>
+            <Typography variant="h6" fontWeight={800} sx={{ mt: 0.5 }}>
+              {DATASET.name} · {DATASET.version}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {DATASET.count.toLocaleString()} pinned examples · immutable
+              snapshot
+            </Typography>
+          </Paper>
+          <Paper variant="outlined" sx={{ p: 1.75, flex: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              Latest candidate
+            </Typography>
+            <Typography variant="h6" fontWeight={800} sx={{ mt: 0.5 }}>
+              Support agent · v12
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              86% quality · 1 regression needs review
+            </Typography>
+          </Paper>
+        </Stack>
+        <Alert severity="warning" sx={{ mt: 2 }}>
+          Review the candidate in Experiments before marking it as a release
+          baseline.
+        </Alert>
+      </CardContent>
+    </Card>
+  );
+}
+
+function OptimizationView({ onAction }) {
+  return (
+    <Card variant="outlined" sx={{ borderRadius: 2 }}>
+      <CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
+        <Typography variant="h6" fontWeight={800}>
+          Optimization
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          Use the existing optimization workflow to turn reviewed cases into a
+          prompt or agent improvement.
+        </Typography>
+        <Paper variant="outlined" sx={{ p: 1.75, mt: 2, maxWidth: 680 }}>
+          <Stack direction="row" spacing={1.25} alignItems="flex-start">
+            <Iconify
+              icon="solar:magic-stick-3-linear"
+              width={24}
+              color="primary.main"
+            />
+            <Box>
+              <Typography variant="subtitle2" fontWeight={800}>
+                Start from reviewed cases
+              </Typography>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mt: 0.4 }}
+              >
+                Select regressions from an experiment comparison, then open the
+                current optimizer with their provenance attached.
+              </Typography>
+              <Button
+                variant="outlined"
+                size="small"
+                sx={{ mt: 1.25 }}
+                onClick={onAction}
+              >
+                Open optimization workflow
+              </Button>
+            </Box>
+          </Stack>
+        </Paper>
+      </CardContent>
+    </Card>
+  );
+}
+OptimizationView.propTypes = { onAction: PropTypes.func.isRequired };
+
+export default function DatasetExperimentsMock() {
+  const [screen, setScreen] = useState("dataset");
+  const [tab, setTab] = useState("experiments");
+  const [datasetVersion, setDatasetVersion] = useState(DATASET.version);
+  const [runs, setRuns] = useState(INITIAL_RUNS);
+  const [selectedRunIds, setSelectedRunIds] = useState(["run-001", "run-002"]);
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [selectedVersion, setSelectedVersion] = useState(null);
+  const [runSetupOpen, setRunSetupOpen] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [runQuery, setRunQuery] = useState("");
+  const [runStatus, setRunStatus] = useState("all");
+
+  const baseline = runs.find((run) => run.id === selectedRunIds[0]) || runs[1];
+  const candidate = runs.find((run) => run.id === selectedRunIds[1]) || runs[0];
+  const canCompare =
+    selectedRunIds.length === 2 &&
+    [baseline, candidate].every(
+      (run) => run.status === "Completed" && run.compatible,
+    );
+  const toggleRun = (id) =>
+    setSelectedRunIds((current) =>
+      current.includes(id)
+        ? current.filter((value) => value !== id)
+        : current.length < 2
+          ? [...current, id]
+          : current,
+    );
+  const createRun = (payload) => {
+    const newRun = {
+      ...INITIAL_RUNS[3],
+      ...payload,
+      id: `run-${runs.length + 1}`,
+      status: "Queued",
+      progress: 0,
+      planned: DATASET.count,
+      completed: 0,
+      errors: 0,
+      quality: 0,
+      cost: "—",
+      latency: "—",
+      created: "Just now",
+      compatible: true,
+      evaluator: "Groundedness v4 · Policy v2",
+    };
+    setRuns((current) => [newRun, ...current]);
+    setNotice(
+      "Run created and queued. It will appear in Experiments as results arrive (mock).",
+    );
+    setTab("experiments");
+  };
+
+  if (screen === "compare" && canCompare) {
+    return (
+      <>
+        <Helmet>
+          <title>Compare · {DATASET.name}</title>
+        </Helmet>
+        <CompareView
+          baseline={baseline}
+          candidate={candidate}
+          onBack={() => {
+            setSelectedCase(null);
+            setScreen("dataset");
+          }}
+          onOpenCase={setSelectedCase}
+        />
+        <CaseDrawer
+          item={selectedCase}
+          items={CASES}
+          onClose={() => setSelectedCase(null)}
+          onNavigate={setSelectedCase}
+        />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Helmet>
+        <title>{DATASET.name} · Develop</title>
+      </Helmet>
+      <HeaderComponent
+        links={[{ name: "Build", href: "/" }, { name: DATASET.name }]}
+        routeDepth={1}
+      />
+      <Box
+        sx={{
+          bgcolor: "background.neutral",
+          minHeight: "calc(100vh - 70px)",
+          px: { xs: 2, md: 4 },
+          py: { xs: 2, md: 3 },
+        }}
+      >
+        <Box sx={{ maxWidth: 1480, mx: "auto" }}>
           <Stack
             direction={{ xs: "column", md: "row" }}
             justifyContent="space-between"
@@ -2083,18 +1967,20 @@ export default function DatasetExperimentsMock() {
                 <Typography variant="h5" fontWeight={850}>
                   {DATASET.name}
                 </Typography>
-                <Chip
+                <Button
                   size="small"
-                  color="primary"
                   variant="outlined"
-                  label={DATASET.version}
-                />
-                <Chip
-                  size="small"
-                  color="success"
-                  variant="outlined"
-                  label="Pinned"
-                />
+                  onClick={() =>
+                    setSelectedVersion(
+                      VERSIONS.find(
+                        (version) => version.id === datasetVersion,
+                      ) || VERSIONS[0],
+                    )
+                  }
+                  endIcon={<Iconify icon="solar:alt-arrow-down-linear" />}
+                >
+                  Version {datasetVersion}
+                </Button>
               </Stack>
               <Typography
                 variant="body2"
@@ -2108,120 +1994,103 @@ export default function DatasetExperimentsMock() {
             <Stack direction="row" spacing={1}>
               <Button
                 variant="outlined"
-                startIcon={
-                  <Iconify icon="solar:download-minimalistic-linear" />
-                }
                 onClick={() =>
-                  setNotice("Export started for Support questions v12 (mock).")
+                  setNotice(
+                    "Export prepared with the current dataset version (mock).",
+                  )
                 }
               >
                 Export
               </Button>
               <Button
-                variant="outlined"
-                startIcon={<Iconify icon="solar:bolt-linear" />}
-                onClick={() => setFalconOpen(true)}
-              >
-                Falcon
-              </Button>
-              <Button
                 variant="contained"
                 startIcon={<Iconify icon="solar:add-circle-linear" />}
-                onClick={() => setWizardOpen(true)}
+                onClick={() => setRunSetupOpen(true)}
               >
-                New run
+                Add experiment
               </Button>
             </Stack>
           </Stack>
           {notice && (
             <Alert
               severity="success"
+              sx={{ mt: 1.5 }}
               onClose={() => setNotice("")}
-              sx={{ mt: 2 }}
             >
               {notice}
             </Alert>
           )}
+          <Paper
+            variant="outlined"
+            sx={{ mt: 2, px: 1.5, py: 1, borderRadius: 1.5 }}
+          >
+            <Typography variant="caption" color="text.secondary">
+              <strong>Dataset context</strong> · {DATASET.name} ·{" "}
+              {datasetVersion} · {DATASET.count.toLocaleString()} pinned cases ·
+              schema: input + expected output
+            </Typography>
+          </Paper>
           <Tabs
             value={tab}
             onChange={(_, value) => setTab(value)}
             sx={{ mt: 2.5, borderBottom: 1, borderColor: "divider" }}
           >
-            <Tab
-              value="items"
-              label={`Items ${DATASET.count.toLocaleString()}`}
-            />
-            <Tab value="runs" label={`Runs ${runs.length}`} />
-            <Tab value="versions" label="Versions" />
-            <Tab value="evaluators" label="Evaluators" />
+            <Tab value="data" label="Data" />
+            <Tab value="experiments" label={`Experiments ${runs.length}`} />
+            <Tab value="optimization" label="Optimization" />
+            <Tab value="summary" label="Summary" />
           </Tabs>
           <Box sx={{ mt: 2 }}>
-            {tab === "items" && (
+            {tab === "data" && (
               <ItemsView
-                onOpenCase={setSelectedCase}
-                onVersion={() => setSelectedVersion(VERSIONS[0])}
+                onOpenVersion={() => setSelectedVersion(VERSIONS[0])}
               />
             )}
-            {tab === "versions" && (
-              <VersionsView onOpenVersion={setSelectedVersion} />
-            )}
-            {tab === "evaluators" && <EvaluatorsView />}
-            {tab === "runs" && (
+            {tab === "experiments" && (
               <RunsView
                 runs={runs}
-                selectedIds={selectedIds}
-                baselineId={baselineId}
-                candidateId={candidateId}
-                onToggle={handleToggle}
-                onBaseline={(id) => {
-                  setBaselineId(id);
-                  setSelectedIds((current) =>
-                    current.includes(id) ? current : [...current.slice(-1), id],
-                  );
-                }}
-                onCandidate={(id) => {
-                  setCandidateId(id);
-                  setSelectedIds((current) =>
-                    current.includes(id) ? current : [...current.slice(-1), id],
-                  );
-                }}
-                onCompare={() => setCompareVisible(true)}
-                compareVisible={compareVisible}
-                search={search}
-                setSearch={setSearch}
-                statusFilter={statusFilter}
-                setStatusFilter={setStatusFilter}
-                onOpenCase={setSelectedCase}
+                selectedIds={selectedRunIds}
+                onToggle={toggleRun}
+                onCompare={() => setScreen("compare")}
+                onEvaluator={() =>
+                  setNotice(
+                    "Evaluator library opened in the existing evaluator surface (mock).",
+                  )
+                }
+                search={runQuery}
+                setSearch={setRunQuery}
+                statusFilter={runStatus}
+                setStatusFilter={setRunStatus}
               />
             )}
+            {tab === "optimization" && (
+              <OptimizationView
+                onAction={() =>
+                  setNotice(
+                    "Optimization workflow opened with the current dataset context (mock).",
+                  )
+                }
+              />
+            )}
+            {tab === "summary" && <SummaryView />}
           </Box>
         </Box>
       </Box>
-      <CaseDrawer
-        item={selectedCase}
-        items={CASES}
-        onClose={() => setSelectedCase(null)}
-        onNavigate={setSelectedCase}
-      />
       <VersionDrawer
         version={selectedVersion}
         onClose={() => setSelectedVersion(null)}
-        onCreate={() => {
-          setNotice("Child dataset version draft created (mock).");
+        onUse={(version) => {
+          setDatasetVersion(version);
           setSelectedVersion(null);
+          setRunSetupOpen(true);
         }}
       />
-      <FalconDrawer
-        open={falconOpen}
-        onClose={() => setFalconOpen(false)}
-        onAction={handleFalcon}
+      <RunSetupDrawer
+        open={runSetupOpen}
+        onClose={() => setRunSetupOpen(false)}
+        onCreated={createRun}
+        datasetVersion={datasetVersion}
       />
-      <RunWizard
-        open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        onCreate={handleCreateRun}
-      />
-      {selectedRun && null}
     </>
   );
 }
