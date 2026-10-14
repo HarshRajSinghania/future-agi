@@ -333,7 +333,9 @@ function RunStatus({ status }) {
             ? "warning"
             : status === "Waiting for results"
               ? "info"
-              : "default"
+              : status === "Running"
+                ? "info"
+                : "default"
       }
       variant="outlined"
     />
@@ -1608,6 +1610,7 @@ function RunsView({
                   <MenuItem value="all">All statuses</MenuItem>
                   <MenuItem value="Completed">Completed</MenuItem>
                   <MenuItem value="Partial">Partial</MenuItem>
+                  <MenuItem value="Running">Running</MenuItem>
                   <MenuItem value="Queued">Queued</MenuItem>
                   <MenuItem value="Waiting for results">
                     Waiting for results
