@@ -1,0 +1,25 @@
+# Enable the TypeSafe Jev provider in the gateway.
+#
+# Create the referenced Secret out of band; never put the provider key in a
+# values file or in Git:
+#   kubectl -n <namespace> create secret generic futureagi-llm \
+#     --from-literal=TYPESAFE_API_KEY="$TYPESAFE_API_KEY"
+#
+# The key is read by the gateway only. Jev is still entitlement/license gated
+# by the application and gateway, so this wiring does not enable it by itself.
+agentccGateway:
+  config:
+    providers:
+      typesafe:
+        api_format: typesafe
+        api_key: ${TYPESAFE_API_KEY}
+        base_url: https://api.typesafe.ai
+        default_timeout: 90s
+        max_concurrent: 100
+        conn_pool_size: 100
+        models:
+          - jev-1.13.0
+          - jev-latest
+  extraEnvFrom:
+    - secretRef:
+        name: futureagi-llm
