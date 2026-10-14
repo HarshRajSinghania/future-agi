@@ -222,6 +222,22 @@ describe("SourceToSandboxMap", () => {
     expect(screen.getByText("SYSTEM PROMPT")).toBeInTheDocument();
   });
 
+  it("names a rule by its short label and shows the full rule under it", () => {
+    const text =
+      "Use simple, everyday words. Avoid fan slang and technical terms. If you must use a One Piece word, explain it in a few plain words.";
+    renderMap({
+      rules: [text, "Be polite"],
+      ruleDetails: [{ text, short: "simple_words_explain_terms", enforced_by: ["prompt"] }],
+    });
+
+    expect(screen.getByText("simple_words_explain_terms")).toBeInTheDocument();
+    const fullRule = screen.getByText(text);
+    expect(fullRule).toBeInTheDocument();
+    expect(getComputedStyle(fullRule).whiteSpace).not.toBe("nowrap");
+    const unlabelled = screen.getByText("Be polite");
+    expect(getComputedStyle(unlabelled).whiteSpace).not.toBe("nowrap");
+  });
+
   it("lists the backed stores' tables, or says none were seeded", () => {
     const { unmount } = renderMap({}, { stores: [{ capability: "orders", tables: [{ name: "orders", rows: 8 }] }] });
     expect(screen.getByText("orders")).toBeInTheDocument();
@@ -288,24 +304,24 @@ describe("SourceToSandboxMap", () => {
     expect(screen.getByText("approves refunds over $200")).toBeInTheDocument();
   });
 
-  it("shows the full rule in a tooltip only when the row cuts it off", async () => {
+  it("shows a full tool name in a tooltip only when the row cuts it off", async () => {
     const user = userEvent.setup();
-    const rule = "Identify the caller before discussing any prescription.";
+    const tool = "lookup_prescription_history_for_verified_caller";
     const widths = (scroll, client) => {
       vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(scroll);
       vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(client);
     };
 
     widths(100, 100);
-    const { unmount } = renderMap({ rules: [rule], ruleDetails: [] });
-    await user.hover(screen.getByText(rule));
+    const { unmount } = renderMap({ tools: [{ name: tool }], rules: [] });
+    await user.hover(screen.getByText(tool));
     expect(screen.queryByRole("tooltip")).toBeNull();
     unmount();
 
     widths(500, 100);
-    renderMap({ rules: [rule], ruleDetails: [] });
-    await user.hover(screen.getByText(rule));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(rule);
+    renderMap({ tools: [{ name: tool }], rules: [] });
+    await user.hover(screen.getByText(tool));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(tool);
     vi.restoreAllMocks();
   });
 

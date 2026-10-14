@@ -50,7 +50,9 @@ export const ruleMapRows = (env) =>
     const detail = (env?.ruleDetails || []).find((candidate) => candidate.text === text);
     return {
       key: `rule-${index}`,
-      name: text,
+      name: detail?.short || text,
+      detail: detail?.short ? text : null,
+      prose: !detail?.short,
       origin: originOf(detail?.origin),
       target: ruleTarget(detail),
       fallback: MAP_COPY.notEnforced,

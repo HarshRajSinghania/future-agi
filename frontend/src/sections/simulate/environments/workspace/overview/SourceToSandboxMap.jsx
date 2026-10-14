@@ -153,21 +153,43 @@ MapGroup.propTypes = {
 };
 
 function MapRow({ index, row }) {
-  const { name, origin, target, fallback } = row;
+  const { name, detail, prose, origin, target, fallback } = row;
+  const multiline = Boolean(detail || prose);
   return (
     <Box
       sx={{
         display: "grid",
         gridTemplateColumns: MAP_GRID,
         columnGap: 2.5,
-        alignItems: "center",
+        alignItems: multiline ? "start" : "center",
         minHeight: 40,
         px: MAP_PX,
+        py: multiline ? 1.25 : 0,
         bgcolor: (t) =>
           index % 2 === 1 ? alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.025 : 0.015) : "transparent",
       }}
     >
-      <TruncatedText text={name} sx={{ typography: "s2", fontWeight: "fontWeightSemiBold", fontFamily: MONO }} />
+      {multiline ? (
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            sx={{
+              typography: "s2",
+              fontWeight: "fontWeightSemiBold",
+              fontFamily: prose ? undefined : MONO,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {name}
+          </Typography>
+          {detail && (
+            <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.5, maxWidth: 640 }}>
+              {detail}
+            </Typography>
+          )}
+        </Box>
+      ) : (
+        <TruncatedText text={name} sx={{ typography: "s2", fontWeight: "fontWeightSemiBold", fontFamily: MONO }} />
+      )}
       <Box sx={{ justifySelf: "end", display: "flex", whiteSpace: "nowrap" }}>
         {origin && (
           <OriginChip origin={origin.kind} file={origin.path || origin.field} line={origin.line ?? undefined} showPath={false} />
@@ -190,6 +212,8 @@ MapRow.propTypes = {
   index: PropTypes.number,
   row: PropTypes.shape({
     name: PropTypes.string,
+    detail: PropTypes.string,
+    prose: PropTypes.bool,
     origin: PropTypes.object,
     target: PropTypes.string,
     fallback: PropTypes.string,
