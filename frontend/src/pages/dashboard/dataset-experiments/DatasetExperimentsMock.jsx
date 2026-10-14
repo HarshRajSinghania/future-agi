@@ -1044,6 +1044,298 @@ SummaryRow.propTypes = {
   value: PropTypes.string.isRequired,
 };
 
+function RunDetailDrawer({ run, onClose, onUpdate, onNotice }) {
+  const [panel, setPanel] = useState("overview");
+  if (!run) return null;
+  const terminal =
+    run.status === "Completed" ||
+    run.status === "Failed" ||
+    run.status === "Cancelled";
+  const isExternal = run.targetType === "External / SDK";
+  const phaseFor = (phase) => {
+    if (run.status === "Queued")
+      return phase === "Plan pinned" ? "done" : "pending";
+    if (run.status === "Partial") {
+      if (phase === "Plan pinned" || phase === "Execution") return "done";
+      if (phase === "Evaluation") return "warning";
+      return "pending";
+    }
+    if (run.status === "Completed") return "done";
+    return phase === "Plan pinned" ? "done" : "warning";
+  };
+  const phaseIcon = (state) =>
+    state === "done"
+      ? "solar:check-circle-bold"
+      : state === "warning"
+        ? "solar:danger-triangle-bold"
+        : "solar:clock-circle-linear";
+  const phaseColor = (state) =>
+    state === "done"
+      ? "success.main"
+      : state === "warning"
+        ? "warning.main"
+        : "text.disabled";
+  const retryFailed = () => {
+    onUpdate({
+      status: "Running",
+      progress: 96,
+      completed: Math.min(run.planned, run.completed + run.errors),
+      errors: 0,
+    });
+    onNotice("Retry started for the failed run items (mock).");
+  };
+  const cancelRun = () => {
+    onUpdate({ status: "Cancelled" });
+    onNotice("Run cancellation requested and fenced (mock).");
+  };
+  return (
+    <Drawer
+      anchor="right"
+      open={Boolean(run)}
+      onClose={onClose}
+      PaperProps={{ sx: { width: { xs: "100%", sm: 560 } } }}
+    >
+      <Box sx={{ p: 2.5 }}>
+        <Stack
+          direction="row"
+          justifyContent="space-between"
+          alignItems="flex-start"
+          spacing={2}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="overline" color="text.secondary">
+              Experiment run
+            </Typography>
+            <Typography variant="h6" fontWeight={800}>
+              {run.name}
+            </Typography>
+            <Stack direction="row" spacing={0.75} sx={{ mt: 1 }}>
+              <RunStatus status={run.status} />
+              <Chip size="small" variant="outlined" label={run.targetType} />
+            </Stack>
+          </Box>
+          <IconButton aria-label="Close run" onClick={onClose}>
+            <Iconify icon="solar:close-circle-linear" />
+          </IconButton>
+        </Stack>
+      </Box>
+      <Divider />
+      <Tabs
+        value={panel}
+        onChange={(_, value) => setPanel(value)}
+        variant="fullWidth"
+      >
+        <Tab value="overview" label="Overview" />
+        <Tab value="items" label="Items" />
+        <Tab value="trace" label="Trace" />
+      </Tabs>
+      <Box sx={{ p: 2.5, overflowY: "auto" }}>
+        {panel === "overview" && (
+          <Stack spacing={2}>
+            <Paper variant="outlined" sx={{ p: 1.5 }}>
+              <Stack spacing={1}>
+                <SummaryRow label="Execution target" value={run.target} />
+                <SummaryRow
+                  label="Dataset snapshot"
+                  value={`${DATASET.name} · ${run.dataset}`}
+                />
+                <SummaryRow label="Evaluator bindings" value={run.evaluator} />
+                <SummaryRow
+                  label="Plan"
+                  value={`${run.planned.toLocaleString()} cases · 2 trials · max concurrency 8`}
+                />
+              </Stack>
+            </Paper>
+            <Box>
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="baseline"
+              >
+                <Typography variant="subtitle2" fontWeight={800}>
+                  Run progress
+                </Typography>
+                <Typography variant="body2" fontWeight={750}>
+                  {run.completed.toLocaleString()} /{" "}
+                  {run.planned.toLocaleString()}
+                </Typography>
+              </Stack>
+              <LinearProgress
+                variant="determinate"
+                value={run.progress}
+                color={
+                  run.status === "Partial"
+                    ? "warning"
+                    : run.status === "Cancelled"
+                      ? "inherit"
+                      : "success"
+                }
+                sx={{ mt: 1, height: 8, borderRadius: 4 }}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mt: 0.75 }}
+              >
+                {run.errors
+                  ? `${run.errors} items need retry or review.`
+                  : terminal
+                    ? "Every planned item reached a terminal state."
+                    : "Items are still being processed."}
+              </Typography>
+            </Box>
+            <Paper variant="outlined" sx={{ p: 1.5 }}>
+              <Typography variant="subtitle2" fontWeight={800}>
+                Execution timeline
+              </Typography>
+              <Stack spacing={1.25} sx={{ mt: 1.25 }}>
+                {[
+                  "Plan pinned",
+                  isExternal ? "Waiting for SDK results" : "Execution",
+                  "Evaluation",
+                  "Receipt committed",
+                ].map((phase) => {
+                  const state = phaseFor(phase);
+                  return (
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      alignItems="flex-start"
+                      key={phase}
+                    >
+                      <Iconify
+                        icon={phaseIcon(state)}
+                        color={phaseColor(state)}
+                        width={18}
+                      />
+                      <Box>
+                        <Typography
+                          variant="body2"
+                          fontWeight={state === "done" ? 700 : 500}
+                        >
+                          {phase}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {phase === "Plan pinned"
+                            ? `${run.dataset} · ${run.planned.toLocaleString()} item identities`
+                            : phase === "Evaluation"
+                              ? `${run.evaluator} · missing evidence remains explicit`
+                              : phase === "Receipt committed"
+                                ? terminal
+                                  ? "Run receipt is durable"
+                                  : "Waiting for terminal item states"
+                                : isExternal
+                                  ? "Caller owns execution; Future AGI waits for uploads"
+                                  : "Graph nodes and model calls are recorded here"}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                  );
+                })}
+              </Stack>
+            </Paper>
+            {run.status === "Partial" && (
+              <Alert severity="warning">
+                This run is partial. The comparison gate will remain blocked
+                until failed and missing items are resolved.
+              </Alert>
+            )}
+          </Stack>
+        )}
+        {panel === "items" && (
+          <Stack spacing={1}>
+            <Typography variant="subtitle2" fontWeight={800}>
+              Item state sample
+            </Typography>
+            {[
+              "Completed · refund-014",
+              "Completed · cancel-031",
+              run.errors ? "Failed · delivery-102" : "Completed · invoice-027",
+              "Pending · exchange-044",
+            ].map((item) => (
+              <Paper variant="outlined" sx={{ p: 1.25 }} key={item}>
+                <Typography variant="body2">{item}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Identity includes example and trial number; retries do not
+                  duplicate completed items.
+                </Typography>
+              </Paper>
+            ))}
+          </Stack>
+        )}
+        {panel === "trace" && (
+          <Stack spacing={2}>
+            <Alert severity={isExternal ? "info" : "success"}>
+              {isExternal
+                ? "Trace refs arrive with the caller's result upload; this UI does not claim execution."
+                : "Graph root and item trace refs are available for sampled cases."}
+            </Alert>
+            <Paper variant="outlined" sx={{ p: 1.5 }}>
+              <SummaryRow
+                label="Trace coverage"
+                value={
+                  isExternal
+                    ? "Waiting for upload"
+                    : run.status === "Completed"
+                      ? "1,246 / 1,248 linked"
+                      : "Pending"
+                }
+              />
+              <SummaryRow
+                label="Observe project"
+                value={isExternal ? "Not attested" : "support-evals"}
+              />
+            </Paper>
+            <Button
+              variant="outlined"
+              disabled={isExternal || run.status === "Queued"}
+              onClick={() =>
+                onNotice("Opened the run's verified trace view (mock).")
+              }
+            >
+              Open run trace
+            </Button>
+          </Stack>
+        )}
+        <Divider sx={{ my: 2.5 }} />
+        <Stack direction="row" spacing={1} flexWrap="wrap">
+          <Button
+            variant="outlined"
+            disabled={terminal || run.status === "Cancelled"}
+            onClick={cancelRun}
+          >
+            Cancel run
+          </Button>
+          <Button
+            variant="outlined"
+            disabled={!run.errors}
+            onClick={retryFailed}
+          >
+            Retry failed items
+          </Button>
+          <Button
+            variant="contained"
+            disabled={!terminal || run.status !== "Completed"}
+            onClick={() =>
+              onNotice(
+                "Select this run with a compatible baseline to compare (mock).",
+              )
+            }
+          >
+            Use in comparison
+          </Button>
+        </Stack>
+      </Box>
+    </Drawer>
+  );
+}
+RunDetailDrawer.propTypes = {
+  run: RUN_SHAPE,
+  onClose: PropTypes.func.isRequired,
+  onUpdate: PropTypes.func.isRequired,
+  onNotice: PropTypes.func.isRequired,
+};
+
 function ItemsView({ onOpenVersion }) {
   const [query, setQuery] = useState("");
   const items = CASES.filter(
@@ -1147,6 +1439,7 @@ function RunsView({
   onToggle,
   onCompare,
   onEvaluator,
+  onOpenRun,
   search,
   setSearch,
   statusFilter,
@@ -1294,12 +1587,15 @@ function RunsView({
                     key={run.id}
                     hover
                     selected={selectedIds.includes(run.id)}
+                    onClick={() => onOpenRun(run)}
+                    sx={{ cursor: "pointer" }}
                   >
                     <TableCell padding="checkbox">
                       <Checkbox
                         size="small"
                         checked={selectedIds.includes(run.id)}
                         onChange={() => onToggle(run.id)}
+                        onClick={(event) => event.stopPropagation()}
                         inputProps={{ "aria-label": `Select ${run.name}` }}
                       />
                     </TableCell>
@@ -1379,6 +1675,7 @@ RunsView.propTypes = {
   onToggle: PropTypes.func.isRequired,
   onCompare: PropTypes.func.isRequired,
   onEvaluator: PropTypes.func.isRequired,
+  onOpenRun: PropTypes.func.isRequired,
   search: PropTypes.string.isRequired,
   setSearch: PropTypes.func.isRequired,
   statusFilter: PropTypes.string.isRequired,
@@ -1558,6 +1855,21 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
               tone="error"
             />
           </Stack>
+          <Paper variant="outlined" sx={{ mt: 1.5, px: 1.5, py: 1 }}>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={{ xs: 0.5, sm: 3 }}
+            >
+              <Typography variant="caption" color="text.secondary">
+                <strong>Trial stability</strong> · 96% of paired cases agree
+                across 2 trials
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                <strong>Evidence coverage</strong> · 1,247 / 1,248 assessed · 1
+                incomplete blocker
+              </Typography>
+            </Stack>
+          </Paper>
           <Card variant="outlined" sx={{ mt: 2, borderRadius: 2 }}>
             <CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
               <Stack
@@ -1868,6 +2180,7 @@ export default function DatasetExperimentsMock() {
   const [runs, setRuns] = useState(INITIAL_RUNS);
   const [selectedRunIds, setSelectedRunIds] = useState(["run-001", "run-002"]);
   const [selectedCase, setSelectedCase] = useState(null);
+  const [selectedRun, setSelectedRun] = useState(null);
   const [selectedVersion, setSelectedVersion] = useState(null);
   const [runSetupOpen, setRunSetupOpen] = useState(false);
   const [notice, setNotice] = useState("");
@@ -1911,6 +2224,14 @@ export default function DatasetExperimentsMock() {
       "Run created and queued. It will appear in Experiments as results arrive (mock).",
     );
     setTab("experiments");
+  };
+  const updateRun = (changes) => {
+    if (!selectedRun) return;
+    const updated = { ...selectedRun, ...changes };
+    setRuns((current) =>
+      current.map((run) => (run.id === updated.id ? updated : run)),
+    );
+    setSelectedRun(updated);
   };
 
   if (screen === "compare" && canCompare) {
@@ -2057,6 +2378,7 @@ export default function DatasetExperimentsMock() {
                     "Evaluator library opened in the existing evaluator surface (mock).",
                   )
                 }
+                onOpenRun={setSelectedRun}
                 search={runQuery}
                 setSearch={setRunQuery}
                 statusFilter={runStatus}
@@ -2090,6 +2412,12 @@ export default function DatasetExperimentsMock() {
         onClose={() => setRunSetupOpen(false)}
         onCreated={createRun}
         datasetVersion={datasetVersion}
+      />
+      <RunDetailDrawer
+        run={selectedRun}
+        onClose={() => setSelectedRun(null)}
+        onUpdate={updateRun}
+        onNotice={setNotice}
       />
     </>
   );
