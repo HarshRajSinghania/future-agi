@@ -445,11 +445,10 @@ class AgentDefinitionSerializer(serializers.ModelSerializer):
         if new_api_key is not None and is_masked(new_api_key):
             validated_data.pop("api_key")
 
-        previous_provider = instance.provider
         instance = super().update(instance, validated_data)
 
         creds_input.provider = instance.provider or creds_input.provider
-        sync_edited_agent_credentials(instance, previous_provider, creds_input)
+        sync_edited_agent_credentials(instance, creds_input)
         return instance
 
 

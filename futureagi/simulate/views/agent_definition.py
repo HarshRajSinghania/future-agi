@@ -701,7 +701,6 @@ class EditAgentDefinitionView(APIView):
                 "websocket_url",
                 "websocket_headers",
             ]
-            previous_provider = agent.provider
             for field in update_fields:
                 if field == "api_key" and preserve_existing_api_key:
                     continue
@@ -736,7 +735,7 @@ class EditAgentDefinitionView(APIView):
                 livekit_max_concurrency=validated.get("livekit_max_concurrency"),
                 provider_was_provided="provider" in request.data,
             )
-            sync_edited_agent_credentials(agent, previous_provider, creds_input)
+            sync_edited_agent_credentials(agent, creds_input)
             updated_agent = agent
 
             response_data = {

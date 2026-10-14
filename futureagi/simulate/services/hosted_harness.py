@@ -24,6 +24,7 @@ from simulate.models import (
     HostedHarnessScenario,
     TestExecution,
 )
+from simulate.services.agent_definition import provider_is_stale
 from simulate.services.alk_simulate_ingestion import (
     ALKSimulateIngestionError,
     append_alk_sim_scenarios,
@@ -1195,12 +1196,15 @@ def _record_target_agent_facts(
         changed.append("target_speaks_first")
     if changed:
         agent_definition.save(update_fields=[*changed, "updated_at"])
-    versioned = agent_definition.latest_version is not None
-    # Calls pin the latest version; one older than the provider would report
-    # none. An unversioned agent is read live, so it gets no version for this.
-    if (versioned and "provider" in changed) or (
+    # Calls pin the latest version, so it must record the agent's provider. An
+    # unversioned agent is read live and gets no version for that alone.
+    if provider_is_stale(agent_definition) or (
         prompt
-        and (not versioned or "description" in changed or "assistant_id" in changed)
+        and (
+            agent_definition.latest_version is None
+            or "description" in changed
+            or "assistant_id" in changed
+        )
     ):
         agent_definition.create_version(
             description=agent_definition.description,

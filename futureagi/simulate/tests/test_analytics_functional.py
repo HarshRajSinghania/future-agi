@@ -4152,15 +4152,18 @@ def test_hosted_transport_does_not_depend_on_tool_trace(
     assert response.json()["transport"] == "livekit"
 
 
-@pytest.mark.integration
-@pytest.mark.django_db
-@pytest.mark.parametrize(
+EDIT_ENDPOINTS = pytest.mark.parametrize(
     "method,path",
     [
         ("put", "/simulate/agent-definitions/{}/edit/"),
         ("patch", "/simulate/api/agent-definition-operations/{}/"),
     ],
 )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@EDIT_ENDPOINTS
 def test_provider_edit_labels_later_calls_without_relabelling_earlier_ones(
     auth_client, test_execution, scenario, method, path
 ):
@@ -4191,3 +4194,151 @@ def test_provider_edit_labels_later_calls_without_relabelling_earlier_ones(
         for call in calls
     ]
     assert providers == ["vapi", "retell"]
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@EDIT_ENDPOINTS
+def test_provider_edit_within_one_credential_type_keeps_the_credentials(
+    auth_client, agent_definition, method, path
+):
+    from simulate.services.agent_definition import sync_provider_credentials
+    from simulate.services.types.agent_definition import ProviderCredentialsInput
+
+    agent_definition.provider = "livekit_bridge"
+    agent_definition.save(update_fields=["provider"])
+    bridged = agent_definition.create_version(
+        description="v1", commit_message="v1", status="active"
+    )
+    sync_provider_credentials(
+        bridged,
+        ProviderCredentialsInput(
+            provider="livekit_bridge",
+            livekit_url="https://lk.example.com",
+            livekit_api_key="lk-key",
+            livekit_api_secret="lk-secret",
+            livekit_agent_name="front-desk",
+            provider_was_provided=True,
+        ),
+    )
+
+    response = getattr(auth_client, method)(
+        path.format(agent_definition.id), {"provider": "livekit"}, format="json"
+    )
+
+    assert response.status_code == 200, response.content
+    native = agent_definition.latest_version
+    assert native.id != bridged.id
+    assert native.configuration_snapshot["provider"] == "livekit"
+    credentials = native.credentials
+    assert (
+        credentials.get_api_key(),
+        credentials.get_api_secret(),
+        credentials.server_url,
+        credentials.agent_name,
+    ) == ("lk-key", "lk-secret", "https://lk.example.com", "front-desk")
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@EDIT_ENDPOINTS
+def test_an_edit_versions_a_provider_changed_before_versioning_existed(
+    auth_client, test_execution, scenario, method, path
+):
+    agent = test_execution.agent_definition
+    agent.provider = "vapi"
+    agent.save(update_fields=["provider"])
+    agent.create_version(description="v1", commit_message="v1", status="active")
+    # Before this change, editing the provider left the latest version stale.
+    agent.provider = "retell"
+    agent.save(update_fields=["provider"])
+
+    response = getattr(auth_client, method)(
+        path.format(agent.id), {"agent_name": "Renamed"}, format="json"
+    )
+
+    assert response.status_code == 200, response.content
+    call = CallExecution.objects.create(
+        test_execution=test_execution,
+        scenario=scenario,
+        status="completed",
+        agent_version=agent.latest_version,
+    )
+    detail = auth_client.get(f"/simulate/v3/call-executions/{call.id}/")
+    assert detail.json()["provider"] == "retell"
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_repair_migration_versions_agents_whose_provider_drifted(
+    agent_definition,
+):
+    import importlib
+
+    from django.apps import apps
+
+    from simulate.services.agent_definition import sync_provider_credentials
+    from simulate.services.types.agent_definition import ProviderCredentialsInput
+
+    agent_definition.provider = "vapi"
+    agent_definition.save(update_fields=["provider"])
+    stale = agent_definition.create_version(
+        description="v1", commit_message="v1", status="active"
+    )
+    sync_provider_credentials(
+        stale,
+        ProviderCredentialsInput(
+            provider="retell",
+            api_key="rk-key",
+            assistant_id="agent_r",
+            provider_was_provided=True,
+        ),
+    )
+    agent_definition.provider = "retell"
+    agent_definition.save(update_fields=["provider"])
+    migration = importlib.import_module(
+        "simulate.migrations.0098_version_agents_with_a_stale_provider"
+    )
+
+    migration.version_agents_with_a_stale_provider(apps, None)
+    migration.version_agents_with_a_stale_provider(apps, None)
+
+    versions = list(agent_definition.versions.order_by("version_number"))
+    assert [v.configuration_snapshot["provider"] for v in versions] == [
+        "vapi",
+        "retell",
+    ]
+    assert versions[1].credentials.get_api_key() == "rk-key"
+    assert versions[1].credentials.assistant_id == "agent_r"
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@pytest.mark.parametrize("pinned_on", ["run", "call"])
+def test_results_page_query_count_does_not_grow_with_pinned_rows(
+    auth_client, test_execution, scenario, pinned_on
+):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    agent = test_execution.agent_definition
+    version = agent.create_version(description="v", commit_message="v", status="active")
+    if pinned_on == "run":
+        test_execution.agent_version = version
+        test_execution.save(update_fields=["agent_version"])
+    url = f"/simulate/v3/test-executions/{test_execution.id}/calls/"
+    counts = []
+    for total in (2, 8):
+        CallExecution.objects.filter(test_execution=test_execution).delete()
+        for _ in range(total):
+            CallExecution.objects.create(
+                test_execution=test_execution,
+                scenario=scenario,
+                status="completed",
+                agent_version=version if pinned_on == "call" else None,
+            )
+        auth_client.get(url)
+        with CaptureQueriesContext(connection) as queries:
+            assert auth_client.get(url).status_code == 200
+        counts.append(len(queries))
+    assert counts[0] == counts[1], counts
