@@ -82,6 +82,9 @@ const INITIAL_RUNS = [
     dataset: "v12",
     evaluator: "Groundedness v4 · Policy v2",
     planKey: "support-v12|2|groundedness-v4|policy-v2",
+    trials: 2,
+    concurrency: 8,
+    traceCoverage: "1,246 / 1,248 linked",
     status: "Completed",
     progress: 100,
     planned: 1248,
@@ -101,6 +104,9 @@ const INITIAL_RUNS = [
     dataset: "v12",
     evaluator: "Groundedness v4 · Policy v2",
     planKey: "support-v12|2|groundedness-v4|policy-v2",
+    trials: 2,
+    concurrency: 8,
+    traceCoverage: "1,248 / 1,248 linked",
     status: "Completed",
     progress: 100,
     planned: 1248,
@@ -120,6 +126,9 @@ const INITIAL_RUNS = [
     dataset: "v12",
     evaluator: "Policy v2",
     planKey: "support-v12|2|policy-v2",
+    trials: 2,
+    concurrency: 8,
+    traceCoverage: "1,167 / 1,175 linked",
     status: "Partial",
     progress: 94,
     planned: 1248,
@@ -139,6 +148,9 @@ const INITIAL_RUNS = [
     dataset: "v12",
     evaluator: "Groundedness v4",
     planKey: "support-v12|2|groundedness-v4",
+    trials: 2,
+    concurrency: 8,
+    traceCoverage: "Waiting for upload",
     status: "Waiting for results",
     progress: 0,
     planned: 1248,
@@ -273,6 +285,9 @@ const RUN_SHAPE = PropTypes.shape({
   dataset: PropTypes.string.isRequired,
   evaluator: PropTypes.string.isRequired,
   planKey: PropTypes.string.isRequired,
+  trials: PropTypes.number.isRequired,
+  concurrency: PropTypes.number.isRequired,
+  traceCoverage: PropTypes.string.isRequired,
   status: PropTypes.string.isRequired,
   progress: PropTypes.number.isRequired,
   planned: PropTypes.number.isRequired,
@@ -1040,6 +1055,8 @@ function RunSetupDrawer({ open, onClose, onCreated, datasetVersion }) {
                       ? "GraphVersion"
                       : "External / SDK",
                 dataset: version,
+                trials: Number(trials) || 1,
+                concurrency: Number(concurrency) || 1,
               });
               resetClose();
             }}
@@ -1166,6 +1183,10 @@ function RunDetailDrawer({ run, onClose, onUpdate, onNotice }) {
         <Tab value="trace" label="Trace" />
       </Tabs>
       <Box sx={{ p: 2.5, overflowY: "auto" }}>
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Mock-only preview: actions update local state; no provider, scheduler,
+          or Observe request is sent.
+        </Alert>
         {panel === "overview" && (
           <Stack spacing={2}>
             <Paper variant="outlined" sx={{ p: 1.5 }}>
@@ -1178,7 +1199,7 @@ function RunDetailDrawer({ run, onClose, onUpdate, onNotice }) {
                 <SummaryRow label="Evaluator bindings" value={run.evaluator} />
                 <SummaryRow
                   label="Plan"
-                  value={`${run.planned.toLocaleString()} cases · 2 trials · max concurrency 8`}
+                  value={`${run.planned.toLocaleString()} cases · ${run.trials} trials · max concurrency ${run.concurrency}`}
                 />
               </Stack>
             </Paper>
@@ -1318,16 +1339,7 @@ function RunDetailDrawer({ run, onClose, onUpdate, onNotice }) {
                 : "Graph root and item trace refs are available for sampled cases."}
             </Alert>
             <Paper variant="outlined" sx={{ p: 1.5 }}>
-              <SummaryRow
-                label="Trace coverage"
-                value={
-                  isExternal
-                    ? "Waiting for upload"
-                    : run.status === "Completed"
-                      ? "1,246 / 1,248 linked"
-                      : "Pending"
-                }
-              />
+              <SummaryRow label="Trace coverage" value={run.traceCoverage} />
               <SummaryRow
                 label="Observe project"
                 value={isExternal ? "Not attested" : "support-evals"}
@@ -1862,6 +1874,9 @@ function CompareView({ baseline, candidate, onBack, onOpenCase }) {
               >
                 Review the candidate against a pinned baseline before release.
               </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Review prototype · mock comparison data
+              </Typography>
             </Box>
             <Chip
               color="warning"
@@ -2329,11 +2344,19 @@ export default function DatasetExperimentsMock() {
       created: "Just now",
       compatible: true,
       evaluator: "Groundedness v4 · Policy v2",
-      planKey: `${payload.dataset}|2|groundedness-v4|policy-v2`,
+      planKey: `${payload.dataset}|${payload.trials || 2}|groundedness-v4|policy-v2`,
+      trials: payload.trials || 2,
+      concurrency: payload.concurrency || 8,
+      traceCoverage:
+        payload.targetType === "External / SDK"
+          ? "Waiting for upload"
+          : "Pending",
     };
     setRuns((current) => [newRun, ...current]);
     setNotice(
-      "Run created and queued. It will appear in Experiments as results arrive (mock).",
+      payload.targetType === "External / SDK"
+        ? "External run created. Waiting for the caller to upload results (mock)."
+        : "Run created and queued. It will appear in Experiments as results arrive (mock).",
     );
     setTab("experiments");
   };
