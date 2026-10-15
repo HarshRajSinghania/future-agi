@@ -218,6 +218,30 @@ async function fetchProgress(taskId) {
 // the run's trace set with timestamps and the current answer per question.
 const MAX_ROWS = 500;
 
+// Plain-language reasons for the task's error groups (normalized messages
+// from get_eval_task_logs). Unknown reasons fall back to a generic line.
+export function explainErrorGroups(groups = []) {
+  return groups.map((group) => {
+    const text = `${group?.normalized || ""}`;
+    const count = group?.count || 0;
+    if (/rate_limited/i.test(text))
+      return {
+        count,
+        reason:
+          "hit your plan's evaluation rate limit and were not given. Rerun in a minute, or raise the limit on your plan.",
+      };
+    if (/ENTITLEMENT|jev_models|402/i.test(text))
+      return { count, reason: "were skipped because Jev isn't enabled for this workspace." };
+    if (/JEV_INPUT_TOO_LARGE/i.test(text))
+      return { count, reason: "were too long for Jev to read." };
+    if (/JEV_RATE_LIMITED|JEV_TIMEOUT|JEV_PROVIDER_ERROR/i.test(text))
+      return { count, reason: "failed while calling Jev. Rerun to retry them." };
+    if (/missing|not found|Required attribute/i.test(text))
+      return { count, reason: "had no input or output for Jev to read." };
+    return { count, reason: "couldn't be evaluated." };
+  });
+}
+
 export function answerFromCell(cell) {
   if (!cell || typeof cell !== "object") return undefined;
   if (cell.error) return "error";
@@ -313,6 +337,7 @@ export function useInstantEvalRun(projectId) {
         const perQuestion = items.length || 1;
         const patch = {
           taskStatus: progress.status,
+          errorGroups: progress.error_groups || [],
           total: Math.round((progress.total_count || 0) / perQuestion),
           completed: Math.round((progress.success_count || 0) / perQuestion),
           failed: Math.round(

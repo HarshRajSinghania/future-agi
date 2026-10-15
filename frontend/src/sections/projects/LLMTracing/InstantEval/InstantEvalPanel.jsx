@@ -29,6 +29,7 @@ import {
 } from "./instantEvalPayloads";
 import {
   createContinuousTask,
+  explainErrorGroups,
   useInstantEvalHistory,
   useInstantEvals,
 } from "./useInstantEval";
@@ -687,6 +688,18 @@ export default function InstantEvalPanel({
                     : "No traces matched this view"}
                 {run.failed ? ` · ${run.failed} couldn't be evaluated` : ""}
               </Typography>
+            )}
+            {run.phase === "done" && run.failed > 0 && (
+              <Alert severity="warning">
+                {explainErrorGroups(run.errorGroups).map((entry, index) => (
+                  <Box key={index} component="span" sx={{ display: "block" }}>
+                    {entry.count} answer{entry.count === 1 ? "" : "s"}{" "}
+                    {entry.reason}
+                  </Box>
+                ))}
+                {!run.errorGroups?.length &&
+                  `${run.failed} trace${run.failed === 1 ? "" : "s"} couldn't be evaluated.`}
+              </Alert>
             )}
             {run.phase === "done" && !run.total && (
               <Alert severity={run.since ? "info" : "warning"}>
