@@ -46,26 +46,45 @@ def allowed_numbers(result: dict, examples: list[dict]) -> set[str]:
         if value is None:
             return
         if isinstance(value, float):
-            for text in (f"{value:.1f}", f"{round(value)}", f"{value * 100:.0f}", f"{value * 100:.1f}"):
+            for text in (
+                f"{value:.1f}", f"{value:.2f}", f"{round(value)}",
+                f"{value * 100:.0f}", f"{value * 100:.1f}",
+            ):
                 numbers.add(text.rstrip("0").rstrip(".") if "." in text else text)
         else:
             numbers.add(str(value))
 
-    totals = result["totals"]
-    add(totals["count"])
-    add(totals["users"])
-    add(totals["sessions"])
-    add(result.get("population_size"))
-    add(result.get("sample_size"))
-    for category in result["categories"]:
-        stats = category["stats"]
+    def add_stats(stats: dict):
         for key in ("count", "users", "sessions", "turns"):
             add(stats.get(key))
-        add(stats["share"])
-        for key in ("failure_rate", "unresolved_rate", "error_rate"):
+        for key in ("share", "failure_rate", "unresolved_rate", "error_rate", "top_user_share"):
             add(stats.get(key))
-        for count in stats.get("outcomes", {}).values():
+        for key in ("sentiment", "cost"):
+            if stats.get(key) is not None:
+                add(float(stats[key]))
+        if stats.get("latency_ms"):
+            add(stats["latency_ms"])
+            add(stats["latency_ms"] / 1000)
+        for bound in stats.get("share_ci") or []:
+            add(float(bound))
+        for count in (stats.get("outcomes") or {}).values():
             add(count)
+            if stats.get("count"):
+                add(count / stats["count"])
+        for attribute in (stats.get("attributes") or {}).values():
+            for key in ("rate", "mean"):
+                if attribute.get(key) is not None:
+                    add(float(attribute[key]))
+            add(attribute.get("n"))
+            for top in attribute.get("top") or []:
+                add(top.get("count"))
+
+    totals = result["totals"]
+    add_stats(totals)
+    for key in ("population_size", "sample_size", "excluded", "failed"):
+        add(result.get(key))
+    for category in result["categories"]:
+        add_stats(category["stats"])
         for note in category.get("notable", []):
             add(note["value"])
             add(note["rest"])
