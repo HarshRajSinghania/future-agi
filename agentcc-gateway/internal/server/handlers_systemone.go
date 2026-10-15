@@ -67,23 +67,12 @@ func (h *Handlers) SystemOne(w http.ResponseWriter, r *http.Request) {
 	}
 	h.applyOrgModelMapOverrides(orgCfg, rc)
 
-	// Resolve provider.
-	provider, err := h.resolveProvider(ctx, rc, req.Model)
+	// Resolve provider (org providers first, as the other native handlers do).
+	// resolveProvider refuses any override that would change a System One model.
+	provider, _, err := h.resolveProviderWithOrgFallback(ctx, rc, orgID, orgCfg, req.Model)
 	if err != nil {
-		if orgCfg != nil && orgID != "" && h.orgProviderCache != nil {
-			if orgP, providerID := h.resolveOrgProvider(orgID, orgCfg, req.Model); orgP != nil {
-				provider = orgP
-				rc.Provider = providerID
-				rc.Metadata["org_provider"] = "true"
-				err = nil
-			}
-		}
-		if err != nil {
-			models.WriteErrorFromError(w, err)
-			return
-		}
-	} else if shouldApplyOrgProviderOverride(rc) {
-		provider = h.applyOrgProviderOverride(orgID, orgCfg, rc.Provider, provider)
+		models.WriteErrorFromError(w, err)
+		return
 	}
 
 	// Type-assert to SystemOneProvider.
