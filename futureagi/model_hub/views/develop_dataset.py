@@ -8596,10 +8596,10 @@ class EditAndRunUserEvalView(APIView):
         },
     )
     def post(self, request, dataset_id, eval_id, *args, **kwargs):
-        from tfc.ee_gates import managed_model_gate_for_template
+        from tfc.ee_gates import ee_model_gate_for_template
 
         request_data = request.validated_data
-        gate = managed_model_gate_for_template(
+        gate = ee_model_gate_for_template(
             request_data.get("model"),
             template_id=request_data.get("template_id"),
             eval_type=request_data.get("eval_type"),
@@ -8978,10 +8978,10 @@ class AddUserEvalView(CreateAPIView):
         },
     )
     def post(self, request, dataset_id, *args, **kwargs):
-        from tfc.ee_gates import managed_model_gate_for_template
+        from tfc.ee_gates import ee_model_gate_for_template
 
         request_data = request.validated_data
-        gate = managed_model_gate_for_template(
+        gate = ee_model_gate_for_template(
             request_data.get("model"),
             template_id=request_data.get("template_id"),
             eval_type=request_data.get("eval_type"),

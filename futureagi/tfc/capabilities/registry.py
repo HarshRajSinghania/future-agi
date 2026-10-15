@@ -31,7 +31,8 @@ class FeatureDefinition:
     # Two-tier gating: requires_license=True features are cloud-plan products
     # by default and run FREE on self-hosted deployments (OSS or EE, any
     # license state). Setting oss_locked=True additionally requires a valid
-    # license off-cloud — reserved for managed compute and the error feed.
+    # license off-cloud — reserved for managed compute, the error feed and
+    # EE-only evaluator models (Jev).
     oss_locked: bool = False
     required_service: str | None = None
     metering_dimension: str | None = None
@@ -308,8 +309,8 @@ PAID_FEATURES: frozenset[str] = frozenset(
     f.id for f in _ALL_FEATURES if f.requires_license
 )
 
-# Paid features that stay license-gated even off-cloud (managed compute +
-# the error feed). Everything else in PAID_FEATURES is free on self-hosted.
+# Paid features that stay license-gated even off-cloud (managed compute, the
+# error feed and Jev). Everything else in PAID_FEATURES is free on self-hosted.
 OSS_LOCKED_FEATURES: frozenset[str] = frozenset(
     f.id for f in _ALL_FEATURES if f.oss_locked
 )

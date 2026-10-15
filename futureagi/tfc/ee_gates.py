@@ -53,9 +53,7 @@ def jev_gate_for_template(model_name: object, template_id=None, eval_type=None):
     return None
 
 
-def managed_model_gate_for_template(
-    model_name: object, template_id=None, eval_type=None
-):
+def ee_model_gate_for_template(model_name: object, template_id=None, eval_type=None):
     gate = jev_gate_for_template(model_name, template_id, eval_type)
     if gate is not None:
         return gate

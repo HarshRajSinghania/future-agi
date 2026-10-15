@@ -99,7 +99,7 @@ class JevEvaluator(LLM):
         super().__init__(model_name=model, provider="typesafe", api_key=None)
 
     def _init_client(self, api_key):
-        """The typed managed client is the only transport for this evaluator."""
+        """The typed TypeSafe client is the only transport for this evaluator."""
 
     def format_result(self, result_data, eval_template):
         """Use effective binding/version scores in the existing formatter."""

@@ -6955,10 +6955,10 @@ class EvalPlayGroundAPIView(APIView):
         reject_unknown_fields=True,
     )
     def post(self, request, *args, **kwargs):
-        from tfc.ee_gates import managed_model_gate_for_template
+        from tfc.ee_gates import ee_model_gate_for_template
 
         validated_data = request.validated_data
-        gate = managed_model_gate_for_template(
+        gate = ee_model_gate_for_template(
             validated_data.get("model"), validated_data.get("template_id")
         )
         if gate is not None:
@@ -8049,10 +8049,10 @@ class TestEvaluationTemplateAPIView(APIView):
         reject_unknown_fields=True,
     )
     def post(self, request, *args, **kwargs):
-        from tfc.ee_gates import managed_model_gate_for_template
+        from tfc.ee_gates import ee_model_gate_for_template
 
         validated_data = request.validated_data
-        gate = managed_model_gate_for_template(
+        gate = ee_model_gate_for_template(
             validated_data.get("model"),
             template_id=validated_data.get("template_id"),
             eval_type=validated_data.get("eval_type"),

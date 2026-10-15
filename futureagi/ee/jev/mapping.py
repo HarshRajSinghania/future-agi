@@ -1,4 +1,4 @@
-"""Validate saved and effective template fields before any gateway request."""
+"""Validate saved and effective template fields before any TypeSafe request."""
 
 import copy
 import hashlib

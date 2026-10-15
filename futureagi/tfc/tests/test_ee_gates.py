@@ -40,7 +40,7 @@ def test_r02_r14_jev_capability_and_exact_ids():
 
 def test_r06_jev_unknown_denied_before_transport():
     with patch("httpx.post") as dispatch:
-        response = ee_gates.managed_model_gate_for_template("jev-2.0.0")
+        response = ee_gates.ee_model_gate_for_template("jev-2.0.0")
     assert response.status_code == 400
     assert response.data["code"] == "JEV_MODEL_UNKNOWN"
     dispatch.assert_not_called()
@@ -49,7 +49,7 @@ def test_r06_jev_unknown_denied_before_transport():
 def test_r14_jev_off_cloud_denied():
     cfg, loc, chk = _cfg(DeploymentLocation.SELF_HOSTED, allowed=False)
     with cfg, loc, chk as check:
-        response = ee_gates.managed_model_gate_for_template("jev-latest")
+        response = ee_gates.ee_model_gate_for_template("jev-latest")
     assert response.status_code == 402
     assert response.data["code"] == "ENTITLEMENT_DENIED"
     assert response.data["feature"] == "jev"
@@ -59,17 +59,17 @@ def test_r14_jev_off_cloud_denied():
 def test_r14_jev_cloud_defers_to_engine():
     cfg, loc, chk = _cfg(DeploymentLocation.CLOUD, allowed=False)
     with cfg, loc, chk as check:
-        assert ee_gates.managed_model_gate_for_template("jev-latest") is None
+        assert ee_gates.ee_model_gate_for_template("jev-latest") is None
     check.assert_not_called()
 
 
 def test_r18_combined_gate_preserves_turing():
     with patch("tfc.ee_gates._turing_denied_off_cloud", return_value=True):
-        response = ee_gates.managed_model_gate_for_template("turing_large")
+        response = ee_gates.ee_model_gate_for_template("turing_large")
         assert response.status_code == 402
         assert response.data["feature"] == "turing"
         assert (
-            ee_gates.managed_model_gate_for_template("turing_large", eval_type="code")
+            ee_gates.ee_model_gate_for_template("turing_large", eval_type="code")
             is None
         )
 

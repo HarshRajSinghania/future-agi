@@ -1,1 +1,1 @@
-"""Typed Jev evaluator integration through the managed gateway."""
+"""Typed Jev evaluator integration on the org's own TypeSafe key."""

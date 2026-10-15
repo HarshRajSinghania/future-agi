@@ -178,8 +178,8 @@ export const JEV_MODEL_VALUES = new Set(JEV_MODELS.map((m) => m.value));
 const FAGI_MODEL_LOCKED_TOOLTIP =
   "Turing models aren't enabled for this workspace. Select your own model.";
 
-// Managed models share the same product row and selection affordances.
-const ManagedModelRow = ({
+// Turing and Jev rows share the same layout and selection affordances.
+const EvaluatorModelRow = ({
   m,
   selected,
   locked,
@@ -243,7 +243,7 @@ const ManagedModelRow = ({
     </span>
   </Tooltip>
 );
-ManagedModelRow.propTypes = {
+EvaluatorModelRow.propTypes = {
   m: PropTypes.object.isRequired,
   selected: PropTypes.bool.isRequired,
   locked: PropTypes.bool.isRequired,
@@ -1302,7 +1302,7 @@ const ModelSelector = ({
                 FutureAGI Models
               </Typography>
               {filteredFagiModels.map((m) => (
-                <ManagedModelRow
+                <EvaluatorModelRow
                   key={m.value}
                   m={m}
                   selected={m.value === model}
@@ -1340,7 +1340,7 @@ const ModelSelector = ({
                 Jev models
               </Typography>
               {filteredJevModels.map((m) => (
-                <ManagedModelRow
+                <EvaluatorModelRow
                   key={m.value}
                   m={m}
                   selected={m.value === model}
