@@ -49,6 +49,8 @@ def sample_evenly(population: list[dict], size: int) -> list[dict]:
     ordered = sorted(population, key=lambda p: p.get("time") or "")
     if len(ordered) <= size:
         return ordered
+    if size <= 1:
+        return ordered[-1:] if size == 1 else []
     return [ordered[round(i * (len(ordered) - 1) / (size - 1))] for i in range(size)]
 
 

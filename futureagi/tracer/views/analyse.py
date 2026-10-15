@@ -12,9 +12,12 @@ GET    /tracer/analyse/runs/<id>/               run status and results
 GET    /tracer/analyse/runs/<id>/units/         analysed units, by category
 """
 
+from datetime import timedelta
+
 import structlog
 from django.core.cache import cache
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -45,6 +48,7 @@ ERROR_RESPONSES = {
 }
 
 RUNS_PER_HOUR = 30
+ACTIVE_RUN_WINDOW = timedelta(hours=2)
 DRAFTS_PER_HOUR = 60
 MAX_POPULATION = 20000
 UNITS_PAGE = 50
@@ -352,6 +356,14 @@ def _config_item(config, *, with_runs=False) -> dict:
     return item
 
 
+def _rate_limited(gm):
+    return gm.custom_error_response(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        "Too many reports this hour. Try again later.",
+        code="rate_limited",
+    )
+
+
 def _gate(gm, org):
     if not capability_service.check("turing_models", org_id=str(org.id)).allowed:
         return gm.custom_error_response(
@@ -573,12 +585,6 @@ class AnalyseRunCreateView(APIView):
         denied = _gate(self._gm, org)
         if denied:
             return denied
-        if not _spend("run", org.id, RUNS_PER_HOUR):
-            return self._gm.custom_error_response(
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                "Too many reports this hour. Try again later.",
-                code="rate_limited",
-            )
         scope = data.get("scope") or {}
         if data.get("config_id"):
             config = AnalyseConfig.objects.filter(
@@ -586,10 +592,30 @@ class AnalyseRunCreateView(APIView):
             ).first()
             if config is None:
                 return self._gm.not_found("Report not found")
+            # One run per report at a time: a second "Run again" joins the run
+            # in flight instead of racing it (a run stuck for hours doesn't block).
+            active = (
+                AnalyseRun.objects.filter(
+                    config=config,
+                    status__in=["pending", "running"],
+                    deleted=False,
+                    created_at__gte=timezone.now() - ACTIVE_RUN_WINDOW,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if active is not None:
+                return self._gm.success_response(
+                    {"run_id": active.id, "config_id": config.id}
+                )
+            if not _spend("run", org.id, RUNS_PER_HOUR):
+                return _rate_limited(self._gm)
             if scope:
                 config.scope = scope
                 config.save(update_fields=["scope", "updated_at"])
         else:
+            if not _spend("run", org.id, RUNS_PER_HOUR):
+                return _rate_limited(self._gm)
             spec = data["config"]
             config = AnalyseConfig.objects.create(
                 project=project,
