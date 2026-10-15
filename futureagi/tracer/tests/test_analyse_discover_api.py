@@ -126,7 +126,11 @@ def test_discover_requires_authentication(api_client, observe_project):
 
 
 @pytest.mark.django_db
-def test_discover_requires_jev(auth_client, observe_project, monkeypatch):
+@pytest.mark.parametrize("denied", ["turing_models", "jev_models"])
+def test_discover_requires_turing_and_jev(
+    auth_client, observe_project, monkeypatch, denied
+):
+    from ee.agenthub.analyse import discovery
     from tfc.capabilities import service as capability_service
     from tfc.capabilities.service import CapabilityDecision
 
@@ -134,8 +138,11 @@ def test_discover_requires_jev(auth_client, observe_project, monkeypatch):
         capability_service,
         "check",
         lambda feature_id, **_: CapabilityDecision(
-            allowed=False, feature_id=feature_id
+            allowed=feature_id != denied, feature_id=feature_id
         ),
+    )
+    monkeypatch.setattr(
+        discovery, "discover_categories", lambda *_: pytest.fail("must not call")
     )
     response = auth_client.post(
         DISCOVER_PATH,

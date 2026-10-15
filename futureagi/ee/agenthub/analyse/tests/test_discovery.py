@@ -105,3 +105,45 @@ def test_model_failures_become_a_safe_message(monkeypatch):
     with pytest.raises(DiscoveryError) as excinfo:
         discovery.discover_categories("p1", ["t1"] * 12)
     assert "secret" not in str(excinfo.value)
+
+
+def test_rejects_non_verbatim_quotes():
+    data = json.loads(proposal())
+    data["categories"][0]["examples"] = [
+        {"id": 1, "quote": "…"},
+        {"id": 1, "quote": "WHERE IS MY ORDER HP-1?"},
+        {"id": 1, "quote": "Where"},
+        {"id": 1, "quote": "Where   is my\norder HP-1?"},
+    ]
+    result = parse_proposal(json.dumps(data), SAMPLE, "m")
+    # Only the whitespace-normalised exact match survives.
+    assert result.categories[0]["examples"] == [
+        {"trace_id": "t1", "quote": "Where is my order HP-1?"}
+    ]
+    assert result.dropped_quotes == 3
+
+
+def test_tolerates_wrong_shapes_from_the_model():
+    data = json.loads(proposal())
+    data["assignments"] = [{"id": 1, "label": "Refunds"}]
+    data["categories"][0]["examples"] = 3
+    result = parse_proposal(json.dumps(data), SAMPLE, "m")
+    assert result.unassigned == len(SAMPLE)
+    assert result.categories[0]["examples"] == []
+    with pytest.raises(DiscoveryError):
+        parse_proposal(json.dumps({"question": "Why?", "categories": 5}), SAMPLE, "m")
+
+
+def test_reserved_labels_are_dropped():
+    data = json.loads(proposal())
+    data["categories"].append({"label": "__errors", "definition": "x"})
+    result = parse_proposal(json.dumps(data), SAMPLE, "m")
+    assert "__errors" not in [c["label"] for c in result.categories]
+
+
+def test_empty_model_reply_is_an_outage(monkeypatch):
+    monkeypatch.setattr(discovery, "load_sample", lambda *_: SAMPLE * 3)
+    monkeypatch.setattr(discovery, "_call_model", lambda *_: ("", 0.0))
+    with pytest.raises(DiscoveryError) as excinfo:
+        discovery.discover_categories("p1", ["t1"] * 12)
+    assert excinfo.value.unavailable

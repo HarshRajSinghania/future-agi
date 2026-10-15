@@ -109,14 +109,16 @@ class AnalyseDiscoverView(APIView):
         ).exists():
             return self._gm.not_found("Project not found")
 
-        # Proposals exist only to be sorted by Jev, so they need Jev too; this
-        # also keeps the platform-paid discovery call behind the plan gate.
-        if not capability_service.check("jev_models", org_id=str(org.id)).allowed:
-            return self._gm.custom_error_response(
-                status.HTTP_402_PAYMENT_REQUIRED,
-                "Discover needs Jev, which isn't enabled for this organization.",
-                code="CAPABILITY_DENIED",
-            )
+        # The proposal runs on a Turing model and exists only to be sorted by
+        # Jev, so Discover needs both; checking here keeps the platform-paid
+        # call behind the plan gate for clients that skip the UI.
+        for feature in ("turing_models", "jev_models"):
+            if not capability_service.check(feature, org_id=str(org.id)).allowed:
+                return self._gm.custom_error_response(
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    "Discover isn't available on this organization's plan.",
+                    code="CAPABILITY_DENIED",
+                )
 
         if not _spend_discovery(org.id):
             return self._gm.custom_error_response(

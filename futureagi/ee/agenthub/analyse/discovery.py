@@ -196,8 +196,23 @@ def _json_object(raw: str) -> dict:
     return data
 
 
-def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip().casefold()
+MIN_QUOTE_CHARS = 8
+
+
+def _squash(text: str) -> str:
+    """Collapse whitespace only; quotes must match the trace's own casing."""
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _verbatim(quote: str, trace: SampledTrace) -> bool:
+    core = _squash(quote).rstrip("…").strip()
+    if len(core) < MIN_QUOTE_CHARS:
+        return False
+    return core in _squash(trace.input) or core in _squash(trace.output)
+
+
+def _items(value) -> list:
+    return value if isinstance(value, list) else []
 
 
 def _clean_label(value) -> str:
@@ -218,18 +233,20 @@ def parse_proposal(raw: str, sample: list[SampledTrace], model: str) -> Proposal
     categories: list[dict] = []
     seen: set[str] = set()
     dropped = 0
-    for entry in data.get("categories") or []:
+    for entry in _items(data.get("categories")):
         if not isinstance(entry, dict):
             continue
         label = _clean_label(entry.get("label"))
         key = label.casefold()
-        if not label or key == OTHER_LABEL.casefold() or key in seen:
+        # "__"-prefixed names are reserved for the result tallies.
+        reserved = key == OTHER_LABEL.casefold() or key.startswith("__")
+        if not label or reserved or key in seen:
             continue
         definition = _clip(entry.get("definition") or "", DEFINITION_CHARS)
         if not definition:
             continue
         examples = []
-        for example in entry.get("examples") or []:
+        for example in _items(entry.get("examples")):
             if not isinstance(example, dict) or len(examples) >= MAX_EXAMPLES:
                 continue
             trace = by_index.get(str(example.get("id")))
@@ -237,8 +254,7 @@ def parse_proposal(raw: str, sample: list[SampledTrace], model: str) -> Proposal
                 dropped += 1
                 continue
             quote = _clip(example.get("quote") or "", QUOTE_CHARS)
-            haystack = _normalize(trace.input) + " " + _normalize(trace.output)
-            if not quote or _normalize(quote.rstrip("…")) not in haystack:
+            if not _verbatim(quote, trace):
                 dropped += 1
                 continue
             examples.append({"trace_id": trace.trace_id, "quote": quote})
@@ -261,7 +277,9 @@ def parse_proposal(raw: str, sample: list[SampledTrace], model: str) -> Proposal
         )
 
     counts = {category["label"].casefold(): category for category in categories}
-    assignments = data.get("assignments") or {}
+    assignments = data.get("assignments")
+    if not isinstance(assignments, dict):
+        assignments = {}
     unassigned = 0
     for index in by_index:
         label = _clean_label(assignments.get(index, "")).casefold()
@@ -328,6 +346,12 @@ def discover_categories(
             "The discovery model is unavailable right now. Try again shortly.",
             unavailable=True,
         ) from exc
+    if not raw.strip():
+        # The no-gateway path reports provider failures as an empty reply.
+        raise DiscoveryError(
+            "The discovery model is unavailable right now. Try again shortly.",
+            unavailable=True,
+        )
     proposal = parse_proposal(raw, sample, model)
     proposal.cost_usd = cost
     logger.info(
