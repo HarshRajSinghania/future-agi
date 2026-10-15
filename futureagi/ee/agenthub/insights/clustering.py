@@ -243,8 +243,11 @@ def naming_payload(groups: list[list[int]], items: list[Item], vectors: np.ndarr
     clusters = []
     for index, members in enumerate(groups):
         shuffled = list(rng.permutation(members))
-        sample = shuffled[:NAMING_INSIDE]
-        holdout = shuffled[NAMING_INSIDE : NAMING_INSIDE + 8]
+        # Hold back about a quarter of every cluster (2 to 8 members) so the
+        # namer's blind audit always has members the name was not written from.
+        held = min(8, max(2, len(members) // 4)) if len(members) >= 6 else 0
+        holdout = shuffled[:held]
+        sample = shuffled[held : held + NAMING_INSIDE]
         others = [i for g, group in enumerate(groups) if g != index for i in group]
         nearest = sorted(others, key=lambda i: -float(vectors[i] @ centroids[index]))[
             :NAMING_OUTSIDE

@@ -187,6 +187,7 @@ def from_agent(reply: dict, result: dict, units: list[dict], contents: dict[str,
         "category_insights": insights,
         "dropped_points": dropped,
         "verified": True,
+        "verification": reply.get("verification") or {},
     }
 
 
@@ -257,6 +258,9 @@ def _answer_payload(reply: dict, result: dict, units: list[dict], contents: dict
             "category_ids": [c for c in raw.get("category_ids") or [] if c in categories],
             "evidence": _evidence(raw.get("evidence"), units_by_key, contents),
         })
+    dropped_reply = reply.get("dropped")
+    if isinstance(dropped_reply, dict):
+        dropped += int(dropped_reply.get("paragraphs") or 0)
     return {
         "answer": paragraphs,
         "follow_ups": [_clean(q, 160) for q in (reply.get("follow_ups") or [])[:3] if q],
@@ -268,7 +272,19 @@ def answer(run, result: dict, units: list[dict], contents: dict[str, str],
            question: str, history: list[dict], spend: Spend) -> dict:
     if insight_agent.enabled():
         payload = agent_payload(run, result, units, contents)
-        payload.update({"question": question, "history": history[-10:]})
+        summary = result.get("summary") or {}
+        payload.update({
+            "question": question,
+            "history": history[-10:],
+            # The report's own findings, as context for the answer.
+            "report": {
+                "title": summary.get("title", ""),
+                "findings": [
+                    {k: f.get(k) for k in ("headline", "detail", "action", "category_ids")}
+                    for f in summary.get("findings", [])
+                ],
+            },
+        })
         return _answer_payload(insight_agent.ask(payload, spend), result, units, contents)
     from ee.agenthub.insights.llm import THINKING, chat_json
 

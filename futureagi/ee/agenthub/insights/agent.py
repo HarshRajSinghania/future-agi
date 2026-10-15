@@ -152,7 +152,9 @@ def read_units(context: dict, units: list[tuple[str, str]], attributes: list[dic
         if key not in contents:
             continue
         if not item.get("ok", True):
-            out[key] = {"error": str(item.get("error") or "unreadable")[:200]}
+            error = item.get("error")
+            message = error.get("message") if isinstance(error, dict) else error
+            out[key] = {"error": str(message or "The Insights agent could not read this item.")[:200]}
             continue
         facets = normalise(item.get("facets") or {}, attributes)
         evidence, dropped = verified_evidence(item.get("evidence"), contents[key], key)
