@@ -29,7 +29,7 @@ export function useJevAvailability() {
       available: false,
       isLoading,
       reason:
-        "Analyse runs on Jev with your own TypeSafe key. Add it in Settings → AI Providers to start.",
+        "Jev runs on your own TypeSafe key. Add it in Settings → AI Providers to start.",
       settingsPath: AI_PROVIDERS_SETTINGS_PATH,
     };
   return { available: true, isLoading, reason: null };

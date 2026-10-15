@@ -41,9 +41,17 @@ const PrimaryGraph = lazy(
   () => import("../LLMTracing/GraphSection/PrimaryGraph"),
 );
 
+// Instant eval / Analyse
+import { useInstantEvalLauncher } from "../LLMTracing/InstantEval/useInstantEvalLauncher";
+import { scopeLabel } from "../LLMTracing/InstantEval/instantEvalUnits";
+import { analyseReportLink } from "../observeHandoff";
+const InstantEvalDrawer = lazy(
+  () => import("../LLMTracing/InstantEval/InstantEvalDrawer"),
+);
+
 // User-specific
 import useUsersStore from "./Store/usersStore";
-import { getUsersColumnConfig } from "./common";
+import { buildUsersRequestFilters, getUsersColumnConfig } from "./common";
 import UsersGrid from "./UsersGrid";
 import { sanitizeUserColumnState } from "./userSortContract";
 import UsersEmptyScreen from "./UsersEmptyScreen";
@@ -270,6 +278,38 @@ const UsersView = ({
     if (!extraFilters.length) return validatedFilters;
     return [...validatedFilters, ...extraFilters];
   }, [validatedFilters, extraFilters]);
+
+  // --- Instant eval / Analyse ---
+  // Both ask about exactly the users the grid lists (UsersGrid sends
+  // buildUsersRequestFilters(finalFilters), date window included).
+  const userViewScope = useMemo(
+    () => ({
+      filters: buildUsersRequestFilters(finalFilters),
+      label: getDateLabel(dateFilter),
+    }),
+    [finalFilters, dateFilter],
+  );
+  const instantEval = useInstantEvalLauncher({
+    enabled: Boolean(observeId),
+    navigate,
+  });
+  const openAnalyse = useCallback(() => {
+    navigate(
+      analyseReportLink(observeId, {
+        unit: "users",
+        filters: userViewScope.filters,
+        label: scopeLabel(userViewScope),
+      }),
+    );
+  }, [observeId, userViewScope, navigate]);
+  // The same user page a grid row opens.
+  const openInstantEvalUser = useCallback(
+    (row) => {
+      const userId = row.userId || row.label;
+      if (userId) navigate(`/dashboard/users/${encodeURIComponent(userId)}`);
+    },
+    [navigate],
+  );
 
   // --- Row height ---
   const [cellHeight, setCellHeight] = useUrlState("userCellHeight", "Short");
@@ -875,6 +915,8 @@ const UsersView = ({
               }
             : undefined
         }
+        onInstantEval={observeId ? instantEval.openDrawer : undefined}
+        onAnalyse={observeId ? openAnalyse : undefined}
       />
 
       {/* Filter chips. Inject `display_name` so chips render the column's
@@ -983,6 +1025,21 @@ const UsersView = ({
         onAttributeSearchChange={setCustomAttributeSearch}
         inventoryControlProps={inventoryControlProps}
       />
+
+      {observeId && instantEval.mounted && (
+        <Suspense fallback={null}>
+          <InstantEvalDrawer
+            open={instantEval.open}
+            onClose={instantEval.close}
+            projectId={observeId}
+            unit="users"
+            scope={userViewScope}
+            seed={instantEval.seed}
+            seedKey={instantEval.seedKey}
+            onOpenRow={openInstantEvalUser}
+          />
+        </Suspense>
+      )}
     </>
   );
 };

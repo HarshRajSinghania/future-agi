@@ -145,6 +145,10 @@ import axios, { endpoints } from "src/utils/axios";
 
 import { PROJECT_SOURCE } from "src/utils/constants";
 import { OBSERVE_LIST_REFRESH_EVENT } from "../observeEvents";
+import { analyseReportLink } from "../observeHandoff";
+import { useInstantEvalLauncher } from "./InstantEval/useInstantEvalLauncher";
+import { scopeLabel } from "./InstantEval/instantEvalUnits";
+import { tracePageLink } from "./InstantEval/results/scopeLinks";
 import { useLLMTracingFilters } from "./useLLMTracingFilters";
 import { isTraceListProjectReady } from "./projectSourceMode";
 import { canonicalObserveViewMode } from "./viewMode";
@@ -332,6 +336,7 @@ const CallLogsGrid = lazy(
   () => import("src/sections/agents/CallLogs/CallLogsGrid"),
 );
 const LLMFiltersDrawer = lazy(() => import("./LLMFiltersDrawer"));
+const InstantEvalDrawer = lazy(() => import("./InstantEval/InstantEvalDrawer"));
 const AddDataset = lazy(
   () => import("src/components/traceDetailDrawer/addToDataset/add-dataset"),
 );
@@ -907,13 +912,13 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
   const [_urlRowIndex, setUrlRowIndex, _removeUrlRowIndex] =
     useUrlState("rowIndex");
 
-  const { resetStates, viewMode, setViewMode } = useLLMTracingStoreShallow(
-    (state) => ({
+  const { resetStates, viewMode, setViewMode, setTraceDetailDrawerOpen } =
+    useLLMTracingStoreShallow((state) => ({
       resetStates: state.resetStates,
       viewMode: state.viewMode,
       setViewMode: state.setViewMode,
-    }),
-  );
+      setTraceDetailDrawerOpen: state.setTraceDetailDrawerOpen,
+    }));
   const {
     selectedTraces,
     allTracesSelected,
@@ -2906,32 +2911,65 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
     navigate,
   ]);
 
-  // Instant eval lives in the Analyse tab; the Trace view hands over exactly
-  // what the grid is showing (date window, filters, chips, toggles) as scope.
-  const openInstantEval = useCallback(() => {
-    const scope = toBackendFilters([
-      ...primaryCombinedFilters,
-      ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
-      ...(extraFilters || []),
-      ...(metricFilters || []),
-    ]);
-    const params = new URLSearchParams({
-      tab: "analyse",
-      scope: JSON.stringify({
-        filters: scope,
-        label: dateLabel || "From the Trace view",
-      }),
-    });
-    navigate(`/dashboard/observe/${observeId}/analyse?${params.toString()}`);
-  }, [
-    primaryCombinedFilters,
-    hasEvalFilter,
-    extraFilters,
-    metricFilters,
-    dateLabel,
-    observeId,
+  // Instant eval and Analyse ask about exactly the traces the grid shows: its
+  // date window, filters, chips and toggles, as its list request sends them.
+  const traceViewScope = useMemo(
+    () => ({
+      filters: toBackendFilters([
+        ...primaryCombinedFilters,
+        ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
+        ...(extraFilters || []),
+        ...(metricFilters || []),
+      ]),
+      label: dateLabel,
+    }),
+    [
+      primaryCombinedFilters,
+      hasEvalFilter,
+      extraFilters,
+      metricFilters,
+      dateLabel,
+    ],
+  );
+  const instantEval = useInstantEvalLauncher({
+    enabled: Boolean(observeId),
     navigate,
-  ]);
+  });
+  const openAnalyse = useCallback(() => {
+    navigate(
+      analyseReportLink(observeId, {
+        unit: "traces",
+        filters: traceViewScope.filters,
+        label: scopeLabel(traceViewScope),
+      }),
+    );
+  }, [observeId, traceViewScope, navigate]);
+  // "Show in grid": the answer becomes a filter chip on this grid.
+  const showInstantEvalAnswers = useCallback(
+    (filter) =>
+      setExtraFilters((prev) => [
+        ...(prev || []).filter((item) => item.column_id !== filter.column_id),
+        filter,
+      ]),
+    [setExtraFilters],
+  );
+  const openInstantEvalTrace = useCallback(
+    (row) => {
+      if (
+        projectSource === PROJECT_SOURCE.SIMULATOR ||
+        !setTraceDetailDrawerOpen
+      )
+        navigate(tracePageLink(observeId, row.id));
+      else setTraceDetailDrawerOpen({ traceId: row.id });
+    },
+    [projectSource, setTraceDetailDrawerOpen, navigate, observeId],
+  );
+  // A finished run's answers become an eval column on the grid.
+  const refreshAfterInstantEval = useCallback(() => {
+    if (projectSource === PROJECT_SOURCE.SIMULATOR)
+      primaryCallLogsGridRef.current?.refresh?.();
+    else refreshGridRef(primaryTraceGridRef);
+  }, [projectSource]);
 
   const handleResetView = useCallback(() => {
     setViewMode(DEFAULT_DISPLAY_CONFIG.viewMode);
@@ -4480,12 +4518,15 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
                 setExcludeSimulationCalls(excludeSimulationCalls ? null : true)
               }
               onAddEvals={handleAddEvals}
-              // Analyse is per project and per trace: not in the cross-project
-              // user view, and not from the Spans tab.
+              // Instant eval and Analyse are per project and per trace: not in
+              // the cross-project user view, and not from the Spans tab.
               onInstantEval={
                 observeId && selectedTab !== "spans"
-                  ? openInstantEval
+                  ? instantEval.openDrawer
                   : undefined
+              }
+              onAnalyse={
+                observeId && selectedTab !== "spans" ? openAnalyse : undefined
               }
             />
             {/* FilterChips moved above graph section */}
@@ -5356,6 +5397,22 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
         </Box>
       </Box>
       {/* Old LLMFiltersDrawer removed — replaced by FilterPanel in ObserveToolbar */}
+      {observeId && instantEval.mounted && (
+        <Suspense fallback={null}>
+          <InstantEvalDrawer
+            open={instantEval.open && selectedTab !== "spans"}
+            onClose={instantEval.close}
+            projectId={observeId}
+            unit="traces"
+            scope={traceViewScope}
+            seed={instantEval.seed}
+            seedKey={instantEval.seedKey}
+            onOpenRow={openInstantEvalTrace}
+            onShowInGrid={showInstantEvalAnswers}
+            onRunFinished={refreshAfterInstantEval}
+          />
+        </Suspense>
+      )}
     </Box>
   );
 };

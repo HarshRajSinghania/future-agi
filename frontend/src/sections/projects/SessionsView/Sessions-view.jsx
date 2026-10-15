@@ -32,6 +32,10 @@ import { buildAddEvalsDraft } from "../LLMTracing/buildAddEvalsDraft";
 import SelectAllBanner from "../LLMTracing/SelectAllBanner";
 import { getSelectionCountState } from "../LLMTracing/listTotalMetadata";
 import { singleProjectIdFromFilters } from "../LLMTracing/GraphSection/graphFilterUtils";
+import { toBackendFilters } from "../LLMTracing/common";
+import { useInstantEvalLauncher } from "../LLMTracing/InstantEval/useInstantEvalLauncher";
+import { scopeLabel } from "../LLMTracing/InstantEval/instantEvalUnits";
+import { analyseReportLink } from "../observeHandoff";
 
 // Lazy-load graph
 const PrimaryGraph = lazy(
@@ -41,6 +45,10 @@ const AddToQueueDialog = lazy(
   () =>
     import("src/sections/annotations/queues/components/add-to-queue-dialog"),
 );
+const InstantEvalDrawer = lazy(
+  () => import("../LLMTracing/InstantEval/InstantEvalDrawer"),
+);
+const TracesDrawer = lazy(() => import("../TracesDrawer/TracesDrawer"));
 
 const SESSION_BULK_ACTIONS = [
   {
@@ -298,6 +306,33 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
     if (!extraFilters.length) return base;
     return [...base, ...extraFilters];
   }, [userScopeFilter, validatedFilters, extraFilters]);
+
+  // --- Instant eval / Analyse ---
+  // Both ask about exactly the sessions the grid shows (Session-grid sends
+  // toBackendFilters(finalFilters), date window included).
+  const sessionViewScope = useMemo(
+    () => ({
+      filters: toBackendFilters(finalFilters),
+      label: getDateLabel(dateFilter),
+    }),
+    [finalFilters, dateFilter],
+  );
+  const instantEval = useInstantEvalLauncher({
+    enabled: Boolean(observeId),
+    navigate,
+  });
+  const openAnalyse = useCallback(() => {
+    navigate(
+      analyseReportLink(observeId, {
+        unit: "sessions",
+        filters: sessionViewScope.filters,
+        label: scopeLabel(sessionViewScope),
+      }),
+    );
+  }, [observeId, sessionViewScope, navigate]);
+  // A session opened from Instant eval's answers, in the same drawer the
+  // grid opens on a row click.
+  const [instantEvalSession, setInstantEvalSession] = useState(null);
 
   // --- Column visibility ---
   const [updateObj, setUpdateObj] = useState(initialVisibility);
@@ -1102,6 +1137,8 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
         bulkActions={SESSION_BULK_ACTIONS}
         onAddEvals={handleAddEvals}
         onAddCustomColumn={() => setOpenCustomColumn(true)}
+        onInstantEval={observeId ? instantEval.openDrawer : undefined}
+        onAnalyse={observeId ? openAnalyse : undefined}
       />
 
       <Suspense fallback={null}>
@@ -1241,6 +1278,31 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
         onAttributeSearchChange={setCustomAttributeSearch}
         inventoryControlProps={inventoryControlProps}
       />
+
+      {observeId && instantEval.mounted && (
+        <Suspense fallback={null}>
+          <InstantEvalDrawer
+            open={instantEval.open}
+            onClose={instantEval.close}
+            projectId={observeId}
+            unit="sessions"
+            scope={sessionViewScope}
+            seed={instantEval.seed}
+            seedKey={instantEval.seedKey}
+            onOpenRow={(row) => setInstantEvalSession({ session_id: row.id })}
+          />
+        </Suspense>
+      )}
+      {instantEvalSession && (
+        <Suspense fallback={null}>
+          <TracesDrawer
+            key={instantEvalSession.session_id}
+            open
+            onClose={() => setInstantEvalSession(null)}
+            rowData={instantEvalSession}
+          />
+        </Suspense>
+      )}
     </>
   );
 };

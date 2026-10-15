@@ -1,4 +1,4 @@
-import { ERROR_ANSWER } from "../useInstantEval";
+import { ERROR_ANSWER } from "../instantEvalAnswers";
 
 // How traces with each answer behave compared with every other answered trace
 // in the same run. A difference is only called out when it is both large

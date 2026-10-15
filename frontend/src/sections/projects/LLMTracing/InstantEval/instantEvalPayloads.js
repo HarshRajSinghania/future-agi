@@ -13,8 +13,11 @@ export const ANSWER_TYPES = {
   CATEGORY: "category",
 };
 
-// What Jev reads from each trace. Values are the root span fields the eval
-// mapping resolves (input -> input.value, output -> output.value).
+// What Jev reads from each row. For traces the values are the root span
+// fields the eval mapping resolves (input -> input.value, output ->
+// output.value). Sessions and users are read as the whole conversation: the
+// backend renders every turn of a session as "[Turn i] User: … / Assistant: …"
+// under the transcript variable.
 export const READS = {
   input_output: {
     label: "Input and output",
@@ -22,11 +25,16 @@ export const READS = {
   },
   input: { label: "Input only", variables: ["input"] },
   output: { label: "Output only", variables: ["output"] },
+  transcript: { label: "Whole conversation", variables: ["transcript"] },
 };
+
+// The choices a trace question offers; transcript is for sessions and users.
+export const TRACE_READS = ["input_output", "input", "output"];
 
 const VARIABLE_LABELS = {
   input: "Trace input",
   output: "Trace output",
+  transcript: "Conversation",
 };
 
 export const cleanCategories = (categories = []) => {
@@ -60,9 +68,12 @@ export const cleanDefinitions = (definitions = {}, labels = []) =>
       .filter(([, definition]) => definition),
   );
 
-export function validateInstantEval({ question, answerType, categories }) {
+export function validateInstantEval(
+  { question, answerType, categories },
+  noun = "trace",
+) {
   const text = (question || "").trim();
-  if (!text) return "Write the question Jev should answer for each trace.";
+  if (!text) return `Write the question Jev should answer for each ${noun}.`;
   if (text.length > MAX_QUESTION_LENGTH)
     return `Keep the question under ${MAX_QUESTION_LENGTH} characters.`;
   if (answerType === ANSWER_TYPES.CATEGORY) {

@@ -15,33 +15,75 @@ import Iconify from "src/components/iconify";
 import {
   ANSWER_TYPES,
   MAX_CATEGORIES,
+  MAX_DEFINITION_LENGTH,
   MAX_QUESTION_LENGTH,
 } from "./instantEvalPayloads";
 
-function CategoryEditor({ categories, onChange }) {
+// Each category can carry a definition: Jev's rule for when to pick it.
+function CategoryEditor({ categories, definitions, onChange }) {
   const [draft, setDraft] = useState("");
   const add = () => {
     const value = draft.trim();
     if (!value || categories.length >= MAX_CATEGORIES) return;
-    onChange([...categories, value]);
+    if (categories.some((c) => c.toLowerCase() === value.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    onChange({ categories: [...categories, value], definitions });
     setDraft("");
   };
+  const remove = (index) => {
+    const label = categories[index];
+    const rest = { ...definitions };
+    delete rest[label];
+    onChange({
+      categories: categories.filter((_, i) => i !== index),
+      definitions: rest,
+    });
+  };
   return (
-    <Box>
-      {categories.length > 0 && (
-        <Stack direction="row" flexWrap="wrap" gap={0.75} sx={{ mb: 1 }}>
-          {categories.map((category, index) => (
-            <Chip
-              key={`${category}-${index}`}
-              label={category}
+    <Stack spacing={0.75}>
+      {categories.map((category, index) => (
+        <Stack
+          key={`${category}-${index}`}
+          direction="row"
+          alignItems="center"
+          spacing={1}
+        >
+          <Chip
+            label={category}
+            size="small"
+            title={category}
+            sx={{ maxWidth: 160, flexShrink: 0 }}
+          />
+          <TextField
+            size="small"
+            fullWidth
+            value={definitions?.[category] || ""}
+            placeholder="When should Jev pick this? (optional)"
+            onChange={(event) =>
+              onChange({
+                categories,
+                definitions: { ...definitions, [category]: event.target.value },
+              })
+            }
+            inputProps={{
+              maxLength: MAX_DEFINITION_LENGTH,
+              "aria-label": `Definition of ${category}`,
+            }}
+            sx={{ "& .MuiInputBase-input": { py: 0.5, fontSize: 13 } }}
+          />
+          <Tooltip title={`Remove ${category}`}>
+            <IconButton
               size="small"
-              onDelete={() =>
-                onChange(categories.filter((_, i) => i !== index))
-              }
-            />
-          ))}
+              onClick={() => remove(index)}
+              aria-label={`Remove ${category}`}
+            >
+              <Iconify icon="mdi:close" width={16} />
+            </IconButton>
+          </Tooltip>
         </Stack>
-      )}
+      ))}
       <TextField
         size="small"
         fullWidth
@@ -62,12 +104,13 @@ function CategoryEditor({ categories, onChange }) {
         onBlur={add}
         inputProps={{ "aria-label": "Add category", maxLength: 200 }}
       />
-    </Box>
+    </Stack>
   );
 }
 
 CategoryEditor.propTypes = {
   categories: PropTypes.arrayOf(PropTypes.string).isRequired,
+  definitions: PropTypes.object,
   onChange: PropTypes.func.isRequired,
 };
 
@@ -78,6 +121,7 @@ export default function QuestionEditor({
   onChange,
   onRemove,
   autoFocus,
+  placeholder,
 }) {
   const update = (patch) => onChange({ ...value, ...patch });
   return (
@@ -117,7 +161,10 @@ export default function QuestionEditor({
         autoFocus={autoFocus}
         value={value.question}
         onChange={(event) => update({ question: event.target.value })}
-        placeholder="Did the agent promise a refund without checking the order first?"
+        placeholder={
+          placeholder ||
+          "Did the agent promise a refund without checking the order first?"
+        }
         error={Boolean(error)}
         helperText={error || " "}
         inputProps={{
@@ -147,8 +194,9 @@ export default function QuestionEditor({
       {value.answerType === ANSWER_TYPES.CATEGORY && (
         <Box sx={{ mt: 1.25 }}>
           <CategoryEditor
-            categories={value.categories}
-            onChange={(categories) => update({ categories })}
+            categories={value.categories || []}
+            definitions={value.definitions || {}}
+            onChange={update}
           />
         </Box>
       )}
@@ -162,9 +210,11 @@ QuestionEditor.propTypes = {
     question: PropTypes.string,
     answerType: PropTypes.string,
     categories: PropTypes.arrayOf(PropTypes.string),
+    definitions: PropTypes.object,
   }).isRequired,
   error: PropTypes.string,
   onChange: PropTypes.func.isRequired,
   onRemove: PropTypes.func,
   autoFocus: PropTypes.bool,
+  placeholder: PropTypes.string,
 };

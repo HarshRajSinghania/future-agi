@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import axios, { endpoints, readQuery } from "src/utils/axios";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
+import { collectPopulation } from "src/sections/projects/observePopulation";
 import {
   INSTANT_EVAL_MODEL,
   answerLabels,
@@ -9,68 +10,94 @@ import {
   buildTemplatePayload,
   cleanDefinitions,
 } from "./instantEvalPayloads";
+import {
+  TASK_PREFIX,
+  endUserIds,
+  normalizeReads,
+  progressCounts,
+  sessionIdsFromUserSessions,
+  sessionsTaskPayload,
+  splitScopeFilters,
+  traceIdsFilter,
+  tracesTaskPayload,
+  unitMeta,
+  userSessionsRequest,
+} from "./instantEvalUnits";
+import {
+  EMPTY_ANSWERS,
+  ERROR_ANSWER,
+  answeredCount,
+  normalizeAnswers,
+  traceMetrics,
+} from "./instantEvalAnswers";
+
+export { ERROR_ANSWER };
 
 const POLL_MS = 2000;
 // A run that hasn't finished after this long is shown as stalled rather than
 // polled forever (a paused or stuck task never reaches a terminal status).
 const MAX_FOLLOW_MS = 30 * 60 * 1000;
 const POLL_RETRIES = 5;
-// Results reach ClickHouse through CDC a few seconds after the task finishes.
-const COUNT_SETTLE_ATTEMPTS = 6;
+// Answers land a few seconds after the task finishes.
+const ANSWER_SETTLE_ATTEMPTS = 6;
+const MAX_METRIC_ROWS = 500;
 const TERMINAL_TASK_STATUSES = new Set([
   "completed",
   "failed",
   "deleted",
   "paused",
 ]);
-const storageKey = (projectId) => `instant-eval-run:${projectId}`;
+const storageKey = (projectId, unit) => `instant-eval-run:${projectId}:${unit}`;
 
-const IDLE = { phase: "idle", items: [], counts: {}, traces: [] };
+const IDLE = {
+  phase: "idle",
+  items: [],
+  answers: EMPTY_ANSWERS,
+  progress: null,
+};
 
 const result = (response) => response?.data?.result;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const readStored = (projectId) => {
+const readStored = (projectId, unit) => {
   try {
-    const raw = globalThis.sessionStorage?.getItem(storageKey(projectId));
+    const raw = globalThis.sessionStorage?.getItem(storageKey(projectId, unit));
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 };
 
-const writeStored = (projectId, value) => {
+const writeStored = (projectId, unit, value) => {
   try {
     if (value)
       globalThis.sessionStorage?.setItem(
-        storageKey(projectId),
+        storageKey(projectId, unit),
         JSON.stringify(value),
       );
-    else globalThis.sessionStorage?.removeItem(storageKey(projectId));
+    else globalThis.sessionStorage?.removeItem(storageKey(projectId, unit));
   } catch {
     // Session storage unavailable: the run still completes server-side.
   }
 };
 
-// The grid's scope filters carry the date window as a created_at "between"
-// item; eval tasks take it as a sibling date_range instead.
-export function splitScopeFilters(scopeFilters = []) {
-  let dateRange;
-  const filters = [];
-  scopeFilters.forEach((item) => {
-    const config = item?.filter_config || {};
-    if (
-      item?.column_id === "created_at" &&
-      config.filter_op === "between" &&
-      Array.isArray(config.filter_value)
-    ) {
-      dateRange = config.filter_value;
-    } else if (item) {
-      filters.push(item);
-    }
-  });
-  return { dateRange, filters };
-}
+// What survives closing the drawer or reloading the page: enough to resume
+// following the task, or to reload a finished run's answers.
+const storable = (run) => ({
+  phase: run.phase,
+  taskId: run.taskId,
+  items: run.items,
+  scopeFilters: run.scopeFilters,
+  scopeLabel: run.scopeLabel,
+  handedOver: run.handedOver,
+  limit: run.limit,
+  reads: run.reads,
+  asked: run.asked,
+  startedAt: run.startedAt,
+  finishedAt: run.finishedAt,
+  error: run.error,
+  viewing: run.viewing,
+});
 
 export function buildAnswerFilter(item, labels) {
   return {
@@ -98,6 +125,9 @@ export function itemFromConfig(config) {
     labels: meta.labels || [],
     definitions: meta.definitions || {},
     reads: meta.reads,
+    // Questions saved before sessions and users had Instant eval were all
+    // asked about traces.
+    unit: meta.unit || "traces",
   };
 }
 
@@ -118,6 +148,19 @@ const sameDefinitions = (a = {}, b = {}) => {
   return [...keys].every((key) => (a[key] || "") === (b[key] || ""));
 };
 
+// A saved question is reused only when it asks the same thing of the same
+// kind of row: same wording, answers, definitions, inputs and unit.
+export const matchesSavedQuestion = (
+  item,
+  { text, answerType, labels, definitions, reads, unit },
+) =>
+  item.question.toLowerCase() === text.toLowerCase() &&
+  item.answerType === answerType &&
+  item.reads === reads &&
+  (item.unit || "traces") === unit &&
+  sameLabels(item.labels, labels) &&
+  sameDefinitions(item.definitions, definitions);
+
 async function listProjectConfigs(projectId) {
   const response = await axios.get(endpoints.project.getEvalTaskConfig(), {
     params: { project_id: projectId },
@@ -126,9 +169,9 @@ async function listProjectConfigs(projectId) {
 }
 
 // Asking a question that already has an evaluator in this project (same
-// wording, answers and inputs) reuses it, so its grid column and history stay
-// one series. Only new questions create a Jev template and an eval config.
-async function resolveEvaluators({ projectId, questions, reads }) {
+// wording, answers, inputs and unit) reuses it, so its grid column and history
+// stay one series. Only new questions create a Jev template and an eval config.
+async function resolveEvaluators({ projectId, questions, reads, unit }) {
   const configs = await listProjectConfigs(projectId);
   const existing = configs.map(itemFromConfig).filter(Boolean).reverse();
   const taken = new Set(
@@ -141,13 +184,15 @@ async function resolveEvaluators({ projectId, questions, reads }) {
       const text = question.question.trim();
       const labels = answerLabels(question);
       const definitions = cleanDefinitions(question.definitions, labels);
-      const reuse = existing.find(
-        (item) =>
-          item.question.toLowerCase() === text.toLowerCase() &&
-          item.answerType === question.answerType &&
-          item.reads === reads &&
-          sameLabels(item.labels, labels) &&
-          sameDefinitions(item.definitions, definitions),
+      const reuse = existing.find((item) =>
+        matchesSavedQuestion(item, {
+          text,
+          answerType: question.answerType,
+          labels,
+          definitions,
+          reads,
+          unit,
+        }),
       );
       if (reuse) return reuse;
       const template = await axios.post(
@@ -178,6 +223,7 @@ async function resolveEvaluators({ projectId, questions, reads }) {
               labels,
               ...(Object.keys(definitions).length ? { definitions } : {}),
               reads,
+              unit,
             },
           },
         },
@@ -191,26 +237,82 @@ async function resolveEvaluators({ projectId, questions, reads }) {
         labels,
         definitions,
         reads,
+        unit,
       };
     }),
   );
 }
 
-async function createTask({ projectId, items, limit, scopeFilters }) {
-  const { dateRange, filters } = splitScopeFilters(scopeFilters);
-  const response = await axios.post(endpoints.project.createEvalTask(), {
-    name: `Instant eval · ${items[0].question}`.slice(0, 255),
-    project: projectId,
-    evals: items.map((item) => item.configId),
-    filters: {
-      ...(dateRange ? { date_range: dateRange } : {}),
-      ...(filters.length ? { filters } : {}),
+/**
+ * The rows a run asks about. Traces are chosen by the task from the view's
+ * filters; sessions are the exact session ids in view; users are each user's
+ * latest sessions in the view's window.
+ */
+async function collectTarget({ projectId, unit, limit, scope }) {
+  const handedOver = scope?.handedOver;
+  const filters = scope?.filters || [];
+  if (unit === "traces") {
+    if (handedOver)
+      return {
+        scopeFilters: [traceIdsFilter(handedOver.ids.slice(0, limit))],
+        limit: Math.min(limit, handedOver.ids.length),
+      };
+    return { scopeFilters: filters, limit };
+  }
+  const population = handedOver
+    ? null
+    : await collectPopulation({ unit, projectId, filters, limit });
+  const ids = handedOver
+    ? handedOver.ids.slice(0, limit)
+    : population.items.map((item) => item.id);
+  if (unit === "sessions") {
+    if (!ids.length)
+      return { empty: "There are no sessions in this view to ask about." };
+    return { sessionIds: ids, asked: { sessions: ids.length } };
+  }
+  const userIds = endUserIds(ids);
+  if (!userIds.length)
+    return { empty: "There are no users in this view to ask about." };
+  const response = await axios.post(
+    endpoints.project.instantEvalUserSessions(),
+    userSessionsRequest({
+      projectId,
+      userIds,
+      // A hand-off names its users; their latest sessions are read whenever
+      // they happened.
+      filters: handedOver ? [] : filters,
+    }),
+  );
+  const sessionIds = sessionIdsFromUserSessions(result(response));
+  if (!sessionIds.length)
+    return { empty: "None of these users had a session in this window." };
+  return {
+    sessionIds,
+    asked: {
+      users: result(response)?.users ?? userIds.length,
+      sessions: sessionIds.length,
     },
-    run_type: "historical",
-    row_type: "traces",
-    spans_limit: limit,
-    sampling_rate: 100,
-  });
+  };
+}
+
+async function createTask({ projectId, unit, items, target }) {
+  const payload =
+    unit === "traces"
+      ? tracesTaskPayload({
+          projectId,
+          items,
+          limit: target.limit,
+          scopeFilters: target.scopeFilters,
+        })
+      : sessionsTaskPayload({
+          projectId,
+          items,
+          sessionIds: target.sessionIds,
+        });
+  const response = await axios.post(
+    endpoints.project.createEvalTask(),
+    payload,
+  );
   return result(response)?.id;
 }
 
@@ -254,6 +356,38 @@ async function fetchProgress(taskId) {
   throw lastError;
 }
 
+async function fetchAnswers({ projectId, taskId, unit, items }) {
+  const response = await axios.get(endpoints.project.instantEvalAnswers(), {
+    params: {
+      project_id: projectId,
+      eval_task_id: taskId,
+      unit,
+      config_ids: items
+        .map((item) => item.configId)
+        .filter(Boolean)
+        .join(","),
+    },
+  });
+  return normalizeAnswers(result(response));
+}
+
+// Latency, cost and status of a trace run's rows: the newest `limit` traces in
+// the scope are exactly the rows the historical task evaluated.
+async function fetchTraceMetrics({ projectId, scopeFilters, limit }) {
+  const response = await readQuery(
+    endpoints.project.getTracesForObserveProject(),
+    {
+      params: {
+        project_id: projectId,
+        page_number: 0,
+        page_size: Math.min(limit || MAX_METRIC_ROWS, MAX_METRIC_ROWS),
+        filters: JSON.stringify(scopeFilters || []),
+      },
+    },
+  );
+  return traceMetrics(result(response)?.table || []);
+}
+
 // One live task per set of questions: re-creating it would answer every new
 // trace twice and bill twice.
 // Live tasks are found by name, page by page, so a long run history can't hide
@@ -282,12 +416,6 @@ export async function findContinuousTask({ projectId, items }) {
   }
   return undefined;
 }
-
-// The newest `limit` traces in the scope are exactly the rows the historical
-// task evaluates (both read newest-first through the same list builder), and
-// each row carries every eval column of the project. One read therefore gives
-// the run's trace set with timestamps and the current answer per question.
-const MAX_ROWS = 500;
 
 // Plain-language reasons for the task's error groups (normalized messages
 // from get_eval_task_logs). Unknown reasons fall back to a generic line.
@@ -336,201 +464,142 @@ export function explainErrorGroups(groups = []) {
         reason: "failed while calling Jev. Rerun to retry them.",
       };
     if (/missing|not found|Required attribute/i.test(text))
-      return { count, reason: "had no input or output for Jev to read." };
+      return { count, reason: "had nothing for Jev to read." };
     return { count, reason: "couldn't be evaluated." };
   });
 }
 
-// A failed evaluation, kept apart from every label (labels can't start with
-// "__", so a category may even be called "error").
-export const ERROR_ANSWER = "__error__";
-
-export function answerFromCell(cell) {
-  if (!cell || typeof cell !== "object") return undefined;
-  if (cell.error === true) return ERROR_ANSWER;
-  const label = Object.keys(cell).find(
-    (key) => typeof cell[key] === "number" && cell[key] > 0,
-  );
-  return label;
+function endMessage({ stalled, status, unit }) {
+  const noun = unitMeta(unit).noun;
+  if (stalled)
+    return "This run is taking unusually long. Jev keeps answering in the background; reopen Instant eval later to see the rest.";
+  if (status === "paused")
+    return `This run was paused before every ${noun} was answered.`;
+  if (status === "failed")
+    return `The run stopped before every ${noun} was answered.`;
+  return undefined;
 }
 
-async function fetchRunRows({ projectId, scopeFilters, limit }) {
-  const response = await readQuery(
-    endpoints.project.getTracesForObserveProject(),
-    {
-      params: {
-        project_id: projectId,
-        page_number: 0,
-        page_size: Math.min(limit || MAX_ROWS, MAX_ROWS),
-        filters: JSON.stringify(scopeFilters),
-      },
-    },
-  );
-  return result(response)?.table || [];
-}
-
-const numberOrNull = (value) => {
-  const number = Number(value);
-  return value === null ||
-    value === undefined ||
-    value === "" ||
-    Number.isNaN(number)
-    ? null
-    : number;
-};
-
-export function summarizeRows(rows, items) {
-  const traces = rows
-    .map((row) => ({
-      traceId: row.trace_id,
-      time: row.start_time || row.created_at,
-      input: typeof row.input === "string" ? row.input : "",
-      status: row.status,
-      latency: numberOrNull(row.latency),
-      cost: numberOrNull(row.cost),
-      tokens: numberOrNull(row.total_tokens),
-      answers: Object.fromEntries(
-        items.map((item) => [
-          item.configId,
-          answerFromCell(row[item.configId]),
-        ]),
-      ),
-    }))
-    .sort((a, b) => new Date(a.time) - new Date(b.time));
-  const counts = Object.fromEntries(
-    items.map((item) => {
-      const tally = Object.fromEntries(item.labels.map((label) => [label, 0]));
-      let errors = 0;
-      traces.forEach((trace) => {
-        const answer = trace.answers[item.configId];
-        if (answer === ERROR_ANSWER) errors += 1;
-        else if (answer in tally) tally[answer] += 1;
-      });
-      return [item.configId, { ...tally, __errors: errors }];
-    }),
-  );
-  return { traces, counts };
-}
-
-const answeredCount = (traces, items) =>
-  traces.filter((trace) =>
-    items.every((item) => trace.answers[item.configId] !== undefined),
-  ).length;
-
-export function useInstantEvalRun(projectId) {
+/**
+ * One Instant eval run in one view (traces, sessions or users) of a project.
+ * The run in flight, or the last one finished, is kept per project and unit in
+ * session storage, so closing the drawer or reloading the page picks it up.
+ */
+export function useInstantEvalRun(projectId, unit = "traces") {
   const [run, setRun] = useState(IDLE);
   const cancelled = useRef(false);
-  const active = useRef(null);
-  // Bumped whenever the screen moves on (new run, history view, reset, project
-  // switch), so a run still being created can't take the screen back.
+  // Bumped whenever the screen moves on (new run, past run, reset, project
+  // switch), so an older run still being created or polled can't take the
+  // screen back.
   const generation = useRef(0);
 
-  const update = useCallback(
-    (patch) =>
-      setRun((prev) => {
-        const next = { ...prev, ...patch };
-        if (next.taskId && next.phase === "running")
-          writeStored(projectId, {
-            taskId: next.taskId,
-            items: next.items,
-            scopeFilters: next.scopeFilters,
-            limit: next.limit,
-            startedAt: next.startedAt,
-          });
-        return next;
-      }),
-    [projectId],
-  );
-
   const follow = useCallback(
-    async ({ taskId, items, scopeFilters, limit, startedAt }) => {
-      active.current = taskId;
-      const isCurrent = () => !cancelled.current && active.current === taskId;
-      let progress = {};
-      let terminal = false;
+    async (base, mine) => {
+      const isCurrent = () => !cancelled.current && generation.current === mine;
+      const { taskId, items } = base;
+      let progress = progressCounts({}, items.length);
+      let answers = null;
       let stalled = false;
       let settleAttempts = 0;
       const deadline = Date.now() + MAX_FOLLOW_MS;
-      while (isCurrent()) {
+      for (let tick = 0; isCurrent(); tick += 1) {
         if (Date.now() > deadline) {
           stalled = true;
           break;
         }
         // eslint-disable-next-line no-await-in-loop
-        progress = await fetchProgress(taskId);
+        progress = progressCounts(await fetchProgress(taskId), items.length);
         if (!isCurrent()) return;
-        const perQuestion = items.length || 1;
-        // A run reopened from History has no stored limit; the task's own
-        // target is the number of traces it evaluated.
-        const rowLimit =
-          limit ||
-          Math.round(
-            (progress.target_count || progress.total_count || 0) / perQuestion,
-          ) ||
-          undefined;
-        // eslint-disable-next-line no-await-in-loop
-        const rows = await fetchRunRows({
-          projectId,
-          scopeFilters,
-          limit: rowLimit,
-        }).catch(() => null);
-        if (!isCurrent()) return;
-        const patch = {
-          taskStatus: progress.status,
-          errorGroups: progress.error_groups || [],
-          total: Math.round((progress.total_count || 0) / perQuestion),
-          completed: Math.round((progress.success_count || 0) / perQuestion),
-          failed: Math.round(
-            ((progress.errors_count || 0) + (progress.skipped_count || 0)) /
-              perQuestion,
-          ),
-        };
-        if (rows) Object.assign(patch, summarizeRows(rows, items));
-        update(patch);
-        terminal = TERMINAL_TASK_STATUSES.has(progress.status);
-        // Answers reach ClickHouse through CDC a few seconds after the task
-        // finishes; keep reading until every finished trace shows its answer.
-        // Skipped traces never get an answer, so they are not waited for.
-        const expectedAnswers = Math.round(
-          ((progress.success_count || 0) + (progress.errors_count || 0)) /
-            perQuestion,
-        );
+        const terminal = TERMINAL_TASK_STATUSES.has(progress.status);
+        // Answers are read every other poll while Jev works, and every poll
+        // once the task has ended until they have all landed.
+        if (terminal || tick % 2 === 0) {
+          // eslint-disable-next-line no-await-in-loop
+          answers =
+            (await fetchAnswers({ projectId, taskId, unit, items }).catch(
+              () => null,
+            )) || answers;
+          if (!isCurrent()) return;
+        }
+        const snapshot = { progress, ...(answers ? { answers } : {}) };
+        setRun((prev) => ({ ...prev, ...snapshot }));
         const settled =
-          rows &&
-          answeredCount(summarizeRows(rows, items).traces, items) >=
-            expectedAnswers;
-        if (terminal && (settled || settleAttempts >= COUNT_SETTLE_ATTEMPTS))
+          answers && answeredCount(answers, items, unit) >= progress.expected;
+        if (terminal && (settled || settleAttempts >= ANSWER_SETTLE_ATTEMPTS))
           break;
         if (terminal) settleAttempts += 1;
         // eslint-disable-next-line no-await-in-loop
         await sleep(POLL_MS);
       }
       if (!isCurrent()) return;
-      writeStored(projectId, null);
-      update({
+      const metrics =
+        unit === "traces"
+          ? await fetchTraceMetrics({
+              projectId,
+              scopeFilters: base.scopeFilters,
+              limit: base.limit || progress.total,
+            }).catch(() => null)
+          : null;
+      if (!isCurrent()) return;
+      setRun((prev) => ({
+        ...prev,
         phase: "done",
-        finishedAt: new Date().toISOString(),
-        startedAt,
-        error: stalled
-          ? "This run is taking unusually long. Its answers will keep appearing in the Trace view as they finish."
-          : progress.status === "paused"
-            ? "This run was paused before every trace was answered."
-            : progress.status === "failed"
-              ? "The run stopped before every trace was answered."
-              : undefined,
-      });
+        finishedAt: prev.finishedAt || new Date().toISOString(),
+        error: endMessage({ stalled, status: progress.status, unit }),
+        ...(answers ? {} : { answers: { ...EMPTY_ANSWERS, loaded: true } }),
+        ...(metrics ? { metrics } : {}),
+      }));
     },
-    [projectId, update],
+    [projectId, unit],
+  );
+
+  // A finished run reopened from storage: read its answers once.
+  const reload = useCallback(
+    async (base, mine) => {
+      const isCurrent = () => !cancelled.current && generation.current === mine;
+      try {
+        const [answers, metrics] = await Promise.all([
+          fetchAnswers({
+            projectId,
+            taskId: base.taskId,
+            unit,
+            items: base.items,
+          }),
+          unit === "traces"
+            ? fetchTraceMetrics({
+                projectId,
+                scopeFilters: base.scopeFilters,
+                limit: base.limit,
+              }).catch(() => null)
+            : null,
+        ]);
+        if (!isCurrent()) return;
+        setRun((prev) => ({
+          ...prev,
+          answers,
+          ...(metrics ? { metrics } : {}),
+        }));
+      } catch {
+        if (!isCurrent()) return;
+        setRun((prev) => ({
+          ...prev,
+          answers: { ...EMPTY_ANSWERS, loaded: true },
+          error: "The answers of this run could not be loaded.",
+        }));
+      }
+    },
+    [projectId, unit],
   );
 
   const launch = useCallback(
     async ({ questions, existingItems, reads, limit, scope }) => {
-      cancelled.current = false;
-      active.current = null;
       generation.current += 1;
       const mine = generation.current;
-      const stale = () => generation.current !== mine;
-      const scopeFilters = scope?.scopeFilters || [];
+      cancelled.current = false;
+      const stale = () => cancelled.current || generation.current !== mine;
+      // The previous run stops being the one to reopen.
+      writeStored(projectId, unit, null);
+      const runReads = normalizeReads(unit, reads || existingItems?.[0]?.reads);
       const pending =
         existingItems ||
         questions.map((q) => ({
@@ -538,35 +607,62 @@ export function useInstantEvalRun(projectId) {
           answerType: q.answerType,
           labels: answerLabels(q),
         }));
-      const startedAt = new Date().toISOString();
       setRun({
         ...IDLE,
-        phase: "creating",
+        phase: unit === "traces" ? "creating" : "collecting",
         items: pending,
-        scopeFilters,
         limit,
-        startedAt,
-        since: scope?.since,
+        reads: runReads,
+        scopeFilters: scope?.filters || [],
+        scopeLabel: scope?.label,
+        handedOver: scope?.handedOver || null,
+        startedAt: new Date().toISOString(),
       });
       try {
+        const target = await collectTarget({ projectId, unit, limit, scope });
+        if (stale()) return;
+        if (target.empty) {
+          setRun((prev) => ({
+            ...prev,
+            phase: "done",
+            finishedAt: new Date().toISOString(),
+            answers: { ...EMPTY_ANSWERS, loaded: true },
+            empty: target.empty,
+          }));
+          return;
+        }
+        setRun((prev) => ({
+          ...prev,
+          phase: "creating",
+          asked: target.asked || null,
+          scopeFilters: target.scopeFilters || prev.scopeFilters,
+        }));
         const items =
           existingItems ||
-          (await resolveEvaluators({ projectId, questions, reads }));
+          (await resolveEvaluators({
+            projectId,
+            questions,
+            reads: runReads,
+            unit,
+          }));
         if (stale()) return;
         if (items.some((item) => !item.configId))
           throw new Error("The evaluator could not be saved.");
-        const taskId = await createTask({
-          projectId,
-          items,
-          limit,
-          scopeFilters,
-        });
+        const taskId = await createTask({ projectId, unit, items, target });
         if (stale()) return;
         if (!taskId) throw new Error("The run could not be started.");
-        update({ phase: "running", items, taskId, scopeFilters });
-        await follow({ taskId, items, scopeFilters, limit, startedAt });
+        setRun((prev) => ({ ...prev, phase: "running", items, taskId }));
+        await follow(
+          {
+            taskId,
+            items,
+            scopeFilters: target.scopeFilters,
+            limit: target.limit,
+          },
+          mine,
+        );
       } catch (error) {
-        if (cancelled.current || stale()) return;
+        if (stale()) return;
         setRun((prev) => ({
           ...prev,
           phase: "failed",
@@ -577,7 +673,7 @@ export function useInstantEvalRun(projectId) {
         }));
       }
     },
-    [projectId, follow, update],
+    [projectId, unit, follow],
   );
 
   const start = useCallback(
@@ -591,80 +687,88 @@ export function useInstantEvalRun(projectId) {
     [launch],
   );
 
-  // Open a past run from History: its evaluators, its stored scope.
+  // Open a past run: its evaluators, its stored scope.
   const view = useCallback(
-    ({ taskId, items, scopeFilters, limit, startedAt }) => {
-      cancelled.current = false;
+    ({ taskId, items, scopeFilters, startedAt }) => {
       generation.current += 1;
+      const mine = generation.current;
+      cancelled.current = false;
       setRun({
         ...IDLE,
         phase: "running",
         items,
         taskId,
         scopeFilters,
-        limit,
         startedAt,
         viewing: true,
       });
-      follow({ taskId, items, scopeFilters, limit, startedAt }).catch(() =>
+      follow({ taskId, items, scopeFilters }, mine).catch(() => {
+        if (generation.current !== mine) return;
         setRun((prev) => ({
           ...prev,
           phase: "failed",
           error: "This run could not be loaded.",
-        })),
-      );
+        }));
+      });
     },
     [follow],
   );
 
   const reset = useCallback(() => {
     generation.current += 1;
-    active.current = null;
-    writeStored(projectId, null);
+    writeStored(projectId, unit, null);
     setRun(IDLE);
-  }, [projectId]);
+  }, [projectId, unit]);
 
-  // Resume a run that was in flight when the panel or page was closed.
+  // Keep the run in flight (or the last one finished) for this project+unit.
   useEffect(() => {
-    // A new project starts clean: stop following the previous project's run.
+    if (!projectId || !run.taskId) return;
+    if (run.phase === "running" || run.phase === "done")
+      writeStored(projectId, unit, storable(run));
+  }, [projectId, unit, run]);
+
+  // Resume the run that was in flight, or show the last one finished, when the
+  // drawer or page opens again.
+  useEffect(() => {
     generation.current += 1;
-    active.current = null;
-    setRun(IDLE);
+    const mine = generation.current;
     cancelled.current = false;
-    const stored = projectId ? readStored(projectId) : null;
-    if (stored?.taskId) {
-      setRun({
-        ...IDLE,
-        phase: "running",
-        items: stored.items || [],
-        taskId: stored.taskId,
-        scopeFilters: stored.scopeFilters || [],
-        limit: stored.limit,
-        startedAt: stored.startedAt,
-      });
-      follow(stored).catch(() => {
-        writeStored(projectId, null);
-        setRun((prev) =>
-          prev.taskId === stored.taskId
-            ? {
-                ...prev,
-                phase: "failed",
-                error:
-                  "The run that was in progress could not be resumed. Its answers are still saved in the Trace view.",
-              }
-            : prev,
-        );
-      });
+    const stored = projectId ? readStored(projectId, unit) : null;
+    if (!stored?.taskId || !Array.isArray(stored.items)) {
+      setRun(IDLE);
+    } else {
+      const base = { ...IDLE, ...stored, answers: EMPTY_ANSWERS };
+      if (stored.phase === "done") {
+        setRun({ ...base, phase: "done" });
+        reload(base, mine);
+      } else {
+        setRun({ ...base, phase: "running" });
+        follow(base, mine).catch(() => {
+          if (generation.current !== mine) return;
+          writeStored(projectId, unit, null);
+          setRun((prev) => ({
+            ...prev,
+            phase: "failed",
+            error:
+              "The run that was in progress could not be resumed. Jev keeps answering in the background.",
+          }));
+        });
+      }
     }
     return () => {
       cancelled.current = true;
     };
-  }, [projectId, follow]);
+  }, [projectId, unit, follow, reload]);
 
   return { run, start, rerun, view, reset };
 }
 
-export function useInstantEvals(projectId, { enabled = true } = {}) {
+/**
+ * Questions saved by Instant eval in this project. `items` has one entry per
+ * question (the newest evaluator for it), optionally only those asked about
+ * one unit; `all` keeps every evaluator for matching runs back to questions.
+ */
+export function useInstantEvals(projectId, { enabled = true, unit } = {}) {
   const query = useQuery({
     queryKey: ["instant-evals", projectId],
     enabled: Boolean(projectId) && enabled,
@@ -674,38 +778,36 @@ export function useInstantEvals(projectId, { enabled = true } = {}) {
       }),
     select: (response) => {
       const configs = result(response) || [];
-      const seen = new Set();
-      const all = configs.map(itemFromConfig).filter(Boolean).reverse();
-      return {
-        all,
-        // One entry per question: re-asking a question creates a new
-        // evaluator, and the newest one is the one worth re-applying.
-        items: all.filter((item) => {
-          const key = item.question.toLowerCase();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        }),
-      };
+      return configs.map(itemFromConfig).filter(Boolean).reverse();
     },
     staleTime: 30_000,
   });
+  const all = query.data || [];
+  const seen = new Set();
+  // One entry per question: re-asking a question creates a new evaluator,
+  // and the newest one is the one worth re-applying.
+  const items = all.filter((item) => {
+    if (unit && item.unit !== unit) return false;
+    const key = item.question.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return {
-    all: query.data?.all || [],
-    items: query.data?.items || [],
+    all,
+    items,
     isLoading: query.isLoading,
     refetch: query.refetch,
   };
 }
 
-const INSTANT_EVAL_TASK_PREFIX = "Instant eval";
-
 // Past runs are the project's historical eval tasks created by Instant eval.
-// Their evaluators are matched back to saved questions by config name.
+// Their evaluators are matched back to saved questions by config name, which
+// also tells which view a run belongs to.
 export function useInstantEvalHistory(
   projectId,
   configsByName,
-  { enabled = true } = {},
+  { enabled = true, unit } = {},
 ) {
   const query = useQuery({
     queryKey: ["instant-eval-history", projectId],
@@ -714,7 +816,7 @@ export function useInstantEvalHistory(
       axios.get(endpoints.project.getEvalTaskList(), {
         params: {
           project_id: projectId,
-          name: INSTANT_EVAL_TASK_PREFIX,
+          name: TASK_PREFIX,
           page_size: 50,
         },
       }),
@@ -724,8 +826,7 @@ export function useInstantEvalHistory(
   const runs = (query.data || [])
     .filter(
       (task) =>
-        task.run_type === "historical" &&
-        task.name?.startsWith(INSTANT_EVAL_TASK_PREFIX),
+        task.run_type === "historical" && task.name?.startsWith(TASK_PREFIX),
     )
     .map((task) => {
       const items = (task.evals_applied || [])
@@ -754,10 +855,13 @@ export function useInstantEvalHistory(
         dateRange: range,
         filterCount: (task.filters_applied?.filters || []).length,
         items,
+        unit: items[0]?.unit || "traces",
         scopeFilters,
       };
     })
-    .filter((runItem) => runItem.items.length > 0)
+    .filter(
+      (runItem) => runItem.items.length > 0 && (!unit || runItem.unit === unit),
+    )
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   return { runs, isLoading: query.isLoading, refetch: query.refetch };
 }

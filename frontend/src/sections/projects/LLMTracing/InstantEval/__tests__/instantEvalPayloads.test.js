@@ -18,6 +18,12 @@ describe("validateInstantEval", () => {
     expect(
       validateInstantEval({ question: "  ", answerType: ANSWER_TYPES.YES_NO }),
     ).toMatch(/Write the question/);
+    expect(
+      validateInstantEval(
+        { question: "", answerType: ANSWER_TYPES.YES_NO },
+        "session",
+      ),
+    ).toBe("Write the question Jev should answer for each session.");
   });
 
   it("requires two distinct categories for category questions", () => {
@@ -111,6 +117,23 @@ describe("helpers", () => {
     expect(buildInstructions("Is it urgent?", "output")).toBe(
       "Is it urgent?\n\nTrace output:\n{{output}}",
     );
+  });
+
+  it("reads a session as its whole conversation", () => {
+    expect(buildInstructions("Did they get it?", "transcript")).toBe(
+      "Did they get it?\n\nConversation:\n{{transcript}}",
+    );
+    expect(buildEvalMapping("transcript")).toEqual({
+      transcript: "transcript",
+    });
+    const payload = buildTemplatePayload({
+      question: "Did the customer get what they came for?",
+      answerType: ANSWER_TYPES.YES_NO,
+      reads: "transcript",
+      now: NOW,
+    });
+    expect(payload.instructions).toContain("{{transcript}}");
+    expect(payload.instructions).not.toContain("{{input}}");
   });
 
   it("names evaluators with a slug the template API accepts", () => {

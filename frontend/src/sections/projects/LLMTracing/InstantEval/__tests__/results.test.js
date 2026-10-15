@@ -12,7 +12,7 @@ import {
   readScope,
   traceViewLink,
 } from "../results/scopeLinks";
-import { buildHeatmap } from "../results/AnswerHeatmap";
+import { buildHeatmap } from "../results/heatmap";
 
 const STATUS = {
   column_id: "status",

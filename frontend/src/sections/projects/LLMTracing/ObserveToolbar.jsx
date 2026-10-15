@@ -34,6 +34,9 @@ const DATE_OPTIONS = [
   { key: "Custom", label: "Custom range" },
 ];
 
+// Views whose rows Instant eval and Analyse can ask about.
+const ASK_MODES = new Set(["traces", "sessions", "users"]);
+
 const ObserveToolbar = ({
   // Mode: "traces" (default) | "sessions" | "users"
   mode = "traces",
@@ -122,10 +125,14 @@ const ObserveToolbar = ({
   onApplyCompareExtraFilters,
   // Add Evals — opens prefilled task-create draft
   onAddEvals,
+  // Instant eval drawer and Analyse hand-off for the rows in view
   onInstantEval,
+  onAnalyse,
   // Spans view — swaps "Trace Name" filter label to "Span Name"
   isSpansView = false,
 }) => {
+  const showAskActions =
+    ASK_MODES.has(mode) && !isSpansView && !isCompareActive;
   const [displayAnchor, setDisplayAnchor] = useState(null);
   const filterButtonRef = useRef(null);
   const [filterButtonEl, setFilterButtonEl] = useState(null);
@@ -543,8 +550,11 @@ const ObserveToolbar = ({
             onToggleSimulationCalls={onToggleSimulationCalls}
           />
 
-          {/* Instant eval — ask Jev questions about the traces in this view */}
-          {onInstantEval && mode === "traces" && !isCompareActive && (
+          {/* Instant eval asks Jev a question about every row in this view;
+              Analyse opens a new report scoped to it. Both need a project
+              (the views only pass handlers when they have one) and are not
+              offered for spans or in compare mode. */}
+          {onInstantEval && showAskActions && (
             <Button
               variant="outlined"
               size="small"
@@ -555,6 +565,19 @@ const ObserveToolbar = ({
               }}
             >
               Instant eval
+            </Button>
+          )}
+          {onAnalyse && showAskActions && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Iconify icon="mdi:chart-box-outline" width={16} />}
+              onClick={onAnalyse}
+              sx={{
+                ...pillSx,
+              }}
+            >
+              Analyse
             </Button>
           )}
 
@@ -632,6 +655,7 @@ ObserveToolbar.propTypes = {
   bulkActions: PropTypes.array,
   onAddEvals: PropTypes.func,
   onInstantEval: PropTypes.func,
+  onAnalyse: PropTypes.func,
   isSimulator: PropTypes.bool,
   excludeSimulationCalls: PropTypes.bool,
   onToggleSimulationCalls: PropTypes.func,
