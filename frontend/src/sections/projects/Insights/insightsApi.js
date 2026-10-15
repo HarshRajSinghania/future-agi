@@ -112,7 +112,10 @@ const messageOf = (error) =>
  * model-availability messages are written for users and shown as they are;
  * anything else goes through the app's safe-message filter.
  */
-export function insightsErrorMessage(error, fallback = "Something went wrong.") {
+export function insightsErrorMessage(
+  error,
+  fallback = "Something went wrong.",
+) {
   const status = Number(error?.statusCode || error?.response?.status);
   const code = error?.code;
   if (status === 402 || code === "CAPABILITY_DENIED")
@@ -194,17 +197,51 @@ export function useRunUnits(runId, params, { enabled = true } = {}) {
   });
 }
 
-/** One analysed unit by id, for the unit drawer opened from a citation. */
-export function useRunUnit(runId, unitId) {
+/**
+ * One analysed unit by id: for a citation's hover card, or with its full
+ * content (`content: true`) for the example panel. A server (or API
+ * contract) that cannot send the content yet falls back to the unit alone.
+ */
+export function useRunUnit(
+  runId,
+  unitId,
+  { content = false, enabled = true } = {},
+) {
+  const params = content
+    ? { unit_ids: unitId, include_content: true }
+    : { unit_ids: unitId };
+  const first = (page) => page.units?.[0] || null;
   return useQuery({
-    queryKey: insightsKeys.units(runId, { unit_ids: unitId }),
-    queryFn: async ({ signal }) =>
-      (await fetchUnits(runId, { unit_ids: unitId, limit: 1 }, signal))
-        .units?.[0] || null,
-    enabled: Boolean(runId && unitId),
+    queryKey: insightsKeys.units(runId, params),
+    queryFn: async ({ signal }) => {
+      try {
+        return first(await fetchUnits(runId, { ...params, limit: 1 }, signal));
+      } catch (error) {
+        if (!content || isAbort(error)) throw error;
+        return first(
+          await fetchUnits(runId, { unit_ids: unitId, limit: 1 }, signal),
+        );
+      }
+    },
+    enabled: Boolean(runId && unitId) && enabled,
     staleTime: 60_000,
     meta: { errorHandled: true },
   });
+}
+
+/**
+ * Ask a question about a run: {question, history: [{role, content}]}.
+ * Resolves to the response's result ({answer, follow_ups}).
+ */
+export async function askRun(runId, body, signal) {
+  const endpoint = endpoints.project.insightsRunAsk;
+  if (typeof endpoint !== "function") {
+    const error = new Error("Asking about a report isn't available yet.");
+    error.code = "feature_unavailable";
+    error.statusCode = 503;
+    throw error;
+  }
+  return result(await axios.post(endpoint(runId), body, { signal }));
 }
 
 /**

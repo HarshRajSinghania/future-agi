@@ -117,3 +117,25 @@ export function humanizeKey(key) {
 
 // "partially_resolved" -> "Partially resolved"
 export const humanizeValue = (value) => humanizeKey(value);
+
+// "Oct 8–15", "Sep 28 – Oct 3", "Oct 8"; a year is added when the range is
+// not in the current one.
+export function formatDayRange(from, to, now = new Date()) {
+  const start = toDate(from);
+  const end = toDate(to) || start;
+  if (!start) return "";
+  const sameYear = start.getFullYear() === end.getFullYear();
+  const withYear = !sameYear || start.getFullYear() !== now.getFullYear();
+  const month = (date) => date.toLocaleDateString("en-US", { month: "short" });
+  const year = withYear ? `, ${end.getFullYear()}` : "";
+  if (
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth()
+  ) {
+    if (start.getDate() === end.getDate())
+      return `${month(start)} ${start.getDate()}${year}`;
+    return `${month(start)} ${start.getDate()}–${end.getDate()}${year}`;
+  }
+  const startYear = sameYear ? "" : `, ${start.getFullYear()}`;
+  return `${month(start)} ${start.getDate()}${startYear} – ${month(end)} ${end.getDate()}${year}`;
+}

@@ -12,7 +12,6 @@ import {
 } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
-import { parseCitations } from "./insightsCitations";
 import { formatCount, formatPercent } from "./insightsFormat";
 import { attributePills, facetChips } from "./insightsLenses";
 import {
@@ -97,91 +96,86 @@ SectionCard.propTypes = {
   flush: PropTypes.bool,
 };
 
-export function CitationChip({ n, onClick }) {
+/** A category as a small outlined chip that opens it. */
+export function CategoryLink({ category, color, onClick, maxWidth = 260 }) {
+  if (!category) return null;
   return (
-    <Box
-      component="button"
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick?.(n);
-      }}
-      aria-label={`Open example ${n}`}
-      sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 22,
-        height: 18,
-        px: 0.5,
-        mx: 0.25,
-        border: "1px solid",
-        borderColor: "divider",
-        borderRadius: 0.75,
-        bgcolor: "background.neutral",
-        color: "text.secondary",
-        font: "inherit",
-        fontSize: 11,
-        fontWeight: 600,
-        lineHeight: 1,
-        verticalAlign: "1px",
-        cursor: "pointer",
-        "&:hover": { color: "primary.main", borderColor: "primary.main" },
-        "&:focus-visible": {
-          outline: "2px solid",
-          outlineColor: "primary.main",
-          outlineOffset: 1,
-        },
-      }}
-    >
-      #{n}
-    </Box>
-  );
-}
-
-CitationChip.propTypes = {
-  n: PropTypes.number.isRequired,
-  onClick: PropTypes.func,
-};
-
-/** Prose with "#n" citations rendered as chips that open the cited example. */
-export function CitedText({ text, refIndex, onCite, variant = "body2", sx }) {
-  const segments = parseCitations(text, refIndex);
-  return (
-    <Typography variant={variant} component="span" sx={sx}>
-      {segments.map((segment, i) =>
-        segment.type === "text" ? (
-          <React.Fragment key={i}>{segment.text}</React.Fragment>
-        ) : (
-          <Box component="span" key={i} sx={{ whiteSpace: "nowrap" }}>
-            {segment.refs.map((n) => (
-              <CitationChip key={n} n={n} onClick={onCite} />
-            ))}
+    <Tooltip
+      describeChild
+      arrow
+      title={
+        <>
+          <Box component="span" sx={{ display: "block", fontWeight: 600 }}>
+            {category.name}
           </Box>
-        ),
-      )}
-    </Typography>
+          {category.description}
+        </>
+      }
+      enterDelay={400}
+    >
+      <Box
+        component="button"
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick(category.id);
+        }}
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 0.75,
+          maxWidth,
+          height: 22,
+          px: 0.75,
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 0.75,
+          bgcolor: "background.paper",
+          color: "text.primary",
+          font: "inherit",
+          fontSize: 12,
+          cursor: "pointer",
+          "&:hover": { borderColor: "text.disabled" },
+          "&:focus-visible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: 1,
+          },
+        }}
+      >
+        <Swatch color={color} size={8} />
+        <Box
+          component="span"
+          sx={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {category.name}
+        </Box>
+      </Box>
+    </Tooltip>
   );
 }
 
-CitedText.propTypes = {
-  text: PropTypes.string,
-  refIndex: PropTypes.instanceOf(Map),
-  onCite: PropTypes.func,
-  variant: PropTypes.string,
-  sx: PropTypes.object,
+CategoryLink.propTypes = {
+  category: PropTypes.object,
+  color: PropTypes.string,
+  onClick: PropTypes.func.isRequired,
+  maxWidth: PropTypes.number,
 };
 
 // The theme's warning yellow is unreadable as text on a light surface, so the
 // borderline tone uses its darker icon step there.
-const cautionColor = (theme) =>
+export const cautionColor = (theme) =>
   theme.palette.mode === "dark"
     ? theme.palette.warning.light
     : theme.palette.warning.icon ||
       theme.palette.warning.darker ||
       theme.palette.warning.dark;
 
-const toneColor = (theme, tone) =>
+export const toneColor = (theme, tone) =>
   ({
     worse: theme.palette.error.main,
     borderline: cautionColor(theme),
@@ -330,7 +324,10 @@ export function AttributePills({ attributes }) {
             overflow: "hidden",
           }}
         >
-          <Box component="span" sx={{ px: 0.75, color: "text.secondary" }}>
+          <Box
+            component="span"
+            sx={{ px: 0.75, color: "text.secondary", whiteSpace: "nowrap" }}
+          >
             {pill.label}
           </Box>
           <Box
@@ -374,7 +371,6 @@ export function StackedBar({ segments, height = 12, onSegmentClick, label }) {
     >
       {visible.map((segment) => (
         <Tooltip
-          describeChild
           describeChild
           key={segment.id}
           arrow

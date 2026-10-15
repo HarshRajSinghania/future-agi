@@ -177,6 +177,11 @@ const SORTERS = {
   unresolved: (c) => c.stats?.unresolved_rate ?? -1,
   sentiment: (c) => c.stats?.sentiment ?? -1,
   notable: (c) => c.notable?.length ?? 0,
+  share: (c) => c.stats?.count ?? 0,
+  sessions: (c) => c.stats?.sessions ?? 0,
+  latency: (c) => c.stats?.latency_ms ?? -1,
+  cost: (c) => c.stats?.cost ?? -1,
+  errors: (c) => c.stats?.error_rate ?? -1,
 };
 
 /** Sort tops and, within each, their children; muted rows always sink. */
@@ -194,4 +199,64 @@ export function sortCategoryTree(tree, key = "count", direction = "desc") {
   return [...tree]
     .sort(compare)
     .map((row) => ({ ...row, childRows: [...row.childRows].sort(compare) }));
+}
+
+/**
+ * Series for the trend chart: the share of each top-level category in every
+ * completed run, oldest first. A category keeps its slot colour on every
+ * run; one past the palette, or a muted one, folds into a grey "Other".
+ *   {series: [{id, name, color}], rows: [{runId, time, n, shares, counts}]}
+ * `shares` and `counts` are keyed by series id; shares of a run sum to 1.
+ */
+export function buildAreaSeries(
+  runs = [],
+  { order = [], mode = "light" } = {},
+) {
+  const completed = [...runs]
+    .filter((run) => run.status === "completed" && run.distribution?.length)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const names = new Map();
+  const used = new Set();
+  let otherUsed = false;
+  const rows = completed.map((run) => {
+    const tops = runTops(run);
+    const total = tops.reduce((sum, item) => sum + item.count, 0);
+    const shares = {};
+    const counts = {};
+    tops.forEach((item) => {
+      const colored =
+        !isMutedCategory(item) && colorFor(item.id, order, mode) !== null;
+      const key = colored ? item.id : OTHER_ID;
+      if (colored) {
+        names.set(item.id, item.name);
+        used.add(item.id);
+      } else otherUsed = true;
+      counts[key] = (counts[key] || 0) + item.count;
+    });
+    Object.keys(counts).forEach((key) => {
+      shares[key] = total ? counts[key] / total : 0;
+    });
+    return {
+      runId: run.id,
+      time: new Date(run.finished_at || run.created_at).getTime(),
+      n: run.analysed_count || total,
+      shares,
+      counts,
+    };
+  });
+  const series = order
+    .filter((id) => used.has(id))
+    .map((id) => ({
+      id,
+      name: names.get(id),
+      color: colorFor(id, order, mode),
+    }));
+  if (otherUsed)
+    series.push({
+      id: OTHER_ID,
+      name: "Other",
+      color: OTHER_COLOR[mode] || OTHER_COLOR.light,
+      muted: true,
+    });
+  return { series, rows };
 }

@@ -29,7 +29,8 @@ const emptyAttribute = () => ({
   filter_by: false,
 });
 
-function AttributesEditor({ attributes, onChange, disabled }) {
+// `compact` wraps each attribute onto two rows for a narrow drawer.
+export function AttributesEditor({ attributes, onChange, disabled, compact }) {
   const update = (index, patch) =>
     onChange(
       attributes.map((attribute, i) =>
@@ -52,8 +53,10 @@ function AttributesEditor({ attributes, onChange, disabled }) {
           <Stack
             key={index}
             direction="row"
-            spacing={1}
             alignItems="flex-start"
+            useFlexGap
+            flexWrap={compact ? "wrap" : "nowrap"}
+            columnGap={1}
           >
             <TextField
               size="small"
@@ -68,7 +71,7 @@ function AttributesEditor({ attributes, onChange, disabled }) {
               error={Boolean(error)}
               helperText={error || " "}
               disabled={disabled}
-              sx={{ width: 200, flexShrink: 0 }}
+              sx={{ width: compact ? 180 : 200, flexShrink: 0 }}
               inputProps={{ "aria-label": `Attribute ${index + 1} key` }}
             />
             <TextField
@@ -96,10 +99,13 @@ function AttributesEditor({ attributes, onChange, disabled }) {
               }
               disabled={disabled}
               helperText=" "
-              sx={{ flex: 1, minWidth: 0 }}
+              sx={
+                compact
+                  ? { order: 5, flex: "1 1 100%", mt: -0.5 }
+                  : { flex: 1, minWidth: 0 }
+              }
             />
             <Tooltip
-              describeChild
               describeChild
               arrow
               title={
@@ -163,6 +169,7 @@ AttributesEditor.propTypes = {
   attributes: PropTypes.array.isRequired,
   onChange: PropTypes.func.isRequired,
   disabled: PropTypes.bool,
+  compact: PropTypes.bool,
 };
 
 /** Step 3: optional name, agent description, instructions and attributes. */

@@ -6,6 +6,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  IconButton,
   LinearProgress,
   MenuItem,
   Paper,
@@ -530,27 +531,29 @@ export default function NewReport({
     previewState.status === "done" && previewedConfig !== configKey;
 
   return (
-    <Stack spacing={2} sx={{ pb: 10 }}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Button
-          size="small"
-          color="inherit"
+    <Stack spacing={2} sx={{ maxWidth: 880, mx: "auto" }}>
+      <Stack direction="row" alignItems="flex-start" spacing={2}>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="m2" component="h1" fontWeight={600}>
+            New report
+          </Typography>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ fontSize: 13 }}
+          >
+            Pick what to learn and which traffic to read. A report samples it,
+            summarises every item, groups them and measures each group.
+          </Typography>
+        </Box>
+        <IconButton
+          aria-label="Close new report"
           onClick={onCancel}
-          startIcon={<Iconify icon="mdi:chevron-left" width={18} />}
-          sx={{ ml: -0.75 }}
+          size="small"
         >
-          Reports
-        </Button>
+          <Iconify icon="mdi:close" width={18} />
+        </IconButton>
       </Stack>
-      <Box>
-        <Typography variant="m2" component="h1" fontWeight={600}>
-          New report
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Pick what to learn and which traffic to read. A report samples it,
-          summarises every item, groups them and measures each group.
-        </Typography>
-      </Box>
 
       {seed?.source && (
         <Alert
@@ -952,13 +955,16 @@ export default function NewReport({
           position: "sticky",
           bottom: 0,
           zIndex: 2,
-          mx: -3,
-          px: 3,
-          py: 1.5,
-          borderTop: "1px solid",
+          pl: 2,
+          // Clear of the app's floating assistant buttons.
+          pr: 9,
+          py: 1.25,
+          border: "1px solid",
           borderColor: "divider",
-          borderRadius: 0,
+          borderRadius: 1,
           bgcolor: "background.paper",
+          boxShadow: (theme) => theme.customShadows?.dropdown,
+          mb: 2,
         }}
       >
         <Stack direction="row" alignItems="center" spacing={2}>

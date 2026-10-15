@@ -1,4 +1,10 @@
-import React, { useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import PropTypes from "prop-types";
 import {
   Alert,
@@ -6,44 +12,64 @@ import {
   Button,
   Chip,
   IconButton,
+  InputBase,
   ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
   Skeleton,
   Stack,
-  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
 import { useQueryClient } from "@tanstack/react-query";
 import ConfirmDialog from "src/components/custom-dialog/confirm-dialog";
 import Iconify from "src/components/iconify";
-import { unitWord } from "src/sections/projects/observePopulation";
+import AskPanel from "./AskPanel";
+import CategoryExplorer from "./CategoryExplorer";
+import CategoryTable from "./CategoryTable";
+import ChangeCards from "./ChangeCards";
+import EditDrawer from "./EditDrawer";
+import ExamplePanel from "./ExamplePanel";
+import Findings from "./Findings";
+import Highlights from "./Highlights";
+import MethodNote from "./MethodNote";
+import RerunDialog from "./RerunDialog";
+import RunProgress from "./RunProgress";
+import TrendCard from "./TrendCard";
 import {
+  deleteConfig,
   insightsErrorMessage,
   insightsKeys,
-  deleteConfig,
   patchConfig,
   useInsightsConfig,
   useInsightsRun,
 } from "./insightsApi";
-import { formatCount, formatDay, formatWhen } from "./insightsFormat";
+import { buildSegments, resultTops } from "./insightsDistribution";
+import { formatCount } from "./insightsFormat";
 import { useCancellable } from "./insightsHooks";
 import { isRunActive, lensFor, unitTitle } from "./insightsLenses";
+import { reportMetaParts } from "./insightsReport";
+import { ReportProvider, useReportModel } from "./reportContext";
 import { ErrorState } from "./parts";
-import ReportBody from "./ReportBody";
-import RerunDialog from "./RerunDialog";
-import RunProgress from "./RunProgress";
 
-function InfoChip({ label, icon, title }) {
+const CONTENT_WIDTH = 1180;
+
+function HeaderChip({ label, icon, title }) {
   const chip = (
     <Chip
       size="small"
       variant="outlined"
       icon={icon ? <Iconify icon={icon} width={13} /> : undefined}
       label={label}
-      sx={{ height: 24, borderRadius: 0.75, maxWidth: 420 }}
+      sx={{
+        height: 22,
+        borderRadius: 0.75,
+        fontSize: 12,
+        maxWidth: 320,
+        color: "text.secondary",
+        "& .MuiChip-icon": { color: "text.secondary", ml: 0.75 },
+      }}
     />
   );
   return title ? (
@@ -55,195 +81,377 @@ function InfoChip({ label, icon, title }) {
   );
 }
 
-InfoChip.propTypes = {
+HeaderChip.propTypes = {
   label: PropTypes.node.isRequired,
   icon: PropTypes.string,
   title: PropTypes.node,
 };
 
-function RunPager({ runs, runId, onSelectRun }) {
-  const ordered = runs || [];
-  const index = ordered.findIndex((run) => run.id === runId);
-  if (index < 0 || ordered.length < 2) return null;
-  const older = ordered[index + 1];
-  const newer = ordered[index - 1];
-  const position = ordered.length - index;
-  return (
-    <Stack
-      direction="row"
-      alignItems="center"
-      spacing={0.25}
-      aria-label="Runs of this report"
-      sx={{
-        border: "1px solid",
-        borderColor: "divider",
-        borderRadius: 1,
-        pl: 0.25,
-        pr: 0.25,
-      }}
-    >
-      <Tooltip describeChild arrow title={older ? "Older run" : ""}>
-        <span>
-          <IconButton
-            size="small"
-            aria-label="Older run"
-            disabled={!older}
-            onClick={() => onSelectRun(older.id)}
-          >
-            <Iconify icon="mdi:chevron-left" width={18} />
-          </IconButton>
-        </span>
-      </Tooltip>
-      <Typography
-        variant="body2"
-        sx={{
-          px: 0.5,
-          fontVariantNumeric: "tabular-nums",
-          whiteSpace: "nowrap",
-        }}
-      >
-        Run {position} of {ordered.length} ·{" "}
-        {formatWhen(ordered[index].created_at)}
-      </Typography>
-      <Tooltip describeChild arrow title={newer ? "Newer run" : ""}>
-        <span>
-          <IconButton
-            size="small"
-            aria-label="Newer run"
-            disabled={!newer}
-            onClick={() => onSelectRun(newer.id)}
-          >
-            <Iconify icon="mdi:chevron-right" width={18} />
-          </IconButton>
-        </span>
-      </Tooltip>
-    </Stack>
-  );
-}
-
-RunPager.propTypes = {
-  runs: PropTypes.array,
-  runId: PropTypes.string,
-  onSelectRun: PropTypes.func.isRequired,
-};
-
-function ReportName({ config, editing, setEditing }) {
+// The report's name, renamed in place: click it (or the pencil), Enter saves,
+// Escape cancels.
+function InlineName({ config }) {
   const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(config.name);
+  const cancelled = useRef(false);
   const saving = useCancellable("The report could not be renamed.");
-
   const save = () =>
     saving.run(async () => {
       const name = value.trim();
-      if (!name || name === config.name) {
+      if (cancelled.current || !name || name === config.name) {
+        cancelled.current = false;
+        setValue(config.name);
         setEditing(false);
         return null;
       }
       const updated = await patchConfig(config.id, {
         name: name.slice(0, 255),
       });
-      queryClient.setQueryData(insightsKeys.config(config.id), updated);
+      queryClient.setQueryData(insightsKeys.config(config.id), (current) =>
+        current ? { ...current, name: updated?.name || name } : current,
+      );
       queryClient.invalidateQueries({ queryKey: ["insights", "configs"] });
       setEditing(false);
       return updated;
     });
-
   if (editing)
     return (
-      <Stack direction="row" spacing={1} alignItems="center">
-        <TextField
-          size="small"
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <InputBase
           autoFocus
+          fullWidth
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => setValue(event.target.value.slice(0, 255))}
+          onBlur={save}
           onKeyDown={(event) => {
-            if (event.key === "Enter") save();
+            // Enter commits through blur, so the name is saved once.
+            if (event.key === "Enter") event.currentTarget.blur();
             if (event.key === "Escape") {
+              cancelled.current = true;
               setValue(config.name);
               setEditing(false);
             }
           }}
-          inputProps={{ "aria-label": "Report name", maxLength: 255 }}
+          inputProps={{ "aria-label": "Report name" }}
           disabled={saving.state.status === "busy"}
-          error={saving.state.status === "error"}
-          helperText={
-            saving.state.status === "error" ? saving.state.error : undefined
-          }
-          sx={{ width: 420 }}
-        />
-        <Button
-          size="small"
-          variant="contained"
-          onClick={save}
-          disabled={saving.state.status === "busy"}
-        >
-          Save
-        </Button>
-        <Button
-          size="small"
-          color="inherit"
-          onClick={() => {
-            setValue(config.name);
-            setEditing(false);
+          sx={{
+            fontSize: 18,
+            fontWeight: 600,
+            px: 0.75,
+            ml: -0.75,
+            borderRadius: 0.75,
+            outline: "1px solid",
+            outlineColor: "primary.main",
           }}
-        >
-          Cancel
-        </Button>
-      </Stack>
+        />
+        {saving.state.status === "error" && (
+          <Typography variant="caption" color="error.main">
+            {saving.state.error}
+          </Typography>
+        )}
+      </Box>
     );
   return (
     <Stack
       direction="row"
-      spacing={0.5}
       alignItems="center"
-      sx={{ minWidth: 0 }}
+      spacing={0.25}
+      sx={{ minWidth: 0, "&:hover .rename": { opacity: 1 } }}
     >
       <Typography
-        variant="body2"
-        color="text.secondary"
+        variant="m2"
+        component="h1"
+        fontWeight={600}
         noWrap
-        title={config.name}
+        title={`${config.name} · click to rename`}
+        onClick={() => {
+          setValue(config.name);
+          setEditing(true);
+        }}
+        sx={{ cursor: "text", minWidth: 0 }}
       >
         {config.name}
       </Typography>
-      <Tooltip describeChild arrow title="Rename">
-        <IconButton
-          size="small"
-          aria-label="Rename report"
-          onClick={() => {
-            setValue(config.name);
-            setEditing(true);
-          }}
-        >
-          <Iconify icon="mdi:pencil-outline" width={14} />
-        </IconButton>
-      </Tooltip>
+      <IconButton
+        className="rename"
+        size="small"
+        aria-label="Rename report"
+        onClick={() => {
+          setValue(config.name);
+          setEditing(true);
+        }}
+        sx={{
+          opacity: 0.4,
+          color: "text.secondary",
+          "&:focus-visible": { opacity: 1 },
+        }}
+      >
+        <Iconify icon="mdi:pencil-outline" width={14} />
+      </IconButton>
     </Stack>
   );
 }
 
-ReportName.propTypes = {
+InlineName.propTypes = { config: PropTypes.object.isRequired };
+
+function ReportHeader({
+  config,
+  run,
+  busy,
+  onRunNow,
+  onEdit,
+  onRediscover,
+  onDelete,
+  onDetails,
+}) {
+  const [anchor, setAnchor] = useState(null);
+  const lens = lensFor(run?.settings?.lens || config.lens);
+  const scope = run?.scope?.label || config.latest_run?.scope?.label;
+  return (
+    <Stack
+      direction="row"
+      spacing={2}
+      alignItems="flex-start"
+      justifyContent="space-between"
+    >
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <InlineName key={config.name} config={config} />
+        <Stack
+          direction="row"
+          spacing={0.75}
+          alignItems="center"
+          useFlexGap
+          flexWrap="wrap"
+          sx={{ mt: 0.75 }}
+        >
+          <HeaderChip
+            label={unitTitle(config.unit)}
+            icon="mdi:layers-outline"
+          />
+          <HeaderChip
+            label={lens.key === "custom" ? "Custom question" : lens.title}
+            icon={lens.icon}
+          />
+          {scope && (
+            <HeaderChip
+              label={scope}
+              icon="mdi:calendar-range"
+              title="What this run read"
+            />
+          )}
+          {run && (
+            <Box
+              component="button"
+              type="button"
+              onClick={onDetails}
+              sx={{
+                ml: 0.5,
+                p: 0,
+                border: 0,
+                bgcolor: "transparent",
+                font: "inherit",
+                fontSize: 12,
+                color: "text.secondary",
+                cursor: "pointer",
+                textDecoration: "underline",
+                textDecorationColor: "transparent",
+                "&:hover": {
+                  color: "text.primary",
+                  textDecorationColor: "inherit",
+                },
+                "&:focus-visible": {
+                  outline: "2px solid",
+                  outlineColor: "primary.main",
+                },
+              }}
+            >
+              Details
+            </Box>
+          )}
+        </Stack>
+      </Box>
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ flexShrink: 0 }}
+      >
+        <Button
+          size="small"
+          variant="outlined"
+          color="inherit"
+          startIcon={<Iconify icon="mdi:play-outline" width={16} />}
+          onClick={onRunNow}
+          disabled={busy}
+          sx={{ fontSize: 13 }}
+        >
+          {busy ? "Running…" : "Run now"}
+        </Button>
+        <Button
+          size="small"
+          variant="outlined"
+          color="inherit"
+          startIcon={<Iconify icon="mdi:cog-outline" width={16} />}
+          onClick={onEdit}
+          sx={{ fontSize: 13 }}
+        >
+          Edit
+        </Button>
+        <IconButton
+          size="small"
+          aria-label="More report actions"
+          onClick={(event) => setAnchor(event.currentTarget)}
+          sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}
+        >
+          <Iconify icon="mdi:dots-horizontal" width={18} />
+        </IconButton>
+        <Menu
+          anchorEl={anchor}
+          open={Boolean(anchor)}
+          onClose={() => setAnchor(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+        >
+          <MenuItem
+            disabled={!config.has_taxonomy || busy}
+            onClick={() => {
+              setAnchor(null);
+              onRediscover();
+            }}
+            sx={{ maxWidth: 340, whiteSpace: "normal" }}
+          >
+            <ListItemIcon>
+              <Iconify icon="mdi:shape-plus-outline" width={18} />
+            </ListItemIcon>
+            <ListItemText
+              primary="Rediscover categories"
+              secondary="Runs reuse this report's categories so their shares compare. Rediscover to let the next run find new ones."
+              secondaryTypographyProps={{ variant: "caption" }}
+            />
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setAnchor(null);
+              onDelete();
+            }}
+            sx={{ color: "error.main" }}
+          >
+            <ListItemIcon sx={{ color: "inherit" }}>
+              <Iconify icon="mdi:trash-can-outline" width={18} />
+            </ListItemIcon>
+            <ListItemText>Delete report</ListItemText>
+          </MenuItem>
+        </Menu>
+      </Stack>
+    </Stack>
+  );
+}
+
+ReportHeader.propTypes = {
   config: PropTypes.object.isRequired,
-  editing: PropTypes.bool.isRequired,
-  setEditing: PropTypes.func.isRequired,
+  run: PropTypes.object,
+  busy: PropTypes.bool,
+  onRunNow: PropTypes.func.isRequired,
+  onEdit: PropTypes.func.isRequired,
+  onRediscover: PropTypes.func.isRequired,
+  onDelete: PropTypes.func.isRequired,
+  onDetails: PropTypes.func.isRequired,
 };
 
-function taxonomyNote(run, config) {
-  if (!run || run.status !== "completed") return null;
-  if (run.taxonomy_mode === "classify")
-    return {
-      label: `Using this report's categories from ${formatDay(config?.taxonomy?.frozen_at) || "its first run"}`,
-      title:
-        "Runs after the first sort into the same categories so their shares can be compared. Rediscover categories (menu) to find new ones.",
-    };
-  if (config?.taxonomy?.source_run_id === run.id)
-    return {
-      label: "Categories discovered in this run",
-      title:
-        "Later runs of this report reuse these categories so their shares compare.",
-    };
-  return { label: "Categories discovered in this run" };
+function ReportSkeleton() {
+  return (
+    <Box sx={{ px: 3, pt: 2.5, maxWidth: CONTENT_WIDTH, mx: "auto" }}>
+      <Skeleton variant="text" width={320} height={32} />
+      <Skeleton variant="text" width={220} />
+      <Skeleton variant="rounded" height={248} sx={{ mt: 2 }} />
+      <Skeleton variant="text" width="60%" height={36} sx={{ mt: 3 }} />
+      <Stack spacing={1.5} sx={{ mt: 1.5 }}>
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} variant="rounded" height={64} />
+        ))}
+      </Stack>
+    </Box>
+  );
 }
+
+/** A completed run: question, findings, changes, highlights, categories. */
+function ReportBody({ config, run, lens, methodOpen, onMethod }) {
+  const result = run.result || {};
+  const meta = reportMetaParts(run, lens);
+  const categories = result.categories || [];
+  return (
+    <Stack spacing={3.5}>
+      <Box>
+        <Typography
+          variant="h4"
+          component="h2"
+          sx={{ fontSize: 22, lineHeight: "30px", fontWeight: 600 }}
+        >
+          {run.settings?.question || config.question}
+        </Typography>
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mt: 0.5, fontSize: 13, fontVariantNumeric: "tabular-nums" }}
+        >
+          {meta.join(" · ")}
+        </Typography>
+        <Box sx={{ mt: 1.5 }}>
+          {categories.length ? (
+            <Findings summary={result.summary} />
+          ) : (
+            <Box
+              sx={{
+                p: 2.5,
+                border: "1px solid",
+                borderColor: "divider",
+                borderRadius: 1,
+              }}
+            >
+              <Typography variant="subtitle2">
+                No categories in this run
+              </Typography>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ fontSize: 13 }}
+              >
+                None of the {formatCount(run.sample_size)} sampled matched the
+                question. Try a wider window, a different lens, or remove an
+                attribute that filters.
+              </Typography>
+            </Box>
+          )}
+        </Box>
+      </Box>
+      {categories.length > 0 && (
+        <>
+          <ChangeCards changes={result.changes} />
+          <Highlights highlights={result.summary?.highlights} />
+          <CategoryTable
+            reportId={config.id}
+            run={run}
+            attributes={run.settings?.attributes || config.attributes}
+          />
+        </>
+      )}
+      <MethodNote
+        run={run}
+        config={config}
+        open={methodOpen}
+        onToggle={() => onMethod((value) => !value)}
+      />
+    </Stack>
+  );
+}
+
+ReportBody.propTypes = {
+  config: PropTypes.object.isRequired,
+  run: PropTypes.object.isRequired,
+  lens: PropTypes.string,
+  methodOpen: PropTypes.bool.isRequired,
+  onMethod: PropTypes.func.isRequired,
+};
 
 export default function ReportPage({
   projectId,
@@ -251,9 +459,8 @@ export default function ReportPage({
   runId,
   categoryId,
   exampleId,
-  onBack,
   onSelectRun,
-  onDrawer,
+  onView,
   onDeleted,
   onStarted,
 }) {
@@ -263,33 +470,53 @@ export default function ReportPage({
   const effectiveRunId = runId || config?.latest_run?.id;
   const runQuery = useInsightsRun(effectiveRunId);
   const run = runQuery.data;
-  const [menuAnchor, setMenuAnchor] = useState(null);
+  const model = useReportModel(
+    config,
+    run?.status === "completed" ? run : null,
+  );
   const [rerun, setRerun] = useState(null); // {rediscover}
+  const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [renaming, setRenaming] = useState(false);
+  const [methodOpen, setMethodOpen] = useState(false);
   const deleting = useCancellable("The report could not be deleted.");
 
-  if (configQuery.isLoading)
-    return (
-      <Stack spacing={2}>
-        <Skeleton variant="text" width={120} />
-        <Skeleton variant="text" width="50%" height={36} />
-        <Skeleton variant="rounded" height={180} />
-        <Skeleton variant="rounded" height={88} />
-        <Skeleton variant="rounded" height={320} />
-      </Stack>
-    );
+  const openCategory = useCallback(
+    (id) => onView({ category: id, example: null }, { push: true }),
+    [onView],
+  );
+  const openExample = useCallback(
+    (unitId) => onView({ example: unitId }),
+    [onView],
+  );
+  const context = useMemo(
+    () => ({
+      ...model,
+      projectId,
+      runId: run?.id,
+      unit: run?.unit || config?.unit,
+      openCategory,
+      openExample,
+    }),
+    [
+      model,
+      projectId,
+      run?.id,
+      run?.unit,
+      config?.unit,
+      openCategory,
+      openExample,
+    ],
+  );
+
+  // A new place (another run, a category, back to the report) starts at the top.
+  useEffect(() => {
+    document.getElementById("insights-pane")?.scrollTo?.({ top: 0 });
+  }, [effectiveRunId, categoryId]);
+
+  if (configQuery.isLoading) return <ReportSkeleton />;
   if (configQuery.isError || !config)
     return (
-      <Stack spacing={2} alignItems="flex-start">
-        <Button
-          size="small"
-          color="inherit"
-          onClick={onBack}
-          startIcon={<Iconify icon="mdi:chevron-left" width={18} />}
-        >
-          Reports
-        </Button>
+      <Box sx={{ px: 3, pt: 2.5 }}>
         <ErrorState
           message={insightsErrorMessage(
             configQuery.error,
@@ -297,15 +524,28 @@ export default function ReportPage({
           )}
           onRetry={() => configQuery.refetch()}
         />
-      </Stack>
+      </Box>
     );
 
-  const lens = lensFor(config.lens);
+  const lens = run?.settings?.lens || config.lens;
   const active = isRunActive(run?.status);
   const latest = config.latest_run;
-  const newerRunning =
-    latest && latest.id !== effectiveRunId && isRunActive(latest.status);
-  const note = taxonomyNote(run, config);
+  const latestActive = isRunActive(latest?.status);
+  const newerRunning = latest && latest.id !== effectiveRunId && latestActive;
+  const completed = run?.status === "completed";
+  const runs = config.runs || (latest ? [latest] : []);
+  const sharedTaxonomy = runs
+    .filter((r) => r.status === "completed")
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+    .slice(1)
+    .every((r) => r.taxonomy_mode === "classify");
+  const currentSegments = completed
+    ? buildSegments(resultTops(model.categories), {
+        order: model.order,
+        mode: model.mode,
+      })
+    : [];
+  const showExplorer = Boolean(categoryId) && completed;
 
   const remove = () =>
     deleting.run(async () => {
@@ -316,235 +556,180 @@ export default function ReportPage({
       onDeleted();
       return true;
     });
+  const showDetails = () => {
+    setMethodOpen(true);
+    setTimeout(
+      () =>
+        document
+          .getElementById("insights-method")
+          ?.scrollIntoView?.({ behavior: "smooth", block: "start" }),
+      60,
+    );
+  };
+
+  let body;
+  if (!effectiveRunId)
+    body = (
+      <Alert
+        severity="info"
+        action={
+          <Button
+            color="inherit"
+            size="small"
+            onClick={() => setRerun({ rediscover: false })}
+          >
+            Run it
+          </Button>
+        }
+      >
+        This report has not run yet.
+      </Alert>
+    );
+  else if (runQuery.isLoading)
+    body = (
+      <Stack spacing={1.5}>
+        <Skeleton variant="text" width="55%" height={36} />
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} variant="rounded" height={64} />
+        ))}
+      </Stack>
+    );
+  else if (runQuery.isError || !run)
+    body = (
+      <ErrorState
+        message={insightsErrorMessage(
+          runQuery.error,
+          "This run could not be loaded.",
+        )}
+        onRetry={() => runQuery.refetch()}
+      />
+    );
+  else if (active) body = <RunProgress run={run} />;
+  else if (run.status === "failed")
+    body = (
+      <Alert
+        severity="error"
+        action={
+          <Button
+            color="inherit"
+            size="small"
+            onClick={() => setRerun({ rediscover: false })}
+          >
+            Retry
+          </Button>
+        }
+      >
+        <Typography variant="subtitle2">This run failed</Typography>
+        {run.error || "Something went wrong while the report was running."}
+      </Alert>
+    );
+  else
+    body = (
+      <ReportBody
+        config={config}
+        run={run}
+        lens={lens}
+        methodOpen={methodOpen}
+        onMethod={setMethodOpen}
+      />
+    );
 
   return (
-    <Stack spacing={2}>
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{ minWidth: 0 }}
-      >
-        <Button
-          size="small"
-          color="inherit"
-          onClick={onBack}
-          startIcon={<Iconify icon="mdi:chevron-left" width={18} />}
-          sx={{ ml: -0.75, flexShrink: 0 }}
-        >
-          Reports
-        </Button>
-        <Typography color="text.disabled">/</Typography>
-        <ReportName
-          key={`${config.id}-${renaming}`}
-          config={config}
-          editing={renaming}
-          setEditing={setRenaming}
-        />
-      </Stack>
-
-      <Stack
-        direction="row"
-        spacing={2}
-        alignItems="flex-start"
-        justifyContent="space-between"
-      >
-        <Box sx={{ minWidth: 0 }}>
-          <Typography
-            variant="m1"
-            component="h1"
-            fontWeight={600}
-            sx={{ display: "block" }}
-          >
-            {run?.settings?.question || config.question}
-          </Typography>
-          <Stack
-            direction="row"
-            spacing={0.75}
-            useFlexGap
-            flexWrap="wrap"
-            sx={{ mt: 1 }}
-          >
-            <InfoChip
-              label={unitTitle(config.unit)}
-              icon="mdi:layers-outline"
-            />
-            <InfoChip
-              label={
-                lens.title === "Your question" ? "Custom question" : lens.title
-              }
-              icon={lens.icon}
-            />
-            {run?.scope?.label && (
-              <InfoChip label={run.scope.label} icon="mdi:calendar-range" />
-            )}
-            {run && run.sample_size > 0 && (
-              <InfoChip
-                label={`Sampled ${formatCount(run.sample_size)} of ${formatCount(run.population_size)}`}
-                title={`An even sample over time of ${formatCount(run.sample_size)} ${unitWord(run.unit, run.sample_size)} from the ${formatCount(run.population_size)} collected for this run.`}
-              />
-            )}
-            {note && (
-              <InfoChip
-                label={note.label}
-                icon="mdi:shape-outline"
-                title={note.title}
-              />
-            )}
-          </Stack>
-        </Box>
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          sx={{ flexShrink: 0 }}
-        >
-          <RunPager
-            runs={config.runs}
-            runId={effectiveRunId}
-            onSelectRun={onSelectRun}
+    <ReportProvider value={context}>
+      <Box sx={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
+        {showExplorer ? (
+          <CategoryExplorer
+            key={categoryId}
+            categoryId={categoryId}
+            reportName={config.name}
+            run={run}
+            lens={lens}
+            onBack={() => onView({ category: null, example: null })}
           />
-          <Button
-            variant="outlined"
-            color="inherit"
-            startIcon={<Iconify icon="mdi:refresh" width={16} />}
-            onClick={() => setRerun({ rediscover: false })}
-            disabled={isRunActive(latest?.status)}
-          >
-            Run again
-          </Button>
-          <IconButton
-            aria-label="More actions"
-            onClick={(event) => setMenuAnchor(event.currentTarget)}
-          >
-            <Iconify icon="mdi:dots-vertical" width={20} />
-          </IconButton>
-          <Menu
-            anchorEl={menuAnchor}
-            open={Boolean(menuAnchor)}
-            onClose={() => setMenuAnchor(null)}
-            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-            transformOrigin={{ vertical: "top", horizontal: "right" }}
-          >
-            <MenuItem
-              onClick={() => {
-                setMenuAnchor(null);
-                setRenaming(true);
+        ) : (
+          <>
+            <Box
+              sx={{
+                flex: 1,
+                width: "100%",
+                maxWidth: CONTENT_WIDTH,
+                mx: "auto",
+                px: 3,
+                pt: 2.5,
+                pb: 4,
               }}
             >
-              <ListItemIcon>
-                <Iconify icon="mdi:pencil-outline" width={18} />
-              </ListItemIcon>
-              <ListItemText>Rename</ListItemText>
-            </MenuItem>
-            <MenuItem
-              disabled={!config.has_taxonomy || isRunActive(latest?.status)}
-              onClick={() => {
-                setMenuAnchor(null);
-                setRerun({ rediscover: true });
-              }}
-            >
-              <ListItemIcon>
-                <Iconify icon="mdi:shape-plus-outline" width={18} />
-              </ListItemIcon>
-              <ListItemText
-                primary="Rediscover categories"
-                secondary="Later runs keep these categories so they compare"
-                secondaryTypographyProps={{ variant: "caption" }}
+              <ReportHeader
+                config={config}
+                run={run}
+                busy={latestActive}
+                onRunNow={() => setRerun({ rediscover: false })}
+                onEdit={() => setEditing(true)}
+                onRediscover={() => setRerun({ rediscover: true })}
+                onDelete={() => setConfirmDelete(true)}
+                onDetails={showDetails}
               />
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                setMenuAnchor(null);
-                setConfirmDelete(true);
-              }}
-              sx={{ color: "error.main" }}
-            >
-              <ListItemIcon sx={{ color: "inherit" }}>
-                <Iconify icon="mdi:trash-can-outline" width={18} />
-              </ListItemIcon>
-              <ListItemText>Delete</ListItemText>
-            </MenuItem>
-          </Menu>
-        </Stack>
-      </Stack>
+              {newerRunning && (
+                <Alert
+                  severity="info"
+                  sx={{ mt: 2 }}
+                  action={
+                    <Button
+                      color="inherit"
+                      size="small"
+                      onClick={() => onSelectRun(latest.id)}
+                    >
+                      View progress
+                    </Button>
+                  }
+                >
+                  A newer run of this report is in progress.
+                </Alert>
+              )}
+              <Box sx={{ mt: 2 }}>
+                <TrendCard
+                  runs={runs}
+                  runId={effectiveRunId}
+                  order={model.order}
+                  currentSegments={currentSegments}
+                  sharedTaxonomy={sharedTaxonomy}
+                  onSelectRun={onSelectRun}
+                  onCategory={completed ? openCategory : undefined}
+                  onRunNow={
+                    latestActive
+                      ? undefined
+                      : () => setRerun({ rediscover: false })
+                  }
+                />
+              </Box>
+              <Box sx={{ mt: 3 }}>{body}</Box>
+            </Box>
+            {completed && model.categories.length > 0 && (
+              <AskPanel key={run.id} run={run} lens={lens} />
+            )}
+          </>
+        )}
+      </Box>
 
-      {newerRunning && (
-        <Alert
-          severity="info"
-          action={
-            <Button
-              color="inherit"
-              size="small"
-              onClick={() => onSelectRun(latest.id)}
-            >
-              View progress
-            </Button>
-          }
-        >
-          A newer run of this report is in progress.
-        </Alert>
-      )}
-
-      {!effectiveRunId ? (
-        <Alert
-          severity="info"
-          action={
-            <Button
-              color="inherit"
-              size="small"
-              onClick={() => setRerun({ rediscover: false })}
-            >
-              Run it
-            </Button>
-          }
-        >
-          This report has not run yet.
-        </Alert>
-      ) : runQuery.isLoading ? (
-        <Stack spacing={2}>
-          <Skeleton variant="rounded" height={180} />
-          <Skeleton variant="rounded" height={88} />
-          <Skeleton variant="rounded" height={320} />
-        </Stack>
-      ) : runQuery.isError || !run ? (
-        <ErrorState
-          message={insightsErrorMessage(
-            runQuery.error,
-            "This run could not be loaded.",
-          )}
-          onRetry={() => runQuery.refetch()}
+      {completed && (
+        <ExamplePanel
+          open={Boolean(exampleId)}
+          unitId={exampleId}
+          onClose={() => onView({ example: null })}
         />
-      ) : active ? (
-        <RunProgress run={run} />
-      ) : run.status === "failed" ? (
-        <Alert
-          severity="error"
-          action={
-            <Button
-              color="inherit"
-              size="small"
-              onClick={() => setRerun({ rediscover: false })}
-            >
-              Retry
-            </Button>
-          }
-        >
-          <Typography variant="subtitle2">This run failed</Typography>
-          {run.error || "Something went wrong while the report was running."}
-        </Alert>
-      ) : (
-        <ReportBody
-          projectId={projectId}
+      )}
+      {editing && (
+        <EditDrawer
+          open={editing}
           config={config}
-          run={run}
-          categoryId={categoryId}
-          exampleId={exampleId}
-          onDrawer={onDrawer}
-          onSelectRun={onSelectRun}
+          scopeLabel={run?.scope?.label || latest?.scope?.label}
+          onClose={() => setEditing(false)}
+          onRunNow={() => {
+            setEditing(false);
+            setRerun({ rediscover: false });
+          }}
         />
       )}
-
       <RerunDialog
         open={Boolean(rerun)}
         projectId={projectId}
@@ -563,8 +748,8 @@ export default function ReportPage({
         content={
           <Stack spacing={1}>
             <Typography variant="body2">
-              “{config.name}” and all {formatCount(config.runs?.length || 0)} of
-              its runs will be deleted. This can&apos;t be undone.
+              “{config.name}” and all {formatCount(runs.length)} of its runs
+              will be deleted. This can&apos;t be undone.
             </Typography>
             {deleting.state.status === "error" && (
               <Alert severity="error">{deleting.state.error}</Alert>
@@ -583,7 +768,7 @@ export default function ReportPage({
           </Button>
         }
       />
-    </Stack>
+    </ReportProvider>
   );
 }
 
@@ -593,9 +778,8 @@ ReportPage.propTypes = {
   runId: PropTypes.string,
   categoryId: PropTypes.string,
   exampleId: PropTypes.string,
-  onBack: PropTypes.func.isRequired,
   onSelectRun: PropTypes.func.isRequired,
-  onDrawer: PropTypes.func.isRequired,
+  onView: PropTypes.func.isRequired,
   onDeleted: PropTypes.func.isRequired,
   onStarted: PropTypes.func.isRequired,
 };

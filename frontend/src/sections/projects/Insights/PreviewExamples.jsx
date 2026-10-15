@@ -2,6 +2,7 @@ import React from "react";
 import PropTypes from "prop-types";
 import { Box, Paper, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { EvidenceQuote } from "./Citation";
 import { AttributePills, FacetChips } from "./parts";
 
 // Why the report would leave an example out, in the user's terms.
@@ -90,6 +91,12 @@ export default function PreviewExamples({ units, lens, attributes = [] }) {
                 {facets.lens_answer}
               </Typography>
             )}
+            {(facets.evidence || [])
+              .filter((e) => e?.quote)
+              .slice(0, 2)
+              .map((e) => (
+                <EvidenceQuote key={e.quote} quote={e.quote} dense />
+              ))}
             <FacetChips facets={facets} dense />
             <AttributePills attributes={facets.attributes} />
           </Paper>

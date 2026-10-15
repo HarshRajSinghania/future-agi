@@ -15,11 +15,17 @@ import { typography } from "src/theme/typography";
 import configsFixture from "./fixtures/configs.json";
 import runFixture from "./fixtures/run_sessions_failures.json";
 import unitsFixture from "./fixtures/run_sessions_failures_units.json";
+import enrichedRunFixture from "./fixtures/run_sessions_failures_enriched.json";
+import enrichedUnitsFixture from "./fixtures/run_sessions_failures_units_enriched.json";
+import askFixture from "./fixtures/ask_answer.json";
+import omegaRunFixture from "./fixtures/run_sessions_failures_omega.json";
 
 const mocks = vi.hoisted(() => ({
   readQuery: vi.fn(),
   post: vi.fn(),
   collect: vi.fn(),
+  enriched: false,
+  omega: false,
 }));
 
 vi.mock("src/components/iconify", () => ({ default: () => null }));
@@ -41,6 +47,7 @@ vi.mock("src/utils/axios", () => ({
       insightsRuns: () => "/tracer/insights/runs/",
       insightsRun: (id) => `/tracer/insights/runs/${id}/`,
       insightsRunUnits: (id) => `/tracer/insights/runs/${id}/units/`,
+      insightsRunAsk: (id) => `/tracer/insights/runs/${id}/ask/`,
     },
   },
 }));
@@ -100,19 +107,33 @@ const population = Array.from({ length: 108 }, (_, i) => ({
 }));
 
 beforeEach(() => {
+  mocks.enriched = false;
+  mocks.omega = false;
   mocks.readQuery.mockImplementation((url, { params } = {}) => {
     if (url === "/tracer/insights/configs/") return ok(configsFixture.result);
     if (url === `/tracer/insights/configs/${CONFIG_ID}/`)
       return ok(configDetail);
-    if (url === `/tracer/insights/runs/${RUN_ID}/`) return ok(runFixture.result);
+    if (url === `/tracer/insights/runs/${RUN_ID}/`)
+      return ok(
+        mocks.omega
+          ? { ...omegaRunFixture.result, id: RUN_ID }
+          : mocks.enriched
+            ? enrichedRunFixture.result
+            : runFixture.result,
+      );
     if (url === `/tracer/insights/runs/${RUN_ID}/units/`) {
-      const units = unitsFixture.result.units;
-      if (params?.unit_ids)
+      const source = mocks.enriched ? enrichedUnitsFixture : unitsFixture;
+      const units = source.result.units;
+      if (params?.unit_ids) {
+        const cited = (source.result.cited || []).find(
+          (u) => u.unit_id === params.unit_ids,
+        );
         return ok({
-          units: [{ ...units[0], unit_id: params.unit_ids }],
+          units: [cited || { ...units[0], unit_id: params.unit_ids }],
           total: 1,
         });
-      return ok(unitsFixture.result);
+      }
+      return ok({ units, total: source.result.total });
     }
     return Promise.reject(new Error(`unexpected ${url}`));
   });
@@ -144,7 +165,16 @@ describe("InsightsView", () => {
     expect(screen.getByText("Who are our users?")).toBeInTheDocument();
   });
 
-  it("renders a completed report: summary, stats, categories and highlights", async () => {
+  it("opens the most recent report when none is chosen", async () => {
+    renderAt("");
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe(
+        `?report=${configsFixture.result.configs[0].id}`,
+      ),
+    );
+  });
+
+  it("renders a legacy run: key points as findings, meta line, categories, highlights", async () => {
     renderAt(`?report=${CONFIG_ID}`);
     expect(
       await screen.findByRole("heading", {
@@ -152,18 +182,23 @@ describe("InsightsView", () => {
       }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByText("Where does Harbor fall short?"),
+      screen.getByText(
+        "108 sessions sampled of 108 · 72 analysed (34 had no failure) · 39 users · Oct 9–15",
+      ),
+    ).toBeInTheDocument();
+    // The first sentence of a key point is its headline.
+    expect(
+      screen.getByText(
+        /^Unresponsive support is the most damaging failure: 26 conversations/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/5 findings checked against the report's statistics/),
     ).toBeInTheDocument();
     // Citations are chips, not "#3" in the prose.
     expect(
       screen.getAllByRole("button", { name: "Open example 3" }).length,
     ).toBeGreaterThan(0);
-    // 72 of the 106 read had a failure (2 could not be read).
-    expect(screen.getByText("Had a failure")).toBeInTheDocument();
-    expect(screen.getByText("68%")).toBeInTheDocument();
-    expect(
-      screen.getByText(/34 left out \(no agent failure found\)/),
-    ).toBeInTheDocument();
     // Categories table with a notable difference in plain words.
     const table = screen.getByRole("table");
     expect(
@@ -172,10 +207,112 @@ describe("InsightsView", () => {
     expect(
       within(table).getAllByText("Sentiment 4.0 vs 2.0").length,
     ).toBeGreaterThan(0);
+    expect(
+      within(table).getByText("All sessions analysed: 72"),
+    ).toBeInTheDocument();
+    // No previous run: no Change column and no change cards.
+    expect(within(table).queryByText("Change")).toBeNull();
+    expect(screen.queryByText("What changed since the last run")).toBeNull();
     // Highlights with their reason.
-    expect(screen.getByText("Highlights")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Hide highlighted examples" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/Refund of \$129 issued outside the 30-day window/),
+    ).toBeInTheDocument();
+    // The trend falls back to a single bar for one run.
+    expect(screen.getByText(/One run so far/)).toBeInTheDocument();
+  });
+
+  it("renders the engine's findings, changes and highlight quotes", async () => {
+    mocks.enriched = true;
+    renderAt(`?report=${CONFIG_ID}`);
+    expect(
+      await screen.findByText(
+        "Unresolved 100% across 26 conversations (36%): the agent loops instead of escalating",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Add a handoff after two failed lookups or one explicit request for a human.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: "High severity" })).toHaveLength(
+      2,
+    );
+    expect(
+      screen.getByText(
+        /5 findings checked against the report's statistics and the cited examples · 1 dropped/,
+      ),
+    ).toBeInTheDocument();
+    // What changed: a new category and a significant move.
+    expect(
+      screen.getByText("What changed since the last run"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.getByText("5% → 14%")).toBeInTheDocument();
+    // Highlight cards use the title and quote.
+    expect(
+      screen.getByText(
+        "Asked for a human four times and was never offered one",
+      ),
+    ).toBeInTheDocument();
+    // The Change column shows the delta in points.
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("Change")).toBeInTheDocument();
+    expect(within(table).getAllByText("+6 pts").length).toBeGreaterThan(0);
+  });
+
+  it("renders a real Omega run: verifier footer, quotes and root causes", async () => {
+    mocks.omega = true;
+    renderAt(`?report=${CONFIG_ID}`);
+    expect(
+      await screen.findByText(
+        "Unresolved 100% in 10 conversations (14%): the agent re-asks for an order number given in the first message",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/6 findings checked by an independent verifier/),
+    ).toBeInTheDocument();
+    // Highlight cards carry the engine's quote.
+    expect(
+      screen.getAllByText("“I literally just gave it to you”").length,
+    ).toBeGreaterThan(0);
+    // The root cause of a subcategory shows in its explorer.
+    const table = screen.getByRole("table");
+    fireEvent.click(
+      within(table).getByRole("button", {
+        name: /Show subcategories of Agent disregards/,
+      }),
+    );
+    fireEvent.click(
+      within(table).getByText("Agent re-asks for order number already given"),
+    );
+    expect(await screen.findByText("Root cause")).toBeInTheDocument();
+    expect(screen.getByText("Fix")).toBeInTheDocument();
+  });
+
+  it("previews a citation on hover with its title and quote", async () => {
+    mocks.enriched = true;
+    renderAt(`?report=${CONFIG_ID}`);
+    const [chip] = await screen.findAllByRole("button", {
+      name: "Open example 11",
+    });
+    fireEvent.mouseEnter(chip);
+    const card = await waitFor(() => {
+      const found = screen
+        .getAllByRole("tooltip")
+        .find((el) => el.textContent.includes("Click to open the example"));
+      expect(found).toBeTruthy();
+      return found;
+    });
+    expect(
+      within(card).getByText(
+        "Asked for a human four times and was never offered one",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByText(/no\. a human\. agent\. representative/),
     ).toBeInTheDocument();
   });
 
@@ -194,6 +331,29 @@ describe("InsightsView", () => {
     ).toBeInTheDocument();
   });
 
+  it("switches columns from the Columns menu and keeps the choice", async () => {
+    const store = new Map();
+    vi.stubGlobal("localStorage", {
+      getItem: (key) => store.get(key) ?? null,
+      setItem: (key, value) => store.set(key, value),
+    });
+    try {
+      renderAt(`?report=${CONFIG_ID}`);
+      fireEvent.click(await screen.findByRole("button", { name: "Columns" }));
+      fireEvent.click(
+        screen.getByRole("menuitemcheckbox", { name: /Unresolved %/ }),
+      );
+      const table = screen.getByRole("table", { hidden: true });
+      expect(within(table).getByText("Unresolved %")).toBeInTheDocument();
+      expect(JSON.parse(store.get(`insights-columns:${CONFIG_ID}`))).toEqual({
+        on: ["unresolved"],
+        off: [],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("opens the cited example from a citation chip", async () => {
     renderAt(`?report=${CONFIG_ID}`);
     const [chip] = await screen.findAllByRole("button", {
@@ -210,6 +370,7 @@ describe("InsightsView", () => {
       expect.objectContaining({
         params: expect.objectContaining({
           unit_ids: "abf42ede-1742-5a77-acf0-6023fe8c2d61",
+          include_content: true,
         }),
       }),
     );
@@ -218,21 +379,124 @@ describe("InsightsView", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens a category drawer with its examples", async () => {
+  it("marks the evidence inside the example's content", async () => {
+    mocks.enriched = true;
+    const unitId = "5b2ca31b-3453-52f3-a646-a8801b377c16";
+    renderAt(`?report=${CONFIG_ID}&example=${unitId}`);
+    const marks = await waitFor(() => {
+      const found = document.querySelectorAll("mark");
+      expect(found.length).toBe(3);
+      return found;
+    });
+    expect([...marks].map((m) => m.textContent)).toEqual([
+      "Could you share your order number?",
+      "I just gave it to you. HP-72336.",
+      "Is there anything else I can help you with?",
+    ]);
+    expect(marks[1]).toHaveAttribute(
+      "title",
+      "The customer had given it in the first message",
+    );
+  });
+
+  it("falls back to the unit alone when its content cannot be read", async () => {
+    const unitId = "5b2ca31b-3453-52f3-a646-a8801b377c16";
+    const base = mocks.readQuery.getMockImplementation();
+    mocks.readQuery.mockImplementation((url, options = {}) =>
+      options.params?.include_content
+        ? Promise.reject(new Error("contract"))
+        : base(url, options),
+    );
+    renderAt(`?report=${CONFIG_ID}&example=${unitId}`);
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: "Open session's traces" },
+        { timeout: 4000 },
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("First message")).toBeInTheDocument();
+  });
+
+  it("opens the category explorer with the tree, root cause and summaries", async () => {
+    mocks.enriched = true;
     renderAt(`?report=${CONFIG_ID}`);
     const table = await screen.findByRole("table");
     fireEvent.click(
-      within(table).getByText("Unverified Claims and Fabricated Facts"),
+      within(table).getByText("Unresponsive Support and No Escalation"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toContain(
+        "category=3ffe0720fc9b",
+      ),
     );
     expect(
       await screen.findByRole("button", { name: "Measure with Jev" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("tree")).toBeInTheDocument();
+    expect(screen.getByText("Root cause")).toBeInTheDocument();
     expect(
-      await screen.findByText(/What is the Coastline Rain Shell made of/),
+      screen.getByText(/The order lookup fails silently during outages/),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("location").textContent).toContain(
-      "category=a55e9078defc",
+    expect(
+      await screen.findByText(/Coastline Rain Shell's material/),
+    ).toBeInTheDocument();
+    // Back returns to the report.
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Back to report" })[0],
     );
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).not.toContain(
+        "category=",
+      ),
+    );
+  });
+
+  it("asks about the report and cites the answer", async () => {
+    mocks.enriched = true;
+    const store = new Map();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key) => store.get(key) ?? null,
+      setItem: (key, value) => store.set(key, value),
+    });
+    mocks.post.mockImplementation((url) =>
+      url === `/tracer/insights/runs/${RUN_ID}/ask/`
+        ? Promise.resolve({ data: askFixture })
+        : Promise.reject(new Error(`unexpected ${url}`)),
+    );
+    try {
+      renderAt(`?report=${CONFIG_ID}`);
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Which users are hit hardest?",
+        }),
+      );
+      expect(
+        await screen.findByText(
+          /Customers who ask for a human are hit hardest/,
+        ),
+      ).toBeInTheDocument();
+      const [url, body] = mocks.post.mock.calls[0];
+      expect(url).toBe(`/tracer/insights/runs/${RUN_ID}/ask/`);
+      expect(body).toEqual({
+        question: "Which users are hit hardest?",
+        history: [],
+      });
+      // The cited unit keeps its report number.
+      expect(
+        screen.getAllByRole("button", { name: "Open example 11" }).length,
+      ).toBeGreaterThan(1);
+      expect(
+        screen.getByRole("button", {
+          name: "Which of these users came back later?",
+        }),
+      ).toBeInTheDocument();
+      expect(store.get(`insights-ask:${RUN_ID}`)).toContain(
+        "Which users are hit hardest?",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("guides a new report and starts it with the collected population", async () => {

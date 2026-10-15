@@ -2,31 +2,66 @@ import React, { useMemo, useState } from "react";
 import PropTypes from "prop-types";
 import {
   Box,
+  Button,
+  Checkbox,
   Chip,
   IconButton,
+  ListItemText,
+  Menu,
+  MenuItem,
   Stack,
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableRow,
   TableSortLabel,
   Tooltip,
   Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
+import { alpha, useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
+import { UNITS } from "src/sections/projects/observePopulation";
+import { formatPts } from "./insightsChanges";
+import {
+  availableColumns,
+  readColumnPrefs,
+  toggleColumn,
+  visibleColumns,
+  writeColumnPrefs,
+} from "./insightsColumns";
 import {
   categoryRowId,
   isMutedCategory,
   sortCategoryTree,
 } from "./insightsDistribution";
-import { formatCount, formatPercent, formatSentiment } from "./insightsFormat";
+import {
+  formatCost,
+  formatCount,
+  formatLatency,
+  formatPercent,
+  formatSentiment,
+} from "./insightsFormat";
 import { sortNotable } from "./insightsNotable";
-import { NotableChip, SectionCard, Swatch } from "./parts";
+import { useReport } from "./reportContext";
+import { NotableChip, Swatch } from "./parts";
 
 const MOSTLY_ONE_USER = 0.5;
 const NOTABLE_IN_ROW = 2;
+const CATEGORY_MIN_WIDTH = 260;
+const SORTABLE = new Set([
+  "share",
+  "count",
+  "users",
+  "sessions",
+  "failure",
+  "unresolved",
+  "sentiment",
+  "latency",
+  "cost",
+  "errors",
+]);
 
 function ShareCell({ stats, color }) {
   const share = stats?.share || 0;
@@ -36,7 +71,7 @@ function ShareCell({ stats, color }) {
       <Box
         sx={{
           position: "relative",
-          width: 88,
+          width: 52,
           height: 6,
           borderRadius: 3,
           bgcolor: "action.hover",
@@ -69,14 +104,24 @@ function ShareCell({ stats, color }) {
           }}
         />
       </Box>
-      <Typography variant="body2" sx={{ fontVariantNumeric: "tabular-nums" }}>
+      <Typography
+        variant="body2"
+        sx={{ fontSize: 13, fontVariantNumeric: "tabular-nums" }}
+      >
         {formatPercent(share)}
+        {Number.isFinite(stats?.count) && (
+          <Box
+            component="span"
+            sx={{ ml: 0.75, color: "text.secondary", fontSize: 12 }}
+          >
+            {formatCount(stats.count)}
+          </Box>
+        )}
       </Typography>
     </Stack>
   );
   return ci ? (
     <Tooltip
-      describeChild
       describeChild
       arrow
       title={`95% CI ${formatPercent(ci[0])}–${formatPercent(ci[1])}: with this sample size, the true share is very likely in this range.`}
@@ -90,44 +135,166 @@ function ShareCell({ stats, color }) {
 
 ShareCell.propTypes = { stats: PropTypes.object, color: PropTypes.string };
 
-const COLUMNS = [
-  { key: "count", label: "Count", align: "right", width: 72 },
-  { key: "share", label: "Share", sortKey: "count", width: 150 },
-  {
-    key: "users",
-    label: "Users",
-    align: "right",
-    width: 76,
-    help: "Users affected: distinct users with at least one item here.",
-  },
-  {
-    key: "failure",
-    label: "Failure",
-    align: "right",
-    width: 76,
-    help: "Share with an agent mistake.",
-  },
-  {
-    key: "unresolved",
-    label: "Unresolved",
-    align: "right",
-    width: 96,
-    help: "Share that ended unresolved or abandoned.",
-  },
-  {
-    key: "sentiment",
-    label: "Sentiment",
-    align: "right",
-    width: 88,
-    help: "Average user sentiment, 1 (very negative) to 5 (very positive).",
-  },
-  {
-    key: "notable",
-    label: "Notable differences",
-    width: 300,
-    help: "Where this category differs from the rest of the report, after correcting for every comparison made.",
-  },
-];
+function ChangeCell({ change }) {
+  const theme = useTheme();
+  if (!change) return <Muted>–</Muted>;
+  if (change.isNew)
+    return (
+      <Chip
+        size="small"
+        label="New"
+        sx={{
+          height: 20,
+          fontSize: 11,
+          borderRadius: 0.75,
+          color: "info.dark",
+          bgcolor: "info.lighter",
+        }}
+      />
+    );
+  if (!Number.isFinite(change.delta)) return <Muted>–</Muted>;
+  const strong = change.significant && Math.abs(change.delta) >= 0.005;
+  const icon =
+    change.delta > 0
+      ? "mdi:arrow-up"
+      : change.delta < 0
+        ? "mdi:arrow-down"
+        : "mdi:minus";
+  return (
+    <Tooltip
+      arrow
+      describeChild
+      title={
+        strong
+          ? `Was ${formatPercent(change.previousShare)} last run. A real change: it holds after correcting for every comparison.`
+          : `Was ${formatPercent(change.previousShare)} last run. Within the noise for this sample size.`
+      }
+    >
+      <Stack
+        direction="row"
+        spacing={0.25}
+        alignItems="center"
+        justifyContent="flex-end"
+        sx={{
+          color: strong ? "text.primary" : "text.secondary",
+          fontWeight: strong ? 600 : 400,
+        }}
+      >
+        <Iconify
+          icon={icon}
+          width={13}
+          sx={{
+            color: strong
+              ? theme.palette.text.primary
+              : theme.palette.text.disabled,
+          }}
+        />
+        <span>{formatPts(change.delta)}</span>
+      </Stack>
+    </Tooltip>
+  );
+}
+
+ChangeCell.propTypes = { change: PropTypes.object };
+
+function Muted({ children }) {
+  return (
+    <Typography
+      variant="body2"
+      component="span"
+      color="text.disabled"
+      sx={{ fontSize: 13 }}
+    >
+      {children}
+    </Typography>
+  );
+}
+
+Muted.propTypes = { children: PropTypes.node };
+
+function attributeValue(summary, type) {
+  if (!summary) return "–";
+  if ((summary.type || type) === "boolean") return formatPercent(summary.rate);
+  if ((summary.type || type) === "number")
+    return Number.isFinite(summary.mean) ? summary.mean.toFixed(1) : "–";
+  return summary.top?.[0]?.value ?? "–";
+}
+
+function cellValue(column, category, ctx) {
+  const stats = category.stats || {};
+  if (column.attribute)
+    return attributeValue(
+      stats.attributes?.[column.attribute],
+      column.attributeType,
+    );
+  switch (column.key) {
+    case "share":
+      return <ShareCell stats={stats} color={ctx.color} />;
+    case "users": {
+      const mostlyOne = (stats.top_user_share || 0) > MOSTLY_ONE_USER;
+      return (
+        <Stack
+          direction="row"
+          spacing={0.5}
+          alignItems="center"
+          justifyContent="flex-end"
+        >
+          {mostlyOne && (
+            <Tooltip
+              describeChild
+              arrow
+              title={`Mostly one user: ${formatPercent(stats.top_user_share)} of this category comes from a single user.`}
+            >
+              <Iconify
+                icon="mdi:account-alert-outline"
+                width={15}
+                sx={{ color: "warning.dark" }}
+                aria-label="Mostly one user"
+              />
+            </Tooltip>
+          )}
+          <span>{formatCount(stats.users)}</span>
+        </Stack>
+      );
+    }
+    case "notable": {
+      const notable = sortNotable(category.notable);
+      if (!notable.length) return <Muted>–</Muted>;
+      return (
+        <Stack spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+          {notable.slice(0, NOTABLE_IN_ROW).map((note) => (
+            <NotableChip key={`${note.metric}-${note.kind}`} note={note} />
+          ))}
+          {notable.length > NOTABLE_IN_ROW && (
+            <Typography variant="caption" color="text.secondary">
+              +{notable.length - NOTABLE_IN_ROW} more
+            </Typography>
+          )}
+        </Stack>
+      );
+    }
+    case "change":
+      return <ChangeCell change={ctx.change} />;
+    case "count":
+      return formatCount(stats.count);
+    case "sessions":
+      return formatCount(stats.sessions);
+    case "failure":
+      return formatPercent(stats.failure_rate);
+    case "unresolved":
+      return formatPercent(stats.unresolved_rate);
+    case "sentiment":
+      return formatSentiment(stats.sentiment);
+    case "latency":
+      return formatLatency(stats.latency_ms);
+    case "cost":
+      return stats.cost > 0 ? formatCost(stats.cost) : "–";
+    case "errors":
+      return formatPercent(stats.error_rate);
+    default:
+      return "–";
+  }
+}
 
 function CategoryRow({
   category,
@@ -138,67 +305,12 @@ function CategoryRow({
   expanded,
   onToggle,
   onOpen,
-  highlighted,
 }) {
+  const report = useReport();
   const stats = category.stats || {};
   const muted = isMutedCategory(category);
-  const notable = sortNotable(category.notable);
-  const mostlyOne = (stats.top_user_share || 0) > MOSTLY_ONE_USER;
   const open = () => onOpen(category.id);
-  const cells = {
-    count: formatCount(stats.count),
-    share: <ShareCell stats={stats} color={color} />,
-    users: (
-      <Stack
-        direction="row"
-        spacing={0.5}
-        alignItems="center"
-        justifyContent="flex-end"
-      >
-        {mostlyOne && (
-          <Tooltip
-            describeChild
-            describeChild
-            arrow
-            title={`Mostly one user: ${formatPercent(stats.top_user_share)} of this category comes from a single user.`}
-          >
-            <Iconify
-              icon="mdi:account-alert-outline"
-              width={15}
-              sx={{ color: "warning.icon" }}
-              aria-label="Mostly one user"
-            />
-          </Tooltip>
-        )}
-        <span>{formatCount(stats.users)}</span>
-      </Stack>
-    ),
-    failure: formatPercent(stats.failure_rate),
-    unresolved: formatPercent(stats.unresolved_rate),
-    sentiment: formatSentiment(stats.sentiment),
-    notable: notable.length ? (
-      <Stack
-        direction="row"
-        spacing={0.5}
-        useFlexGap
-        flexWrap="wrap"
-        alignItems="center"
-      >
-        {notable.slice(0, NOTABLE_IN_ROW).map((note) => (
-          <NotableChip key={`${note.metric}-${note.kind}`} note={note} />
-        ))}
-        {notable.length > NOTABLE_IN_ROW && (
-          <Typography variant="caption" color="text.secondary">
-            +{notable.length - NOTABLE_IN_ROW} more
-          </Typography>
-        )}
-      </Stack>
-    ) : (
-      <Typography variant="caption" color="text.disabled">
-        –
-      </Typography>
-    ),
-  };
+  const ctx = { color, change: report.changes.get(category.id) };
 
   return (
     <TableRow
@@ -220,10 +332,13 @@ function CategoryRow({
       aria-label={`${category.name}: ${formatCount(stats.count)} (${formatPercent(stats.share)})`}
       sx={{
         cursor: "pointer",
-        verticalAlign: "top",
-        transition: "background-color 600ms",
-        bgcolor: highlighted ? "action.selected" : undefined,
-        "& > td": { color: muted ? "text.secondary" : undefined },
+        bgcolor: child ? "background.neutral" : undefined,
+        "& > td": {
+          color: muted ? "text.secondary" : undefined,
+          fontSize: 13,
+          py: 1.25,
+        },
+        "&:hover .open-hint": { opacity: 1 },
         "&:focus-visible": {
           outline: "2px solid",
           outlineColor: "primary.main",
@@ -231,7 +346,7 @@ function CategoryRow({
         },
       }}
     >
-      <TableCell padding="none" sx={{ width: 40, pl: 1 }}>
+      <TableCell padding="none" sx={{ width: 36, pl: 0.5 }}>
         {expandable && (
           <IconButton
             size="small"
@@ -241,7 +356,6 @@ function CategoryRow({
               event.stopPropagation();
               onToggle(category.id);
             }}
-            sx={{ mt: 0.5 }}
           >
             <Iconify
               icon={expanded ? "mdi:chevron-down" : "mdi:chevron-right"}
@@ -250,28 +364,32 @@ function CategoryRow({
           </IconButton>
         )}
       </TableCell>
-      <TableCell sx={{ pl: child ? 3.5 : 1, minWidth: 280 }}>
-        <Stack direction="row" spacing={1} alignItems="flex-start">
-          <Box sx={{ pt: "6px" }}>
-            <Swatch
-              color={child && color ? alpha(color, 0.55) : color}
-              size={child ? 8 : 10}
-            />
-          </Box>
-          <Box sx={{ minWidth: 0 }}>
-            <Stack
-              direction="row"
-              spacing={0.75}
-              alignItems="center"
-              flexWrap="wrap"
-              useFlexGap
-            >
-              <Typography variant="subtitle2" fontWeight={child ? 500 : 600}>
+      <TableCell sx={{ pl: child ? 3 : 0.5 }}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Swatch
+            color={
+              muted ? undefined : child && color ? alpha(color, 0.55) : color
+            }
+            size={child ? 8 : 10}
+          />
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Stack direction="row" spacing={0.75} alignItems="center">
+              <Typography
+                variant="body2"
+                title={category.name}
+                sx={{
+                  fontSize: 13,
+                  fontWeight: child ? 500 : 600,
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
+              >
                 {category.name}
               </Typography>
               {category.status === "emerging" && (
                 <Tooltip
-                  describeChild
                   describeChild
                   arrow
                   title="New in this run: these items did not fit the report's saved categories."
@@ -279,40 +397,44 @@ function CategoryRow({
                   <Chip
                     size="small"
                     label="New"
-                    color="info"
-                    variant="outlined"
-                    sx={{ height: 18, fontSize: 10, borderRadius: 0.75 }}
+                    sx={{
+                      height: 18,
+                      fontSize: 10,
+                      borderRadius: 0.75,
+                      color: "info.dark",
+                      bgcolor: "info.lighter",
+                    }}
                   />
                 </Tooltip>
               )}
             </Stack>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              title={category.description}
-              sx={{
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-              }}
-            >
-              {category.description}
-            </Typography>
+            {category.description && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                component="div"
+                title={category.description}
+              >
+                {category.description}
+              </Typography>
+            )}
           </Box>
+          <Iconify
+            className="open-hint"
+            icon="mdi:arrow-top-right"
+            width={14}
+            sx={{ color: "text.disabled", opacity: 0, flexShrink: 0 }}
+          />
         </Stack>
       </TableCell>
       {columns.map((column) => (
         <TableCell
           key={column.key}
           align={column.align}
-          sx={{
-            fontVariantNumeric: "tabular-nums",
-            whiteSpace: "nowrap",
-            pt: 1.5,
-          }}
+          sx={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
         >
-          {cells[column.key]}
+          {cellValue(column, category, ctx)}
         </TableCell>
       ))}
     </TableRow>
@@ -328,107 +450,225 @@ CategoryRow.propTypes = {
   expanded: PropTypes.bool,
   onToggle: PropTypes.func,
   onOpen: PropTypes.func.isRequired,
-  highlighted: PropTypes.bool,
 };
 
-export default function CategoryTable({
-  tree,
-  unit,
-  lens,
-  colorOf,
-  expanded,
-  onToggle,
-  onOpen,
-  highlightId,
-}) {
-  const [sort, setSort] = useState({ key: "count", direction: "desc" });
+function ColumnsMenu({ columns, prefs, onChange }) {
+  const [anchor, setAnchor] = useState(null);
+  const shown = new Set(visibleColumns(columns, prefs).map((c) => c.key));
+  return (
+    <>
+      <Button
+        size="small"
+        variant="outlined"
+        color="inherit"
+        startIcon={<Iconify icon="mdi:view-column-outline" width={16} />}
+        onClick={(event) => setAnchor(event.currentTarget)}
+        aria-haspopup="menu"
+        sx={{ fontSize: 13, fontWeight: 500 }}
+      >
+        Columns
+      </Button>
+      <Menu
+        anchorEl={anchor}
+        open={Boolean(anchor)}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        MenuListProps={{ dense: true, "aria-label": "Columns" }}
+        PaperProps={{ sx: { maxHeight: 420, minWidth: 220 } }}
+      >
+        <MenuItem disabled sx={{ opacity: "1 !important" }}>
+          <Checkbox size="small" checked disabled sx={{ p: 0.5, mr: 1 }} />
+          <ListItemText primary="Category" />
+        </MenuItem>
+        {columns.map((column, index) => (
+          <MenuItem
+            key={column.key}
+            role="menuitemcheckbox"
+            aria-checked={shown.has(column.key)}
+            onClick={() => onChange(toggleColumn(columns, prefs, column.key))}
+            divider={
+              Boolean(column.attribute) === false &&
+              Boolean(columns[index + 1]?.attribute)
+            }
+          >
+            <Checkbox
+              size="small"
+              checked={shown.has(column.key)}
+              tabIndex={-1}
+              sx={{ p: 0.5, mr: 1 }}
+            />
+            <ListItemText
+              primary={column.label}
+              secondary={column.attribute ? "Attribute" : undefined}
+              secondaryTypographyProps={{ variant: "caption" }}
+            />
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
+  );
+}
+
+ColumnsMenu.propTypes = {
+  columns: PropTypes.array.isRequired,
+  prefs: PropTypes.object,
+  onChange: PropTypes.func.isRequired,
+};
+
+/**
+ * The categories of a run: one row per category with its share, users and
+ * what sets it apart; subcategories expand inline and a row opens the
+ * category explorer. Columns are chosen from a menu and kept per report.
+ */
+export default function CategoryTable({ reportId, run, attributes }) {
+  const report = useReport();
+  const unit = run.unit;
+  const totals = run.result?.totals || {};
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [sort, setSort] = useState({ key: "share", direction: "desc" });
+  const [prefs, setPrefs] = useState(() => readColumnPrefs(reportId));
   const columns = useMemo(
     () =>
-      COLUMNS.filter(
-        (column) =>
-          !(column.key === "users" && unit === "users") &&
-          !(column.key === "failure" && lens === "failures"),
-      ),
-    [unit, lens],
+      availableColumns({
+        unit,
+        attributes,
+        hasChanges: Boolean(run.result?.changes),
+      }),
+    [unit, attributes, run.result?.changes],
   );
+  const shown = visibleColumns(columns, prefs);
   const rows = useMemo(
-    () => sortCategoryTree(tree, sort.key, sort.direction),
-    [tree, sort],
+    () => sortCategoryTree(report.tree, sort.key, sort.direction),
+    [report.tree, sort],
   );
-  const allExpandable = tree
+  const expandable = report.tree
     .filter((row) => row.expandable)
     .map((row) => row.id);
   const allOpen =
-    allExpandable.length > 0 && allExpandable.every((id) => expanded.has(id));
+    expandable.length > 0 && expandable.every((id) => expanded.has(id));
+  const plural = (UNITS[unit] || UNITS.traces).plural;
 
+  const toggle = (id) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const sortBy = (key) =>
     setSort((current) => ({
       key,
       direction:
         current.key === key && current.direction === "desc" ? "asc" : "desc",
     }));
+  const changePrefs = (next) => {
+    setPrefs(next);
+    writeColumnPrefs(reportId, next);
+  };
+
+  const totalsRow = {
+    id: "__all__",
+    name: `All ${plural} analysed`,
+    stats: {
+      ...totals,
+      share: 1,
+    },
+    notable: [],
+  };
 
   return (
-    <SectionCard
-      id="insights-categories"
-      title="Categories"
-      subtitle="Each row opens its examples. Expand a category to see its subcategories."
-      action={
-        allExpandable.length > 0 && (
-          <Box
-            component="button"
-            type="button"
+    <Box component="section" aria-labelledby="insights-categories-title">
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1.5}
+        sx={{ mb: 1.25 }}
+      >
+        <Typography
+          id="insights-categories-title"
+          variant="subtitle1"
+          component="h2"
+          sx={{ fontSize: 15 }}
+        >
+          Categories
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+          Click a category to explore its {plural}
+        </Typography>
+        {expandable.length > 0 && (
+          <Button
+            size="small"
+            color="inherit"
             onClick={() =>
-              allExpandable.forEach((id) => {
-                if (allOpen === expanded.has(id)) onToggle(id);
-              })
+              setExpanded(allOpen ? new Set() : new Set(expandable))
             }
-            sx={{
-              border: 0,
-              bgcolor: "transparent",
-              color: "text.secondary",
-              font: "inherit",
-              fontSize: 13,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              "&:hover": { color: "text.primary" },
-            }}
+            sx={{ fontSize: 13, fontWeight: 500, color: "text.secondary" }}
           >
             {allOpen ? "Collapse all" : "Expand all"}
-          </Box>
-        )
-      }
-      flush
-    >
-      <Box sx={{ overflowX: "auto" }}>
-        <Table size="small" sx={{ "& td, & th": { borderColor: "divider" } }}>
+          </Button>
+        )}
+        <ColumnsMenu columns={columns} prefs={prefs} onChange={changePrefs} />
+      </Stack>
+      <Box
+        sx={{
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 1,
+          overflowX: "auto",
+        }}
+      >
+        <Table
+          size="small"
+          id="insights-categories"
+          sx={{
+            tableLayout: "fixed",
+            minWidth:
+              CATEGORY_MIN_WIDTH +
+              36 +
+              shown.reduce((sum, column) => sum + (column.width || 96), 0),
+            "& td, & th": { borderColor: "divider" },
+            "& thead th": {
+              bgcolor: "background.neutral",
+              color: "text.secondary",
+              fontSize: 12,
+              fontWeight: 500,
+              py: 0.75,
+              whiteSpace: "nowrap",
+            },
+          }}
+        >
           <TableHead>
             <TableRow>
-              <TableCell padding="none" sx={{ width: 40 }} />
-              <TableCell sx={{ pl: 1 }}>Category</TableCell>
-              {columns.map((column) => {
-                const sortKey = column.sortKey || column.key;
-                const label = (
+              <TableCell padding="none" sx={{ width: 36 }} />
+              <TableCell sx={{ pl: 0.5 }}>Category</TableCell>
+              {shown.map((column) => {
+                const sortable = SORTABLE.has(column.key);
+                const label = sortable ? (
                   <TableSortLabel
-                    active={sort.key === sortKey}
-                    direction={sort.key === sortKey ? sort.direction : "desc"}
-                    onClick={() => sortBy(sortKey)}
+                    active={sort.key === column.key}
+                    direction={
+                      sort.key === column.key ? sort.direction : "desc"
+                    }
+                    onClick={() => sortBy(column.key)}
                   >
                     {column.label}
                   </TableSortLabel>
+                ) : (
+                  column.label
                 );
                 return (
                   <TableCell
                     key={column.key}
                     align={column.align}
-                    sx={{ width: column.width, whiteSpace: "nowrap" }}
+                    sx={{ width: column.width }}
                     sortDirection={
-                      sort.key === sortKey ? sort.direction : false
+                      sort.key === column.key ? sort.direction : false
                     }
                   >
                     {column.help ? (
                       <Tooltip describeChild arrow title={column.help}>
-                        {label}
+                        <span>{label}</span>
                       </Tooltip>
                     ) : (
                       label
@@ -441,18 +681,17 @@ export default function CategoryTable({
           <TableBody>
             {rows.map((row) => {
               const isOpen = expanded.has(row.id);
-              const color = colorOf(row.id);
+              const color = report.colorOf(row.id);
               return (
                 <React.Fragment key={row.id}>
                   <CategoryRow
                     category={row}
                     color={color}
-                    columns={columns}
+                    columns={shown}
                     expandable={row.expandable}
                     expanded={isOpen}
-                    onToggle={onToggle}
-                    onOpen={onOpen}
-                    highlighted={highlightId === row.id}
+                    onToggle={toggle}
+                    onOpen={report.openCategory}
                   />
                   {row.expandable &&
                     isOpen &&
@@ -462,28 +701,48 @@ export default function CategoryTable({
                         category={child}
                         child
                         color={color}
-                        columns={columns}
-                        onOpen={onOpen}
-                        highlighted={highlightId === child.id}
+                        columns={shown}
+                        onOpen={report.openCategory}
                       />
                     ))}
                 </React.Fragment>
               );
             })}
           </TableBody>
+          <TableFooter>
+            <TableRow
+              sx={{
+                "& td": {
+                  borderBottom: 0,
+                  color: "text.secondary",
+                  fontSize: 12,
+                  fontVariantNumeric: "tabular-nums",
+                  whiteSpace: "nowrap",
+                  py: 1,
+                },
+              }}
+            >
+              <TableCell padding="none" />
+              <TableCell sx={{ pl: 0.5 }}>
+                {totalsRow.name}: {formatCount(totals.count)}
+              </TableCell>
+              {shown.map((column) => (
+                <TableCell key={column.key} align={column.align}>
+                  {["share", "notable", "change"].includes(column.key)
+                    ? ""
+                    : cellValue(column, totalsRow, {})}
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableFooter>
         </Table>
       </Box>
-    </SectionCard>
+    </Box>
   );
 }
 
 CategoryTable.propTypes = {
-  tree: PropTypes.array.isRequired,
-  unit: PropTypes.string,
-  lens: PropTypes.string,
-  colorOf: PropTypes.func.isRequired,
-  expanded: PropTypes.instanceOf(Set).isRequired,
-  onToggle: PropTypes.func.isRequired,
-  onOpen: PropTypes.func.isRequired,
-  highlightId: PropTypes.string,
+  reportId: PropTypes.string,
+  run: PropTypes.object.isRequired,
+  attributes: PropTypes.array,
 };
