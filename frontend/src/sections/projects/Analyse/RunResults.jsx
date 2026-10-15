@@ -448,6 +448,15 @@ export default function RunResults({ projectId, run, navigate }) {
           {explainErrorGroups(run.errorGroups).map((entry, index) => (
             <Box key={index} component="span" sx={{ display: "block" }}>
               {entry.count} answer{entry.count === 1 ? "" : "s"} {entry.reason}
+              {entry.settingsPath && (
+                <Button
+                  size="small"
+                  onClick={() => navigate(entry.settingsPath)}
+                  sx={{ ml: 1, textTransform: "none", py: 0 }}
+                >
+                  Open AI Providers
+                </Button>
+              )}
             </Box>
           ))}
           {!run.errorGroups?.length &&

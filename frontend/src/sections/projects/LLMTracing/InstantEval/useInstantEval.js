@@ -274,10 +274,28 @@ const MAX_ROWS = 500;
 
 // Plain-language reasons for the task's error groups (normalized messages
 // from get_eval_task_logs). Unknown reasons fall back to a generic line.
+export const AI_PROVIDERS_SETTINGS_PATH = "/dashboard/settings/ai-providers";
+
+// Jev runs on the organization's own TypeSafe key; key problems point to the
+// AI Providers settings where it is added or replaced.
 export function explainErrorGroups(groups = []) {
   return groups.map((group) => {
-    const text = `${group?.normalized || ""}`;
+    const text = `${group?.normalized || ""} ${group?.sample || ""}`;
     const count = group?.count || 0;
+    if (/API key not configured for typesafe/i.test(text))
+      return {
+        count,
+        reason:
+          "were skipped because this workspace has no TypeSafe key. Add yours in Settings → AI Providers.",
+        settingsPath: AI_PROVIDERS_SETTINGS_PATH,
+      };
+    if (/JEV_KEY_INVALID/i.test(text))
+      return {
+        count,
+        reason:
+          "were rejected by TypeSafe because the key in Settings → AI Providers is invalid or revoked.",
+        settingsPath: AI_PROVIDERS_SETTINGS_PATH,
+      };
     if (/rate_limited/i.test(text))
       return {
         count,
@@ -291,7 +309,11 @@ export function explainErrorGroups(groups = []) {
       };
     if (/JEV_INPUT_TOO_LARGE/i.test(text))
       return { count, reason: "were too long for Jev to read." };
-    if (/JEV_RATE_LIMITED|JEV_TIMEOUT|JEV_PROVIDER_ERROR/i.test(text))
+    if (
+      /JEV_RATE_LIMITED|JEV_TIMEOUT|JEV_PROVIDER_ERROR|JEV_RESPONSE_INVALID/i.test(
+        text,
+      )
+    )
       return {
         count,
         reason: "failed while calling Jev. Rerun to retry them.",

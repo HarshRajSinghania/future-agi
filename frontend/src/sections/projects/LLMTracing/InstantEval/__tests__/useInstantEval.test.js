@@ -7,8 +7,10 @@ vi.mock("src/utils/axios", () => ({
 }));
 
 import {
+  AI_PROVIDERS_SETTINGS_PATH,
   answerFromCell,
   buildAnswerFilter,
+  explainErrorGroups,
   itemFromConfig,
   splitScopeFilters,
   summarizeRows,
@@ -154,5 +156,28 @@ describe("filters and saved questions", () => {
       definitions: {},
       reads: "input_output",
     });
+  });
+});
+
+describe("explainErrorGroups", () => {
+  it("points key problems at the AI Providers settings", () => {
+    const [missing, invalid, other] = explainErrorGroups([
+      {
+        normalized: "Error during evaluation",
+        sample:
+          "API key not configured for typesafe. Please add your API key in settings.",
+        count: 4,
+      },
+      { normalized: "JEV_KEY_INVALID", count: 2 },
+      { normalized: "JEV_RESPONSE_INVALID", count: 1 },
+    ]);
+    expect(missing).toMatchObject({
+      count: 4,
+      settingsPath: AI_PROVIDERS_SETTINGS_PATH,
+    });
+    expect(missing.reason).toMatch(/TypeSafe key/);
+    expect(invalid.settingsPath).toBe(AI_PROVIDERS_SETTINGS_PATH);
+    expect(other.reason).toMatch(/Rerun/);
+    expect(other.settingsPath).toBeUndefined();
   });
 });
