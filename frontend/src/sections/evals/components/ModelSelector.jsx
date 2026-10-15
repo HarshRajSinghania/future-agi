@@ -1351,6 +1351,9 @@ const ModelSelector = ({
                   }
                   onSelect={() => {
                     if (!hasTypesafeKey) {
+                      // Close the picker so its backdrop doesn't swallow the
+                      // first click in the keys drawer.
+                      setModelAnchor(null);
                       setKeysDrawerModel({
                         model_name: m.value,
                         providers: "typesafe",
@@ -1398,7 +1401,9 @@ const ModelSelector = ({
                     selected={m.model_name === model}
                     onClick={() => {
                       if (!available) {
-                        // Open keys drawer for this model
+                        // Open keys drawer for this model; close the picker
+                        // so its backdrop doesn't cover the drawer.
+                        setModelAnchor(null);
                         setKeysDrawerModel(m);
                         return;
                       }

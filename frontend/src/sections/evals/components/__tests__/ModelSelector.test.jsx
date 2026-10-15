@@ -218,6 +218,12 @@ describe("ModelSelector — Jev models (bring your own key)", () => {
     });
     await userEvent.click(row);
     expect(onModelChange).not.toHaveBeenCalled();
+    // The picker closes so its backdrop can't swallow clicks in the drawer.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("menuitem", { name: /Jev latest/ }),
+      ).not.toBeInTheDocument(),
+    );
     expect(keysDrawer).toHaveBeenLastCalledWith(
       expect.objectContaining({
         open: true,
