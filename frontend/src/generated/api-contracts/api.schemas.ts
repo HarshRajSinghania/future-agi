@@ -25857,6 +25857,50 @@ export interface InsightConfigResponseApi {
   result: InsightConfigItemApi;
 }
 
+export type InsightConfigPatchApiLens =
+  (typeof InsightConfigPatchApiLens)[keyof typeof InsightConfigPatchApiLens];
+
+export const InsightConfigPatchApiLens = {
+  usage: "usage",
+  failures: "failures",
+  experience: "experience",
+  personas: "personas",
+  custom: "custom",
+} as const;
+
+export type InsightAttributeApiType =
+  (typeof InsightAttributeApiType)[keyof typeof InsightAttributeApiType];
+
+export const InsightAttributeApiType = {
+  boolean: "boolean",
+  number: "number",
+  string: "string",
+} as const;
+
+export interface InsightAttributeApi {
+  /**
+   * @minLength 1
+   * @maxLength 60
+   */
+  key: string;
+  type: InsightAttributeApiType;
+  /** @maxLength 300 */
+  description?: string;
+  filter_by?: boolean;
+}
+
+export type InsightScopeApiFiltersItem = { [key: string]: unknown };
+
+export interface InsightScopeApi {
+  filters?: InsightScopeApiFiltersItem[];
+  /** @maxLength 300 */
+  label?: string;
+  /** @maxLength 16 */
+  preset?: string;
+  /** @maxItems 2 */
+  window?: string[];
+}
+
 export interface InsightConfigPatchApi {
   /**
    * @minLength 1
@@ -25864,6 +25908,23 @@ export interface InsightConfigPatchApi {
    */
   name?: string;
   reset_taxonomy?: boolean;
+  /**
+   * @minLength 1
+   * @maxLength 500
+   */
+  question?: string;
+  lens?: InsightConfigPatchApiLens;
+  /** @maxLength 500 */
+  agent_description?: string;
+  /** @maxLength 1000 */
+  instructions?: string;
+  attributes?: InsightAttributeApi[];
+  /**
+   * @minimum 10
+   * @maximum 1000
+   */
+  sample_size?: number;
+  scope?: InsightScopeApi;
 }
 
 export type InsightDraftApiUnit =
@@ -25939,27 +26000,6 @@ export const InsightConfigInputApiLens = {
   custom: "custom",
 } as const;
 
-export type InsightAttributeApiType =
-  (typeof InsightAttributeApiType)[keyof typeof InsightAttributeApiType];
-
-export const InsightAttributeApiType = {
-  boolean: "boolean",
-  number: "number",
-  string: "string",
-} as const;
-
-export interface InsightAttributeApi {
-  /**
-   * @minLength 1
-   * @maxLength 60
-   */
-  key: string;
-  type: InsightAttributeApiType;
-  /** @maxLength 300 */
-  description?: string;
-  filter_by?: boolean;
-}
-
 export interface InsightConfigInputApi {
   /**
    * @minLength 1
@@ -26004,18 +26044,6 @@ export interface InsightPreviewResultApi {
 export interface InsightPreviewResponseApi {
   status?: boolean;
   result: InsightPreviewResultApi;
-}
-
-export type InsightScopeApiFiltersItem = { [key: string]: unknown };
-
-export interface InsightScopeApi {
-  filters?: InsightScopeApiFiltersItem[];
-  /** @maxLength 300 */
-  label?: string;
-  /** @maxLength 16 */
-  preset?: string;
-  /** @maxItems 2 */
-  window?: string[];
 }
 
 export interface InsightPopulationItemApi {

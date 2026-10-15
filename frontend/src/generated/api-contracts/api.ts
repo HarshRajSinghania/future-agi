@@ -72199,7 +72199,9 @@ export const getTracerInsightsConfigsPartialUpdateUrl = (configId: string) => {
 };
 
 /**
- * Rename a report, or forget its saved categories so the next run discovers afresh.
+ * Edit a report's setup, or forget its saved categories so the next
+run discovers afresh. Changing the question or lens changes what the
+categories mean, so it resets them too. Applies from the next run.
  */
 export const tracerInsightsConfigsPartialUpdate = async (
   configId: string,

@@ -55680,7 +55680,9 @@ export const TracerInsightsConfigsReadResponse = zod.object({
 });
 
 /**
- * Rename a report, or forget its saved categories so the next run discovers afresh.
+ * Edit a report's setup, or forget its saved categories so the next
+run discovers afresh. Changing the question or lens changes what the
+categories mean, so it resets them too. Applies from the next run.
  */
 export const TracerInsightsConfigsPartialUpdateParams = zod.object({
   config_id: zod.string(),
@@ -55689,6 +55691,28 @@ export const TracerInsightsConfigsPartialUpdateParams = zod.object({
 export const tracerInsightsConfigsPartialUpdateBodyNameMax = 255;
 
 export const tracerInsightsConfigsPartialUpdateBodyResetTaxonomyDefault = false;
+export const tracerInsightsConfigsPartialUpdateBodyQuestionMax = 500;
+
+export const tracerInsightsConfigsPartialUpdateBodyAgentDescriptionMax = 500;
+
+export const tracerInsightsConfigsPartialUpdateBodyInstructionsMax = 1000;
+
+export const tracerInsightsConfigsPartialUpdateBodyAttributesItemKeyMax = 60;
+
+export const tracerInsightsConfigsPartialUpdateBodyAttributesItemDescriptionMax = 300;
+
+export const tracerInsightsConfigsPartialUpdateBodyAttributesItemFilterByDefault =
+  false;
+export const tracerInsightsConfigsPartialUpdateBodySampleSizeMin = 10;
+export const tracerInsightsConfigsPartialUpdateBodySampleSizeMax = 1000;
+
+export const tracerInsightsConfigsPartialUpdateBodyScopeLabelMax = 300;
+
+export const tracerInsightsConfigsPartialUpdateBodyScopePresetMax = 16;
+
+export const tracerInsightsConfigsPartialUpdateBodyScopeWindowItemMax = 64;
+
+export const tracerInsightsConfigsPartialUpdateBodyScopeWindowMax = 2;
 
 export const TracerInsightsConfigsPartialUpdateBody = zod.object({
   name: zod
@@ -55699,6 +55723,71 @@ export const TracerInsightsConfigsPartialUpdateBody = zod.object({
   reset_taxonomy: zod
     .boolean()
     .default(tracerInsightsConfigsPartialUpdateBodyResetTaxonomyDefault),
+  question: zod
+    .string()
+    .min(1)
+    .max(tracerInsightsConfigsPartialUpdateBodyQuestionMax)
+    .optional(),
+  lens: zod
+    .enum(["usage", "failures", "experience", "personas", "custom"])
+    .optional(),
+  agent_description: zod
+    .string()
+    .max(tracerInsightsConfigsPartialUpdateBodyAgentDescriptionMax)
+    .optional(),
+  instructions: zod
+    .string()
+    .max(tracerInsightsConfigsPartialUpdateBodyInstructionsMax)
+    .optional(),
+  attributes: zod
+    .array(
+      zod.object({
+        key: zod
+          .string()
+          .min(1)
+          .max(tracerInsightsConfigsPartialUpdateBodyAttributesItemKeyMax),
+        type: zod.enum(["boolean", "number", "string"]),
+        description: zod
+          .string()
+          .max(
+            tracerInsightsConfigsPartialUpdateBodyAttributesItemDescriptionMax,
+          )
+          .optional(),
+        filter_by: zod
+          .boolean()
+          .default(
+            tracerInsightsConfigsPartialUpdateBodyAttributesItemFilterByDefault,
+          ),
+      }),
+    )
+    .optional(),
+  sample_size: zod
+    .number()
+    .min(tracerInsightsConfigsPartialUpdateBodySampleSizeMin)
+    .max(tracerInsightsConfigsPartialUpdateBodySampleSizeMax)
+    .optional(),
+  scope: zod
+    .object({
+      filters: zod.array(zod.object({}).passthrough()).optional(),
+      label: zod
+        .string()
+        .max(tracerInsightsConfigsPartialUpdateBodyScopeLabelMax)
+        .optional(),
+      preset: zod
+        .string()
+        .max(tracerInsightsConfigsPartialUpdateBodyScopePresetMax)
+        .optional(),
+      window: zod
+        .array(
+          zod
+            .string()
+            .min(1)
+            .max(tracerInsightsConfigsPartialUpdateBodyScopeWindowItemMax),
+        )
+        .max(tracerInsightsConfigsPartialUpdateBodyScopeWindowMax)
+        .optional(),
+    })
+    .optional(),
 });
 
 export const tracerInsightsConfigsPartialUpdateResponseStatusDefault = true;

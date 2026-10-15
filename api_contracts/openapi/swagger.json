@@ -62446,7 +62446,7 @@
             },
             "patch": {
                 "operationId": "tracer_insights_configs_partial_update",
-                "description": "Rename a report, or forget its saved categories so the next run discovers afresh.",
+                "description": "Edit a report's setup, or forget its saved categories so the next\nrun discovers afresh. Changing the question or lens changes what the\ncategories mean, so it resets them too. Applies from the next run.",
                 "parameters": [
                     {
                         "name": "data",
@@ -160084,6 +160084,70 @@
                 }
             }
         },
+        "InsightAttribute": {
+            "required": [
+                "key",
+                "type"
+            ],
+            "type": "object",
+            "properties": {
+                "key": {
+                    "title": "Key",
+                    "type": "string",
+                    "maxLength": 60,
+                    "minLength": 1
+                },
+                "type": {
+                    "title": "Type",
+                    "type": "string",
+                    "enum": [
+                        "boolean",
+                        "number",
+                        "string"
+                    ]
+                },
+                "description": {
+                    "title": "Description",
+                    "type": "string",
+                    "maxLength": 300
+                },
+                "filter_by": {
+                    "title": "Filter by",
+                    "type": "boolean",
+                    "default": false
+                }
+            }
+        },
+        "InsightScope": {
+            "type": "object",
+            "properties": {
+                "filters": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "maxLength": 300
+                },
+                "preset": {
+                    "title": "Preset",
+                    "type": "string",
+                    "maxLength": 16
+                },
+                "window": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "minLength": 1
+                    },
+                    "maxItems": 2
+                }
+            }
+        },
         "InsightConfigPatch": {
             "type": "object",
             "properties": {
@@ -160097,6 +160161,48 @@
                     "title": "Reset taxonomy",
                     "type": "boolean",
                     "default": false
+                },
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 1
+                },
+                "lens": {
+                    "title": "Lens",
+                    "type": "string",
+                    "enum": [
+                        "usage",
+                        "failures",
+                        "experience",
+                        "personas",
+                        "custom"
+                    ]
+                },
+                "agent_description": {
+                    "title": "Agent description",
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "instructions": {
+                    "title": "Instructions",
+                    "type": "string",
+                    "maxLength": 1000
+                },
+                "attributes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAttribute"
+                    }
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer",
+                    "maximum": 1000,
+                    "minimum": 10
+                },
+                "scope": {
+                    "$ref": "#/definitions/InsightScope"
                 }
             }
         },
@@ -160210,40 +160316,6 @@
                 },
                 "result": {
                     "$ref": "#/definitions/InsightDraftResult"
-                }
-            }
-        },
-        "InsightAttribute": {
-            "required": [
-                "key",
-                "type"
-            ],
-            "type": "object",
-            "properties": {
-                "key": {
-                    "title": "Key",
-                    "type": "string",
-                    "maxLength": 60,
-                    "minLength": 1
-                },
-                "type": {
-                    "title": "Type",
-                    "type": "string",
-                    "enum": [
-                        "boolean",
-                        "number",
-                        "string"
-                    ]
-                },
-                "description": {
-                    "title": "Description",
-                    "type": "string",
-                    "maxLength": 300
-                },
-                "filter_by": {
-                    "title": "Filter by",
-                    "type": "boolean",
-                    "default": false
                 }
             }
         },
@@ -160367,36 +160439,6 @@
                 },
                 "result": {
                     "$ref": "#/definitions/InsightPreviewResult"
-                }
-            }
-        },
-        "InsightScope": {
-            "type": "object",
-            "properties": {
-                "filters": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "label": {
-                    "title": "Label",
-                    "type": "string",
-                    "maxLength": 300
-                },
-                "preset": {
-                    "title": "Preset",
-                    "type": "string",
-                    "maxLength": 16
-                },
-                "window": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "maxLength": 64,
-                        "minLength": 1
-                    },
-                    "maxItems": 2
                 }
             }
         },

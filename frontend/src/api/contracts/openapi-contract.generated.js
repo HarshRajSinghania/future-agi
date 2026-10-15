@@ -64596,6 +64596,42 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "boolean",
           default: false,
         },
+        question: {
+          title: "Question",
+          type: "string",
+          maxLength: 500,
+          minLength: 1,
+        },
+        lens: {
+          title: "Lens",
+          type: "string",
+          enum: ["usage", "failures", "experience", "personas", "custom"],
+        },
+        agent_description: {
+          title: "Agent description",
+          type: "string",
+          maxLength: 500,
+        },
+        instructions: {
+          title: "Instructions",
+          type: "string",
+          maxLength: 1000,
+        },
+        attributes: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightAttribute",
+          },
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          maximum: 1000,
+          minimum: 10,
+        },
+        scope: {
+          $ref: "#/definitions/InsightScope",
+        },
       },
     },
     InsightConfigResponse: {
@@ -94642,6 +94678,63 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InsightAttribute: {
+      required: ["key", "type"],
+      type: "object",
+      properties: {
+        key: {
+          title: "Key",
+          type: "string",
+          maxLength: 60,
+          minLength: 1,
+        },
+        type: {
+          title: "Type",
+          type: "string",
+          enum: ["boolean", "number", "string"],
+        },
+        description: {
+          title: "Description",
+          type: "string",
+          maxLength: 300,
+        },
+        filter_by: {
+          title: "Filter by",
+          type: "boolean",
+          default: false,
+        },
+      },
+    },
+    InsightScope: {
+      type: "object",
+      properties: {
+        filters: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          maxLength: 300,
+        },
+        preset: {
+          title: "Preset",
+          type: "string",
+          maxLength: 16,
+        },
+        window: {
+          type: "array",
+          items: {
+            type: "string",
+            maxLength: 64,
+            minLength: 1,
+          },
+          maxItems: 2,
+        },
+      },
+    },
     InsightConfigItem: {
       required: [
         "id",
@@ -94854,36 +94947,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "User id",
           type: "string",
           maxLength: 255,
-        },
-      },
-    },
-    InsightScope: {
-      type: "object",
-      properties: {
-        filters: {
-          type: "array",
-          items: {
-            type: "object",
-          },
-        },
-        label: {
-          title: "Label",
-          type: "string",
-          maxLength: 300,
-        },
-        preset: {
-          title: "Preset",
-          type: "string",
-          maxLength: 16,
-        },
-        window: {
-          type: "array",
-          items: {
-            type: "string",
-            maxLength: 64,
-            minLength: 1,
-          },
-          maxItems: 2,
         },
       },
     },
@@ -111448,33 +111511,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
       "x-nullable": true,
-    },
-    InsightAttribute: {
-      required: ["key", "type"],
-      type: "object",
-      properties: {
-        key: {
-          title: "Key",
-          type: "string",
-          maxLength: 60,
-          minLength: 1,
-        },
-        type: {
-          title: "Type",
-          type: "string",
-          enum: ["boolean", "number", "string"],
-        },
-        description: {
-          title: "Description",
-          type: "string",
-          maxLength: 300,
-        },
-        filter_by: {
-          title: "Filter by",
-          type: "boolean",
-          default: false,
-        },
-      },
     },
     InsightUnitItem: {
       required: [

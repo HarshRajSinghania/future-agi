@@ -133,6 +133,13 @@ class InsightConfigsQuerySerializer(serializers.Serializer):
 class InsightConfigPatchSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False)
     reset_taxonomy = serializers.BooleanField(required=False, default=False)
+    question = serializers.CharField(max_length=500, required=False)
+    lens = serializers.ChoiceField(choices=InsightLens.choices, required=False)
+    agent_description = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    instructions = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    attributes = InsightAttributeSerializer(many=True, required=False, max_length=8)
+    sample_size = serializers.IntegerField(min_value=10, max_value=1000, required=False)
+    scope = InsightScopeSerializer(required=False)
 
 
 class InsightUnitsQuerySerializer(serializers.Serializer):
@@ -462,19 +469,39 @@ class InsightConfigDetailView(APIView):
         responses={200: InsightConfigResponseSerializer, **ERROR_RESPONSES},
     )
     def patch(self, request, config_id):
-        """Rename a report, or forget its saved categories so the next run discovers afresh."""
+        """Edit a report's setup, or forget its saved categories so the next
+        run discovers afresh. Changing the question or lens changes what the
+        categories mean, so it resets them too. Applies from the next run."""
+        from ee.agenthub.insights.facets import clean_attributes
+
         config = self._config(request, config_id)
         if config is None:
             return self._gm.not_found("Report not found")
         data = request.validated_data
-        fields = ["updated_at"]
+        fields = {"updated_at"}
+        reset = bool(data.get("reset_taxonomy"))
         if data.get("name"):
             config.name = data["name"]
-            fields.append("name")
-        if data.get("reset_taxonomy"):
+            fields.add("name")
+        for key in ("question", "lens"):
+            if key in data and data[key] != getattr(config, key):
+                setattr(config, key, data[key])
+                fields.add(key)
+                reset = True
+        for key in ("agent_description", "instructions", "sample_size"):
+            if key in data:
+                setattr(config, key, data[key])
+                fields.add(key)
+        if "attributes" in data:
+            config.attributes = clean_attributes([dict(a) for a in data["attributes"]])
+            fields.add("attributes")
+        if "scope" in data:
+            config.scope = dict(data["scope"])
+            fields.add("scope")
+        if reset and (config.taxonomy or {}).get("subs"):
             config.taxonomy = {}
-            fields.append("taxonomy")
-        config.save(update_fields=fields)
+            fields.add("taxonomy")
+        config.save(update_fields=sorted(fields))
         return self._gm.success_response(_config_item(config, with_runs=True))
 
     @validated_request(responses={200: InsightConfigResponseSerializer, **ERROR_RESPONSES})
