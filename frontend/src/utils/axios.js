@@ -1383,6 +1383,7 @@ export const endpoints = {
     insightsRunAsk: (runId) =>
       apiPath("/tracer/insights/runs/{run_id}/ask/", { run_id: runId }),
     instantEvalAnswers: () => apiPath("/tracer/instant-eval/answers/"),
+    instantEvalRuns: () => apiPath("/tracer/instant-eval/runs/"),
     instantEvalUserSessions: () =>
       apiPath("/tracer/instant-eval/user-sessions/"),
     getAgentGraph: () => apiPath("/tracer/trace/agent_graph/"),

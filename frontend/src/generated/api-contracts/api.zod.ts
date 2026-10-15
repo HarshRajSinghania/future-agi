@@ -56344,6 +56344,8 @@ export const TracerInsightsRunsUnitsListResponse = zod.object({
  */
 export const tracerInstantEvalAnswersListQueryConfigIdsMax = 2000;
 
+export const tracerInstantEvalAnswersListQueryCountsOnlyDefault = false;
+
 export const TracerInstantEvalAnswersListQueryParams = zod.object({
   project_id: zod.string().uuid(),
   eval_task_id: zod.string().uuid(),
@@ -56352,6 +56354,9 @@ export const TracerInstantEvalAnswersListQueryParams = zod.object({
     .string()
     .max(tracerInstantEvalAnswersListQueryConfigIdsMax)
     .optional(),
+  counts_only: zod
+    .boolean()
+    .default(tracerInstantEvalAnswersListQueryCountsOnlyDefault),
 });
 
 export const tracerInstantEvalAnswersListResponseStatusDefault = true;
@@ -56387,6 +56392,61 @@ export const TracerInstantEvalAnswersListResponse = zod.object({
     counts: zod.record(zod.string(), zod.record(zod.string(), zod.number())),
     answered: zod.number(),
     pending: zod.number().optional(),
+  }),
+});
+
+/**
+ * Past Instant eval runs of a project, newest first, with their answer split.
+ */
+export const tracerInstantEvalRunsListQuerySearchMax = 200;
+
+export const tracerInstantEvalRunsListQueryPageNumberDefault = 0;
+export const tracerInstantEvalRunsListQueryPageNumberMin = 0;
+
+export const tracerInstantEvalRunsListQueryPageSizeDefault = 20;
+export const tracerInstantEvalRunsListQueryPageSizeMax = 50;
+
+export const TracerInstantEvalRunsListQueryParams = zod.object({
+  project_id: zod.string().uuid(),
+  unit: zod.enum(["traces", "spans", "sessions", "users"]).optional(),
+  search: zod.string().max(tracerInstantEvalRunsListQuerySearchMax).optional(),
+  page_number: zod
+    .number()
+    .min(tracerInstantEvalRunsListQueryPageNumberMin)
+    .default(tracerInstantEvalRunsListQueryPageNumberDefault),
+  page_size: zod
+    .number()
+    .min(1)
+    .max(tracerInstantEvalRunsListQueryPageSizeMax)
+    .default(tracerInstantEvalRunsListQueryPageSizeDefault),
+});
+
+export const tracerInstantEvalRunsListResponseStatusDefault = true;
+
+export const TracerInstantEvalRunsListResponse = zod.object({
+  status: zod.boolean().default(tracerInstantEvalRunsListResponseStatusDefault),
+  result: zod.object({
+    runs: zod.array(
+      zod.object({
+        task_id: zod.string().min(1),
+        name: zod.string(),
+        created_at: zod.string().min(1),
+        status: zod.string().min(1),
+        run_type: zod.string().min(1),
+        unit: zod.string().min(1),
+        reads: zod.string(),
+        rows: zod.number(),
+        config_ids: zod.array(zod.string().min(1)),
+        questions: zod.array(zod.string().min(1)),
+        counts: zod.record(
+          zod.string(),
+          zod.record(zod.string(), zod.number()),
+        ),
+        answered: zod.number(),
+        pending: zod.number(),
+      }),
+    ),
+    has_more: zod.boolean(),
   }),
 });
 

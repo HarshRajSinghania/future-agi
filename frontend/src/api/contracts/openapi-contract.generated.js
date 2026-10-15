@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1068,
+  endpointCount: 1069,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -35213,10 +35213,88 @@ export const OPENAPI_CONTRACT = Object.freeze({
               maxLength: 2000,
             },
           },
+          counts_only: {
+            required: false,
+            schema: {
+              type: "boolean",
+              default: false,
+            },
+          },
         },
         responses: {
           200: {
             $ref: "#/definitions/InstantEvalAnswersResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/instant-eval/runs/": {
+      get: {
+        operationId: "tracer_instant-eval_runs_list",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          project_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          unit: {
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["traces", "spans", "sessions", "users"],
+            },
+          },
+          search: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 200,
+            },
+          },
+          page_number: {
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 0,
+              default: 0,
+            },
+          },
+          page_size: {
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 1,
+              maximum: 50,
+              default: 20,
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/InstantEvalRunsResponse",
           },
           400: {
             $ref: "#/definitions/ApiErrorResponse",
@@ -64828,6 +64906,20 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         result: {
           $ref: "#/definitions/InstantEvalAnswersResult",
+        },
+      },
+    },
+    InstantEvalRunsResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InstantEvalRunsResult",
         },
       },
     },
@@ -95150,6 +95242,22 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InstantEvalRunsResult: {
+      required: ["runs", "has_more"],
+      type: "object",
+      properties: {
+        runs: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InstantEvalRun",
+          },
+        },
+        has_more: {
+          title: "Has more",
+          type: "boolean",
+        },
+      },
+    },
     InstantEvalUserSessionsResult: {
       required: ["sessions", "users"],
       type: "object",
@@ -111642,6 +111750,97 @@ export const OPENAPI_CONTRACT = Object.freeze({
           additionalProperties: {
             $ref: "#/definitions/InstantEvalAnswer",
           },
+        },
+      },
+    },
+    InstantEvalRun: {
+      required: [
+        "task_id",
+        "name",
+        "created_at",
+        "status",
+        "run_type",
+        "unit",
+        "reads",
+        "rows",
+        "config_ids",
+        "questions",
+        "counts",
+        "answered",
+        "pending",
+      ],
+      type: "object",
+      properties: {
+        task_id: {
+          title: "Task id",
+          type: "string",
+          minLength: 1,
+        },
+        name: {
+          title: "Name",
+          type: "string",
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          minLength: 1,
+        },
+        run_type: {
+          title: "Run type",
+          type: "string",
+          minLength: 1,
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          minLength: 1,
+        },
+        reads: {
+          title: "Reads",
+          type: "string",
+          "x-nullable": true,
+        },
+        rows: {
+          title: "Rows",
+          type: "integer",
+        },
+        config_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        questions: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        counts: {
+          title: "Counts",
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            additionalProperties: {
+              type: "integer",
+            },
+          },
+        },
+        answered: {
+          title: "Answered",
+          type: "integer",
+        },
+        pending: {
+          title: "Pending",
+          type: "integer",
         },
       },
     },

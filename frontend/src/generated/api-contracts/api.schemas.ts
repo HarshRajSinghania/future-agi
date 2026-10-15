@@ -26252,6 +26252,41 @@ export interface InstantEvalAnswersResponseApi {
   result: InstantEvalAnswersResultApi;
 }
 
+export type InstantEvalRunApiCounts = {
+  [key: string]: { [key: string]: number };
+};
+
+export interface InstantEvalRunApi {
+  /** @minLength 1 */
+  task_id: string;
+  name: string;
+  /** @minLength 1 */
+  created_at: string;
+  /** @minLength 1 */
+  status: string;
+  /** @minLength 1 */
+  run_type: string;
+  /** @minLength 1 */
+  unit: string;
+  reads: string;
+  rows: number;
+  config_ids: string[];
+  questions: string[];
+  counts: InstantEvalRunApiCounts;
+  answered: number;
+  pending: number;
+}
+
+export interface InstantEvalRunsResultApi {
+  runs: InstantEvalRunApi[];
+  has_more: boolean;
+}
+
+export interface InstantEvalRunsResponseApi {
+  status?: boolean;
+  result: InstantEvalRunsResultApi;
+}
+
 export interface InstantEvalUserSessionsApi {
   project_id: string;
   /**
@@ -36206,12 +36241,41 @@ export type TracerInstantEvalAnswersListParams = {
    * @maxLength 2000
    */
   config_ids?: string;
+  counts_only?: boolean;
 };
 
 export type TracerInstantEvalAnswersListUnit =
   (typeof TracerInstantEvalAnswersListUnit)[keyof typeof TracerInstantEvalAnswersListUnit];
 
 export const TracerInstantEvalAnswersListUnit = {
+  traces: "traces",
+  spans: "spans",
+  sessions: "sessions",
+  users: "users",
+} as const;
+
+export type TracerInstantEvalRunsListParams = {
+  project_id: string;
+  unit?: TracerInstantEvalRunsListUnit;
+  /**
+   * @maxLength 200
+   */
+  search?: string;
+  /**
+   * @minimum 0
+   */
+  page_number?: number;
+  /**
+   * @minimum 1
+   * @maximum 50
+   */
+  page_size?: number;
+};
+
+export type TracerInstantEvalRunsListUnit =
+  (typeof TracerInstantEvalRunsListUnit)[keyof typeof TracerInstantEvalRunsListUnit];
+
+export const TracerInstantEvalRunsListUnit = {
   traces: "traces",
   spans: "spans",
   sessions: "sessions",

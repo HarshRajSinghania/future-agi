@@ -63146,6 +63146,13 @@
                         "required": false,
                         "type": "string",
                         "maxLength": 2000
+                    },
+                    {
+                        "name": "counts_only",
+                        "in": "query",
+                        "required": false,
+                        "type": "boolean",
+                        "default": false
                     }
                 ],
                 "responses": {
@@ -63153,6 +63160,107 @@
                         "description": "",
                         "schema": {
                             "$ref": "#/definitions/InstantEvalAnswersResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
+        "/tracer/instant-eval/runs/": {
+            "get": {
+                "operationId": "tracer_instant-eval_runs_list",
+                "description": "Past Instant eval runs of a project, newest first, with their answer split.",
+                "parameters": [
+                    {
+                        "name": "project_id",
+                        "in": "query",
+                        "required": true,
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    {
+                        "name": "unit",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "enum": [
+                            "traces",
+                            "spans",
+                            "sessions",
+                            "users"
+                        ]
+                    },
+                    {
+                        "name": "search",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "maxLength": 200
+                    },
+                    {
+                        "name": "page_number",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer",
+                        "default": 0,
+                        "minimum": 0
+                    },
+                    {
+                        "name": "page_size",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer",
+                        "default": 20,
+                        "maximum": 50,
+                        "minimum": 1
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InstantEvalRunsResponse"
                         }
                     },
                     "400": {
@@ -161087,6 +161195,132 @@
                 },
                 "result": {
                     "$ref": "#/definitions/InstantEvalAnswersResult"
+                }
+            }
+        },
+        "InstantEvalRun": {
+            "required": [
+                "task_id",
+                "name",
+                "created_at",
+                "status",
+                "run_type",
+                "unit",
+                "reads",
+                "rows",
+                "config_ids",
+                "questions",
+                "counts",
+                "answered",
+                "pending"
+            ],
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "title": "Task id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "created_at": {
+                    "title": "Created at",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "status": {
+                    "title": "Status",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "run_type": {
+                    "title": "Run type",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "reads": {
+                    "title": "Reads",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "rows": {
+                    "title": "Rows",
+                    "type": "integer"
+                },
+                "config_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "counts": {
+                    "title": "Counts",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "answered": {
+                    "title": "Answered",
+                    "type": "integer"
+                },
+                "pending": {
+                    "title": "Pending",
+                    "type": "integer"
+                }
+            }
+        },
+        "InstantEvalRunsResult": {
+            "required": [
+                "runs",
+                "has_more"
+            ],
+            "type": "object",
+            "properties": {
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InstantEvalRun"
+                    }
+                },
+                "has_more": {
+                    "title": "Has more",
+                    "type": "boolean"
+                }
+            }
+        },
+        "InstantEvalRunsResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InstantEvalRunsResult"
                 }
             }
         },

@@ -42,6 +42,7 @@ from tracer.views.insights import (
 )
 from tracer.views.instant_eval import (
     InstantEvalAnswersView,
+    InstantEvalRunsView,
     InstantEvalUserSessionsView,
 )
 from tracer.views.monitor import UserAlertMonitorLogView, UserAlertMonitorView
@@ -260,6 +261,11 @@ urlpatterns = [
         "instant-eval/answers/",
         InstantEvalAnswersView.as_view(),
         name="instant-eval-answers",
+    ),
+    path(
+        "instant-eval/runs/",
+        InstantEvalRunsView.as_view(),
+        name="instant-eval-runs",
     ),
     # Agent graph — explicit path because @action doesn't register reliably with Granian reload
     path(

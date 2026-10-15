@@ -10,10 +10,10 @@ from accounts.models.organization import Organization
 from model_hub.models.ai_model import AIModel
 from tracer.models.insights import InsightConfig, InsightRun, InsightUnit
 from tracer.models.project import Project
-from tracer.views import analyse as views
+from tracer.views import insights as views
 
-RUNS = "/tracer/analyse/runs/"
-CONFIGS = "/tracer/analyse/configs/"
+RUNS = "/tracer/insights/runs/"
+CONFIGS = "/tracer/insights/configs/"
 
 
 @pytest.fixture(autouse=True)

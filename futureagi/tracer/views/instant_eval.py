@@ -16,6 +16,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 
 import structlog
+from django.core.cache import cache
 from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -76,6 +77,8 @@ class InstantEvalAnswersQuerySerializer(serializers.Serializer):
     eval_task_id = serializers.UUIDField()
     unit = serializers.ChoiceField(choices=["traces", "spans", "sessions", "users"])
     config_ids = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    # Only the answer counts (History's split bars): no rows in the response.
+    counts_only = serializers.BooleanField(required=False, default=False)
 
 
 class InstantEvalAnswerSerializer(serializers.Serializer):
@@ -313,6 +316,45 @@ def _user_rollup(session_rows: list[dict]) -> list[dict]:
     return users
 
 
+DISPLAY_TTL = 600
+
+
+def _cached_display(project_id: str, unit: str, row_ids: list[str]) -> dict[str, dict]:
+    """What each row shows (excerpt, time, user) never changes during a run,
+    so it is read from ClickHouse once and cached; polls only read answers."""
+    kind = {"traces": "traces", "spans": "spans"}.get(unit, "sessions")
+    keys = {row_id: f"ie-display:{project_id}:{kind}:{row_id}" for row_id in row_ids}
+    cached = cache.get_many(list(keys.values()))
+    display = {row_id: cached[key] for row_id, key in keys.items() if key in cached}
+    missing = [row_id for row_id in row_ids if row_id not in display]
+    if missing:
+        reader = {"traces": _trace_display, "spans": _span_display}.get(kind, _session_display)
+        try:
+            fresh = reader(project_id, missing)
+        except Exception:
+            logger.exception("instant_eval_answers_display_failed")
+            fresh = {}
+        if fresh:
+            cache.set_many({keys[r]: v for r, v in fresh.items() if r in keys}, DISPLAY_TTL)
+        display.update(fresh)
+    return display
+
+
+def _summary(unit: str, shown_rows: list[dict], all_rows: list[dict], config_ids) -> dict:
+    settled = sum(
+        1
+        for row in all_rows
+        if all(a.get("status") not in IN_FLIGHT for a in row["answers"].values())
+    )
+    return {
+        "unit": unit,
+        "rows": shown_rows,
+        "counts": _tally(all_rows, config_ids),
+        "answered": settled,
+        "pending": len(all_rows) - settled,
+    }
+
+
 class InstantEvalUserSessionsView(APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
@@ -399,12 +441,10 @@ class InstantEvalAnswersView(APIView):
                 "status": log.status,
             }
         row_ids = list(answers)[:MAX_ANSWER_ROWS]
-        try:
-            reader_for = {"traces": _trace_display, "spans": _span_display}
-            display = reader_for.get(unit, _session_display)(str(project.id), row_ids)
-        except Exception:
-            logger.exception("instant_eval_answers_display_failed")
-            display = {}
+        if params.get("counts_only") and unit != "users":
+            rows = [{"answers": answers[r]} for r in row_ids]
+            return self._gm.success_response(_summary(unit, [], rows, config_ids))
+        display = _cached_display(str(project.id), unit, row_ids)
         rows = []
         for row_id in row_ids:
             shown = display.get(row_id, {})
@@ -424,20 +464,128 @@ class InstantEvalAnswersView(APIView):
             rows = _user_rollup(rows)
         else:
             rows.sort(key=lambda r: r["time"] or "", reverse=True)
-        settled = sum(
-            1
-            for row in rows
-            if all(
-                a.get("status") not in IN_FLIGHT
-                for a in row["answers"].values()
-            )
+        shown_rows = [] if params.get("counts_only") else rows
+        return self._gm.success_response(_summary(unit, shown_rows, rows, config_ids))
+
+
+# ─── History ────────────────────────────────────────────────────────────────
+HISTORY_SCAN = 500
+INSTANT_TASK_PREFIX = "Instant eval"
+
+
+class InstantEvalRunsQuerySerializer(serializers.Serializer):
+    project_id = serializers.UUIDField()
+    unit = serializers.ChoiceField(
+        choices=["traces", "spans", "sessions", "users"], required=False
+    )
+    search = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    page_number = serializers.IntegerField(min_value=0, required=False, default=0)
+    page_size = serializers.IntegerField(min_value=1, max_value=50, required=False, default=20)
+
+
+class InstantEvalRunSerializer(serializers.Serializer):
+    task_id = serializers.CharField()
+    name = serializers.CharField(allow_blank=True)
+    created_at = serializers.CharField(allow_null=True)
+    status = serializers.CharField()
+    run_type = serializers.CharField()
+    unit = serializers.CharField()
+    reads = serializers.CharField(allow_blank=True, allow_null=True)
+    rows = serializers.IntegerField()
+    config_ids = serializers.ListField(child=serializers.CharField())
+    questions = serializers.ListField(child=serializers.CharField())
+    counts = serializers.DictField(child=serializers.DictField(child=serializers.IntegerField()))
+    answered = serializers.IntegerField()
+    pending = serializers.IntegerField()
+
+
+class InstantEvalRunsResultSerializer(serializers.Serializer):
+    runs = InstantEvalRunSerializer(many=True)
+    has_more = serializers.BooleanField()
+
+
+class InstantEvalRunsResponseSerializer(serializers.Serializer):
+    status = serializers.BooleanField(default=True)
+    result = InstantEvalRunsResultSerializer()
+
+
+def _task_rows(task) -> int:
+    filters = task.filters or {}
+    for key in ("session_id", "trace_id", "span_id"):
+        if isinstance(filters.get(key), list):
+            return len(filters[key])
+    return int(task.spans_limit or 0)
+
+
+class InstantEvalRunsView(APIView):
+    permission_classes = [IsAuthenticated]
+    _gm = GeneralMethods()
+
+    @validated_request(
+        query_serializer=InstantEvalRunsQuerySerializer,
+        responses={200: InstantEvalRunsResponseSerializer, **ERROR_RESPONSES},
+    )
+    def get(self, request):
+        """Past Instant eval runs of a project, newest first, with their answer split."""
+        params = request.validated_query_data
+        project = _project(request, params["project_id"])
+        if project is None:
+            return self._gm.not_found("Project not found")
+        tasks = EvalTask.objects.filter(
+            project=project, deleted=False, name__startswith=INSTANT_TASK_PREFIX
         )
-        return self._gm.success_response(
-            {
+        if params.get("search"):
+            tasks = tasks.filter(name__icontains=params["search"])
+        tasks = list(tasks.order_by("-created_at").prefetch_related("evals")[:HISTORY_SCAN])
+        runs = []
+        for task in tasks:
+            metas = [
+                (str(c.id), (c.config or {}).get("instant_eval") or {}) for c in task.evals.all()
+            ]
+            metas = [(cid, m) for cid, m in metas if m.get("question")]
+            if not metas:
+                continue
+            unit = metas[0][1].get("unit") or str(task.row_type or "traces")
+            if params.get("unit") and unit != params["unit"]:
+                continue
+            runs.append((task, unit, metas))
+        start = params["page_number"] * params["page_size"]
+        page = runs[start : start + params["page_size"]]
+        counts: dict[str, dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
+        settled: dict[str, set] = defaultdict(set)
+        rows_seen: dict[str, set] = defaultdict(set)
+        logs = EvalLogger.objects.filter(
+            eval_task_id__in=[str(t.id) for t, _, _ in page], deleted=False
+        ).only(
+            "eval_task_id", "custom_eval_config_id", "status", "error", "skipped_reason",
+            "output_str_list", "output_str", "trace_id", "trace_session_id",
+            "observation_span_id",
+        )
+        for log in logs:
+            row = log.trace_session_id or log.trace_id or log.observation_span_id
+            rows_seen[log.eval_task_id].add(row)
+            answer = answer_of(log)
+            if answer is not None:
+                counts[log.eval_task_id][str(log.custom_eval_config_id)][answer] += 1
+                settled[log.eval_task_id].add(row)
+        out = []
+        for task, unit, metas in page:
+            tid = str(task.id)
+            out.append({
+                "task_id": tid,
+                "name": task.name or "",
+                "created_at": _iso(task.created_at),
+                "status": str(task.status),
+                "run_type": str(task.run_type),
                 "unit": unit,
-                "rows": rows,
-                "counts": _tally(rows, config_ids),
-                "answered": settled,
-                "pending": len(rows) - settled,
-            }
+                "reads": metas[0][1].get("reads"),
+                "rows": _task_rows(task),
+                "config_ids": [cid for cid, _ in metas],
+                "questions": [m["question"] for _, m in metas],
+                "counts": {cid: dict(c) for cid, c in counts[tid].items()},
+                "answered": len(settled[tid]),
+                "pending": max(0, len(rows_seen[tid]) - len(settled[tid])),
+            })
+        return self._gm.success_response(
+            {"runs": out, "has_more": start + params["page_size"] < len(runs)}
         )

@@ -647,6 +647,7 @@ import type {
   InsightRunResponseApi,
   InsightUnitsResponseApi,
   InstantEvalAnswersResponseApi,
+  InstantEvalRunsResponseApi,
   InstantEvalUserSessionsApi,
   InstantEvalUserSessionsResponseApi,
   IntegrationConnectionCreateApi,
@@ -1317,6 +1318,7 @@ import type {
   TracerInsightsConfigsListParams,
   TracerInsightsRunsUnitsListParams,
   TracerInstantEvalAnswersListParams,
+  TracerInstantEvalRunsListParams,
   TracerObservabilityProviderList200,
   TracerObservabilityProviderListParams,
   TracerObservationSpanGetEvalAttributesListParams,
@@ -72956,6 +72958,98 @@ export const tracerInstantEvalAnswersList = async (
 ): Promise<tracerInstantEvalAnswersListResponse> => {
   return apiMutator<tracerInstantEvalAnswersListResponse>(
     getTracerInstantEvalAnswersListUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type tracerInstantEvalRunsListResponse200 = {
+  data: InstantEvalRunsResponseApi;
+  status: 200;
+};
+
+export type tracerInstantEvalRunsListResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInstantEvalRunsListResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInstantEvalRunsListResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInstantEvalRunsListResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInstantEvalRunsListResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInstantEvalRunsListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 500 | 503>;
+};
+
+export type tracerInstantEvalRunsListResponseSuccess =
+  tracerInstantEvalRunsListResponse200 & {
+    headers: Headers;
+  };
+export type tracerInstantEvalRunsListResponseError = (
+  | tracerInstantEvalRunsListResponse400
+  | tracerInstantEvalRunsListResponse403
+  | tracerInstantEvalRunsListResponse404
+  | tracerInstantEvalRunsListResponse500
+  | tracerInstantEvalRunsListResponse503
+  | tracerInstantEvalRunsListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInstantEvalRunsListResponse =
+  | tracerInstantEvalRunsListResponseSuccess
+  | tracerInstantEvalRunsListResponseError;
+
+export const getTracerInstantEvalRunsListUrl = (
+  params: TracerInstantEvalRunsListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/tracer/instant-eval/runs/?${stringifiedParams}`
+    : `/tracer/instant-eval/runs/`;
+};
+
+/**
+ * Past Instant eval runs of a project, newest first, with their answer split.
+ */
+export const tracerInstantEvalRunsList = async (
+  params: TracerInstantEvalRunsListParams,
+  options?: RequestInit,
+): Promise<tracerInstantEvalRunsListResponse> => {
+  return apiMutator<tracerInstantEvalRunsListResponse>(
+    getTracerInstantEvalRunsListUrl(params),
     {
       ...options,
       method: "GET",
