@@ -244,6 +244,95 @@ describe("Jev editor save and test contract", () => {
     );
   });
 
+  describe("authored choice order", () => {
+    // choice_scores is jsonb, which returns keys shortest first; `choices`
+    // and the mapping labels keep the order the author saved.
+    const AUTHORED = ["Resolved", "Unresolved", "Escalated"];
+    const JSONB_SCORES = { Resolved: 1, Escalated: 0.5, Unresolved: 0 };
+    const saved = mapping("choice", {
+      choice: {
+        labels: AUTHORED,
+        descriptions: {
+          Resolved: "Customer confirmed the fix",
+          Unresolved: "",
+          Escalated: "Handed to tier 2",
+        },
+      },
+    });
+    const descriptionOrder = () =>
+      screen
+        .getAllByLabelText(/^Description for /)
+        .map((field) =>
+          field.labels[0].textContent.replace("Description for ", ""),
+        );
+    const expectUnchangedSave = async () => {
+      await waitFor(() => expect(mocks.create).toHaveBeenCalled());
+      const payload = mocks.update.mock.calls[0][0];
+      expect(payload.jev_mapping).toEqual(saved);
+      expect(Object.keys(payload.choice_scores)).toEqual(AUTHORED);
+      const snapshot = mocks.create.mock.calls[0][0].config_snapshot;
+      expect(snapshot.jev_mapping).toEqual(saved);
+      expect(Object.keys(snapshot.choice_scores)).toEqual(AUTHORED);
+    };
+
+    beforeEach(() => {
+      mocks.data.output_type = "deterministic";
+      mocks.data.choice_scores = JSONB_SCORES;
+      mocks.data.choices = AUTHORED;
+      mocks.data.config = {
+        ...mocks.data.config,
+        choices: AUTHORED,
+        jev_mapping: saved,
+      };
+    });
+
+    it("keeps the label order and the mapping on an unrelated save", async () => {
+      render(<EvalDetailPage />);
+      expect(descriptionOrder()).toEqual(AUTHORED);
+      await edit();
+      await userEvent.click(save());
+      await expectUnchangedSave();
+    });
+
+    it("keeps the label order when the page loads the default version", async () => {
+      mocks.versions = {
+        versions: [
+          {
+            id: "v1",
+            version_number: 1,
+            is_default: true,
+            model: "jev-latest",
+            criteria: "Check {{input}}",
+            config_snapshot: {
+              model: "jev-latest",
+              output: "choices",
+              choices: AUTHORED,
+              choice_scores: JSONB_SCORES,
+              jev_mapping: saved,
+            },
+          },
+        ],
+      };
+      render(<EvalDetailPage />);
+      expect(descriptionOrder()).toEqual(AUTHORED);
+      await edit();
+      await userEvent.click(save());
+      await expectUnchangedSave();
+    });
+
+    it("uses the template's choices when no Jev labels were saved yet", async () => {
+      delete mocks.data.config.jev_mapping;
+      render(<EvalDetailPage />);
+      expect(descriptionOrder()).toEqual(AUTHORED);
+      await edit();
+      await userEvent.click(save());
+      await waitFor(() => expect(mocks.update).toHaveBeenCalled());
+      const payload = mocks.update.mock.calls[0][0];
+      expect(payload.jev_mapping.choice.labels).toEqual(AUTHORED);
+      expect(Object.keys(payload.choice_scores)).toEqual(AUTHORED);
+    });
+  });
+
   it.each([
     ["one", ["Low"]],
     ["eleven", Array.from({ length: 11 }, (_, i) => `Level ${i}`)],
@@ -518,7 +607,9 @@ describe("Jev editor save and test contract", () => {
     mocks.data.output_type = "percentage";
     mocks.data.config.model = "turing_large";
     render(<EvalDetailPage />);
-    expect(screen.getByRole("slider", { name: "Pass threshold" })).toBeEnabled();
+    expect(
+      screen.getByRole("slider", { name: "Pass threshold" }),
+    ).toBeEnabled();
   });
 
   it("leaves non-Jev payloads and UI unchanged", async () => {

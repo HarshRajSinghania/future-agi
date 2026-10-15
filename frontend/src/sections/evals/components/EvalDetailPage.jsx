@@ -68,6 +68,7 @@ import {
   buildJevMapping,
   getJevValidationErrors,
   hasExtraJevMessages,
+  orderChoiceScores,
 } from "../utils/jevMapping";
 import { FAGI_MODEL_VALUES, JEV_MODEL_VALUES } from "./ModelSelector";
 import { buildDataInjection } from "src/sections/common/EvalPicker/evalPickerConfigUtils";
@@ -368,7 +369,13 @@ const EvalDetailPage = () => {
           {
             const scored = evalData.choice_scores;
             if (scored && Object.keys(scored).length > 0) {
-              setChoiceScores(scored);
+              // Authored order (see the initial-load effect below).
+              setChoiceScores(
+                orderChoiceScores(
+                  scored,
+                  config.jev_mapping?.choice?.labels || evalData.choices,
+                ),
+              );
             } else if (
               Array.isArray(evalData.choices) &&
               evalData.choices.length > 0
@@ -504,7 +511,12 @@ const EvalDetailPage = () => {
         );
       }
       setPassThreshold(config.passThreshold ?? config.pass_threshold ?? 0.5);
-      setChoiceScores(config.choiceScores || config.choice_scores || {});
+      setChoiceScores(
+        orderChoiceScores(
+          config.choiceScores || config.choice_scores || {},
+          config.jev_mapping?.choice?.labels || config.choices,
+        ),
+      );
       setMultiChoice(config.multiChoice ?? config.multi_choice ?? false);
       if (config.messages && config.messages.length > 0) {
         setMessages(config.messages);
@@ -623,7 +635,14 @@ const EvalDetailPage = () => {
         {
           const scored = evalData.choice_scores;
           if (scored && Object.keys(scored).length > 0) {
-            setChoiceScores(scored);
+            // jsonb returns choice_scores keys shortest first; show and save
+            // them in the order the author saved.
+            setChoiceScores(
+              orderChoiceScores(
+                scored,
+                config.jev_mapping?.choice?.labels || evalData.choices,
+              ),
+            );
           } else if (
             Array.isArray(evalData.choices) &&
             evalData.choices.length > 0

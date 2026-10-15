@@ -1,6 +1,29 @@
 export const JEV_RUBRIC_ERROR =
   "Jev rubric score requires 2 to 10 ordered levels";
 
+// choice_scores is a jsonb column, which returns object keys shortest first,
+// so its key order is not the order the author saved. Put the authored labels
+// back in their order, in the slots they hold, and leave labels added or
+// renamed since where the editor shows them. Without an authored order the
+// key order is all there is.
+function orderChoiceLabels(choiceScores, authored) {
+  const keys = Object.keys(choiceScores || {});
+  if (!Array.isArray(authored)) return keys;
+  const present = new Set(keys);
+  const known = [...new Set(authored)].filter((label) => present.has(label));
+  const knownSet = new Set(known);
+  let next = 0;
+  return keys.map((key) => (knownSet.has(key) ? known[next++] : key));
+}
+
+export const orderChoiceScores = (choiceScores, authored) =>
+  Object.fromEntries(
+    orderChoiceLabels(choiceScores, authored).map((label) => [
+      label,
+      choiceScores[label],
+    ]),
+  );
+
 // Only the active question's fields are sent. Keep the other editor values in
 // local state so changing models never discards the user's work.
 export function buildJevMapping(outputType, choiceScores, draft = {}) {
@@ -9,7 +32,9 @@ export function buildJevMapping(outputType, choiceScores, draft = {}) {
     deterministic: "choice",
     percentage: "score",
   }[outputType];
-  const labels = Object.keys(choiceScores || {});
+  // The labels TypeSafe sees, and mapping_revision, follow this order, so an
+  // unrelated save must not reorder them.
+  const labels = orderChoiceLabels(choiceScores, draft.choice?.labels);
   return {
     revision: "jev-map-v1",
     question_type: questionType,

@@ -57,3 +57,28 @@ def _get_billing_event_type(api_call_type: str, *models, evaluator=None) -> str:
     from ee.usage.schemas.event_types import BillingEventType
 
     return BillingEventType.JEV_EVALUATOR.value
+
+
+def _is_jev_evaluator(evaluator) -> bool:
+    """Whether a built evaluator runs Jev: what billing should go by, rather
+    than a second copy of the engine's model rule."""
+    try:
+        from ee.evals.llm.jev_evaluator.evaluator import JevEvaluator
+    except ImportError:
+        return False
+    return isinstance(evaluator, JevEvaluator)
+
+
+def _emit_jev_usage(evaluator, *, org_id: str, run_id: str) -> bool:
+    """Bill a completed Jev run the one way every eval path bills Jev: the
+    ee.jev.metering events at the flat per-run eval fee, with ids stable per
+    run attempt. Emits nothing and returns False for any other evaluator, which
+    the caller bills as before."""
+    if not _is_jev_evaluator(evaluator):
+        return False
+    try:
+        from ee.jev.metering import emit_usage_events
+    except ImportError:
+        return False
+    emit_usage_events(evaluator, org_id=org_id, cell_or_run_id=run_id)
+    return True

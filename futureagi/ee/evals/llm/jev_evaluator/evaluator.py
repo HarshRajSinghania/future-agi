@@ -7,7 +7,7 @@ import time
 from jinja2 import Environment, StrictUndefined, TemplateError, UndefinedError
 
 from agentic_eval.core.llm.llm import LLM
-from agentic_eval.core.utils.llm_payloads import _IMAGE_EXT_PAT, compute_choices_failure
+from agentic_eval.core.utils.llm_payloads import compute_choices_failure
 from ee.evals.llm.custom_prompt_evaluator.rendering import render_prompt
 from ee.jev.client import JevSystemOneClient
 from ee.jev.mapping import (
@@ -21,10 +21,15 @@ from ee.jev.mapping import (
 from ee.jev.validation import validate_response
 from tfc.ee_gates import is_jev_model
 
+# A value that is nothing but a link to an image, PDF, audio or video file.
+# A link inside prose is text, whatever it points to, and goes to Jev as such.
 _MEDIA_URL = re.compile(
-    r"https?://[^\s\"<>]+\.(?:pdf|mp3|wav|ogg|m4a|mp4|webm|flac)(?:[?#\s]|$)",
+    r"https?://\S+\."
+    r"(?:png|jpe?g|gif|webp|svg|bmp|tiff?|pdf|mp3|wav|ogg|m4a|flac|mp4|webm)"
+    r"(?:[?#]\S*)?",
     re.IGNORECASE,
 )
+_MEDIA_DATA_URI = ("data:image/", "data:audio/", "data:application/pdf")
 
 
 def _reject_media(value):
@@ -33,11 +38,8 @@ def _reject_media(value):
             "JEV_INPUT_UNSUPPORTED", "state", "Jev accepts text and JSON inputs only."
         )
     if isinstance(value, str) and (
-        _IMAGE_EXT_PAT.search(value)
-        or _MEDIA_URL.search(value)
-        or value.lstrip().startswith(
-            ("data:image/", "data:audio/", "data:application/pdf")
-        )
+        _MEDIA_URL.fullmatch(value.strip())
+        or value.strip().lower().startswith(_MEDIA_DATA_URI)
     ):
         raise JevMappingError(
             "JEV_INPUT_UNSUPPORTED", "state", "Jev does not accept media inputs."
@@ -115,6 +117,25 @@ class JevEvaluator(LLM):
             multi_choice=False,
         )
         return format_eval_value(result_data, effective_template)
+
+    def _reason(self, answer, value, level_count):
+        """What Jev answered, restated from the typed answer alone. TypeSafe
+        returns no rationale, so this never offers one."""
+        if answer.question_type == "noul":
+            reason = (
+                f"Jev probability {answer.probability:.2f} vs threshold "
+                f"{self._pass_threshold:.2f} → {value}"
+            )
+            return reason + " (reversed)" if self._reverse_output else reason
+        if answer.question_type == "choice":
+            return f'Jev chose "{value}" (probability {answer.distribution[value]:.2f})'
+        score = answer.raw_score
+        if float(score).is_integer():
+            level = f'{int(score)} of {level_count} "{answer.legend[str(int(score))]}"'
+        else:
+            # Between two levels: no single rubric label to name.
+            level = f"{score:.2f} of {level_count}"
+        return f"Jev scored level {level} (normalized {answer.normalized_score:.2f})"
 
     def _evaluate(self, **kwargs):
         started = time.monotonic()
@@ -219,6 +240,7 @@ class JevEvaluator(LLM):
             failure = not failure
         if answer.question_type == "noul":
             value = "Fail" if failure else "Pass"
+        reason = self._reason(answer, value, len(levels) if levels else None)
         usage = response["usage"]
         self.token_usage = {
             "prompt_tokens": usage["input_tokens"],
@@ -268,7 +290,7 @@ class JevEvaluator(LLM):
             "display_name": self.display_name,
             "data": {"result": value},
             "failure": failure,
-            "reason": None,
+            "reason": reason,
             "runtime": runtime,
             "model": response["model"],
             "metrics": [{"id": "custom_eval_score", "value": metric}],

@@ -72,6 +72,9 @@ class EvalResult:
     # can emit billing events without having to hold the instance themselves).
     cost: dict | None = None
     token_usage: dict | None = None
+    # The evaluator that ran, for callers that bill by evaluator type: a Jev
+    # run bills as Jev whatever model name TypeSafe reports.
+    evaluator: Any = field(default=None, repr=False, compare=False)
 
 
 def run_eval(request: EvalRequest) -> EvalResult:
@@ -201,4 +204,5 @@ def run_eval(request: EvalRequest) -> EvalResult:
         duration=end_time - start_time,
         cost=getattr(eval_instance, "cost", None),
         token_usage=getattr(eval_instance, "token_usage", None),
+        evaluator=eval_instance,
     )

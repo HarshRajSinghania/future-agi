@@ -6397,7 +6397,8 @@ class EvalUsageStatsView(APIView):
                 result_label = ""
                 if isinstance(output_data, dict):
                     raw_output = output_data.get("output")
-                    reason = output_data.get("reason", "")
+                    # A stored null reason (older Jev runs) reads as no reason.
+                    reason = output_data.get("reason") or ""
                     if isinstance(raw_output, dict):
                         # Choice object
                         result_label = raw_output.get("label", "")
@@ -6798,6 +6799,8 @@ class TraceEvalView(APIView):
                 )
 
             except Exception as eval_error:
+                from tfc.ee_gates import jev_error_message
+
                 logger.exception(
                     "trace_evaluation_execution_failed",
                     error_type=type(eval_error).__name__,
@@ -6806,7 +6809,10 @@ class TraceEvalView(APIView):
                     template_id=str(template_id),
                     trace_id=req.trace_id,
                     status="failed",
-                    reason="Evaluation could not be completed. Please retry.",
+                    reason=(
+                        jev_error_message(eval_error)
+                        or "Evaluation could not be completed. Please retry."
+                    ),
                 )
 
             return self._gm.success_response(response.model_dump())
@@ -7521,6 +7527,16 @@ class EvalPlayGroundAPIView(APIView):
                         error_type=type(exc).__name__,
                     )
                     return self._gm.usage_limit_response(exc.check_result)
+                from model_hub.utils.jev_templates import jev_error_response
+
+                # A failed Jev run says what to fix: a rejected key will never
+                # succeed on retry. The text is fixed per typed code.
+                jev_error = jev_error_response(exc)
+                if jev_error is not None:
+                    logger.warning(
+                        "eval_playground_jev_error", code=jev_error.data["code"]
+                    )
+                    return jev_error
                 logger.exception(
                     "eval_playground_execution_failed",
                     error_type=type(exc).__name__,
@@ -8207,7 +8223,18 @@ class TestEvaluationTemplateAPIView(APIView):
                 error_type=type(exc).__name__,
             )
             return self._gm.bad_request(str(exc))
+        except MissingProviderKeyError as exc:
+            # As in the eval playground: say which key to add.
+            return self._gm.bad_request(missing_provider_key_message(exc.provider))
         except Exception as exc:
+            from model_hub.utils.jev_templates import jev_error_response
+
+            jev_error = jev_error_response(exc)
+            if jev_error is not None:
+                logger.warning(
+                    "evaluation_template_test_jev_error", code=jev_error.data["code"]
+                )
+                return jev_error
             logger.exception(
                 "evaluation_template_test_failed",
                 error_type=type(exc).__name__,

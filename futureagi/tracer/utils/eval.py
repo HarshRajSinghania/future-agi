@@ -1,6 +1,7 @@
 import json
 import time
 import traceback
+import uuid
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import asdict
@@ -23,8 +24,13 @@ from model_hub.models.choices import StatusType
 from model_hub.models.evals_metric import EvalTemplate
 from model_hub.utils.eval_input_validation import is_empty_value
 from model_hub.utils.eval_mapping import require_mapping_paths
-from sdk.utils.helpers import _get_api_call_type, _get_billing_event_type
+from sdk.utils.helpers import (
+    _emit_jev_usage,
+    _get_api_call_type,
+    _get_billing_event_type,
+)
 from tfc.constants.api_calls import APICallStatusChoices
+from tfc.ee_gates import jev_error_message
 from tfc.temporal import temporal_activity
 from tfc.utils.case import to_camel_case, to_snake_case
 from tracer.models.custom_eval_config import CustomEvalConfig, EvalOutputType
@@ -1016,6 +1022,14 @@ def _emit_eval_billing(
             return {}
 
     try:
+        if _emit_jev_usage(
+            getattr(result, "evaluator", None),
+            org_id=org_id,
+            run_id=(
+                str(api_call_log_row.log_id) if api_call_log_row else str(uuid.uuid4())
+            ),
+        ):
+            return
         billing_config = BillingConfig.get()
         _llm_cost = (result.cost or {}).get("total_cost", 0)
         _per_run_fee = billing_config.get_eval_per_run_fee()
@@ -1255,12 +1269,14 @@ def _run_evaluation(
 
     except Exception as e:
         traceback.print_exc()
-        error_message = str(e)
+        error_message = jev_error_message(e) or str(e)
         try:
             if api_call_log_row is not None:
                 api_call_log_row.status = APICallStatusChoices.ERROR.value
                 current_config = json.loads(api_call_log_row.config)
-                current_config.update({"output": {"output": None, "reason": str(e)}})
+                current_config.update(
+                    {"output": {"output": None, "reason": error_message}}
+                )
                 api_call_log_row.config = json.dumps(current_config)
                 api_call_log_row.save()
         except Exception:
@@ -1950,12 +1966,14 @@ def _execute_evaluation(
 
     except Exception as e:
         traceback.print_exc()
-        error_message = str(e)
+        error_message = jev_error_message(e) or str(e)
         try:
             if api_call_log_row is not None:
                 api_call_log_row.status = APICallStatusChoices.ERROR.value
                 current_config = json.loads(api_call_log_row.config)
-                current_config.update({"output": {"output": None, "reason": str(e)}})
+                current_config.update(
+                    {"output": {"output": None, "reason": error_message}}
+                )
                 api_call_log_row.config = json.dumps(current_config)
                 api_call_log_row.save()
         except Exception:
@@ -3821,12 +3839,14 @@ def _execute_evaluation_for_trace(
         }
     except Exception as e:
         traceback.print_exc()
-        error_message = str(e)
+        error_message = jev_error_message(e) or str(e)
         try:
             if api_call_log_row is not None:
                 api_call_log_row.status = APICallStatusChoices.ERROR.value
                 current_config = json.loads(api_call_log_row.config)
-                current_config.update({"output": {"output": None, "reason": str(e)}})
+                current_config.update(
+                    {"output": {"output": None, "reason": error_message}}
+                )
                 api_call_log_row.config = json.dumps(current_config)
                 api_call_log_row.save()
         except Exception:
@@ -4077,12 +4097,14 @@ def _execute_evaluation_for_session(
         }
     except Exception as e:
         traceback.print_exc()
-        error_message = str(e)
+        error_message = jev_error_message(e) or str(e)
         try:
             if api_call_log_row is not None:
                 api_call_log_row.status = APICallStatusChoices.ERROR.value
                 current_config = json.loads(api_call_log_row.config)
-                current_config.update({"output": {"output": None, "reason": str(e)}})
+                current_config.update(
+                    {"output": {"output": None, "reason": error_message}}
+                )
                 api_call_log_row.config = json.dumps(current_config)
                 api_call_log_row.save()
         except Exception:
