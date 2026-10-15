@@ -1285,6 +1285,12 @@ def promote_conversation_checkpoint(
                 output.save(update_fields=["data", "summary", "updated_at"])
             index_scenarios(environment, suite, prune=True)
             _bind_added_scenarios(environment)
+            if environment.environment_version_id is not None:
+                from simulate.services.harness_versioning.versions import (
+                    record_authoring_quietly,
+                )
+
+                record_authoring_quietly(environment, archive, origin="chat")
     if stale_revision is not None:
         _rebase_conversation_workspace(
             conversation,

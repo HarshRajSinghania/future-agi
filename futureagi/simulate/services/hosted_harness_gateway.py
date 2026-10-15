@@ -3161,7 +3161,17 @@ class HostedHarnessGateway:
                 if packed.exit_code:
                     raise RuntimeError(str(packed.result or "authoring pack failed"))
                 body = sandbox.fs.download_file("/tmp/authoring-rerun.tar.gz", 300)
+                extending = bool(metadata.get("scenario_extend"))
                 store_authoring_archive(job, body, advance_lifecycle=False)
+                from simulate.services.harness_versioning.versions import (
+                    record_authoring_quietly,
+                )
+
+                # An extend is versioned only once the first build is.
+                if not extending or job.environment_version_id is not None:
+                    record_authoring_quietly(
+                        job, body, origin="extend" if extending else "authoring"
+                    )
                 job.refresh_from_db()
             except Exception:  # noqa: BLE001 - retry on the next poll; do not abort calls
                 logger.exception(
@@ -4947,7 +4957,17 @@ class AuthoringArchiveKept(Exception):
 
 def rewrite_authoring_scenarios(job: HostedHarnessJob, suite: list[dict]) -> str | None:
     """Write an edited suite back into the sealed archive a rerun replays."""
-    metadata = (job.payload or {}).get("metadata") or {}
+    from simulate.services.harness_versioning.versions import (
+        environment_head,
+        is_versioned,
+        record_authoring,
+    )
+
+    versioned = is_versioned(job)
+    # A versioned edit always starts from the environment's current default, never from
+    # the pair a run pinned, so it cannot roll the environment back.
+    source = environment_head(job) if versioned else job
+    metadata = (source.payload or {}).get("metadata") or {}
     object_key = str(metadata.get("authoring_object_key") or "").strip()
     if not object_key:
         return None
@@ -4971,6 +4991,22 @@ def rewrite_authoring_scenarios(job: HostedHarnessJob, suite: list[dict]) -> str
             job.id,
         )
         raise AuthoringArchiveKept("the change would lose files a run needs")
+    if versioned:
+        # A versioned archive is never overwritten: the edit becomes the next suite version.
+        try:
+            recorded = record_authoring(
+                source, rewritten, origin="manual", expected_pair_key=object_key
+            )
+        except HostedHarnessError as exc:
+            raise AuthoringArchiveKept(exc.message) from exc
+        except Exception as exc:  # noqa: BLE001 - an edit that cannot be saved changes nothing
+            logger.exception("could not version an amended suite job=%s", job.id)
+            raise AuthoringArchiveKept("the change could not be saved") from exc
+        if recorded is None:
+            return None
+        if job.environment_id is not None:
+            _repoint_run(job, source)
+        return recorded.pair_key
     client.put_object(
         bucket_name=UPLOAD_BUCKET_NAME,
         object_name=object_key,
@@ -4986,6 +5022,20 @@ def rewrite_authoring_scenarios(job: HostedHarnessJob, suite: list[dict]) -> str
     job.content_updated_at = timezone.now()
     job.save(update_fields=["payload", "content_updated_at", "updated_at"])
     return object_key
+
+
+def _repoint_run(run: HostedHarnessJob, environment: HostedHarnessJob) -> None:
+    """An amended run replays the environment's new pair, as it did when both shared one."""
+    environment.refresh_from_db()
+    current = (environment.payload or {}).get("metadata") or {}
+    payload = dict(run.payload or {})
+    metadata = dict(payload.get("metadata") or {})
+    metadata["authoring_object_key"] = current.get("authoring_object_key")
+    metadata["authoring_revision"] = current.get("authoring_revision")
+    payload["metadata"] = metadata
+    run.payload = payload
+    run.content_updated_at = timezone.now()
+    run.save(update_fields=["payload", "content_updated_at", "updated_at"])
 
 
 def rewrite_conversation_scenarios(job: HostedHarnessJob, suite: list[dict]) -> int:
