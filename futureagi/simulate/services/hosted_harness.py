@@ -5,7 +5,7 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 import structlog
@@ -31,6 +31,12 @@ from simulate.services.alk_simulate_ingestion import (
     create_alk_sim_test_execution,
     precreate_alk_sim_call_executions,
     provision_alk_sim_run_test,
+)
+from simulate.services.canonical_json import (  # noqa: F401 - re-exported
+    _json_value,
+    _rfc3339,
+    canonical_digest,
+    canonical_json_bytes,
 )
 
 _CAPABILITY_SCHEMA_VERSION = "futureagi.harness-capabilities.v1"
@@ -86,20 +92,6 @@ class AttemptCapability:
     fence: str
     document: dict[str, Any]
     admitted_parallelism: int
-
-
-def canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        _json_value(value),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-
-
-def canonical_digest(value: object) -> str:
-    return "sha256:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
 def hash_secret(value: str) -> str:
@@ -1622,22 +1614,3 @@ def _begin_response(
             ],
         }
     }
-
-
-def _json_value(value: object) -> object:
-    if isinstance(value, dict):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    if isinstance(value, uuid.UUID):
-        return str(value)
-    if isinstance(value, datetime):
-        return _rfc3339(value)
-    return value
-
-
-def _rfc3339(value: datetime) -> str:
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    value = value.astimezone(UTC)
-    return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")

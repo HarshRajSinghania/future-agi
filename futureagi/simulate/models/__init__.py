@@ -13,6 +13,15 @@ from .harness_environment_credentials import (
     HarnessEnvironmentCredentials,
 )
 from .eval_config import SimulateEvalConfig
+from .harness_versioning import (
+    HarnessAgentVersionRuntime,
+    HarnessAssembledBundle,
+    HarnessEnvironmentVersion,
+    HarnessNudge,
+    HarnessSuiteMember,
+    HarnessSuiteValidation,
+    HarnessSuiteVersion,
+)
 from .hosted_harness import (
     HostedHarnessArtifact,
     HostedHarnessAttempt,
@@ -58,6 +67,13 @@ __all__ = [
     "ComponentEvaluation",
     "HarnessCredentialFile",
     "HarnessEnvironmentCredentials",
+    "HarnessAgentVersionRuntime",
+    "HarnessAssembledBundle",
+    "HarnessEnvironmentVersion",
+    "HarnessNudge",
+    "HarnessSuiteMember",
+    "HarnessSuiteValidation",
+    "HarnessSuiteVersion",
     "PromptTrial",
     "SimulatorAgent",
     "RunTest",
