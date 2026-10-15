@@ -455,3 +455,69 @@ def test_r03_auth_client_rejection_codes(auth_client, extra, code):
     assert response.data["code"] == "JEV_MAPPING_INVALID"
     assert code in response.data["details"][response.data["attr"]]
     client.assert_not_called()
+
+
+JEV_OK = {
+    "model": "jev-1.13.0",
+    "answers": {"q1": {"type": "noul", "noul": 0.91}},
+    "usage": {"input_tokens": 320, "output_tokens": 20},
+}
+
+
+def _jev_playground(auth_client):
+    with patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False):
+        created = auth_client.post(
+            "/model-hub/eval-templates/create-v2/", payload(), format="json"
+        )
+    assert created.status_code == 200, created.data
+    return lambda: auth_client.post(
+        "/model-hub/eval-playground/",
+        {
+            "template_id": created.data["result"]["id"],
+            "model": "jev-latest",
+            "mapping": {"input": "Agent: I issued a full refund."},
+            "config": {"params": {}},
+        },
+        format="json",
+    )
+
+
+# The eval path calls close_old_connections(), so these need real transactions.
+@pytest.mark.django_db(transaction=True)
+def test_byok_playground_runs_on_the_org_typesafe_key(auth_client, user):
+    import httpx
+
+    from model_hub.models.api_key import ApiKey
+
+    run = _jev_playground(auth_client)
+    # Saved the way Settings -> AI Providers saves it.
+    ApiKey.objects.create(
+        provider="typesafe", organization=user.organization, key="org-typesafe-key"
+    )
+    with (
+        patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False),
+        patch("tfc.capabilities.service.check_or_raise"),
+        patch("httpx.post", return_value=httpx.Response(200, json=JEV_OK)) as post,
+    ):
+        response = run()
+    assert response.status_code == 200, response.data
+    assert post.call_args.args == ("https://api.typesafe.ai/v1/systemone",)
+    assert post.call_args.kwargs["headers"]["Authorization"] == (
+        "Bearer org-typesafe-key"
+    )
+    assert "org-typesafe-key" not in str(response.data)
+
+
+# The eval path calls close_old_connections(), so these need real transactions.
+@pytest.mark.django_db(transaction=True)
+def test_byok_playground_without_a_typesafe_key_says_which_key_to_add(auth_client):
+    run = _jev_playground(auth_client)
+    with (
+        patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False),
+        patch("tfc.capabilities.service.check_or_raise"),
+        patch("httpx.post") as post,
+    ):
+        response = run()
+    assert response.status_code == 400
+    assert "API key not configured for typesafe" in str(response.data)
+    post.assert_not_called()

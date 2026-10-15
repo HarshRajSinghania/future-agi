@@ -29,6 +29,7 @@ import React, {
 } from "react";
 import Iconify from "src/components/iconify";
 import KeysDrawer from "src/components/custom-model-dropdown/KeysDrawer";
+import { useApiKeysStatus } from "src/api/model/api-keys";
 import { useDebounce } from "src/hooks/use-debounce";
 import {
   useFeatureAllowed,
@@ -785,6 +786,11 @@ const ModelSelector = ({
   const { locked: fagiModelsLocked, isLoading: capabilitiesLoading } =
     useFeatureLocked(CAPABILITY.TURING_MODELS);
   const { locked: jevModelsLocked } = useFeatureLocked(CAPABILITY.JEV_MODELS);
+  // Jev runs on the org's own TypeSafe key (Settings -> AI Providers).
+  const { data: providerStatuses } = useApiKeysStatus();
+  const hasTypesafeKey = (providerStatuses || []).some(
+    (p) => p.provider === "typesafe" && p.hasKey,
+  );
   const fagiModelsDenied = fagiModelsLocked && !capabilitiesLoading;
   const { allowed: falconAllowed } = useFeatureAllowed(CAPABILITY.FALCON_AI);
 
@@ -1340,8 +1346,17 @@ const ModelSelector = ({
                   selected={m.value === model}
                   locked={jevModelsLocked}
                   lockedTooltip="Not included in your plan"
-                  secondaryText={m.value}
+                  secondaryText={
+                    hasTypesafeKey ? m.value : "Add your TypeSafe API key"
+                  }
                   onSelect={() => {
+                    if (!hasTypesafeKey) {
+                      setKeysDrawerModel({
+                        model_name: m.value,
+                        providers: "typesafe",
+                      });
+                      return;
+                    }
                     onModelChange(m.value);
                     setModelAnchor(null);
                     setModelSearch("");

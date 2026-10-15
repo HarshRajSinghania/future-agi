@@ -1,4 +1,4 @@
-"""Bounded typed requests using the existing managed-service credentials."""
+"""Bounded typed requests to TypeSafe's System One API with the org's own key."""
 
 import random
 import threading
@@ -8,13 +8,10 @@ from functools import lru_cache
 from django.conf import settings
 
 from ee.jev.mapping import JevMappingError, check_input_size
-from ee.licensing.activation_client import (
-    ManagedServiceError,
-    call_managed_service,
-    dispatch_managed_request,
-)
-from ee.licensing.managed_ai import _cloud_gateway_credentials
 from tfc.ee_gates import is_jev_model
+
+TYPESAFE_BASE_URL = "https://api.typesafe.ai"
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 
 class JevGatewayError(RuntimeError):
@@ -28,59 +25,56 @@ def _semaphore(limit):
     return threading.BoundedSemaphore(limit)
 
 
-def _gateway_error(code=None, status=None, retry_after=None):
-    if code in (
-        "upstream_auth",
-        "upstream_invalid_response",
-        "not_supported",
-        "model_not_found",
-    ) or status in (400, 401, 402, 403, 404, 413, 422, 501):
-        return JevGatewayError()
-    if code in ("rate_limit_exceeded", "RATE_LIMITED") or status == 429:
+def _provider_error(status, retry_after=None):
+    """Map a TypeSafe HTTP status to a typed, body-free error."""
+    if status in (401, 403):
+        # The org's key was rejected; retrying cannot help.
+        return JevGatewayError("JEV_KEY_INVALID")
+    if status == 429:
         return JevGatewayError("JEV_RATE_LIMITED", True, retry_after)
-    if code in ("gateway_timeout", "GATEWAY_TIMEOUT") or status == 504:
+    if status in (408, 504):
         return JevGatewayError("JEV_TIMEOUT", True, retry_after)
-    retryable = (
-        code
-        in (
-            "upstream_error",
-            "all_providers_unavailable",
-            "service_unavailable",
-            "GATEWAY_UNREACHABLE",
-        )
-        or status == 503
-    )
-    return JevGatewayError("JEV_PROVIDER_ERROR", retryable, retry_after)
+    return JevGatewayError("JEV_PROVIDER_ERROR", status in (500, 502, 503), retry_after)
 
 
 class JevSystemOneClient:
-    def __init__(self, *, sleep=time.sleep, clock=time.monotonic, jitter=None):
+    def __init__(
+        self, *, api_key=None, sleep=time.sleep, clock=time.monotonic, jitter=None
+    ):
+        self.api_key = api_key
         self.sleep, self.clock = sleep, clock
         self.jitter = jitter or (lambda upper: random.uniform(0, upper))
         self.attempt = 0
         self.attempts = []
 
     def _request(self, payload, timeout):
-        from ee.usage.deployment import DeploymentMode
+        import httpx
 
-        if DeploymentMode.is_cloud():
-            base_url, api_key = _cloud_gateway_credentials()
-
-            def unauthorized():
-                raise ManagedServiceError(
-                    "GATEWAY_UNAUTHORIZED", "Managed gateway rejected credentials"
-                )
-
-            return dispatch_managed_request(
-                url=base_url.rstrip("/") + "/v1/systemone",
-                api_key=api_key,
-                json_body=payload,
+        if not self.api_key:
+            raise JevGatewayError("JEV_KEY_MISSING")
+        base_url = getattr(settings, "TYPESAFE_BASE_URL", "") or TYPESAFE_BASE_URL
+        try:
+            response = httpx.post(
+                base_url.rstrip("/") + "/v1/systemone",
+                json=payload,
                 timeout=timeout,
-                on_unauthorized=unauthorized,
+                follow_redirects=False,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
             )
-        return call_managed_service(
-            path="/v1/systemone", json_body=payload, timeout=timeout
-        )
+        except httpx.TimeoutException:
+            raise JevGatewayError("JEV_TIMEOUT", True) from None
+        except httpx.HTTPError:
+            raise JevGatewayError("JEV_PROVIDER_ERROR", True) from None
+        if response.status_code != 200:
+            raise _provider_error(
+                response.status_code, response.headers.get("Retry-After")
+            )
+        if len(response.content) > _MAX_RESPONSE_BYTES:
+            raise JevGatewayError()
+        return response.json()
 
     def evaluate(self, model, state, questions, *, timeout=35):
         if not is_jev_model(model):
@@ -107,10 +101,7 @@ class JevSystemOneClient:
                     if not isinstance(response, dict):
                         raise JevGatewayError()
                     if "error" in response:
-                        error = response["error"]
-                        raise _gateway_error(
-                            error.get("code") if isinstance(error, dict) else None
-                        )
+                        raise JevGatewayError()
                     if self.clock() > deadline:
                         raise JevGatewayError("JEV_TIMEOUT", True)
                     # Only allowlisted accounting fields are retained; never the body.
@@ -122,12 +113,6 @@ class JevSystemOneClient:
                         }
                     )
                     return response
-                except ManagedServiceError as exc:
-                    error = _gateway_error(
-                        getattr(exc, "gateway_code", None) or exc.code,
-                        getattr(exc, "status_code", None),
-                        getattr(exc, "retry_after", None),
-                    )
                 except JevGatewayError as exc:
                     error = exc
                 except (ValueError, TypeError):

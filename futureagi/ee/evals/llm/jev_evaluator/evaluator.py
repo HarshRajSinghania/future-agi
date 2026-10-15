@@ -18,7 +18,6 @@ from ee.jev.mapping import (
     mapping_revision,
     validate_jev_mapping,
 )
-from ee.jev.metering import calculate_actual_cost
 from ee.jev.validation import validate_response
 from tfc.ee_gates import is_jev_model
 
@@ -81,8 +80,13 @@ class JevEvaluator(LLM):
         self._choices = choices or list(choice_scores or {})
         self._pass_threshold = pass_threshold
         self._reverse_output = bool(reverse_output)
+        # The org's own TypeSafe key: kept on the client only, never in config,
+        # which flows into result metadata.
+        api_key = config.pop("api_key", None)
         self._jev_config = config
-        self.client = client if client is not None else JevSystemOneClient()
+        self.client = (
+            client if client is not None else JevSystemOneClient(api_key=api_key)
+        )
         self.mapping = validate_jev_mapping(
             None,
             output=output_type,
@@ -221,16 +225,15 @@ class JevEvaluator(LLM):
             "completion_tokens": usage["output_tokens"],
             "total_tokens": usage["input_tokens"] + usage["output_tokens"],
         }
-        # TypeSafe charges only input tokens ($0.042 / million); output is
-        # free. BillingConfig applies the deployment's platform markup when
-        # converting this cost to credits.
-        actual_cost = calculate_actual_cost(usage)
+        # Jev runs on the org's own TypeSafe key, so TypeSafe bills them, not
+        # us. No provider cost here leaves the flat per-run eval fee as the
+        # whole platform charge.
         self.cost.update(
             {
                 "model": response["model"],
-                "prompt_cost": float(actual_cost),
+                "prompt_cost": 0.0,
                 "completion_cost": 0.0,
-                "total_cost": float(actual_cost),
+                "total_cost": 0.0,
             }
         )
         runtime = int((time.monotonic() - started) * 1000)

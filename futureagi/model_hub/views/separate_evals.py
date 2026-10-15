@@ -32,6 +32,10 @@ from agentic_eval.core.embeddings.serving_client import (
     serving_available,
 )
 from agentic_eval.core_evals.fi_utils.exceptions import CodeEvalSetupError
+from agentic_eval.core_evals.run_prompt.litellm_models import (
+    MissingProviderKeyError,
+    missing_provider_key_message,
+)
 from model_hub.constants import (
     EVAL_PLAYGROUND_CURL_CODE,
     EVAL_PLAYGROUND_JS_CODE,
@@ -7504,6 +7508,10 @@ class EvalPlayGroundAPIView(APIView):
                     error_type=type(exc).__name__,
                 )
                 return self._gm.bad_request(str(exc))
+            except MissingProviderKeyError as exc:
+                # Bring-your-own-key models: say which key to add, from a fixed
+                # template rather than the exception text.
+                return self._gm.bad_request(missing_provider_key_message(exc.provider))
             except Exception as exc:
                 if UsageLimitExceeded is not None and isinstance(
                     exc, UsageLimitExceeded

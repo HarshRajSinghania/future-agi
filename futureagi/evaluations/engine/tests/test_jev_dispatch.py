@@ -1,4 +1,4 @@
-"""R-04..R-06, R-14, R-18: effective model dispatch before BYOK resolution."""
+"""R-04..R-06, R-14, R-18: effective model dispatch before chat key resolution."""
 
 from copy import deepcopy
 from types import SimpleNamespace
@@ -12,6 +12,16 @@ from evaluations.engine.instance import create_eval_instance
 from evaluations.engine.registry import get_eval_class
 
 pytestmark = pytest.mark.requires_ee
+ORG_KEY = "org-typesafe-key"
+
+
+@pytest.fixture(autouse=True)
+def typesafe_key():
+    """Jev is bring your own key: dispatch resolves the org's TypeSafe key."""
+    with patch(
+        "evaluations.engine.instance._get_typesafe_api_key", return_value=ORG_KEY
+    ) as lookup:
+        yield lookup
 
 
 def template(model="gpt-4o", **config):
@@ -44,7 +54,9 @@ def version(model="jev-latest", **snapshot):
 
 
 @pytest.mark.parametrize("eval_type", ["CustomPromptEvaluator", "AgentEvaluator"])
-def test_r05_c22_version_jev_over_byok_no_key_lookup(eval_type):
+def test_r05_c22_version_jev_uses_org_typesafe_key_not_chat_key(
+    eval_type, typesafe_key
+):
     tpl = template(eval_type_id=eval_type, agent_mode="quick")
     before = deepcopy(tpl.config)
     with (
@@ -59,7 +71,11 @@ def test_r05_c22_version_jev_over_byok_no_key_lookup(eval_type):
     assert isinstance(instance, JevEvaluator)
     assert instance._model == "jev-latest"
     assert instance.provider == "typesafe"
+    # The org key reaches only the System One client, never evaluator config.
     assert instance.api_key is None
+    assert instance.client.api_key == ORG_KEY
+    assert "api_key" not in instance._jev_config
+    typesafe_key.assert_called_once_with("trusted-org", None)
     assert instance._pass_threshold == 0.7
     capability.assert_called_once_with("jev_models", org_id="trusted-org")
     assert tpl.config == before

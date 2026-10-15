@@ -1373,6 +1373,8 @@ class LiteLlmModelProvider(Enum):
     HUME = "hume"
     CARTESIA = "cartesia"
     LMNT = "lmnt"
+    # Jev evaluator models (System One API); keys are used by ee.jev, not LiteLLM.
+    TYPESAFE = "typesafe"
     # VERTEX_AI_CHAT_MODELS = "vertex_ai-chat-models"
     # VERTEX_AI_CODE_CHAT_MODELS = "vertex_ai-code-chat-models"
 

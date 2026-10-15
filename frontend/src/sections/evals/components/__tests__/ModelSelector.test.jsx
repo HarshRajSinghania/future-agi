@@ -4,11 +4,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ModelSelector from "../ModelSelector";
 
 const mockGet = vi.fn();
+const keysDrawer = vi.fn();
 let capabilityResponse;
+let typesafeHasKey;
 
 vi.mock("src/components/iconify", () => ({ default: () => null }));
 
 beforeEach(() => {
+  typesafeHasKey = true;
   capabilityResponse = Promise.resolve({
     data: {
       features: {
@@ -31,6 +34,7 @@ vi.mock("src/utils/axios", () => ({
   endpoints: {
     develop: {
       modelList: "/model-hub/api/models_list/",
+      apiKey: { status: "/model-hub/develops/provider-status/" },
       eval: {
         summaryTemplates: "/eval/summary-templates/",
         summaryTemplate: (id) => `/eval/summary-templates/${id}/`,
@@ -44,7 +48,10 @@ vi.mock("src/utils/axios", () => ({
 // KeysDrawer pulls in its own data fetching / drawer chrome that is
 // irrelevant to the model-logo behaviour under test.
 vi.mock("src/components/custom-model-dropdown/KeysDrawer", () => ({
-  default: () => null,
+  default: (props) => {
+    keysDrawer(props);
+    return null;
+  },
 }));
 
 const OPENAI_LOGO =
@@ -53,6 +60,15 @@ const OPENAI_LOGO =
 function mockModelList(models) {
   mockGet.mockImplementation((url) => {
     if (url === "/api/capabilities/") return capabilityResponse;
+    if (url === "/model-hub/develops/provider-status/") {
+      return Promise.resolve({
+        data: {
+          result: {
+            providers: [{ provider: "typesafe", has_key: typesafeHasKey }],
+          },
+        },
+      });
+    }
     if (url === "/model-hub/api/models_list/") {
       return Promise.resolve({
         data: { results: models, next: null, current_page: 1 },
@@ -118,7 +134,7 @@ describe("ModelSelector — BYOK model logos", () => {
   });
 });
 
-describe("ModelSelector — Jev managed models", () => {
+describe("ModelSelector — Jev models (bring your own key)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockModelList([
@@ -191,6 +207,24 @@ describe("ModelSelector — Jev managed models", () => {
       expect(screen.queryByText("FutureAGI Models")).not.toBeInTheDocument();
     },
   );
+
+  it("asks for the org's TypeSafe key instead of selecting Jev without one", async () => {
+    typesafeHasKey = false;
+    const onModelChange = vi.fn();
+    renderSelector({ onModelChange });
+    await userEvent.click(screen.getByText("Select model"));
+    const row = await screen.findByRole("menuitem", {
+      name: /Jev latest.*Add your TypeSafe API key/,
+    });
+    await userEvent.click(row);
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(keysDrawer).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        open: true,
+        selectedModel: { model_name: "jev-latest", providers: "typesafe" },
+      }),
+    );
+  });
 
   it("selects the exact provider ID and labels only exact Jev values", async () => {
     const onModelChange = vi.fn();

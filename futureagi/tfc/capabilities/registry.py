@@ -102,15 +102,15 @@ FEATURE_TURING_MODELS = FeatureDefinition(
     air_gap_behavior=AirGapBehavior.UNAVAILABLE,
 )
 
+# Jev runs on the org's own TypeSafe key (Settings -> AI Providers), so no
+# FutureAGI service or managed credits are involved; it still needs TypeSafe.
 FEATURE_JEV_MODELS = FeatureDefinition(
     id="jev_models",
     oss_locked=True,
     display_name="Jev Models",
     oss_baseline=False,
     requires_license=True,
-    execution_location=ExecutionLocation.FUTUREAGI_SERVICE,
-    required_service="jev",
-    metering_dimension="managed_ai_credits_monthly",
+    execution_location=ExecutionLocation.LOCAL,
     air_gap_behavior=AirGapBehavior.UNAVAILABLE,
 )
 

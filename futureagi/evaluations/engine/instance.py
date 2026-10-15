@@ -425,10 +425,26 @@ def prepare_eval_config(
     return config, criteria_override
 
 
+def _get_typesafe_api_key(organization_id, workspace_id=None):
+    """The org's TypeSafe key from Settings -> AI Providers. Jev is bring your
+    own key only, so a missing key fails like any other provider's."""
+    from agentic_eval.core_evals.run_prompt.litellm_models import LiteLLMModelManager
+    from model_hub.models.choices import LiteLlmModelProvider
+
+    return LiteLLMModelManager("jev").get_provider_api_key(
+        organization_id, LiteLlmModelProvider.TYPESAFE.value, workspace_id
+    )
+
+
 def prepare_jev_config(
-    eval_template, config, effective_model, resolved_version, runtime_config
+    eval_template,
+    config,
+    effective_model,
+    resolved_version,
+    runtime_config,
+    api_key=None,
 ):
-    """Build an effective typed config without resolving chat credentials."""
+    """Build an effective typed config with the org's TypeSafe key."""
     from copy import deepcopy
 
     from ee.jev.mapping import validate_jev_mapping
@@ -439,7 +455,7 @@ def prepare_jev_config(
     effective.update(config)
     effective, _ = apply_version_overrides(effective, resolved_version)
     effective["model"] = effective_model
-    effective["api_key"] = None
+    effective["api_key"] = api_key
     effective["provider"] = "typesafe"
     effective["output_type"] = effective.get(
         "output_type", effective.get("output", "Pass/Fail")
@@ -557,8 +573,21 @@ def create_eval_instance(
 
         if kb_id:
             config = {**config, "knowledge_base_id": str(kb_id)}
+        org_id = organization_id or (
+            str(eval_template.organization.id) if eval_template.organization else None
+        )
+        ws_id = workspace_id or (
+            str(eval_template.workspace.id)
+            if getattr(eval_template, "workspace", None)
+            else None
+        )
         jev_config = prepare_jev_config(
-            eval_template, config, effective_model, resolved_version, runtime_config
+            eval_template,
+            config,
+            effective_model,
+            resolved_version,
+            runtime_config,
+            api_key=_get_typesafe_api_key(org_id, ws_id),
         )
         return JevEvaluator(**jev_config), None
 

@@ -1,15 +1,17 @@
-"""R-05, R-06, R-15..R-17: managed transport, bounded retries, no fallback."""
+"""R-05, R-06, R-15..R-17: org-key transport, bounded retries, no fallback."""
 
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+from django.test import override_settings
 
 from ee.jev.client import JevGatewayError, JevSystemOneClient
 from ee.jev.mapping import JevMappingError
-from ee.licensing.managed_ai import chat_completion, is_managed_model, service_for_model
+from ee.licensing.managed_ai import is_managed_model
 
 pytestmark = pytest.mark.requires_ee
+ORG_KEY = "org-typesafe-key-CANARY"
 OK = {
     "model": "jev-1.13.0",
     "answers": {"q1": {"type": "noul", "noul": 0.9}},
@@ -18,16 +20,8 @@ OK = {
 QUESTIONS = {"q1": {"type": "noul", "instructions": "Judge"}}
 
 
-@pytest.fixture
-def cloud():
-    with (
-        patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
-        patch(
-            "ee.jev.client._cloud_gateway_credentials",
-            return_value=("http://gateway.invalid/", "fixture-key"),
-        ),
-    ):
-        yield
+def client(**kwargs):
+    return JevSystemOneClient(api_key=ORG_KEY, **kwargs)
 
 
 def reply(status, code=None, headers=None):
@@ -38,42 +32,59 @@ def reply(status, code=None, headers=None):
     )
 
 
-def test_r05_cloud_exact_route_payload_and_key(cloud):
+def test_r05_calls_typesafe_with_the_org_key():
     with patch("httpx.post", return_value=reply(200)) as post:
-        result = JevSystemOneClient().evaluate(
+        result = client().evaluate(
             "jev-latest", {"input": "value"}, QUESTIONS, timeout=35
         )
     assert result == OK
-    assert post.call_args.args == ("http://gateway.invalid/v1/systemone",)
+    assert post.call_args.args == ("https://api.typesafe.ai/v1/systemone",)
     assert post.call_args.kwargs["json"] == {
         "model": "jev-latest",
         "state": {"input": "value"},
         "questions": QUESTIONS,
     }
-    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer fixture-key"
+    assert post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {ORG_KEY}"
+    assert post.call_args.kwargs["follow_redirects"] is False
 
 
-def test_r05_self_hosted_activation_route():
+@override_settings(TYPESAFE_BASE_URL="https://typesafe.example/")
+def test_r05_base_url_setting():
+    with patch("httpx.post", return_value=reply(200)) as post:
+        client().evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    assert post.call_args.args == ("https://typesafe.example/v1/systemone",)
+
+
+def test_missing_org_key_never_calls_out():
     with (
-        patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=False),
-        patch("ee.jev.client.call_managed_service", return_value=OK) as managed,
+        patch("httpx.post") as post,
+        pytest.raises(JevGatewayError, match="JEV_KEY_MISSING") as error,
     ):
-        assert (
-            JevSystemOneClient().evaluate("jev-latest", "x", QUESTIONS, timeout=35)
-            == OK
-        )
-    assert managed.call_args.kwargs["path"] == "/v1/systemone"
+        JevSystemOneClient().evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    assert not error.value.retryable
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_rejected_org_key_is_not_retried(status):
+    sleep = Mock()
+    with patch("httpx.post", return_value=reply(status, "invalid_api_key")) as post:
+        with pytest.raises(JevGatewayError, match="JEV_KEY_INVALID") as error:
+            client(sleep=sleep).evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    assert ORG_KEY not in str(error.value)
+    assert post.call_count == 1
+    sleep.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "model", ["jev-preview", "jev-2.0.0", "JEV-LATEST", "turing_large"]
 )
-def test_r06_unknown_model_zero_transport(cloud, model):
+def test_r06_unknown_model_zero_transport(model):
     with (
         patch("httpx.post") as post,
         pytest.raises(JevMappingError, match="JEV_MODEL_UNKNOWN"),
     ):
-        JevSystemOneClient().evaluate(model, "x", QUESTIONS, timeout=35)
+        client().evaluate(model, "x", QUESTIONS, timeout=35)
     post.assert_not_called()
 
 
@@ -81,22 +92,18 @@ def test_r06_unknown_model_zero_transport(cloud, model):
     "status,code",
     [
         (400, "upstream_rejected"),
-        (401, "invalid_api_key"),
-        (402, "entitlement_denied"),
-        (403, "permission_denied"),
+        (402, "payment_required"),
         (404, "model_not_found"),
         (413, "request_too_large"),
         (422, "invalid_question"),
         (501, "not_supported"),
-        (502, "upstream_auth"),
-        (500, "upstream_invalid_response"),
     ],
 )
-def test_r15_r16_no_retry_or_content_leak(cloud, status, code):
+def test_r15_r16_no_retry_or_content_leak(status, code):
     sleep = Mock()
     with patch("httpx.post", return_value=reply(status, code)) as post:
-        with pytest.raises(JevGatewayError) as error:
-            JevSystemOneClient(sleep=sleep).evaluate(
+        with pytest.raises(JevGatewayError, match="JEV_PROVIDER_ERROR") as error:
+            client(sleep=sleep).evaluate(
                 "jev-latest", "PRIVATE-CANARY", QUESTIONS, timeout=35
             )
     assert not error.value.retryable
@@ -105,38 +112,30 @@ def test_r15_r16_no_retry_or_content_leak(cloud, status, code):
     sleep.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "status,code",
-    [
-        (429, "rate_limit_exceeded"),
-        (502, "upstream_error"),
-        (503, "all_providers_unavailable"),
-        (504, "gateway_timeout"),
-    ],
-)
-def test_r16_transient_retry_success(cloud, status, code):
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_r16_transient_retry_success(status):
     sleep = Mock()
     with patch(
         "httpx.post",
-        side_effect=[reply(status, code, {"Retry-After": "2"}), reply(200)],
+        side_effect=[reply(status, "busy", {"Retry-After": "2"}), reply(200)],
     ) as post:
-        client = JevSystemOneClient(sleep=sleep)
-        assert client.evaluate("jev-latest", "x", QUESTIONS, timeout=35) == OK
+        jev = client(sleep=sleep)
+        assert jev.evaluate("jev-latest", "x", QUESTIONS, timeout=35) == OK
     assert post.call_count == 2
     sleep.assert_called_once_with(2)
-    assert client.attempt == 2
-    assert client.attempts[0]["outcome"] == "error"
-    assert client.attempts[1]["usage"]["output_tokens"] == 6
+    assert jev.attempt == 2
+    assert jev.attempts[0]["outcome"] == "error"
+    assert jev.attempts[1]["usage"]["output_tokens"] == 6
 
 
-def test_r16_retry_exhaustion_and_bounded_jitter(cloud):
+def test_r16_retry_exhaustion_and_bounded_jitter():
     sleep = Mock()
     with patch(
         "httpx.post",
         return_value=reply(429, "rate_limit_exceeded", {"Retry-After": "11"}),
     ) as post:
         with pytest.raises(JevGatewayError, match="JEV_RATE_LIMITED"):
-            JevSystemOneClient(sleep=sleep, jitter=lambda upper: upper).evaluate(
+            client(sleep=sleep, jitter=lambda upper: upper).evaluate(
                 "jev-latest", "x", QUESTIONS, timeout=35
             )
     assert post.call_count == 3
@@ -147,18 +146,16 @@ def test_r16_retry_exhaustion_and_bounded_jitter(cloud):
     "error",
     [httpx.ConnectError("PRIVATE-CANARY"), httpx.TimeoutException("PRIVATE-CANARY")],
 )
-def test_r16_transport_retries(cloud, error):
+def test_r16_transport_retries(error):
     with patch("httpx.post", side_effect=[error, reply(200)]) as post:
         assert (
-            JevSystemOneClient(sleep=Mock()).evaluate(
-                "jev-latest", "x", QUESTIONS, timeout=35
-            )
+            client(sleep=Mock()).evaluate("jev-latest", "x", QUESTIONS, timeout=35)
             == OK
         )
     assert post.call_count == 2
 
 
-def test_r16_total_deadline_and_cancel(cloud):
+def test_r16_total_deadline_and_cancel():
     now = [0.0]
 
     def delayed(*args, **kwargs):
@@ -168,7 +165,7 @@ def test_r16_total_deadline_and_cancel(cloud):
 
     with patch("httpx.post", side_effect=delayed) as post:
         with pytest.raises(JevGatewayError, match="JEV_TIMEOUT"):
-            JevSystemOneClient(
+            client(
                 clock=lambda: now[0],
                 sleep=lambda delay: now.__setitem__(0, now[0] + delay),
                 jitter=lambda _: 0,
@@ -179,36 +176,33 @@ def test_r16_total_deadline_and_cancel(cloud):
         patch("httpx.post", side_effect=KeyboardInterrupt) as post,
         pytest.raises(KeyboardInterrupt),
     ):
-        JevSystemOneClient(sleep=Mock()).evaluate(
-            "jev-latest", "x", QUESTIONS, timeout=35
-        )
+        client(sleep=Mock()).evaluate("jev-latest", "x", QUESTIONS, timeout=35)
     assert post.call_count == 1
 
 
-def test_r12_malformed_json_is_sanitized_error(cloud):
-    with patch(
-        "httpx.post", return_value=httpx.Response(200, content=b"PRIVATE-CANARY")
-    ) as post:
-        with pytest.raises(JevGatewayError, match="JEV_PROVIDER_ERROR"):
-            JevSystemOneClient(sleep=Mock()).evaluate(
-                "jev-latest", "x", QUESTIONS, timeout=35
-            )
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, content=b"PRIVATE-CANARY"),
+        httpx.Response(200, json={"error": {"message": "PRIVATE-CANARY"}}),
+    ],
+)
+def test_r12_malformed_or_error_body_is_sanitized_error(response):
+    with patch("httpx.post", return_value=response) as post:
+        with pytest.raises(JevGatewayError, match="JEV_PROVIDER_ERROR") as error:
+            client(sleep=Mock()).evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    assert "PRIVATE-CANARY" not in str(error.value)
     assert post.call_count == 1
 
 
 @pytest.mark.parametrize("model", ["jev-latest", "jev-1.13.0"])
-def test_r05_r17_managed_recognition_but_chat_rejected(model):
-    assert is_managed_model(model)
-    assert service_for_model(model) == "jev"
-    with patch("ee.licensing.managed_ai._cloud_chat_completion") as chat:
-        with pytest.raises(ValueError, match="System One"):
-            chat_completion({"model": model, "messages": []})
-    chat.assert_not_called()
-    assert not is_managed_model("jev-preview")
-    assert service_for_model("jev-preview") is None
+def test_jev_is_not_a_futureagi_managed_model(model):
+    # Third-party models are bring your own key; only Turing models run on
+    # FutureAGI credentials, so Jev must never route through the managed gateway.
+    assert not is_managed_model(model)
 
 
-def test_r16_concurrency_bound(cloud):
+def test_r16_concurrency_bound():
     import threading
     from concurrent.futures import ThreadPoolExecutor
     from time import sleep
@@ -233,9 +227,7 @@ def test_r16_concurrency_bound(cloud):
     ):
         results = list(
             pool.map(
-                lambda _: JevSystemOneClient().evaluate(
-                    "jev-latest", "x", QUESTIONS, timeout=35
-                ),
+                lambda _: client().evaluate("jev-latest", "x", QUESTIONS, timeout=35),
                 range(20),
             )
         )

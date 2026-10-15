@@ -28,8 +28,10 @@ def test_r02_r14_jev_capability_and_exact_ids():
 
     feature = FEATURE_REGISTRY["jev_models"]
     assert feature.oss_locked and feature.requires_license
-    assert feature.required_service == "jev"
-    assert feature.metering_dimension == "managed_ai_credits_monthly"
+    # Bring your own key: no FutureAGI service or managed credits.
+    assert feature.execution_location.value == "local"
+    assert feature.required_service is None
+    assert feature.metering_dimension is None
     assert ee_gates.is_jev_model("jev-1.13.0")
     assert ee_gates.is_jev_model("jev-latest")
     assert not ee_gates.is_jev_model("jev-preview")
