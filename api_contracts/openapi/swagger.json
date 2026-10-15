@@ -58246,6 +58246,12 @@
                             "$ref": "#/definitions/ApiErrorResponse"
                         }
                     },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
                     "403": {
                         "description": "",
                         "schema": {

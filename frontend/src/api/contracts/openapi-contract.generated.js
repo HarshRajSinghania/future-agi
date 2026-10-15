@@ -32163,6 +32163,9 @@ export const OPENAPI_CONTRACT = Object.freeze({
           400: {
             $ref: "#/definitions/ApiErrorResponse",
           },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
           403: {
             $ref: "#/definitions/ApiErrorResponse",
           },

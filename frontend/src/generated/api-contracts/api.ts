@@ -67422,6 +67422,11 @@ export type tracerAnalyseDiscoverCreateResponse400 = {
   status: 400;
 };
 
+export type tracerAnalyseDiscoverCreateResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
 export type tracerAnalyseDiscoverCreateResponse403 = {
   data: ApiErrorResponseApi;
   status: 403;
@@ -67449,7 +67454,10 @@ export type tracerAnalyseDiscoverCreateResponse503 = {
 
 export type tracerAnalyseDiscoverCreateResponseDefault = {
   data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 429 | 500 | 503>;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
 };
 
 export type tracerAnalyseDiscoverCreateResponseSuccess =
@@ -67458,6 +67466,7 @@ export type tracerAnalyseDiscoverCreateResponseSuccess =
   };
 export type tracerAnalyseDiscoverCreateResponseError = (
   | tracerAnalyseDiscoverCreateResponse400
+  | tracerAnalyseDiscoverCreateResponse402
   | tracerAnalyseDiscoverCreateResponse403
   | tracerAnalyseDiscoverCreateResponse404
   | tracerAnalyseDiscoverCreateResponse429

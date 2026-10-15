@@ -68,7 +68,14 @@ Reply with only this JSON object:
 
 
 class DiscoveryError(Exception):
-    """A proposal could not be produced; the message is safe to show users."""
+    """A proposal could not be produced; the message is safe to show users.
+
+    ``unavailable`` marks failures of the model itself (retry later) as
+    opposed to problems with the traces or the model's answer."""
+
+    def __init__(self, message: str, *, unavailable: bool = False):
+        super().__init__(message)
+        self.unavailable = unavailable
 
 
 @dataclass
@@ -318,7 +325,8 @@ def discover_categories(
     except Exception as exc:
         logger.warning("analyse_discovery_call_failed", model=model, error=str(exc))
         raise DiscoveryError(
-            "The discovery model is unavailable right now. Try again shortly."
+            "The discovery model is unavailable right now. Try again shortly.",
+            unavailable=True,
         ) from exc
     proposal = parse_proposal(raw, sample, model)
     proposal.cost_usd = cost

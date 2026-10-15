@@ -10,6 +10,18 @@ from tracer.models.project import Project
 DISCOVER_PATH = "/tracer/analyse/discover/"
 
 
+@pytest.fixture(autouse=True)
+def jev_enabled(monkeypatch):
+    from tfc.capabilities import service as capability_service
+    from tfc.capabilities.service import CapabilityDecision
+
+    monkeypatch.setattr(
+        capability_service,
+        "check",
+        lambda feature_id, **_: CapabilityDecision(allowed=True, feature_id=feature_id),
+    )
+
+
 def trace_ids(n=12):
     return [str(uuid.uuid4()) for _ in range(n)]
 
@@ -111,3 +123,39 @@ def test_discover_requires_authentication(api_client, observe_project):
         status.HTTP_401_UNAUTHORIZED,
         status.HTTP_403_FORBIDDEN,
     )
+
+
+@pytest.mark.django_db
+def test_discover_requires_jev(auth_client, observe_project, monkeypatch):
+    from tfc.capabilities import service as capability_service
+    from tfc.capabilities.service import CapabilityDecision
+
+    monkeypatch.setattr(
+        capability_service,
+        "check",
+        lambda feature_id, **_: CapabilityDecision(
+            allowed=False, feature_id=feature_id
+        ),
+    )
+    response = auth_client.post(
+        DISCOVER_PATH,
+        data={"project_id": str(observe_project.id), "trace_ids": trace_ids()},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_402_PAYMENT_REQUIRED
+
+
+@pytest.mark.django_db
+def test_discover_maps_model_outages_to_503(auth_client, observe_project, monkeypatch):
+    from ee.agenthub.analyse import discovery
+
+    def unavailable(*_):
+        raise discovery.DiscoveryError("down", unavailable=True)
+
+    monkeypatch.setattr(discovery, "discover_categories", unavailable)
+    response = auth_client.post(
+        DISCOVER_PATH,
+        data={"project_id": str(observe_project.id), "trace_ids": trace_ids()},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE

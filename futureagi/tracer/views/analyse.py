@@ -10,6 +10,7 @@ from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from tfc.capabilities import service as capability_service
 from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_serializers import ApiErrorResponseSerializer
 from tfc.utils.general_methods import GeneralMethods
@@ -19,6 +20,7 @@ logger = structlog.get_logger(__name__)
 
 ERROR_RESPONSES = {
     400: ApiErrorResponseSerializer,
+    402: ApiErrorResponseSerializer,
     403: ApiErrorResponseSerializer,
     404: ApiErrorResponseSerializer,
     429: ApiErrorResponseSerializer,
@@ -107,6 +109,15 @@ class AnalyseDiscoverView(APIView):
         ).exists():
             return self._gm.not_found("Project not found")
 
+        # Proposals exist only to be sorted by Jev, so they need Jev too; this
+        # also keeps the platform-paid discovery call behind the plan gate.
+        if not capability_service.check("jev_models", org_id=str(org.id)).allowed:
+            return self._gm.custom_error_response(
+                status.HTTP_402_PAYMENT_REQUIRED,
+                "Discover needs Jev, which isn't enabled for this organization.",
+                code="CAPABILITY_DENIED",
+            )
+
         if not _spend_discovery(org.id):
             return self._gm.custom_error_response(
                 status.HTTP_429_TOO_MANY_REQUESTS,
@@ -123,7 +134,7 @@ class AnalyseDiscoverView(APIView):
             return self._gm.custom_error_response(
                 (
                     status.HTTP_503_SERVICE_UNAVAILABLE
-                    if "unavailable" in str(exc)
+                    if exc.unavailable
                     else status.HTTP_400_BAD_REQUEST
                 ),
                 str(exc),
