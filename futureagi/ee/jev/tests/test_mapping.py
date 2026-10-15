@@ -51,6 +51,25 @@ def test_r08_c2_exact_choice_labels_and_descriptions():
     }
 
 
+def test_r08_c2_choice_scores_reordered_by_jsonb_keep_authored_order():
+    # Postgres jsonb reads {"Yes": 1, "No": 0} back as {"No": 0, "Yes": 1}.
+    result = mapping(
+        "choices",
+        {"No": 0, "Yes": 1},
+        jev_mapping={"choice": {"labels": ["Yes", "No"]}},
+    )
+    assert result.to_dict()["choice"]["labels"] == ["Yes", "No"]
+    assert list(build_question(result, "Judge")[1]["criteria"]) == ["Yes", "No"]
+
+
+@pytest.mark.parametrize(
+    "labels", [["Yes"], ["Yes", "Maybe"], ["Yes", "Yes"], "Yes,No", None]
+)
+def test_r08_c2_reject_label_set_mismatch(labels):
+    with pytest.raises(JevMappingError, match="JEV_CHOICE_LABELS_INVALID"):
+        mapping("choices", {"Yes": 1, "No": 0}, jev_mapping={"choice": {"labels": labels}})
+
+
 @pytest.mark.parametrize(
     "scores",
     [{}, {"": 1}, {"Yes": 1, " yes ": 0}, {1: 1}, {str(i): 0 for i in range(256)}],

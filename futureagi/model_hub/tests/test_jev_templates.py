@@ -302,6 +302,24 @@ def test_r03_ui_draft_switched_to_llm_judge_saves_with_jev(auth_client):
     assert template.config["jev_mapping"]["question_type"] == "noul"
 
 
+@pytest.mark.django_db
+def test_r08_choice_template_still_binds_after_jsonb_reorders_labels(auth_client):
+    from model_hub.utils.jev_templates import validate_jev_binding
+
+    with patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False):
+        response = auth_client.post(
+            "/model-hub/eval-templates/create-v2/",
+            payload("deterministic", choice_scores={"Yes": 1, "No": 0}),
+            format="json",
+        )
+        assert response.status_code == 200, response.data
+        template = EvalTemplate.objects.get(id=response.data["result"]["id"])
+        # jsonb stores shorter keys first.
+        assert list(template.choice_scores) == ["No", "Yes"]
+        assert template.config["jev_mapping"]["choice"]["labels"] == ["Yes", "No"]
+        assert validate_jev_binding(template, model="jev-latest") is None
+
+
 def test_r02_c19_detail_and_version_readback_under_denial():
     from django.utils import timezone
 

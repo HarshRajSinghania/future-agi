@@ -135,8 +135,17 @@ def validate_jev_mapping(template_like, *, output, choice_scores, multi_choice, 
             or len({label.strip().lower() for label in labels}) != len(labels)
         ):
             _reject("JEV_CHOICE_LABELS_INVALID", "choice_scores")
-        if "labels" in choice and choice["labels"] != labels:
-            _reject("JEV_CHOICE_LABELS_INVALID", "jev_mapping.choice.labels")
+        if "labels" in choice:
+            # choice_scores is a jsonb column, which stores keys shortest
+            # first, so compare membership and keep the order the author saved.
+            authored = choice["labels"]
+            if (
+                not isinstance(authored, list)
+                or len(authored) != len(labels)
+                or set(authored) != set(labels)
+            ):
+                _reject("JEV_CHOICE_LABELS_INVALID", "jev_mapping.choice.labels")
+            labels = list(authored)
         descriptions = choice.get("descriptions", {})
         if (
             not isinstance(descriptions, dict)
