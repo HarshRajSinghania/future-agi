@@ -70,6 +70,8 @@ export function validateInstantEval({ question, answerType, categories }) {
     if (labels.length < 2) return "Add at least two categories.";
     if (labels.length > MAX_CATEGORIES)
       return `Use at most ${MAX_CATEGORIES} categories.`;
+    if (labels.some((label) => label.startsWith("__")))
+      return "Category names can't start with two underscores.";
     if (labels.some((label) => label.length > 200))
       return "Keep each category under 200 characters.";
   }

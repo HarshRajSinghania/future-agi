@@ -248,7 +248,11 @@ const ObserveTabBar = ({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === "a" || e.key === "A") {
-        if (visibleFixedTabs.some((t) => t.key === "analyse"))
+        // Already on Analyse: keep its mode and any proposal under review.
+        if (
+          activeTab !== "analyse" &&
+          visibleFixedTabs.some((t) => t.key === "analyse")
+        )
           onTabChange("analyse");
         return;
       }
@@ -267,7 +271,7 @@ const ObserveTabBar = ({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onTabChange, allCustomTabs, visibleFixedTabs]);
+  }, [onTabChange, allCustomTabs, visibleFixedTabs, activeTab]);
 
   // -----------------------------------------------------------------------
   // Tab action handlers
@@ -352,7 +356,11 @@ const ObserveTabBar = ({
               icon={tab.icon}
               shortcut={tab.shortcut}
               isActive={activeTab === tab.key}
-              onClick={onTabChange}
+              onClick={(key) =>
+                // Re-clicking Analyse would reset its URL (mode, scope).
+                !(key === "analyse" && activeTab === "analyse") &&
+                onTabChange(key)
+              }
             />
           ))}
         </Box>

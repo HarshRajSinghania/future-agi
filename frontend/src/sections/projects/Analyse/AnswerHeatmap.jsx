@@ -9,6 +9,7 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha, keyframes, useTheme } from "@mui/material/styles";
+import { ERROR_ANSWER } from "src/sections/projects/LLMTracing/InstantEval/useInstantEval";
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const HOUR_TICKS = new Set([0, 3, 6, 9, 12, 15, 18, 21]);
@@ -73,10 +74,14 @@ export function buildHeatmap({ traces, configId, label, window }) {
       matches: 0,
       answered: 0,
       traceIds: [],
+      first: time.getTime(),
+      last: time.getTime(),
     };
     const answer = trace.answers?.[configId];
     cell.total += 1;
-    if (answer !== undefined && answer !== "error") cell.answered += 1;
+    cell.first = Math.min(cell.first, time.getTime());
+    cell.last = Math.max(cell.last, time.getTime());
+    if (answer !== undefined && answer !== ERROR_ANSWER) cell.answered += 1;
     if (answer === label) {
       cell.matches += 1;
       cell.traceIds.push(trace.traceId);
@@ -254,16 +259,20 @@ export default function AnswerHeatmap({
                 const key = `${dayKey(row.date)}|${hour}`;
                 const value = cellValue(cell, mode);
                 const level = levelFor(value, max);
-                const empty = !cell;
-                const tooltip = empty
+                // A share needs answered traces; without them the rate is
+                // unknown, not 0%.
+                const empty = !cell || (mode === "rate" && !cell.answered);
+                const tooltip = !cell
                   ? `${dayLabel(row.date)} · ${hourRange(hour)} — no traces`
-                  : `${dayLabel(row.date)} · ${hourRange(hour)} — ${cell.matches} of ${cell.answered} answered trace${cell.answered === 1 ? "" : "s"} said ${label}${
-                      cell.answered
-                        ? ` (${Math.round((cell.matches / cell.answered) * 100)}%)`
-                        : ""
-                    }${isRunning && cell.answered < cell.total ? " · still answering" : ""}${
-                      cell.matches ? " · click to see them" : ""
-                    }`;
+                  : empty
+                    ? `${dayLabel(row.date)} · ${hourRange(hour)} — ${cell.total} trace${cell.total === 1 ? "" : "s"}, none answered yet`
+                    : `${dayLabel(row.date)} · ${hourRange(hour)} — ${cell.matches} of ${cell.answered} answered trace${cell.answered === 1 ? "" : "s"} said ${label}${
+                        cell.answered
+                          ? ` (${Math.round((cell.matches / cell.answered) * 100)}%)`
+                          : ""
+                      }${isRunning && cell.answered < cell.total ? " · still answering" : ""}${
+                        cell.matches ? " · click to see them" : ""
+                      }`;
                 return (
                   <Tooltip
                     key={key}
@@ -276,7 +285,7 @@ export default function AnswerHeatmap({
                       aria-label={tooltip}
                       tabIndex={cell?.matches ? 0 : -1}
                       onClick={() =>
-                        cell?.matches && onSelectCell(row.date, hour)
+                        cell?.matches && onSelectCell(row.date, hour, cell)
                       }
                       onKeyDown={(event) => {
                         if (
@@ -284,7 +293,7 @@ export default function AnswerHeatmap({
                           (event.key === "Enter" || event.key === " ")
                         ) {
                           event.preventDefault();
-                          onSelectCell(row.date, hour);
+                          onSelectCell(row.date, hour, cell);
                         }
                       }}
                       sx={{

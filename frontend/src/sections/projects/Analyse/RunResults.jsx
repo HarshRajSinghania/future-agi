@@ -349,8 +349,8 @@ function KeepAnswering({ projectId, run, navigate }) {
         {run.items.length > 1
           ? `these ${run.items.length} questions`
           : "this question"}{" "}
-        for every new trace that matches this scope&apos;s filters, the same way
-        your other Jev evaluators run.
+        for every new trace that matches this scope&apos;s filters. Every answer
+        is billed as one eval run; TypeSafe bills its tokens to your own key.
       </Alert>
     );
   return (
@@ -591,17 +591,24 @@ export default function RunResults({ projectId, run, navigate, onBreakDown }) {
             onModeChange={setMode}
             isRunning={isRunning}
             color={labelColor(item, label, theme)}
-            onSelectCell={(date, hour) => {
-              const start = new Date(
-                date.getFullYear(),
-                date.getMonth(),
-                date.getDate(),
-                hour,
-              );
-              const end = new Date(start.getTime() + 3600 * 1000);
+            onSelectCell={(date, hour, cell) => {
+              // The cell's own traces bound the window, so an hour that occurs
+              // twice (daylight saving fall-back) still links to all of them.
+              // Local hour boundaries keep half-hour time zones aligned.
+              const hourMs = 3600 * 1000;
+              const hourStart = (ms) => new Date(ms).setMinutes(0, 0, 0);
+              const start = cell
+                ? hourStart(cell.first)
+                : new Date(
+                    date.getFullYear(),
+                    date.getMonth(),
+                    date.getDate(),
+                    hour,
+                  ).getTime();
+              const end = (cell ? hourStart(cell.last) : start) + hourMs;
               showInTraceView(
                 [label],
-                [start.toISOString(), end.toISOString()],
+                [new Date(start).toISOString(), new Date(end).toISOString()],
               );
             }}
           />

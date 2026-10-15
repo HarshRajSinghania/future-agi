@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -490,7 +490,8 @@ function Composer({ onRun, scopeCount, disabled }) {
           </Button>
           <Typography variant="caption" color="text.secondary">
             Each question is saved as a Jev evaluator you can reuse, edit or run
-            on new traces.
+            on new traces. Every answer is billed as one eval run; TypeSafe
+            bills its tokens to your own key.
           </Typography>
         </Stack>
       </Box>
@@ -524,6 +525,19 @@ export default function AnalyseView() {
   };
   const [composerKey, setComposerKey] = useState(0);
   const [discoverFocus, setDiscoverFocus] = useState(null);
+
+  // The route element is reused across projects; another project's filters
+  // and draft must not carry over.
+  const scopedProject = useRef(observeId);
+  useEffect(() => {
+    if (scopedProject.current === observeId) return;
+    scopedProject.current = observeId;
+    setScope(readScope(location.search));
+    setDiscoverFocus(null);
+    setComposerKey((key) => key + 1);
+    // Only a project change resets; the URL is read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [observeId]);
   const runApi = useInstantEvalRun(observeId);
   const { run, start, rerun, view, reset } = runApi;
   const saved = useInstantEvals(observeId, { enabled: jev.available });
@@ -643,7 +657,22 @@ export default function AnalyseView() {
           {jev.isLoading ? (
             <LinearProgress />
           ) : !jev.available ? (
-            <Alert severity="info">{jev.reason}</Alert>
+            <Alert
+              severity="info"
+              action={
+                jev.settingsPath && (
+                  <Button
+                    size="small"
+                    onClick={() => navigate(jev.settingsPath)}
+                    sx={{ textTransform: "none" }}
+                  >
+                    Open AI Providers
+                  </Button>
+                )
+              }
+            >
+              {jev.reason}
+            </Alert>
           ) : (
             <>
               {showComposer && (

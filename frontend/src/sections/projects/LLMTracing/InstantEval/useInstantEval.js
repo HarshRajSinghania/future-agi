@@ -214,12 +214,16 @@ async function createTask({ projectId, items, limit, scopeFilters }) {
   return result(response)?.id;
 }
 
+const LIVE_TASK_PREFIX = "Instant eval (live)";
+const LIVE_TASK_PAGE_SIZE = 50;
+const LIVE_TASK_MAX_PAGES = 20;
+
 // Same evaluators, same view filters, no date window: answers every new trace
 // that matches this view as it arrives.
 export async function createContinuousTask({ projectId, items, scopeFilters }) {
   const { filters } = splitScopeFilters(scopeFilters);
   const response = await axios.post(endpoints.project.createEvalTask(), {
-    name: `Instant eval (live) · ${items[0].question}`.slice(0, 255),
+    name: `${LIVE_TASK_PREFIX} · ${items[0].question}`.slice(0, 255),
     project: projectId,
     evals: items.map((item) => item.configId),
     filters: filters.length ? { filters } : {},
@@ -252,18 +256,31 @@ async function fetchProgress(taskId) {
 
 // One live task per set of questions: re-creating it would answer every new
 // trace twice and bill twice.
+// Live tasks are found by name, page by page, so a long run history can't hide
+// an existing one and cause a duplicate.
 export async function findContinuousTask({ projectId, items }) {
-  const response = await axios.get(endpoints.project.getEvalTaskList(), {
-    params: { project_id: projectId, page_size: 50 },
-  });
   const wanted = new Set(items.map((item) => item.name).filter(Boolean));
-  return (result(response)?.table || []).find(
-    (task) =>
-      task.run_type === "continuous" &&
-      !["deleted", "failed"].includes(task.status) &&
-      (task.evals_applied || []).length === wanted.size &&
-      (task.evals_applied || []).every((name) => wanted.has(name)),
-  );
+  const matches = (task) =>
+    task.run_type === "continuous" &&
+    !["deleted", "failed"].includes(task.status) &&
+    (task.evals_applied || []).length === wanted.size &&
+    (task.evals_applied || []).every((name) => wanted.has(name));
+  for (let page = 0; page < LIVE_TASK_MAX_PAGES; page += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const response = await axios.get(endpoints.project.getEvalTaskList(), {
+      params: {
+        project_id: projectId,
+        name: LIVE_TASK_PREFIX,
+        page_number: page,
+        page_size: LIVE_TASK_PAGE_SIZE,
+      },
+    });
+    const rows = result(response)?.table || [];
+    const found = rows.find(matches);
+    if (found) return found;
+    if (rows.length < LIVE_TASK_PAGE_SIZE) return undefined;
+  }
+  return undefined;
 }
 
 // The newest `limit` traces in the scope are exactly the rows the historical
@@ -282,7 +299,7 @@ export function explainErrorGroups(groups = []) {
   return groups.map((group) => {
     const text = `${group?.normalized || ""} ${group?.sample || ""}`;
     const count = group?.count || 0;
-    if (/API key not configured for typesafe/i.test(text))
+    if (/JEV_KEY_MISSING|API key not configured for typesafe/i.test(text))
       return {
         count,
         reason:
@@ -324,9 +341,13 @@ export function explainErrorGroups(groups = []) {
   });
 }
 
+// A failed evaluation, kept apart from every label (labels can't start with
+// "__", so a category may even be called "error").
+export const ERROR_ANSWER = "__error__";
+
 export function answerFromCell(cell) {
   if (!cell || typeof cell !== "object") return undefined;
-  if (cell.error) return "error";
+  if (cell.error === true) return ERROR_ANSWER;
   const label = Object.keys(cell).find(
     (key) => typeof cell[key] === "number" && cell[key] > 0,
   );
@@ -382,7 +403,7 @@ export function summarizeRows(rows, items) {
       let errors = 0;
       traces.forEach((trace) => {
         const answer = trace.answers[item.configId];
-        if (answer === "error") errors += 1;
+        if (answer === ERROR_ANSWER) errors += 1;
         else if (answer in tally) tally[answer] += 1;
       });
       return [item.configId, { ...tally, __errors: errors }];
@@ -400,6 +421,9 @@ export function useInstantEvalRun(projectId) {
   const [run, setRun] = useState(IDLE);
   const cancelled = useRef(false);
   const active = useRef(null);
+  // Bumped whenever the screen moves on (new run, history view, reset, project
+  // switch), so a run still being created can't take the screen back.
+  const generation = useRef(0);
 
   const update = useCallback(
     (patch) =>
@@ -433,13 +457,24 @@ export function useInstantEvalRun(projectId) {
           break;
         }
         // eslint-disable-next-line no-await-in-loop
-        const [nextProgress, rows] = await Promise.all([
-          fetchProgress(taskId),
-          fetchRunRows({ projectId, scopeFilters, limit }).catch(() => null),
-        ]);
+        progress = await fetchProgress(taskId);
         if (!isCurrent()) return;
-        progress = nextProgress;
         const perQuestion = items.length || 1;
+        // A run reopened from History has no stored limit; the task's own
+        // target is the number of traces it evaluated.
+        const rowLimit =
+          limit ||
+          Math.round(
+            (progress.target_count || progress.total_count || 0) / perQuestion,
+          ) ||
+          undefined;
+        // eslint-disable-next-line no-await-in-loop
+        const rows = await fetchRunRows({
+          projectId,
+          scopeFilters,
+          limit: rowLimit,
+        }).catch(() => null);
+        if (!isCurrent()) return;
         const patch = {
           taskStatus: progress.status,
           errorGroups: progress.error_groups || [],
@@ -491,6 +526,10 @@ export function useInstantEvalRun(projectId) {
   const launch = useCallback(
     async ({ questions, existingItems, reads, limit, scope }) => {
       cancelled.current = false;
+      active.current = null;
+      generation.current += 1;
+      const mine = generation.current;
+      const stale = () => generation.current !== mine;
       const scopeFilters = scope?.scopeFilters || [];
       const pending =
         existingItems ||
@@ -513,6 +552,7 @@ export function useInstantEvalRun(projectId) {
         const items =
           existingItems ||
           (await resolveEvaluators({ projectId, questions, reads }));
+        if (stale()) return;
         if (items.some((item) => !item.configId))
           throw new Error("The evaluator could not be saved.");
         const taskId = await createTask({
@@ -521,11 +561,12 @@ export function useInstantEvalRun(projectId) {
           limit,
           scopeFilters,
         });
+        if (stale()) return;
         if (!taskId) throw new Error("The run could not be started.");
         update({ phase: "running", items, taskId, scopeFilters });
         await follow({ taskId, items, scopeFilters, limit, startedAt });
       } catch (error) {
-        if (cancelled.current) return;
+        if (cancelled.current || stale()) return;
         setRun((prev) => ({
           ...prev,
           phase: "failed",
@@ -554,6 +595,7 @@ export function useInstantEvalRun(projectId) {
   const view = useCallback(
     ({ taskId, items, scopeFilters, limit, startedAt }) => {
       cancelled.current = false;
+      generation.current += 1;
       setRun({
         ...IDLE,
         phase: "running",
@@ -576,6 +618,7 @@ export function useInstantEvalRun(projectId) {
   );
 
   const reset = useCallback(() => {
+    generation.current += 1;
     active.current = null;
     writeStored(projectId, null);
     setRun(IDLE);
@@ -584,6 +627,7 @@ export function useInstantEvalRun(projectId) {
   // Resume a run that was in flight when the panel or page was closed.
   useEffect(() => {
     // A new project starts clean: stop following the previous project's run.
+    generation.current += 1;
     active.current = null;
     setRun(IDLE);
     cancelled.current = false;
@@ -598,7 +642,19 @@ export function useInstantEvalRun(projectId) {
         limit: stored.limit,
         startedAt: stored.startedAt,
       });
-      follow(stored).catch(() => writeStored(projectId, null));
+      follow(stored).catch(() => {
+        writeStored(projectId, null);
+        setRun((prev) =>
+          prev.taskId === stored.taskId
+            ? {
+                ...prev,
+                phase: "failed",
+                error:
+                  "The run that was in progress could not be resumed. Its answers are still saved in the Trace view.",
+              }
+            : prev,
+        );
+      });
     }
     return () => {
       cancelled.current = true;

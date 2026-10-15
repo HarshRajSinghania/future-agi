@@ -8,6 +8,7 @@ vi.mock("src/utils/axios", () => ({
 
 import {
   AI_PROVIDERS_SETTINGS_PATH,
+  ERROR_ANSWER,
   answerFromCell,
   buildAnswerFilter,
   explainErrorGroups,
@@ -63,7 +64,9 @@ describe("answerFromCell", () => {
     expect(answerFromCell({ Yes: 0, No: 1 })).toBe("No");
   });
   it("reports errors and missing answers", () => {
-    expect(answerFromCell({ error: true })).toBe("error");
+    expect(answerFromCell({ error: true })).toBe(ERROR_ANSWER);
+    // A category may be called "error"; its count is a number, not a flag.
+    expect(answerFromCell({ success: 0, error: 1 })).toBe("error");
     expect(answerFromCell({ status: "running" })).toBeUndefined();
     expect(answerFromCell(undefined)).toBeUndefined();
   });
@@ -100,7 +103,7 @@ describe("summarizeRows", () => {
   it("orders traces oldest to newest with each question's answer", () => {
     const { traces } = summarizeRows(rows, items);
     expect(traces.map((t) => t.traceId)).toEqual(["t1", "t2", "t3"]);
-    expect(traces[0].answers).toEqual({ q1: "No", q2: "error" });
+    expect(traces[0].answers).toEqual({ q1: "No", q2: ERROR_ANSWER });
     expect(traces[2].answers).toEqual({ q1: undefined, q2: undefined });
   });
 
@@ -161,7 +164,7 @@ describe("filters and saved questions", () => {
 
 describe("explainErrorGroups", () => {
   it("points key problems at the AI Providers settings", () => {
-    const [missing, invalid, other] = explainErrorGroups([
+    const [missing, invalid, missingCode, other] = explainErrorGroups([
       {
         normalized: "Error during evaluation",
         sample:
@@ -169,6 +172,7 @@ describe("explainErrorGroups", () => {
         count: 4,
       },
       { normalized: "JEV_KEY_INVALID", count: 2 },
+      { normalized: "JEV_KEY_MISSING", count: 3 },
       { normalized: "JEV_RESPONSE_INVALID", count: 1 },
     ]);
     expect(missing).toMatchObject({
@@ -177,6 +181,7 @@ describe("explainErrorGroups", () => {
     });
     expect(missing.reason).toMatch(/TypeSafe key/);
     expect(invalid.settingsPath).toBe(AI_PROVIDERS_SETTINGS_PATH);
+    expect(missingCode.reason).toMatch(/TypeSafe key/);
     expect(other.reason).toMatch(/Rerun/);
     expect(other.settingsPath).toBeUndefined();
   });

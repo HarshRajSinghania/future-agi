@@ -72,6 +72,8 @@ export function validateProposal({ question, categories }) {
     return `Use at most ${MAX_CATEGORIES - 1} categories (Other is added for you).`;
   const keys = labels.map((label) => label.toLowerCase());
   if (new Set(keys).size !== keys.length) return "Category names must differ.";
+  if (keys.some((key) => key.startsWith("__")))
+    return "Category names can't start with two underscores.";
   if (keys.includes(OTHER_LABEL.toLowerCase()))
     return "Other is added automatically; rename that category.";
   if (
@@ -440,6 +442,10 @@ export default function DiscoverComposer({
             Sort {covered.toLocaleString()} trace{covered === 1 ? "" : "s"} with
             Jev
           </Button>
+          <Typography variant="caption" color="text.secondary">
+            Every answer is billed as one eval run; TypeSafe bills its tokens to
+            your own key.
+          </Typography>
           <Button
             onClick={() => setState({ step: "goal" })}
             sx={{ textTransform: "none" }}

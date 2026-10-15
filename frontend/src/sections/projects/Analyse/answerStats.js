@@ -1,3 +1,5 @@
+import { ERROR_ANSWER } from "src/sections/projects/LLMTracing/InstantEval/useInstantEval";
+
 // How traces with each answer behave compared with every other answered trace
 // in the same run. A difference is only called out when it is both large
 // enough to matter and unlikely to be chance after correcting for the number
@@ -37,13 +39,23 @@ function normalCdf(z) {
 
 const twoSided = (z) => 2 * (1 - normalCdf(Math.abs(z)));
 
-// Two-proportion z-test with a pooled rate.
-export function proportionTest(hitsA, nA, hitsB, nB) {
+// Fisher's exact test (two-sided) on hitsA/nA vs hitsB/nB. Exact, so a
+// single errored trace in a small group is never mistaken for a pattern.
+export function fisherExact(hitsA, nA, hitsB, nB) {
   if (nA < 1 || nB < 1) return 1;
-  const pooled = (hitsA + hitsB) / (nA + nB);
-  const se = Math.sqrt(pooled * (1 - pooled) * (1 / nA + 1 / nB));
-  if (!se) return 1;
-  return twoSided((hitsA / nA - hitsB / nB) / se);
+  const n = nA + nB;
+  const k = hitsA + hitsB;
+  const logFact = [0];
+  for (let i = 1; i <= n; i += 1) logFact[i] = logFact[i - 1] + Math.log(i);
+  const logChoose = (a, b) => logFact[a] - logFact[b] - logFact[a - b];
+  const logP = (x) => logChoose(nA, x) + logChoose(nB, k - x) - logChoose(n, k);
+  const observed = logP(hitsA);
+  let p = 0;
+  for (let x = Math.max(0, k - nB); x <= Math.min(k, nA); x += 1) {
+    const lp = logP(x);
+    if (lp <= observed + 1e-7) p += Math.exp(lp);
+  }
+  return Math.min(1, p);
 }
 
 // Mann-Whitney U with the normal approximation and average ranks for ties.
@@ -95,7 +107,7 @@ export function adjustPValues(pValues) {
 export function computeAnswerStats(traces, item) {
   const answered = traces.filter((trace) => {
     const answer = trace.answers?.[item.configId];
-    return answer !== undefined && answer !== "error";
+    return answer !== undefined && answer !== ERROR_ANSWER;
   });
   const rows = item.labels.map((label) => {
     const inGroup = answered.filter(
@@ -129,7 +141,7 @@ export function computeAnswerStats(traces, item) {
         inGroup.length >= MIN_GROUP &&
         rest.length >= MIN_GROUP &&
         groupErrors + restErrors > 0
-          ? proportionTest(groupErrors, inGroup.length, restErrors, rest.length)
+          ? fisherExact(groupErrors, inGroup.length, restErrors, rest.length)
           : null,
       cost: mean(costs),
     };

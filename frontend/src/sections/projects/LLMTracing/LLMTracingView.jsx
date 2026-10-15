@@ -4480,7 +4480,13 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
                 setExcludeSimulationCalls(excludeSimulationCalls ? null : true)
               }
               onAddEvals={handleAddEvals}
-              onInstantEval={openInstantEval}
+              // Analyse is per project and per trace: not in the cross-project
+              // user view, and not from the Spans tab.
+              onInstantEval={
+                observeId && selectedTab !== "spans"
+                  ? openInstantEval
+                  : undefined
+              }
             />
             {/* FilterChips moved above graph section */}
             {/* Hidden: Old secondary Trace/Spans tabs — replaced by top-level tab bar */}

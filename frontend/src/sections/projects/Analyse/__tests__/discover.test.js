@@ -15,7 +15,7 @@ import {
 import {
   adjustPValues,
   computeAnswerStats,
-  proportionTest,
+  fisherExact,
   rankTest,
 } from "../answerStats";
 import { buildTemplatePayload } from "src/sections/projects/LLMTracing/InstantEval/instantEvalPayloads";
@@ -91,14 +91,37 @@ describe("proposal review", () => {
 describe("answer statistics", () => {
   it("finds no difference between identical groups", () => {
     expect(rankTest([1, 2, 3, 4, 5], [1, 2, 3, 4, 5])).toBeGreaterThan(0.9);
-    expect(proportionTest(1, 10, 1, 10)).toBeGreaterThan(0.9);
+    expect(fisherExact(1, 10, 1, 10)).toBeGreaterThan(0.9);
   });
 
   it("detects clearly separated groups", () => {
     const slow = Array.from({ length: 20 }, (_, i) => 3000 + i);
     const fast = Array.from({ length: 20 }, (_, i) => 1000 + i);
     expect(rankTest(slow, fast)).toBeLessThan(0.001);
-    expect(proportionTest(15, 20, 1, 20)).toBeLessThan(0.001);
+    expect(fisherExact(15, 20, 1, 20)).toBeLessThan(0.001);
+  });
+
+  it("matches the textbook Fisher exact value", () => {
+    // Lady tasting tea: 3 of 4 vs 1 of 4, two-sided p = 34/70.
+    expect(fisherExact(3, 4, 1, 4)).toBeCloseTo(34 / 70, 6);
+  });
+
+  it("does not flag a single errored trace in a small group", () => {
+    const item = { configId: "q", labels: ["Yes", "No"] };
+    const traces = [
+      ...Array.from({ length: 5 }, (_, i) => ({
+        latency: 1000,
+        status: i === 0 ? "ERROR" : "OK",
+        answers: { q: "Yes" },
+      })),
+      ...Array.from({ length: 100 }, () => ({
+        latency: 1000,
+        status: "OK",
+        answers: { q: "No" },
+      })),
+    ];
+    const stats = computeAnswerStats(traces, item);
+    expect(stats.rows.every((row) => !row.errorNotable)).toBe(true);
   });
 
   it("adjusts p-values with Benjamini-Hochberg", () => {
@@ -118,7 +141,7 @@ describe("answer statistics", () => {
         status: i < 2 ? "ERROR" : "OK",
         answers: { q: "Fast" },
       })),
-      { latency: 50, status: "OK", answers: { q: "error" } },
+      { latency: 50, status: "OK", answers: { q: "__error__" } },
     ];
     const stats = computeAnswerStats(traces, item);
     expect(stats.answered).toBe(40);
