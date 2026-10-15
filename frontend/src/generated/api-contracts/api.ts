@@ -619,8 +619,11 @@ import type {
   HarnessSecretFileUploadResponseApi,
   HarnessSecretValuesApi,
   HarnessSourceUploadResponseApi,
+  HarnessSuiteMemberApi,
   HarnessUsageRequestApi,
   HarnessUsageResponseApi,
+  HarnessVersionDiffApi,
+  HarnessVersionsApi,
   HealthCheckResponseApi,
   HeartbeatApi,
   HuggingFaceAddRowsRequestApi,
@@ -1133,6 +1136,7 @@ import type {
   SimulateApiHarnessConversationsCommandsParams,
   SimulateApiHarnessConversationsSessionStoreParams,
   SimulateApiHarnessEnvironmentsListParams,
+  SimulateApiHarnessEnvironmentsVersionsVersionDiffParams,
   SimulateApiHarnessJobsSecretFileUploadBody,
   SimulateApiHarnessJobsSourceUploadBody,
   SimulateApiLivekitWebhookCreateBody,
@@ -59070,6 +59074,173 @@ export const simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluations =
       },
     );
   };
+
+export type simulateApiHarnessEnvironmentsVersionsResponse200 = {
+  data: HarnessVersionsApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsVersionsResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsVersionsResponseSuccess =
+  simulateApiHarnessEnvironmentsVersionsResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsVersionsResponseError =
+  simulateApiHarnessEnvironmentsVersionsResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsResponse =
+  | simulateApiHarnessEnvironmentsVersionsResponseSuccess
+  | simulateApiHarnessEnvironmentsVersionsResponseError;
+
+export const getSimulateApiHarnessEnvironmentsVersionsUrl = (id: string) => {
+  return `/simulate/api/harness-environments/${id}/versions/`;
+};
+
+/**
+ * Every agent, environment and suite version of this environment, read-only.
+ */
+export const simulateApiHarnessEnvironmentsVersions = async (
+  id: string,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsVersionsResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsVersionsResponse>(
+    getSimulateApiHarnessEnvironmentsVersionsUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse200 =
+  {
+    data: HarnessSuiteMemberApi[];
+    status: 200;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseDefault =
+  {
+    data: ManagementAPIErrorResponseApi;
+    status: Exclude<HTTPStatusCodes, 200>;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseSuccess =
+  simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseError =
+  simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse =
+  | simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseSuccess
+  | simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseError;
+
+export const getSimulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersUrl = (
+  id: string,
+  versionId: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/versions/suite/${versionId}/members/`;
+};
+
+/**
+ * The scenarios in one suite version, by number.
+ */
+export const simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembers = async (
+  id: string,
+  versionId: string,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse>(
+    getSimulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersUrl(
+      id,
+      versionId,
+    ),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsVersionsVersionDiffResponse200 = {
+  data: HarnessVersionDiffApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsVersionsVersionDiffResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsVersionsVersionDiffResponseSuccess =
+  simulateApiHarnessEnvironmentsVersionsVersionDiffResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsVersionsVersionDiffResponseError =
+  simulateApiHarnessEnvironmentsVersionsVersionDiffResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsVersionDiffResponse =
+  | simulateApiHarnessEnvironmentsVersionsVersionDiffResponseSuccess
+  | simulateApiHarnessEnvironmentsVersionsVersionDiffResponseError;
+
+export const getSimulateApiHarnessEnvironmentsVersionsVersionDiffUrl = (
+  id: string,
+  piece: string,
+  versionId: string,
+  params?: SimulateApiHarnessEnvironmentsVersionsVersionDiffParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/simulate/api/harness-environments/${id}/versions/${piece}/${versionId}/diff/?${stringifiedParams}`
+    : `/simulate/api/harness-environments/${id}/versions/${piece}/${versionId}/diff/`;
+};
+
+/**
+ * What one version changed, against its parent or the ``against`` version.
+ */
+export const simulateApiHarnessEnvironmentsVersionsVersionDiff = async (
+  id: string,
+  piece: string,
+  versionId: string,
+  params?: SimulateApiHarnessEnvironmentsVersionsVersionDiffParams,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsVersionsVersionDiffResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsVersionsVersionDiffResponse>(
+    getSimulateApiHarnessEnvironmentsVersionsVersionDiffUrl(
+      id,
+      piece,
+      versionId,
+      params,
+    ),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
 
 export type simulateApiHarnessJobsListResponse200 = {
   data: HarnessJobReadApi[];

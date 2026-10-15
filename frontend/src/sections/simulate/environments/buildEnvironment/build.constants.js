@@ -25,9 +25,10 @@ export const DERIVING_LABEL = {
 };
 
 // The tab rail on the building pane: the workspace tabs, rendered pointer-dead.
-// Runs is left out — the workspace only shows it once a run exists, and an
-// environment that is still building (or failed to build) has none.
-export const BUILDING_TABS = WORKSPACE_TABS.filter((t) => t.id !== "runs");
+// Runs and Versions are left out — an environment that is still building (or
+// failed to build) has no runs and no versions yet.
+const NOT_WHILE_BUILDING = new Set(["runs", "versions"]);
+export const BUILDING_TABS = WORKSPACE_TABS.filter((t) => !NOT_WHILE_BUILDING.has(t.id));
 
 export const CONSOLE_COPY = {
   working: "Working on your last message…",

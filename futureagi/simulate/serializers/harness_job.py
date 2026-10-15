@@ -943,6 +943,13 @@ class HarnessConsumptionSerializer(serializers.Serializer):
     sandbox_seconds = serializers.FloatField(min_value=0)
 
 
+class HarnessVersioningFlagsSerializer(serializers.Serializer):
+    """Whether environment versioning and its nudges are switched on."""
+
+    enabled = serializers.BooleanField()
+    nudges_enabled = serializers.BooleanField()
+
+
 class HarnessJobReadSerializer(serializers.Serializer):
     """Consolidated public read DTO for list/create/retrieve/cancel/poll."""
 
@@ -958,3 +965,4 @@ class HarnessJobReadSerializer(serializers.Serializer):
     conversation = HarnessConversationReadSerializer(allow_null=True, required=False)
     consumption = HarnessConsumptionSerializer(required=False, allow_null=True)
     usage_limit = serializers.JSONField(required=False, allow_null=True)
+    versioning = HarnessVersioningFlagsSerializer(required=False)

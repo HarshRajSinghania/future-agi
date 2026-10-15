@@ -14,6 +14,8 @@ export const WORKSPACE_TABS = [
   { id: "scenarios", label: "Scenarios", icon: "solar:layers-minimalistic-linear", badge: "scenarios" },
   { id: "evals", label: "Evaluations", icon: "solar:shield-check-linear", badge: "evals" },
   { id: "runs", label: "Runs", icon: "solar:play-circle-linear", badge: "runs" },
+  // Shown only when the environment has versioning switched on.
+  { id: "versions", label: "Versions", icon: "solar:history-linear" },
   { id: "settings", label: "Settings", icon: "solar:settings-linear" },
 ];
 
@@ -73,14 +75,12 @@ export const WORKSPACE_COPY = {
     evals: "Add at least one evaluation on the Evaluations tab",
     generic: "Setup incomplete",
   },
-  // The env-version pin: the menu that lists every version of the world so the
-  // reader can switch which one the next run stamps against.
+  // The env-version pin: lists every version of the world. Read only for now —
+  // runs replay the default, and changing it is not offered.
   pin: {
     heading: "Environment versions",
-    subtitle: "A run pins whichever version is active when it starts.",
-    latest: "latest",
-    active: "active",
-    scenarios: (n) => `${n} scenarios`,
+    subtitle: "Runs replay the default version. Changing the default isn't available yet.",
+    default: "default",
   },
   // Banner shown while the derivation is still in flight — the panels below are
   // loading and this explains why.
@@ -108,11 +108,104 @@ export const WORKSPACE_COPY = {
   versionBar: {
     envPrefix: "env",
     agentPrefix: "agent",
-    testSubject: "Test subject",
-    scenariosShared: (n) => `${n} scenarios, shared across agent versions`,
+    suitePrefix: "scenarios",
+    testSubject: "Default",
+    beforeVersioning: "before versioning",
+    noAgent: "none",
+    scenariosShared: (n) =>
+      `${n} scenario${n === 1 ? "" : "s"}, shared across agent versions`,
+    // Either label can be missing: an environment with agent versions but no
+    // environment version yet, or one with no default agent version.
     pairingTooltip: (envLabel, envNote, agentLabel) =>
-      `Environment ${envLabel} - ${envNote}. Test subject: agent ${agentLabel}. Different agents can run against this env; the env stays put.`,
+      [
+        envLabel
+          ? `Runs replay environment ${envLabel}${envNote ? ` (${envNote})` : ""}.`
+          : "This environment has no environment version yet.",
+        agentLabel
+          ? `The environment's default agent version is ${agentLabel}; other agent versions can run against the same environment.`
+          : "No default agent version is set for this environment.",
+      ].join(" "),
+    noVersionsTooltip:
+      "This environment has no versions yet. One is recorded the next time it is built or saved.",
     scenariosTooltip:
       "Scenarios belong to the environment, so the same set runs against any agent version",
+    defaultSuiteTooltip: (label) =>
+      `The number of scenarios in the default scenario version, ${label}. The same set runs against any agent version.`,
+  },
+};
+
+// The Versions tab: the agent, environment and scenario versions of this
+// environment, what changed in each, and which scenarios a suite version holds.
+export const VERSIONS_COPY = {
+  title: "Versions",
+  subtitle:
+    "Every change to the agent, the environment or its scenarios is kept as a version. Runs replay the default environment and scenario versions.",
+  pieces: {
+    agent: "Agent",
+    environment: "Environment",
+    suite: "Scenarios",
+  },
+  noneInPiece: "No versions yet",
+  empty: {
+    title: "This environment has no versions yet",
+    body: "A version is recorded the next time the environment is built or saved.",
+  },
+  loadError: "Couldn't load the versions. Try again in a moment.",
+  disabled: "Versioning is switched off for this environment.",
+  default: "default",
+  unlabelled: "Unnumbered version",
+  status: { draft: "draft", discarded: "discarded" },
+  origin: {
+    authoring: "Built",
+    extend: "Extended",
+    chat: "Saved from chat",
+    manual: "Edited",
+    backfill: "Recorded from before versioning",
+    nudge: "Rebuilt",
+    creation: "Created",
+    push: "Pushed",
+    upload: "Uploaded",
+    prompt: "Prompt changed",
+    agent_payload: "Settings changed",
+    credentials: "Credentials changed",
+    provider_sync: "Synced from provider",
+  },
+  by: (name) => `by ${name}`,
+  detail: {
+    pick: "Pick a version to see what changed in it.",
+    changes: (label) => `What changed in ${label}`,
+    compareWith: "Compared with",
+    previous: "Its previous version",
+    first: "This is the first version, so there is nothing earlier to compare with.",
+    noChange: "Nothing changed.",
+    noRecord: "No change record for this version.",
+    notComparable: "These two versions can't be compared.",
+    loadError: "Couldn't load the changes.",
+    scenarios: (label, n) => `${n} scenario${n === 1 ? "" : "s"} in ${label}`,
+    membersError: "Couldn't load the scenarios in this version.",
+  },
+  diff: {
+    tools: "Tools",
+    rules: "Rules",
+    useCases: "Use cases",
+    fields: "Contract fields changed",
+    modality: "Modality",
+    subGoals: "Sub-goals",
+    files: "World files",
+    filesUnknown: "World files of the earlier version aren't known, so file changes aren't shown.",
+    added: "Added",
+    removed: "Removed",
+    changed: "Changed",
+    scenariosAdded: "Scenarios added",
+    scenariosRemoved: "Scenarios removed",
+    scenariosChanged: "Scenarios changed",
+    source: "Source changed",
+    prompt: "Prompt changed",
+    variables: "Variables",
+  },
+  members: {
+    key: "Key",
+    name: "Name",
+    useCase: "Use case",
   },
 };

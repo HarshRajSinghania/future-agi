@@ -36203,6 +36203,124 @@ export const SimulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsBody =
   });
 
 /**
+ * Every agent, environment and suite version of this environment, read-only.
+ */
+export const SimulateApiHarnessEnvironmentsVersionsParams = zod.object({
+  id: zod.string(),
+});
+
+export const SimulateApiHarnessEnvironmentsVersionsResponse = zod.object({
+  agent: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      label: zod.string().min(1).nullable(),
+      status: zod.enum(["draft", "active", "discarded"]),
+      is_default: zod.boolean(),
+      created_at: zod.string().datetime({ offset: true }),
+      created_by: zod
+        .object({
+          id: zod.string().min(1),
+          name: zod.string(),
+        })
+        .nullable(),
+      origin: zod.string().min(1).nullable(),
+      summary: zod.string(),
+      hash: zod.string().min(1).nullable(),
+      parent_id: zod.string().uuid().nullable(),
+      derived_from_agent_version_id: zod.string().uuid().nullable(),
+      scenario_count: zod.number().nullable(),
+      preflight_status: zod.string().min(1).nullable(),
+    }),
+  ),
+  environment: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      label: zod.string().min(1).nullable(),
+      status: zod.enum(["draft", "active", "discarded"]),
+      is_default: zod.boolean(),
+      created_at: zod.string().datetime({ offset: true }),
+      created_by: zod
+        .object({
+          id: zod.string().min(1),
+          name: zod.string(),
+        })
+        .nullable(),
+      origin: zod.string().min(1).nullable(),
+      summary: zod.string(),
+      hash: zod.string().min(1).nullable(),
+      parent_id: zod.string().uuid().nullable(),
+      derived_from_agent_version_id: zod.string().uuid().nullable(),
+      scenario_count: zod.number().nullable(),
+      preflight_status: zod.string().min(1).nullable(),
+    }),
+  ),
+  suite: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      label: zod.string().min(1).nullable(),
+      status: zod.enum(["draft", "active", "discarded"]),
+      is_default: zod.boolean(),
+      created_at: zod.string().datetime({ offset: true }),
+      created_by: zod
+        .object({
+          id: zod.string().min(1),
+          name: zod.string(),
+        })
+        .nullable(),
+      origin: zod.string().min(1).nullable(),
+      summary: zod.string(),
+      hash: zod.string().min(1).nullable(),
+      parent_id: zod.string().uuid().nullable(),
+      derived_from_agent_version_id: zod.string().uuid().nullable(),
+      scenario_count: zod.number().nullable(),
+      preflight_status: zod.string().min(1).nullable(),
+    }),
+  ),
+});
+
+/**
+ * The scenarios in one suite version, by number.
+ */
+export const SimulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersParams =
+  zod.object({
+    id: zod.string(),
+    version_id: zod.string(),
+  });
+
+export const SimulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseItem =
+  zod.object({
+    scenario_key: zod.string().min(1),
+    number: zod.number(),
+    name: zod.string(),
+    use_case: zod.string(),
+  });
+export const SimulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse =
+  zod.array(
+    SimulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponseItem,
+  );
+
+/**
+ * What one version changed, against its parent or the ``against`` version.
+ */
+export const SimulateApiHarnessEnvironmentsVersionsVersionDiffParams =
+  zod.object({
+    id: zod.string(),
+    piece: zod.string(),
+    version_id: zod.string(),
+  });
+
+export const SimulateApiHarnessEnvironmentsVersionsVersionDiffQueryParams =
+  zod.object({
+    against: zod.string().uuid().optional(),
+  });
+
+export const SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse =
+  zod.object({
+    summary: zod.string(),
+    diff: zod.object({}).passthrough().nullable(),
+  });
+
+/**
  * Validates the v1.6 request contract and delegates execution to the public backend selected by
 ``settings.HARNESS_PROVIDER`` (``hosted`` or ``sandbox``). The hosted backend independently
 selects its managed sandbox runtime.
@@ -36372,6 +36490,12 @@ export const SimulateApiHarnessJobsListResponseItem = zod.object({
     })
     .optional(),
   usage_limit: zod.object({}).passthrough().optional(),
+  versioning: zod
+    .object({
+      enabled: zod.boolean(),
+      nudges_enabled: zod.boolean(),
+    })
+    .optional(),
 });
 export const SimulateApiHarnessJobsListResponse = zod.array(
   SimulateApiHarnessJobsListResponseItem,
@@ -37309,6 +37433,12 @@ export const SimulateApiHarnessJobsReadResponse = zod.object({
     })
     .optional(),
   usage_limit: zod.object({}).passthrough().optional(),
+  versioning: zod
+    .object({
+      enabled: zod.boolean(),
+      nudges_enabled: zod.boolean(),
+    })
+    .optional(),
 });
 
 /**
@@ -37521,6 +37651,12 @@ export const SimulateApiHarnessJobsCancelResponse = zod.object({
     })
     .optional(),
   usage_limit: zod.object({}).passthrough().optional(),
+  versioning: zod
+    .object({
+      enabled: zod.boolean(),
+      nudges_enabled: zod.boolean(),
+    })
+    .optional(),
 });
 
 /**

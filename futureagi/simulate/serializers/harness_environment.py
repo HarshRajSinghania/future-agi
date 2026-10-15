@@ -478,3 +478,52 @@ class HarnessEnvironmentDetailSerializer(serializers.Serializer):
     scenarios = HarnessEnvironmentScenarioSerializer(many=True)
     evaluations = HarnessEnvironmentEvaluationsSerializer()
     settings = HarnessEnvironmentSettingsSerializer()
+
+
+class HarnessVersionPersonSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField(allow_blank=True)
+
+
+class HarnessVersionSerializer(serializers.Serializer):
+    """One agent, environment or suite version, as the version lists show it."""
+
+    id = serializers.UUIDField()
+    label = serializers.CharField(allow_null=True)
+    status = serializers.ChoiceField(choices=("draft", "active", "discarded"))
+    is_default = serializers.BooleanField()
+    created_at = serializers.DateTimeField()
+    created_by = HarnessVersionPersonSerializer(allow_null=True)
+    origin = serializers.CharField(allow_null=True)
+    summary = serializers.CharField(allow_blank=True)
+    hash = serializers.CharField(allow_null=True)
+    parent_id = serializers.UUIDField(allow_null=True)
+    derived_from_agent_version_id = serializers.UUIDField(allow_null=True)
+    scenario_count = serializers.IntegerField(allow_null=True)
+    preflight_status = serializers.CharField(allow_null=True)
+
+
+class HarnessVersionsSerializer(serializers.Serializer):
+    """Every version of an environment's three pieces, newest first."""
+
+    agent = HarnessVersionSerializer(many=True)
+    environment = HarnessVersionSerializer(many=True)
+    suite = HarnessVersionSerializer(many=True)
+
+
+class HarnessVersionDiffQuerySerializer(serializers.Serializer):
+    against = serializers.UUIDField(required=False)
+
+
+class HarnessVersionDiffSerializer(serializers.Serializer):
+    """What changed, against the version's parent or the one named by ``against``."""
+
+    summary = serializers.CharField(allow_blank=True)
+    diff = serializers.JSONField(allow_null=True)
+
+
+class HarnessSuiteMemberSerializer(serializers.Serializer):
+    scenario_key = serializers.CharField()
+    number = serializers.IntegerField()
+    name = serializers.CharField(allow_blank=True)
+    use_case = serializers.CharField(allow_blank=True)

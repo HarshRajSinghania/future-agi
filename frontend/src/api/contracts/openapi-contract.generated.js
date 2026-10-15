@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1058,
+  endpointCount: 1061,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28274,6 +28274,72 @@ export const OPENAPI_CONTRACT = Object.freeze({
           responses: {
             202: {
               $ref: "#/definitions/HarnessEnvironmentRunEvaluationsQueued",
+            },
+            default: {
+              $ref: "#/definitions/ManagementAPIErrorResponse",
+            },
+          },
+        },
+      },
+    "/simulate/api/harness-environments/{id}/versions/": {
+      get: {
+        operationId: "simulate_api_harness-environments_versions",
+        runtimeRequestValidation: false,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/HarnessVersions",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/versions/suite/{version_id}/members/":
+      {
+        get: {
+          operationId:
+            "simulate_api_harness-environments_versions_suite_suite_members",
+          runtimeRequestValidation: false,
+          runtimeResponseValidation: true,
+          requestBody: null,
+          queryParameters: {},
+          responses: {
+            200: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/HarnessSuiteMember",
+              },
+            },
+            default: {
+              $ref: "#/definitions/ManagementAPIErrorResponse",
+            },
+          },
+        },
+      },
+    "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/diff/":
+      {
+        get: {
+          operationId:
+            "simulate_api_harness-environments_versions_version_diff",
+          runtimeRequestValidation: true,
+          runtimeResponseValidation: true,
+          requestBody: null,
+          queryParameters: {
+            against: {
+              required: false,
+              schema: {
+                type: "string",
+                format: "uuid",
+              },
+            },
+          },
+          responses: {
+            200: {
+              $ref: "#/definitions/HarnessVersionDiff",
             },
             default: {
               $ref: "#/definitions/ManagementAPIErrorResponse",
@@ -63152,6 +63218,9 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "object",
           "x-nullable": true,
         },
+        versioning: {
+          $ref: "#/definitions/HarnessVersioningFlags",
+        },
       },
     },
     HarnessManifest: {
@@ -63662,6 +63731,29 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessSuiteMember: {
+      required: ["scenario_key", "number", "name", "use_case"],
+      type: "object",
+      properties: {
+        scenario_key: {
+          title: "Scenario key",
+          type: "string",
+          minLength: 1,
+        },
+        number: {
+          title: "Number",
+          type: "integer",
+        },
+        name: {
+          title: "Name",
+          type: "string",
+        },
+        use_case: {
+          title: "Use case",
+          type: "string",
+        },
+      },
+    },
     HarnessUsageRequest: {
       required: ["operation"],
       type: "object",
@@ -63724,6 +63816,45 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Upgrade cta",
           type: "object",
           "x-nullable": true,
+        },
+      },
+    },
+    HarnessVersionDiff: {
+      required: ["summary", "diff"],
+      type: "object",
+      properties: {
+        summary: {
+          title: "Summary",
+          type: "string",
+        },
+        diff: {
+          title: "Diff",
+          type: "object",
+          "x-nullable": true,
+        },
+      },
+    },
+    HarnessVersions: {
+      required: ["agent", "environment", "suite"],
+      type: "object",
+      properties: {
+        agent: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessVersion",
+          },
+        },
+        environment: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessVersion",
+          },
+        },
+        suite: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessVersion",
+          },
         },
       },
     },
@@ -93201,6 +93332,20 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessVersioningFlags: {
+      required: ["enabled", "nudges_enabled"],
+      type: "object",
+      properties: {
+        enabled: {
+          title: "Enabled",
+          type: "boolean",
+        },
+        nudges_enabled: {
+          title: "Nudges enabled",
+          type: "boolean",
+        },
+      },
+    },
     HarnessManifestEntry: {
       required: ["artifact_id", "kind", "size"],
       type: "object",
@@ -93620,6 +93765,93 @@ export const OPENAPI_CONTRACT = Object.freeze({
             "artifact",
             "platform_sync",
           ],
+          "x-nullable": true,
+        },
+      },
+    },
+    HarnessVersion: {
+      required: [
+        "id",
+        "label",
+        "status",
+        "is_default",
+        "created_at",
+        "created_by",
+        "origin",
+        "summary",
+        "hash",
+        "parent_id",
+        "derived_from_agent_version_id",
+        "scenario_count",
+        "preflight_status",
+      ],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          enum: ["draft", "active", "discarded"],
+        },
+        is_default: {
+          title: "Is default",
+          type: "boolean",
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          format: "date-time",
+        },
+        created_by: {
+          $ref: "#/definitions/HarnessVersionPerson",
+        },
+        origin: {
+          title: "Origin",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        summary: {
+          title: "Summary",
+          type: "string",
+        },
+        hash: {
+          title: "Hash",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        parent_id: {
+          title: "Parent id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        derived_from_agent_version_id: {
+          title: "Derived from agent version id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        scenario_count: {
+          title: "Scenario count",
+          type: "integer",
+          "x-nullable": true,
+        },
+        preflight_status: {
+          title: "Preflight status",
+          type: "string",
+          minLength: 1,
           "x-nullable": true,
         },
       },
@@ -109796,6 +110028,22 @@ export const OPENAPI_CONTRACT = Object.freeze({
           format: "uuid",
         },
       },
+    },
+    HarnessVersionPerson: {
+      required: ["id", "name"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          minLength: 1,
+        },
+        name: {
+          title: "Name",
+          type: "string",
+        },
+      },
+      "x-nullable": true,
     },
     HuggingFaceDatasetDetail: {
       required: ["id", "name", "description", "downloads", "likes", "tags"],

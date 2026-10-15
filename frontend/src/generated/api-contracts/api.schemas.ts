@@ -17760,6 +17760,62 @@ export interface HarnessEnvironmentRunEvaluationsQueuedApi {
   call_execution_count: number;
 }
 
+export type HarnessVersionApiStatus =
+  (typeof HarnessVersionApiStatus)[keyof typeof HarnessVersionApiStatus];
+
+export const HarnessVersionApiStatus = {
+  draft: "draft",
+  active: "active",
+  discarded: "discarded",
+} as const;
+
+export interface HarnessVersionPersonApi {
+  /** @minLength 1 */
+  id: string;
+  name: string;
+}
+
+export interface HarnessVersionApi {
+  id: string;
+  /** @minLength 1 */
+  label: string | null;
+  status: HarnessVersionApiStatus;
+  is_default: boolean;
+  created_at: string;
+  created_by: HarnessVersionPersonApi | null;
+  /** @minLength 1 */
+  origin: string | null;
+  summary: string;
+  /** @minLength 1 */
+  hash: string | null;
+  parent_id: string | null;
+  derived_from_agent_version_id: string | null;
+  scenario_count: number | null;
+  /** @minLength 1 */
+  preflight_status: string | null;
+}
+
+export interface HarnessVersionsApi {
+  agent: HarnessVersionApi[];
+  environment: HarnessVersionApi[];
+  suite: HarnessVersionApi[];
+}
+
+export interface HarnessSuiteMemberApi {
+  /** @minLength 1 */
+  scenario_key: string;
+  number: number;
+  name: string;
+  use_case: string;
+}
+
+export type HarnessVersionDiffApiDiff = { [key: string]: unknown };
+
+export interface HarnessVersionDiffApi {
+  summary: string;
+  diff: HarnessVersionDiffApiDiff | null;
+}
+
 export type HarnessJobReadApiReceiptsItem = { [key: string]: unknown };
 
 export type HarnessJobReadApiUsageLimit = { [key: string]: unknown };
@@ -17980,6 +18036,11 @@ export interface HarnessConsumptionApi {
   sandbox_seconds: number;
 }
 
+export interface HarnessVersioningFlagsApi {
+  enabled: boolean;
+  nudges_enabled: boolean;
+}
+
 export interface HarnessJobReadApi {
   job: HarnessJobInfoApi;
   status: HarnessJobStatusApi;
@@ -17993,6 +18054,7 @@ export interface HarnessJobReadApi {
   conversation?: HarnessConversationReadApi;
   consumption?: HarnessConsumptionApi;
   usage_limit?: HarnessJobReadApiUsageLimit;
+  versioning?: HarnessVersioningFlagsApi;
 }
 
 export type HarnessJobCreateApiSchemaVersion =
@@ -34704,6 +34766,10 @@ export type SimulateApiHarnessEnvironmentsListParams = {
    * @maximum 100
    */
   limit?: number;
+};
+
+export type SimulateApiHarnessEnvironmentsVersionsVersionDiffParams = {
+  against?: string;
 };
 
 export type SimulateApiHarnessJobsSecretFileUploadBody = {

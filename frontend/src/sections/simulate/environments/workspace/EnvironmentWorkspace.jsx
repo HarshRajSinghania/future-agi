@@ -267,7 +267,6 @@ export default function EnvironmentWorkspace() {
         <WorkspaceHeader
           env={env}
           envState={envState}
-          patch={patch}
           canRun={false}
           runBlockedReason={buildFailed ? WORKSPACE_COPY.failedTooltip : WORKSPACE_COPY.buildingTooltip}
           locked
@@ -405,7 +404,6 @@ export default function EnvironmentWorkspace() {
       <WorkspaceHeader
         env={displayEnv}
         envState={envState}
-        patch={patch}
         canRun={runnable && !runMutation.isPending}
         runBlockedReason={blockedReason(envState)}
         locked={locked}

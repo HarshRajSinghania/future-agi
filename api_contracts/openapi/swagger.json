@@ -51010,6 +51010,135 @@
                 }
             ]
         },
+        "/simulate/api/harness-environments/{id}/versions/": {
+            "get": {
+                "operationId": "simulate_api_harness-environments_versions",
+                "description": "Every agent, environment and suite version of this environment, read-only.",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessVersions"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/simulate/api/harness-environments/{id}/versions/suite/{version_id}/members/": {
+            "get": {
+                "operationId": "simulate_api_harness-environments_versions_suite_suite_members",
+                "description": "The scenarios in one suite version, by number.",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/HarnessSuiteMember"
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "version_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/diff/": {
+            "get": {
+                "operationId": "simulate_api_harness-environments_versions_version_diff",
+                "description": "What one version changed, against its parent or the ``against`` version.",
+                "parameters": [
+                    {
+                        "name": "against",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessVersionDiff"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "piece",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "version_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/harness-jobs/": {
             "get": {
                 "operationId": "simulate_api_harness-jobs_list",
@@ -124372,6 +124501,190 @@
                 }
             }
         },
+        "HarnessVersionPerson": {
+            "required": [
+                "id",
+                "name"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessVersion": {
+            "required": [
+                "id",
+                "label",
+                "status",
+                "is_default",
+                "created_at",
+                "created_by",
+                "origin",
+                "summary",
+                "hash",
+                "parent_id",
+                "derived_from_agent_version_id",
+                "scenario_count",
+                "preflight_status"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "status": {
+                    "title": "Status",
+                    "type": "string",
+                    "enum": [
+                        "draft",
+                        "active",
+                        "discarded"
+                    ]
+                },
+                "is_default": {
+                    "title": "Is default",
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "title": "Created at",
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "created_by": {
+                    "$ref": "#/definitions/HarnessVersionPerson"
+                },
+                "origin": {
+                    "title": "Origin",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "summary": {
+                    "title": "Summary",
+                    "type": "string"
+                },
+                "hash": {
+                    "title": "Hash",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "parent_id": {
+                    "title": "Parent id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                },
+                "derived_from_agent_version_id": {
+                    "title": "Derived from agent version id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                },
+                "scenario_count": {
+                    "title": "Scenario count",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "preflight_status": {
+                    "title": "Preflight status",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                }
+            }
+        },
+        "HarnessVersions": {
+            "required": [
+                "agent",
+                "environment",
+                "suite"
+            ],
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessVersion"
+                    }
+                },
+                "environment": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessVersion"
+                    }
+                },
+                "suite": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessVersion"
+                    }
+                }
+            }
+        },
+        "HarnessSuiteMember": {
+            "required": [
+                "scenario_key",
+                "number",
+                "name",
+                "use_case"
+            ],
+            "type": "object",
+            "properties": {
+                "scenario_key": {
+                    "title": "Scenario key",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "number": {
+                    "title": "Number",
+                    "type": "integer"
+                },
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "use_case": {
+                    "title": "Use case",
+                    "type": "string"
+                }
+            }
+        },
+        "HarnessVersionDiff": {
+            "required": [
+                "summary",
+                "diff"
+            ],
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "title": "Summary",
+                    "type": "string"
+                },
+                "diff": {
+                    "title": "Diff",
+                    "type": "object",
+                    "x-nullable": true
+                }
+            }
+        },
         "HarnessJobInfo": {
             "required": [
                 "job_id",
@@ -125009,6 +125322,23 @@
             },
             "x-nullable": true
         },
+        "HarnessVersioningFlags": {
+            "required": [
+                "enabled",
+                "nudges_enabled"
+            ],
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "title": "Enabled",
+                    "type": "boolean"
+                },
+                "nudges_enabled": {
+                    "title": "Nudges enabled",
+                    "type": "boolean"
+                }
+            }
+        },
         "HarnessJobRead": {
             "required": [
                 "job",
@@ -125070,6 +125400,9 @@
                     "title": "Usage limit",
                     "type": "object",
                     "x-nullable": true
+                },
+                "versioning": {
+                    "$ref": "#/definitions/HarnessVersioningFlags"
                 }
             }
         },

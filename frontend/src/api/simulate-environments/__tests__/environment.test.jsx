@@ -432,3 +432,107 @@ describe("useEnvironment status when the detail is older than the job poll", () 
     expect(canRunHeader("harness", env, true)).toBe(false);
   });
 });
+
+describe("useEnvironment keeps the versions current", () => {
+  const isVersionsCall = ([arg]) =>
+    JSON.stringify(arg?.queryKey) === JSON.stringify(["harness-env-versions", "job-done"]);
+  const versionsCalls = (spy) => spy.mock.calls.filter(isVersionsCall).length;
+  const atStage = (stage) => ({ ...COMPLETED_JOB, status: { ...COMPLETED_JOB.status, stage } });
+  const poll = (queryClient, job) => {
+    getHarnessJob.mockResolvedValue(job);
+    return queryClient.refetchQueries({ queryKey: ["harness-job", "job-done"] });
+  };
+
+  it("does not refresh the versions when opening an environment that is already finished", async () => {
+    getHarnessJob.mockResolvedValue(COMPLETED_JOB);
+    const { queryClient, Wrapper } = makeWrapper();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useEnvironment("job-done"), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.env?.name).toBe("Done Environment"));
+    expect(versionsCalls(spy)).toBe(0);
+  });
+
+  it("refreshes only the versions list once a build finishes while the page is open", async () => {
+    getHarnessJob.mockResolvedValue(atStage("running"));
+    const { queryClient, Wrapper } = makeWrapper();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    renderHook(() => useEnvironment("job-done"), { wrapper: Wrapper });
+    await waitFor(() => expect(getHarnessJob).toHaveBeenCalled());
+    expect(versionsCalls(spy)).toBe(0);
+
+    await poll(queryClient, COMPLETED_JOB);
+
+    await waitFor(() => expect(versionsCalls(spy)).toBe(1));
+    // The list only: a version's own diff and scenarios never change.
+    expect(spy.mock.calls.find(isVersionsCall)[0]).toMatchObject({ exact: true });
+  });
+
+  it("refreshes again after a later rebuild finishes", async () => {
+    getHarnessJob.mockResolvedValue(COMPLETED_JOB);
+    const { queryClient, Wrapper } = makeWrapper();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useEnvironment("job-done"), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.env?.name).toBe("Done Environment"));
+    const finished = result.current.env.status;
+    // Polls arrive seconds apart, so each stage renders before the next one.
+    const pollAndRender = async (job, changed) => {
+      await poll(queryClient, job);
+      await waitFor(() =>
+        changed
+          ? expect(result.current.env.status).not.toBe(finished)
+          : expect(result.current.env.status).toBe(finished),
+      );
+    };
+    expect(versionsCalls(spy)).toBe(0);
+
+    await pollAndRender(atStage("running"), true);
+    await pollAndRender(COMPLETED_JOB, false);
+    await waitFor(() => expect(versionsCalls(spy)).toBe(1));
+
+    await pollAndRender(atStage("running"), true);
+    await pollAndRender(COMPLETED_JOB, false);
+    await waitFor(() => expect(versionsCalls(spy)).toBe(2));
+  });
+
+  it("does not refresh a finished environment's versions on switching to it", async () => {
+    getHarnessJob.mockImplementation((id) =>
+      Promise.resolve(id === "job-a" ? { ...atStage("running"), id: "job-a" } : COMPLETED_JOB),
+    );
+    const { queryClient, Wrapper } = makeWrapper();
+    // The finished environment was opened before, so its job is already cached and
+    // the switch goes straight from one environment's "running" to the other's end.
+    queryClient.setQueryData(["harness-job", "job-done"], COMPLETED_JOB);
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const { rerender } = renderHook(({ id }) => useEnvironment(id), {
+      wrapper: Wrapper,
+      initialProps: { id: "job-a" },
+    });
+    await waitFor(() => expect(getHarnessJob).toHaveBeenCalledWith("job-a"));
+
+    rerender({ id: "job-done" });
+    await waitFor(() => expect(getHarnessJob).toHaveBeenCalledWith("job-done"));
+
+    expect(versionsCalls(spy)).toBe(0);
+  });
+
+  it("refreshes the versions, and nothing else, when a chat turn finishes", async () => {
+    const busy = { ...COMPLETED_JOB, conversation: { state: "responding", messages: [] } };
+    const idle = { ...COMPLETED_JOB, conversation: { state: "idle", messages: [] } };
+    getHarnessJob.mockResolvedValue(busy);
+    const { queryClient, Wrapper } = makeWrapper();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useEnvironment("job-done"), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.env?.name).toBe("Done Environment"));
+    await waitFor(() => expect(getHarnessEnvironment).toHaveBeenCalled());
+    const detailFetches = getHarnessEnvironment.mock.calls.length;
+    expect(versionsCalls(spy)).toBe(0);
+
+    await poll(queryClient, idle);
+
+    await waitFor(() => expect(versionsCalls(spy)).toBe(1));
+    expect(spy.mock.calls.every(isVersionsCall)).toBe(true);
+    expect(getHarnessEnvironment.mock.calls.length).toBe(detailFetches);
+  });
+});

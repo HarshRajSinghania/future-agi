@@ -1,5 +1,5 @@
-import { useMemo, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useMemo, useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getHarnessJob } from "src/api/harness/harness";
 import { getHarnessEnvironment } from "src/api/simulate-environments/harnessEnvironments";
 import { harnessDetailToEnvironment } from "src/api/simulate-environments/harnessDetail";
@@ -18,6 +18,7 @@ import {
 } from "src/sections/simulate/environments/helpers/harnessJobToRow";
 import { usePrebuiltEnvironments } from "./prebuilt";
 import { conversationInFlight } from "./conversationProjection";
+import { environmentVersionsKey } from "./versions";
 
 // The §6 environment-detail endpoint is implemented on the backend branch but not
 // yet merged/served (see environments-api-contracts §6). Until it lands and the
@@ -222,6 +223,8 @@ export function harnessJobToEnvironment(item) {
     },
     stageOutputs: item?.stage_outputs,
     parallelism: item?.parallelism || null,
+    // Whether this environment shows its version history ({enabled, nudges_enabled}).
+    versioning: item?.versioning || null,
     tools: world.tools,
     rules: world.rules,
     seed: world.seed,
@@ -288,6 +291,40 @@ export function useEnvironment(envId) {
       detailRefetch();
     }
   }, [stage, detailRefetch]);
+
+  // The version history changes when a build, rebuild or extend finishes while
+  // this page is open, and when a chat turn saves. Opening an environment that
+  // is already finished fetches it once, from the readers themselves. Only the
+  // list is refreshed: a version's own diff and scenarios never change.
+  const queryClient = useQueryClient();
+  const refreshVersions = useCallback(
+    () =>
+      queryClient.invalidateQueries({
+        queryKey: environmentVersionsKey(envId),
+        exact: true,
+      }),
+    [queryClient, envId],
+  );
+  const previousStage = useRef({ envId, stage });
+  useEffect(() => {
+    const before = previousStage.current;
+    previousStage.current = { envId, stage };
+    // Switching to another environment is not a stage change of this one.
+    if (before.envId !== envId) return;
+    if (
+      before.stage &&
+      !terminalStages.has(before.stage) &&
+      terminalStages.has(stage)
+    ) {
+      refreshVersions();
+    }
+  }, [envId, stage, refreshVersions]);
+  const inFlight = conversationInFlight(jobQuery.data?.conversation);
+  const wasInFlight = useRef(inFlight);
+  useEffect(() => {
+    if (wasInFlight.current && !inFlight) refreshVersions();
+    wasInFlight.current = inFlight;
+  }, [inFlight, refreshVersions]);
 
   const detail = useMemo(
     () => (detailQuery.data ? harnessDetailToEnvironment(detailQuery.data) : null),

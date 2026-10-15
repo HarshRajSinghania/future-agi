@@ -243,6 +243,7 @@ def _validate_known_hosted_egress(payload: dict[str, Any], callback_url: str) ->
 
 def serialize_job(job: HostedHarnessJob) -> dict[str, Any]:
     from simulate.services.harness_usage import harness_consumption
+    from simulate.services.harness_versioning.read import versioning_flags
 
     attempt = job.attempts.order_by("-attempt_number").first()
     events: list[dict[str, Any]] = []
@@ -447,6 +448,7 @@ def serialize_job(job: HostedHarnessJob) -> dict[str, Any]:
         "conversation": (
             serialize_conversation(conversation) if conversation is not None else None
         ),
+        "versioning": versioning_flags(),
     }
 
 

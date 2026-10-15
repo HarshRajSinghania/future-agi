@@ -1111,6 +1111,10 @@ HARNESS_VERSIONING_ENABLED = os.getenv("HARNESS_VERSIONING_ENABLED", "").lower()
     "true",
     "yes",
 )
+# Raising agent-change nudges; only takes effect while versioning is enabled.
+HARNESS_VERSIONING_NUDGES_ENABLED = os.getenv(
+    "HARNESS_VERSIONING_NUDGES_ENABLED", ""
+).lower() in ("1", "true", "yes")
 # Most scenarios × trials one simulation Run may submit.
 HARNESS_MAX_EXECUTIONS_PER_RUN = int(os.getenv("HARNESS_MAX_EXECUTIONS_PER_RUN", "200"))
 # Each profile is an operator-certified size/connector/snapshot combination.

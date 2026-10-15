@@ -159,17 +159,3 @@ export const agentVersionsWithRuns = (envState) => {
     runs: runs.filter((r) => r.agentVersion === v.label).length,
   }));
 };
-
-/**
- * The env version the workspace is currently working off.
- *
- * `envState.activeEnvVersion` pins whichever version the user chose to work
- * from. If nothing is pinned the newest is treated as active. Runs stamp
- * whichever version was active when they started.
- */
-export const currentEnvVersion = (env, envState) => {
-  const list = environmentVersions(env, envState);
-  const pinned = envState?.activeEnvVersion;
-  const explicit = pinned ? list.find((v) => v.label === pinned) : null;
-  return explicit || list.find((v) => v.current) || list[0];
-};

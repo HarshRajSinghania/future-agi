@@ -10,9 +10,9 @@ import { environmentVersions } from "src/api/simulate-environments/_fixtures/ver
 // Two banners that change how everything below reads:
 //   building   — the derivation is still in flight. Panels show loading; this
 //                is the top-level signal that "still building" is why.
-//   off-latest — the user pinned an older env version to work from. The amber
-//                pin in the header is the control, this is the reminder so an
-//                hour of edits does not silently run against the wrong world.
+//   off-latest — an older env version is the working one. Still driven by the
+//                fixture versions, not the real history the header pin lists;
+//                it moves onto real data when changing the default lands.
 export default function SystemBanners({ env, envState, patch }) {
   const versions = environmentVersions(env, envState);
   const newest = versions[0];

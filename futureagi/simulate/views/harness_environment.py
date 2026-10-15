@@ -20,6 +20,10 @@ from simulate.serializers.harness_environment import (
     HarnessEnvironmentRunEvaluationsQueuedSerializer,
     HarnessEnvironmentRunEvaluationsSerializer,
     HarnessEnvironmentToolCallEvaluationSerializer,
+    HarnessSuiteMemberSerializer,
+    HarnessVersionDiffQuerySerializer,
+    HarnessVersionDiffSerializer,
+    HarnessVersionsSerializer,
 )
 from simulate.serializers.harness_job import (
     HarnessRunCreateResponseSerializer,
@@ -33,11 +37,14 @@ from simulate.services.harness_environment import (
     eval_modality,
 )
 from simulate.services.harness_provider import (
+    _usage_limit_response,
     get_harness_provider,
     request_organization,
     request_workspace,
     scope_jobs,
 )
+from simulate.services.harness_versioning import read as version_reads
+from simulate.services.hosted_harness import HostedHarnessError
 from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_errors import build_error_envelope
 from tfc.utils.pagination import ExtendedPageNumberPagination
@@ -125,6 +132,71 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         if identifier is None:
             return None
         return self._queryset(request).filter(id=identifier).first()
+
+    def handle_exception(self, exc):
+        if isinstance(exc, HostedHarnessError):
+            return Response(exc.as_dict(), status=exc.status_code)
+        response = _usage_limit_response(exc)
+        if response is not None:
+            return response
+        return super().handle_exception(exc)
+
+    def _not_found(self):
+        return Response(
+            {"detail": "Environment not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    @validated_request(responses={200: HarnessVersionsSerializer})
+    @action(detail=True, methods=["get"], url_path="versions")
+    def versions(self, request, pk=None):
+        """Every agent, environment and suite version of this environment, read-only."""
+        # The flag outranks every other 404, so a disabled feature reads as disabled.
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        return Response(version_reads.list_versions(job))
+
+    @validated_request(
+        query_serializer=HarnessVersionDiffQuerySerializer,
+        responses={200: HarnessVersionDiffSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=(
+            r"versions/(?P<piece>[a-z]+)/(?P<version_id>[0-9a-fA-F-]{36})/diff"
+        ),
+    )
+    def version_diff(self, request, pk=None, piece=None, version_id=None):
+        """What one version changed, against its parent or the ``against`` version."""
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        identifier = _uuid_or_none(version_id)
+        if identifier is None:
+            raise version_reads.version_not_found()
+        against = request.validated_query_data.get("against")
+        return Response(version_reads.version_diff(job, piece, identifier, against))
+
+    @validated_request(responses={200: HarnessSuiteMemberSerializer(many=True)})
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"versions/suite/(?P<version_id>[0-9a-fA-F-]{36})/members",
+    )
+    def suite_members(self, request, pk=None, version_id=None):
+        """The scenarios in one suite version, by number."""
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        identifier = _uuid_or_none(version_id)
+        if identifier is None:
+            raise version_reads.version_not_found()
+        return Response(version_reads.suite_members(job, identifier))
 
     @validated_request(
         query_serializer=HarnessEnvironmentListQuerySerializer,

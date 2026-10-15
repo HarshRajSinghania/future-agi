@@ -612,6 +612,35 @@ export type ${jsonAlias} = JsonValueApi;`,
       }
     }
 
+    // Orval drops Swagger 2.0 x-nullable: environment versions carry null labels
+    // (unnumbered drafts), creators, origins, hashes, parents and pre-versioning
+    // diffs.
+    for (const [field, valueType] of [
+      ["label", "string"],
+      ["created_by", "HarnessVersionPersonApi"],
+      ["origin", "string"],
+      ["hash", "string"],
+      ["parent_id", "string"],
+      ["derived_from_agent_version_id", "string"],
+      ["scenario_count", "number"],
+      ["preflight_status", "string"],
+    ]) {
+      schemas = assertReplaceInNamedBlock(
+        schemas,
+        "export interface HarnessVersionApi {",
+        `${field}: ${valueType};`,
+        `${field}: ${valueType} | null;`,
+        `HarnessVersionApi.${field} nullable`,
+      );
+    }
+    schemas = assertReplaceInNamedBlock(
+      schemas,
+      "export interface HarnessVersionDiffApi {",
+      "diff: HarnessVersionDiffApiDiff;",
+      "diff: HarnessVersionDiffApiDiff | null;",
+      "HarnessVersionDiffApi.diff nullable",
+    );
+
     for (const metadataType of [
       "SpanListMetadataApi",
       "TraceObserveListMetadataApi",
@@ -781,6 +810,46 @@ export type ${jsonAlias} = JsonValueApi;`,
         `SimulateV3TestExecutionCallsResponse.${field} nullable`,
       );
     }
+
+    // The same nullable version fields, in every list of the versions response.
+    for (const [anchor, label] of [
+      ['"label": zod.string().min(1)', "label"],
+      ['"origin": zod.string().min(1)', "origin"],
+      ['"hash": zod.string().min(1)', "hash"],
+      ['"parent_id": zod.string().uuid()', "parent_id"],
+      [
+        '"derived_from_agent_version_id": zod.string().uuid()',
+        "derived_from_agent_version_id",
+      ],
+      ['"scenario_count": zod.number()', "scenario_count"],
+      ['"preflight_status": zod.string().min(1)', "preflight_status"],
+      [
+        `"created_by": zod.object({
+  "id": zod.string().min(1),
+  "name": zod.string()
+})`,
+        "created_by",
+      ],
+    ]) {
+      zod = assertReplaceInNamedBlock(
+        zod,
+        "export const SimulateApiHarnessEnvironmentsVersionsResponse =",
+        anchor,
+        `${anchor}.nullable()`,
+        `SimulateApiHarnessEnvironmentsVersionsResponse.${label} nullable`,
+      );
+    }
+    zod = assertReplaceInNamedBlock(
+      zod,
+      "export const SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse =",
+      `"diff": zod.object({
+
+}).passthrough()`,
+      `"diff": zod.object({
+
+}).passthrough().nullable()`,
+      "SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse.diff nullable",
+    );
 
     zod = assertReplace(
       zod,
