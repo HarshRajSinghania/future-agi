@@ -101,6 +101,22 @@ type testScopeReader struct {
 	scope    observedcatalog.Scope
 	calls    int
 	changeAt int
+	// Holding answers false unless set: holding is the answer from the first
+	// call, holdingFrom the call number (1-based) from which it turns true, and
+	// holdingErr fails every call from holdingErrFrom (the first when zero).
+	holding        bool
+	holdingFrom    int
+	holdingErr     error
+	holdingErrFrom int
+	holdingCall    int
+}
+
+func (r *testScopeReader) Holding(context.Context, string) (bool, error) {
+	r.holdingCall++
+	if r.holdingErr != nil && r.holdingCall >= max(r.holdingErrFrom, 1) {
+		return false, r.holdingErr
+	}
+	return r.holding || (r.holdingFrom > 0 && r.holdingCall >= r.holdingFrom), nil
 }
 
 func (r *testScopeReader) Scope(context.Context, string) (observedcatalog.Scope, error) {
