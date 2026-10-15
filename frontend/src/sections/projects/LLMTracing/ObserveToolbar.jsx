@@ -122,6 +122,7 @@ const ObserveToolbar = ({
   onApplyCompareExtraFilters,
   // Add Evals — opens prefilled task-create draft
   onAddEvals,
+  onInstantEval,
   // Spans view — swaps "Trace Name" filter label to "Span Name"
   isSpansView = false,
 }) => {
@@ -542,6 +543,21 @@ const ObserveToolbar = ({
             onToggleSimulationCalls={onToggleSimulationCalls}
           />
 
+          {/* Instant eval — ask Jev questions about the traces in this view */}
+          {onInstantEval && mode === "traces" && !isCompareActive && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Iconify icon="mdi:creation-outline" width={16} />}
+              onClick={onInstantEval}
+              sx={{
+                ...pillSx,
+              }}
+            >
+              Instant eval
+            </Button>
+          )}
+
           {/* Add Evals — opens task create with project + filters pre-filled */}
           {onAddEvals && (
             <Button
@@ -615,6 +631,7 @@ ObserveToolbar.propTypes = {
   onBulkAction: PropTypes.func,
   bulkActions: PropTypes.array,
   onAddEvals: PropTypes.func,
+  onInstantEval: PropTypes.func,
   isSimulator: PropTypes.bool,
   excludeSimulationCalls: PropTypes.bool,
   onToggleSimulationCalls: PropTypes.func,

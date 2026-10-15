@@ -182,6 +182,12 @@ import {
 } from "./defaultColumns";
 import TracingControls from "./TracingControls";
 import ObserveToolbar from "./ObserveToolbar";
+import InstantEvalPanel from "./InstantEval/InstantEvalPanel";
+import InstantEvalMap from "./InstantEval/InstantEvalMap";
+import {
+  buildAnswerFilter,
+  useInstantEvalRun,
+} from "./InstantEval/useInstantEval";
 import {
   combineGraphFilters,
   resolveAgentGraphProjectScopes,
@@ -214,6 +220,7 @@ import CustomTooltip from "src/components/tooltip";
 import {
   resetSpanGridStore,
   resetTraceGridStore,
+  useLLMTracingStore,
   useLLMTracingStoreShallow,
   useSpanGridStoreShallow,
   useTraceGridStoreShallow,
@@ -2906,6 +2913,81 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
     navigate,
   ]);
 
+  // Instant eval: plain-English questions answered by Jev for the traces in
+  // this view. Each answer is an EVAL_METRIC chip on the grid's extra filters.
+  const [instantEvalOpen, setInstantEvalOpen] = useState(false);
+  const instantEval = useInstantEvalRun(observeId);
+  // The answer map replaces the latency graph while a run is on screen.
+  const [instantEvalMapHidden, setInstantEvalMapHidden] = useState(false);
+  const showInstantEvalMap =
+    selectedTab === "trace" &&
+    !showCompare &&
+    !instantEvalMapHidden &&
+    instantEval.run.phase !== "idle" &&
+    !(instantEval.run.phase === "failed" && !instantEval.run.traces?.length);
+  useEffect(() => {
+    if (instantEval.run.phase === "creating") setInstantEvalMapHidden(false);
+  }, [instantEval.run.phase, instantEval.run.taskId]);
+  const openInstantEvalTrace = useCallback(
+    (traceId) =>
+      useLLMTracingStore
+        .getState()
+        .setTraceDetailDrawerOpen({ traceId, projectId: observeId }),
+    [observeId],
+  );
+  const getInstantEvalScope = useCallback(
+    () =>
+      toBackendFilters([
+        ...primaryCombinedFilters,
+        ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
+        ...(extraFilters || []),
+        ...(metricFilters || []),
+      ]),
+    [primaryCombinedFilters, hasEvalFilter, extraFilters, metricFilters],
+  );
+  const isInstantEvalAnswerActive = useCallback(
+    (configId, label) =>
+      (extraFilters || []).some(
+        (f) =>
+          f?.column_id === configId &&
+          (f?.filter_config?.filter_value || []).includes(label),
+      ),
+    [extraFilters],
+  );
+  const toggleInstantEvalAnswer = useCallback(
+    (item, label) => {
+      const current = extraFilters || [];
+      const existing = current.find((f) => f?.column_id === item.configId);
+      const values = existing?.filter_config?.filter_value || [];
+      const nextValues = values.includes(label)
+        ? values.filter((value) => value !== label)
+        : [...values, label];
+      const others = current.filter((f) => f?.column_id !== item.configId);
+      setExtraFilters(
+        nextValues.length
+          ? [
+              ...others,
+              {
+                ...buildAnswerFilter(item, nextValues),
+                _meta: { instantEval: true },
+              },
+            ]
+          : others,
+      );
+    },
+    [extraFilters, setExtraFilters],
+  );
+  const clearInstantEvalAnswers = useCallback(
+    () =>
+      setExtraFilters(
+        (extraFilters || []).filter((f) => !f?._meta?.instantEval),
+      ),
+    [extraFilters, setExtraFilters],
+  );
+  const hasInstantEvalAnswers = (extraFilters || []).some(
+    (f) => f?._meta?.instantEval,
+  );
+
   const handleResetView = useCallback(() => {
     setViewMode(DEFAULT_DISPLAY_CONFIG.viewMode);
     setHasEvalFilter(DEFAULT_DISPLAY_CONFIG.hasEvalFilter);
@@ -3772,7 +3854,19 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
         >
           {/* Primary Graph — dual-axis bars + line. Hidden in user mode
               (PrimaryGraph requires observeId for its query). */}
-          {effectiveViewMode === "graph" && !isUserMode && (
+          {effectiveViewMode === "graph" && !isUserMode && showInstantEvalMap && (
+            <InstantEvalMap
+              run={instantEval.run}
+              onToggleAnswerFilter={toggleInstantEvalAnswer}
+              isAnswerFilterActive={isInstantEvalAnswerActive}
+              onOpenTrace={openInstantEvalTrace}
+              onShowGraph={() => setInstantEvalMapHidden(true)}
+              onOpenPanel={
+                instantEvalOpen ? undefined : () => setInstantEvalOpen(true)
+              }
+            />
+          )}
+          {effectiveViewMode === "graph" && !isUserMode && !showInstantEvalMap && (
             <>
               <PrimaryGraph
                 filters={
@@ -4453,6 +4547,24 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
                 setExcludeSimulationCalls(excludeSimulationCalls ? null : true)
               }
               onAddEvals={handleAddEvals}
+              onInstantEval={() => setInstantEvalOpen(true)}
+            />
+            <InstantEvalPanel
+              open={instantEvalOpen}
+              onClose={() => setInstantEvalOpen(false)}
+              runApi={instantEval}
+              projectId={observeId}
+              dateLabel={dateLabel}
+              filterCount={(extraFilters || []).length}
+              getScopeFilters={getInstantEvalScope}
+              onToggleAnswerFilter={toggleInstantEvalAnswer}
+              isAnswerFilterActive={isInstantEvalAnswerActive}
+              onClearAnswerFilters={clearInstantEvalAnswers}
+              hasAnswerFilters={hasInstantEvalAnswers}
+              onOpenEvaluator={(item) =>
+                navigate(`/dashboard/evaluations/${item.templateId}`)
+              }
+              onOpenTask={(taskId) => navigate(`/dashboard/tasks/${taskId}`)}
             />
             {/* FilterChips moved above graph section */}
             {/* Hidden: Old secondary Trace/Spans tabs — replaced by top-level tab bar */}
