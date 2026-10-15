@@ -188,6 +188,10 @@ func (s *sourceReader) identityPage(ctx context.Context, project string, hour ti
 	return keys, nil
 }
 
+// The resource column is JSON, which JSONEachRow nests by dotted path, so the
+// mark is read as a presence flag instead of a flat key.
+const simulatedResourceColumn = "resource_simulation_origin_present"
+
 func (s *sourceReader) payloadPage(ctx context.Context, project string, hour time.Time, keys []physicalKey) ([]map[string]any, error) {
 	if len(keys) == 0 {
 		return nil, nil
@@ -203,7 +207,8 @@ func (s *sourceReader) payloadPage(ctx context.Context, project string, hour tim
 	}
 	rows, err := s.selectRows(ctx, `SELECT project_id, org_id, observation_type, service_name, trace_id, id,
  start_time, attrs_string, attrs_number, attrs_bool,
- attributes_extra, model, _version, is_deleted
+ attributes_extra, model, _version, is_deleted,
+ (resource_attrs.fi.simulation.origin IS NOT NULL) AS `+simulatedResourceColumn+`
  FROM spans PREWHERE`+sourceWhere+`
  AND tuple(toString(observation_type), toString(service_name), trace_id, id) IN (`+strings.Join(conditions, ",")+`)`, params)
 	if err != nil {

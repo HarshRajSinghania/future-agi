@@ -231,9 +231,20 @@ func buildPage(rows []map[string]any, scope observedcatalog.Scope, since, until 
 			})
 			continue
 		}
+		// Every row that reaches the extractor must carry the flag: a missing one
+		// is a changed query, and reading it as unmarked would put simulated keys back.
+		simulated := fmt.Sprint(row[simulatedResourceColumn])
+		if simulated != "0" && simulated != "1" {
+			return observedcatalog.Batch{}, pageReport{}, errors.New("invalid source simulation flag")
+		}
 		canonical, err := canonicalRow(row)
 		if err != nil {
 			return observedcatalog.Batch{}, pageReport{}, err
+		}
+		if simulated == "1" {
+			// The stored resource column is not read back whole; hand the
+			// extractor the mark so one code path validates and skips the row.
+			canonical["resource_attrs"] = map[string]any{observedcatalog.SimulationOriginKey: true}
 		}
 		batch, report, err := observedcatalog.Extract(observedcatalog.ScopedSpan{
 			OrganizationID: scope.OrganizationID, WorkspaceID: scope.WorkspaceID, Row: canonical,
