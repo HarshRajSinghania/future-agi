@@ -85,6 +85,39 @@ def agent_payload(run, result: dict, units: list[dict], contents: dict[str, str]
     }
 
 
+def checked_numbers(result: dict, units: list[dict]) -> set[str]:
+    """Numbers a written claim may use: the report's statistics plus the
+    per-user counts the analyst can look up (``list_users``)."""
+    from collections import Counter, defaultdict
+
+    numbers = allowed_numbers(result, [])
+    per_user: dict[str, Counter] = defaultdict(Counter)
+    for unit in units:
+        user = unit.get("user_id")
+        if not user:
+            continue
+        facets = unit.get("facets") or {}
+        per_user[user]["units"] += 1
+        per_user[user]["failures"] += 1 if facets.get("failure_present") else 0
+        per_user[user][f"outcome:{facets.get('outcome', 'unclear')}"] += 1
+        if unit.get("session_id"):
+            per_user[user][f"session:{unit['session_id']}"] = 1
+    for counts in per_user.values():
+        for key, value in counts.items():
+            if not key.startswith("session:"):
+                numbers.add(str(value))
+        numbers.add(str(sum(1 for k in counts if k.startswith("session:"))))
+    numbers.add(str(len(per_user)))
+    return numbers
+
+
+def _without_ids(text: str, units: list[dict]) -> str:
+    """User ids like cust_ada_532 carry digits that are not claims."""
+    for user in {u.get("user_id") for u in units if u.get("user_id")}:
+        text = text.replace(user, "")
+    return text
+
+
 class _Refs:
     """Numbers cited units #1, #2… in order of first citation."""
 
@@ -117,7 +150,7 @@ def from_agent(reply: dict, result: dict, units: list[dict], contents: dict[str,
     """Map the analyst's reply onto unit ids and keep only what checks out."""
     units_by_key = {u["key"]: u for u in units}
     categories = {c["id"]: c for c in result["categories"]}
-    numbers = allowed_numbers(result, [])
+    numbers = checked_numbers(result, units)
     refs = _Refs(units_by_key)
     findings, dropped = [], int((reply.get("dropped") or {}).get("findings") or 0)
     for raw in reply.get("findings") or []:
@@ -125,7 +158,7 @@ def from_agent(reply: dict, result: dict, units: list[dict], contents: dict[str,
             continue
         headline = _clean(raw.get("headline"), 200)
         detail = _clean(raw.get("detail"), 600)
-        if not headline or not verified(f"{headline} {detail}", numbers):
+        if not headline or not verified(_without_ids(f"{headline} {detail}", units), numbers):
             dropped += 1
             continue
         keys = [str(k) for k in raw.get("unit_keys") or []]
@@ -246,13 +279,13 @@ _ASK_SYSTEM = (
 def _answer_payload(reply: dict, result: dict, units: list[dict], contents: dict[str, str]) -> dict:
     units_by_key = {u["key"]: u for u in units}
     categories = {c["id"] for c in result["categories"]}
-    numbers = allowed_numbers(result, [])
+    numbers = checked_numbers(result, units)
     paragraphs, dropped = [], 0
     for raw in reply.get("answer") or []:
         text = _clean((raw or {}).get("text"), 1200)
         if not text:
             continue
-        if not verified(text, numbers):
+        if not verified(_without_ids(text, units), numbers):
             dropped += 1
             continue
         keys = [str(k) for k in raw.get("unit_keys") or [] if str(k) in units_by_key]
