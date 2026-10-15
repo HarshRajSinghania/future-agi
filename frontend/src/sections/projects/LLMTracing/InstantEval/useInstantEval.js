@@ -10,9 +10,18 @@ import {
 } from "./instantEvalPayloads";
 
 const POLL_MS = 2000;
+// A run that hasn't finished after this long is shown as stalled rather than
+// polled forever (a paused or stuck task never reaches a terminal status).
+const MAX_FOLLOW_MS = 30 * 60 * 1000;
+const POLL_RETRIES = 5;
 // Results reach ClickHouse through CDC a few seconds after the task finishes.
 const COUNT_SETTLE_ATTEMPTS = 6;
-const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "deleted"]);
+const TERMINAL_TASK_STATUSES = new Set([
+  "completed",
+  "failed",
+  "deleted",
+  "paused",
+]);
 const storageKey = (projectId) => `instant-eval-run:${projectId}`;
 
 const IDLE = { phase: "idle", items: [], counts: {}, traces: [] };
@@ -115,7 +124,9 @@ async function listProjectConfigs(projectId) {
 async function resolveEvaluators({ projectId, questions, reads }) {
   const configs = await listProjectConfigs(projectId);
   const existing = configs.map(itemFromConfig).filter(Boolean).reverse();
-  const taken = new Set(configs.map((config) => (config.name || "").toLowerCase()));
+  const taken = new Set(
+    configs.map((config) => (config.name || "").toLowerCase()),
+  );
   const mapping = buildEvalMapping(reads);
   const now = new Date();
   return Promise.all(
@@ -140,24 +151,27 @@ async function resolveEvaluators({ projectId, questions, reads }) {
       );
       const templateId = result(template)?.id;
       const name = configName(text, taken);
-      const config = await axios.post(endpoints.project.createEvalTaskConfig(), {
-        project: projectId,
-        eval_template: templateId,
-        name,
-        model: INSTANT_EVAL_MODEL,
-        mapping,
-        error_localizer: false,
-        config: {
+      const config = await axios.post(
+        endpoints.project.createEvalTaskConfig(),
+        {
+          project: projectId,
+          eval_template: templateId,
+          name,
+          model: INSTANT_EVAL_MODEL,
           mapping,
-          run_config: { model: INSTANT_EVAL_MODEL },
-          instant_eval: {
-            question: text,
-            answer_type: question.answerType,
-            labels,
-            reads,
+          error_localizer: false,
+          config: {
+            mapping,
+            run_config: { model: INSTANT_EVAL_MODEL },
+            instant_eval: {
+              question: text,
+              answer_type: question.answerType,
+              labels,
+              reads,
+            },
           },
         },
-      });
+      );
       return {
         configId: result(config)?.id,
         templateId,
@@ -206,10 +220,39 @@ export async function createContinuousTask({ projectId, items, scopeFilters }) {
 }
 
 async function fetchProgress(taskId) {
-  const response = await axios.get(endpoints.project.getEvalTaskLogs(), {
-    params: { eval_task_id: taskId },
+  let lastError;
+  for (let attempt = 0; attempt < POLL_RETRIES; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const response = await axios.get(endpoints.project.getEvalTaskLogs(), {
+        params: { eval_task_id: taskId },
+      });
+      return result(response) || {};
+    } catch (error) {
+      // A dropped poll should not end the run on screen; the task keeps
+      // running server-side.
+      lastError = error;
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(POLL_MS * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+// One live task per set of questions: re-creating it would answer every new
+// trace twice and bill twice.
+export async function findContinuousTask({ projectId, items }) {
+  const response = await axios.get(endpoints.project.getEvalTaskList(), {
+    params: { project_id: projectId, page_size: 50 },
   });
-  return result(response) || {};
+  const wanted = new Set(items.map((item) => item.name).filter(Boolean));
+  return (result(response)?.table || []).find(
+    (task) =>
+      task.run_type === "continuous" &&
+      !["deleted", "failed"].includes(task.status) &&
+      (task.evals_applied || []).length === wanted.size &&
+      (task.evals_applied || []).every((name) => wanted.has(name)),
+  );
 }
 
 // The newest `limit` traces in the scope are exactly the rows the historical
@@ -231,11 +274,17 @@ export function explainErrorGroups(groups = []) {
           "hit your plan's evaluation rate limit and were not given. Rerun in a minute, or raise the limit on your plan.",
       };
     if (/ENTITLEMENT|jev_models|402/i.test(text))
-      return { count, reason: "were skipped because Jev isn't enabled for this workspace." };
+      return {
+        count,
+        reason: "were skipped because Jev isn't enabled for this workspace.",
+      };
     if (/JEV_INPUT_TOO_LARGE/i.test(text))
       return { count, reason: "were too long for Jev to read." };
     if (/JEV_RATE_LIMITED|JEV_TIMEOUT|JEV_PROVIDER_ERROR/i.test(text))
-      return { count, reason: "failed while calling Jev. Rerun to retry them." };
+      return {
+        count,
+        reason: "failed while calling Jev. Rerun to retry them.",
+      };
     if (/missing|not found|Required attribute/i.test(text))
       return { count, reason: "had no input or output for Jev to read." };
     return { count, reason: "couldn't be evaluated." };
@@ -273,7 +322,10 @@ export function summarizeRows(rows, items) {
       time: row.start_time || row.created_at,
       input: typeof row.input === "string" ? row.input : "",
       answers: Object.fromEntries(
-        items.map((item) => [item.configId, answerFromCell(row[item.configId])]),
+        items.map((item) => [
+          item.configId,
+          answerFromCell(row[item.configId]),
+        ]),
       ),
     }))
     .sort((a, b) => new Date(a.time) - new Date(b.time));
@@ -325,8 +377,14 @@ export function useInstantEvalRun(projectId) {
       const isCurrent = () => !cancelled.current && active.current === taskId;
       let progress = {};
       let terminal = false;
+      let stalled = false;
       let settleAttempts = 0;
+      const deadline = Date.now() + MAX_FOLLOW_MS;
       while (isCurrent()) {
+        if (Date.now() > deadline) {
+          stalled = true;
+          break;
+        }
         // eslint-disable-next-line no-await-in-loop
         const [nextProgress, rows] = await Promise.all([
           fetchProgress(taskId),
@@ -350,10 +408,15 @@ export function useInstantEvalRun(projectId) {
         terminal = TERMINAL_TASK_STATUSES.has(progress.status);
         // Answers reach ClickHouse through CDC a few seconds after the task
         // finishes; keep reading until every finished trace shows its answer.
+        // Skipped traces never get an answer, so they are not waited for.
+        const expectedAnswers = Math.round(
+          ((progress.success_count || 0) + (progress.errors_count || 0)) /
+            perQuestion,
+        );
         const settled =
           rows &&
           answeredCount(summarizeRows(rows, items).traces, items) >=
-            patch.completed + patch.failed;
+            expectedAnswers;
         if (terminal && (settled || settleAttempts >= COUNT_SETTLE_ATTEMPTS))
           break;
         if (terminal) settleAttempts += 1;
@@ -366,10 +429,13 @@ export function useInstantEvalRun(projectId) {
         phase: "done",
         finishedAt: new Date().toISOString(),
         startedAt,
-        error:
-          progress.status === "failed"
-            ? "The run stopped before every trace was answered."
-            : undefined,
+        error: stalled
+          ? "This run is taking unusually long. Its answers will keep appearing in the Trace view as they finish."
+          : progress.status === "paused"
+            ? "This run was paused before every trace was answered."
+            : progress.status === "failed"
+              ? "The run stopped before every trace was answered."
+              : undefined,
       });
     },
     [projectId, update],
@@ -379,11 +445,13 @@ export function useInstantEvalRun(projectId) {
     async ({ questions, existingItems, reads, limit, scope }) => {
       cancelled.current = false;
       const scopeFilters = scope?.scopeFilters || [];
-      const pending = existingItems || questions.map((q) => ({
-        question: q.question.trim(),
-        answerType: q.answerType,
-        labels: answerLabels(q),
-      }));
+      const pending =
+        existingItems ||
+        questions.map((q) => ({
+          question: q.question.trim(),
+          answerType: q.answerType,
+          labels: answerLabels(q),
+        }));
       const startedAt = new Date().toISOString();
       setRun({
         ...IDLE,
@@ -468,6 +536,9 @@ export function useInstantEvalRun(projectId) {
 
   // Resume a run that was in flight when the panel or page was closed.
   useEffect(() => {
+    // A new project starts clean: stop following the previous project's run.
+    active.current = null;
+    setRun(IDLE);
     cancelled.current = false;
     const stored = projectId ? readStored(projectId) : null;
     if (stored?.taskId) {
@@ -528,7 +599,11 @@ const INSTANT_EVAL_TASK_PREFIX = "Instant eval";
 
 // Past runs are the project's historical eval tasks created by Instant eval.
 // Their evaluators are matched back to saved questions by config name.
-export function useInstantEvalHistory(projectId, configsByName, { enabled = true } = {}) {
+export function useInstantEvalHistory(
+  projectId,
+  configsByName,
+  { enabled = true } = {},
+) {
   const query = useQuery({
     queryKey: ["instant-eval-history", projectId],
     enabled: Boolean(projectId) && enabled,

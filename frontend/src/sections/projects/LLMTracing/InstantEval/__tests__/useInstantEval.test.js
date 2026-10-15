@@ -25,7 +25,11 @@ const DATE_ITEM = {
 };
 const STATUS_ITEM = {
   column_id: "status",
-  filter_config: { filter_type: "text", filter_op: "equals", filter_value: "OK" },
+  filter_config: {
+    filter_type: "text",
+    filter_op: "equals",
+    filter_value: "OK",
+  },
 };
 
 describe("splitScopeFilters", () => {
@@ -39,9 +43,16 @@ describe("splitScopeFilters", () => {
   it("leaves non-between created_at filters in place", () => {
     const after = {
       column_id: "created_at",
-      filter_config: { filter_type: "datetime", filter_op: "greater_than", filter_value: RANGE[0] },
+      filter_config: {
+        filter_type: "datetime",
+        filter_op: "greater_than",
+        filter_value: RANGE[0],
+      },
     };
-    expect(splitScopeFilters([after])).toEqual({ dateRange: undefined, filters: [after] });
+    expect(splitScopeFilters([after])).toEqual({
+      dateRange: undefined,
+      filters: [after],
+    });
   });
 });
 
@@ -62,9 +73,26 @@ describe("summarizeRows", () => {
     { configId: "q2", labels: ["Refund", "Shipping"] },
   ];
   const rows = [
-    { trace_id: "t2", start_time: "2026-10-14T10:00:00Z", input: "b", q1: { Yes: 1, No: 0 }, q2: { Refund: 1, Shipping: 0 } },
-    { trace_id: "t1", start_time: "2026-10-13T10:00:00Z", input: "a", q1: { Yes: 0, No: 1 }, q2: { error: true } },
-    { trace_id: "t3", start_time: "2026-10-15T10:00:00Z", input: "c", q1: { status: "running" } },
+    {
+      trace_id: "t2",
+      start_time: "2026-10-14T10:00:00Z",
+      input: "b",
+      q1: { Yes: 1, No: 0 },
+      q2: { Refund: 1, Shipping: 0 },
+    },
+    {
+      trace_id: "t1",
+      start_time: "2026-10-13T10:00:00Z",
+      input: "a",
+      q1: { Yes: 0, No: 1 },
+      q2: { error: true },
+    },
+    {
+      trace_id: "t3",
+      start_time: "2026-10-15T10:00:00Z",
+      input: "c",
+      q1: { status: "running" },
+    },
   ];
 
   it("orders traces oldest to newest with each question's answer", () => {
@@ -84,7 +112,9 @@ describe("summarizeRows", () => {
 describe("filters and saved questions", () => {
   it("builds the EVAL_METRIC filter the trace grid understands", () => {
     expect(
-      buildAnswerFilter({ configId: "c1", question: "Refund promised?" }, ["Yes"]),
+      buildAnswerFilter({ configId: "c1", question: "Refund promised?" }, [
+        "Yes",
+      ]),
     ).toEqual({
       column_id: "c1",
       property_id: "eval_config:c1",

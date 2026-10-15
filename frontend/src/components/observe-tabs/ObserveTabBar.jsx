@@ -47,6 +47,13 @@ const FIXED_TABS = [
     shortcut: "2",
   },
   { key: "users", label: "Users", icon: "mdi:account-outline", shortcut: "3" },
+  // Letter shortcut so the digit shortcuts of saved views don't shift.
+  {
+    key: "analyse",
+    label: "Analyse",
+    icon: "mdi:creation-outline",
+    shortcut: "A",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -174,9 +181,12 @@ const ObserveTabBar = ({
             setIsSavingView(false);
           },
           onError: (err) => {
-            enqueueSnackbar(getRequestErrorMessage(err, "Failed to create view"), {
-              variant: "error",
-            });
+            enqueueSnackbar(
+              getRequestErrorMessage(err, "Failed to create view"),
+              {
+                variant: "error",
+              },
+            );
             setIsSavingView(false);
           },
         },
@@ -237,6 +247,11 @@ const ObserveTabBar = ({
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
+      if (e.key === "a" || e.key === "A") {
+        if (visibleFixedTabs.some((t) => t.key === "analyse"))
+          onTabChange("analyse");
+        return;
+      }
       const num = parseInt(e.key, 10);
       if (isNaN(num) || num < 1 || num > 9) return;
 
@@ -252,7 +267,7 @@ const ObserveTabBar = ({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onTabChange, allCustomTabs]);
+  }, [onTabChange, allCustomTabs, visibleFixedTabs]);
 
   // -----------------------------------------------------------------------
   // Tab action handlers
@@ -281,9 +296,12 @@ const ObserveTabBar = ({
         { id: viewId, name: newName },
         {
           onError: (err) =>
-            enqueueSnackbar(getRequestErrorMessage(err, "Failed to rename view"), {
-              variant: "error",
-            }),
+            enqueueSnackbar(
+              getRequestErrorMessage(err, "Failed to rename view"),
+              {
+                variant: "error",
+              },
+            ),
         },
       );
       // Always exit edit mode — a lingering rename state would re-submit on blur.
@@ -398,39 +416,42 @@ const ObserveTabBar = ({
           </DndContext>
         </Box>
 
-        {/* Create view button — pinned after scrollable area */}
-        <CustomTooltip
-          show
-          title="Create new view"
-          placement="bottom"
-          arrow
-          size="small"
-          type="black"
-        >
-          <ButtonBase
-            data-create-view-btn
-            onClick={(e) => setSaveViewAnchor(e.currentTarget)}
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              height: 26,
-              width: 26,
-              border: "1px solid",
-              borderColor: "divider",
-              borderRadius: "4px",
-              bgcolor: "background.paper",
-              flexShrink: 0,
-              "&:hover": { bgcolor: "background.neutral" },
-            }}
+        {/* Create view button — pinned after scrollable area. Analyse has no
+            list config to save as a view. */}
+        {activeTab !== "analyse" && (
+          <CustomTooltip
+            show
+            title="Create new view"
+            placement="bottom"
+            arrow
+            size="small"
+            type="black"
           >
-            <Iconify
-              icon="mdi:plus"
-              width={16}
-              sx={{ color: "text.primary" }}
-            />
-          </ButtonBase>
-        </CustomTooltip>
+            <ButtonBase
+              data-create-view-btn
+              onClick={(e) => setSaveViewAnchor(e.currentTarget)}
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: 26,
+                width: 26,
+                border: "1px solid",
+                borderColor: "divider",
+                borderRadius: "4px",
+                bgcolor: "background.paper",
+                flexShrink: 0,
+                "&:hover": { bgcolor: "background.neutral" },
+              }}
+            >
+              <Iconify
+                icon="mdi:plus"
+                width={16}
+                sx={{ color: "text.primary" }}
+              />
+            </ButtonBase>
+          </CustomTooltip>
+        )}
       </Box>
 
       {/* ── Right: Toolbar portal target + renderRight fallback ── */}

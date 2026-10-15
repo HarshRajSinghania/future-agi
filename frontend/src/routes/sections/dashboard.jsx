@@ -234,6 +234,9 @@ const VoiceFullPage = lazyWithRetry(
 const SessionsView = lazyWithRetry(
   () => import("src/sections/projects/SessionsView/Sessions-view"),
 );
+const AnalyseView = lazyWithRetry(
+  () => import("src/sections/projects/Analyse/AnalyseView"),
+);
 const LLMTracingView = lazyWithRetry(
   () => import("src/sections/projects/LLMTracing/LLMTracingView"),
 );
@@ -325,13 +328,15 @@ const SimulateEnvironmentsHome = lazyWithRetry(
   () => import("src/pages/dashboard/simulate/environments/EnvironmentsHome"),
 );
 const SimulatePrebuiltEnvironments = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate/environments/PrebuiltEnvironments"),
+  () =>
+    import("src/pages/dashboard/simulate/environments/PrebuiltEnvironments"),
 );
 const SimulateUseTemplate = lazyWithRetry(
   () => import("src/pages/dashboard/simulate/environments/UseTemplate"),
 );
 const SimulateEnvironmentWorkspace = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate/environments/EnvironmentWorkspace"),
+  () =>
+    import("src/pages/dashboard/simulate/environments/EnvironmentWorkspace"),
 );
 const WorkspaceExecutionDetail = lazyWithRetry(
   () =>
@@ -481,7 +486,6 @@ const Overview = lazyWithRetry(
 const Executions = lazyWithRetry(
   () => import("src/sections/agent-playground/Executions/Executions"),
 );
-
 
 const DashboardRoutes = () => {
   const location = useLocation();
@@ -1138,6 +1142,10 @@ export const dashboardRoutes = (
           path: "users",
           element: <UsersView />,
         },
+        {
+          path: "analyse",
+          element: <AnalyseView />,
+        },
       ],
     },
     {
@@ -1361,7 +1369,9 @@ export const dashboardRoutes = (
           // job and route straight to the workspace, which hosts the build. An
           // old /build link lands back on the Build entry tab.
           path: "environments/build",
-          element: <Navigate to="/dashboard/simulate/environments?tab=build" replace />,
+          element: (
+            <Navigate to="/dashboard/simulate/environments?tab=build" replace />
+          ),
         },
         {
           path: "environments/:envId",
