@@ -63,6 +63,10 @@ def agent_payload(run, result: dict, units: list[dict], contents: dict[str, str]
             {
                 "key": u["key"],
                 "unit_id": u["unit_id"],
+                # Who and when, so "which users…" questions can be answered.
+                "user_id": u.get("user_id") or "",
+                "session_id": u.get("session_id") or "",
+                "time": u.get("time") or "",
                 "category_id": u["category_id"],
                 "sub_category_id": u["sub_category_id"],
                 "summary": u["summary"],
