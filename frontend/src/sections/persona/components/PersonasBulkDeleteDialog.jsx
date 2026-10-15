@@ -12,6 +12,7 @@ const PersonasBulkDeleteDialog = ({
   open,
   count,
   skippedCount,
+  usageNote,
   onConfirm,
   onCancel,
   isLoading,
@@ -28,6 +29,13 @@ const PersonasBulkDeleteDialog = ({
             {" "}
             {skippedCount} Future AGI built-in persona
             {skippedCount !== 1 ? "s" : ""} will be skipped.
+          </>
+        )}
+        {usageNote && (
+          <>
+            <br />
+            <br />
+            {usageNote}
           </>
         )}
       </DialogContentText>
@@ -52,6 +60,7 @@ PersonasBulkDeleteDialog.propTypes = {
   open: PropTypes.bool.isRequired,
   count: PropTypes.number.isRequired,
   skippedCount: PropTypes.number,
+  usageNote: PropTypes.string,
   onConfirm: PropTypes.func.isRequired,
   onCancel: PropTypes.func.isRequired,
   isLoading: PropTypes.bool,

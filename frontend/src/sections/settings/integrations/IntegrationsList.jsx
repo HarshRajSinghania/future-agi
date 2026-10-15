@@ -1,4 +1,9 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { paths } from "src/routes/paths";
+import { useIntegrations, installedRepos, githubAccountsLabel, connectedCodingAgent } from "src/sections/simulate-v2/_mock/integrations";
+import BrandMark from "src/sections/simulate-v2/integrations/BrandMark";
+import { StatusPill } from "src/sections/simulate-v2/integrations/GithubIntegrationPage";
 import {
   Alert,
   Box,
@@ -24,6 +29,39 @@ export default function IntegrationsList() {
   const { role } = useAuthContext();
   const theme = useTheme();
   const { data, isLoading, isError } = useIntegrationConnections();
+  const navigate = useNavigate();
+  const integrations = useIntegrations();
+  const codingAgent = connectedCodingAgent(integrations);
+  /* Workspace tools — code and team chat. Connected once here, used by
+     Agents, Simulate and Alerts. */
+  const workspaceTools = [
+    {
+      id: "github", name: "GitHub",
+      desc: integrations.github
+        ? `Installed on ${githubAccountsLabel(integrations)} · ${installedRepos(integrations).length} repositor${installedRepos(integrations).length === 1 ? "y" : "ies"}`
+        : "Connect agents from code and open fixes as pull requests",
+      tags: ["Source code", "Pull requests"],
+      on: !!integrations.github,
+    },
+    {
+      id: "slack", name: "Slack",
+      desc: integrations.slack
+        ? `${integrations.slack.workspace} · ${integrations.slack.defaultChannel}`
+        : "Notifications and fix approvals in your team's channels",
+      tags: ["Notifications", "Approvals"],
+      on: !!integrations.slack,
+    },
+    {
+      id: "coding-agents", name: "Coding agents",
+      brand: codingAgent ? codingAgent.id : "coding-agents",
+      desc: codingAgent
+        ? `${codingAgent.label} · ${codingAgent.via === "plugin" ? "plugin" : "MCP server"}`
+        : "Let Claude Code, Codex or Cursor fix issues — Future AGI checks every change",
+      tags: ["Briefs", "Verdicts"],
+      on: !!codingAgent,
+      labels: ["Connected", "Not connected"],
+    },
+  ];
   // null = wizard closed, "" = wizard open (no platform), "langfuse" = wizard open with platform
   const [selectedPlatform, setSelectedPlatform] = useState(null);
 
@@ -73,7 +111,7 @@ export default function IntegrationsList() {
               mt: theme.spacing(0.5),
             }}
           >
-            Connect external observability platforms to import traces
+            Connect your code, your team&apos;s chat and the observability platforms you already use
           </Typography>
         </Box>
         <Button
@@ -89,18 +127,72 @@ export default function IntegrationsList() {
         </Button>
       </Box>
 
-      {/* Active Connections */}
+      {/* Code & collaboration */}
+      <Box mb={theme.spacing(4)}>
+        <Typography
+          sx={{
+            typography: "s2",
+            fontWeight: "fontWeightMedium",
+            color: "text.secondary",
+            mb: theme.spacing(2),
+          }}
+        >
+          Code &amp; collaboration
+        </Typography>
+        <Grid container spacing={2}>
+          {workspaceTools.map((tool) => (
+            <Grid item xs={12} sm={6} md={4} key={tool.id}>
+              <Card variant="outlined">
+                <CardActionArea
+                  onClick={() => navigate(`${paths.dashboard.settings.integrations}/${tool.id}`)}
+                  sx={{ p: theme.spacing(2.5) }}
+                >
+                  <Box display="flex" alignItems="center" gap={theme.spacing(2)}>
+                    <BrandMark brand={tool.brand || tool.id} size={40} />
+                    <Box flex={1} minWidth={0}>
+                      <Box display="flex" alignItems="center" gap={theme.spacing(1)}>
+                        <Typography sx={{ typography: "s1", fontWeight: "fontWeightMedium", color: "text.primary" }}>
+                          {tool.name}
+                        </Typography>
+                        <StatusPill on={tool.on} size="small" labels={tool.labels} />
+                      </Box>
+                      <Typography noWrap sx={{ typography: "s2", color: "text.disabled" }}>
+                        {tool.desc}
+                      </Typography>
+                    </Box>
+                    <Iconify icon="octicon:chevron-right-24" width={16} height={16} sx={{ color: "text.disabled" }} />
+                  </Box>
+                </CardActionArea>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Box>
+
+      {/* Observability platforms — the backend connections. Scoped by its own
+          heading so its empty state can't read as "nothing is connected"
+          while GitHub and Slack above are installed. */}
+      <Typography
+        sx={{
+          typography: "s2",
+          fontWeight: "fontWeightMedium",
+          color: "text.secondary",
+          mb: theme.spacing(2),
+        }}
+      >
+        Observability platforms
+      </Typography>
       {connections.length > 0 ? (
-        <Box mb={theme.spacing(4)}>
+        <Box mb={theme.spacing(3)}>
           <Typography
             sx={{
-              typography: "s2",
+              typography: "s3",
               fontWeight: "fontWeightMedium",
-              color: "text.secondary",
-              mb: theme.spacing(2),
+              color: "text.disabled",
+              mb: theme.spacing(1.5),
             }}
           >
-            Connections ({connections.length})
+            Connected ({connections.length})
           </Typography>
           <Grid container spacing={2}>
             {connections.map((conn) => (
@@ -114,56 +206,46 @@ export default function IntegrationsList() {
         <Card
           variant="outlined"
           sx={{
-            mb: theme.spacing(4),
-            p: theme.spacing(4),
-            textAlign: "center",
+            mb: theme.spacing(3),
+            px: theme.spacing(2.5),
+            py: theme.spacing(2),
             borderStyle: "dashed",
           }}
         >
-          <Typography
-            sx={{
-              typography: "m3",
-              fontWeight: "fontWeightSemiBold",
-              color: "text.primary",
-            }}
-            gutterBottom
-          >
-            No integrations connected
-          </Typography>
-          <Typography
-            sx={{
-              typography: "s1",
-              color: "text.secondary",
-              mb: theme.spacing(2),
-            }}
-          >
-            Connect external platforms to import traces, spans, and evaluations
-            into FutureAGI.
-          </Typography>
-          <Button
-            variant="contained"
-            color="primary"
-            size="small"
-            startIcon={<Iconify icon="solar:add-circle-bold" />}
-            onClick={() => setSelectedPlatform("")}
-            disabled={!RolePermission.API_KEYS[PERMISSIONS.CREATE][role]}
-            sx={{ fontWeight: 500 }}
-          >
-            Add Integration
-          </Button>
+          <Box display="flex" alignItems="center" gap={theme.spacing(2)}>
+            <Iconify icon="solar:chart-2-linear" width={20} sx={{ color: "text.disabled", flexShrink: 0 }} />
+            <Box flex={1} minWidth={0}>
+              <Typography sx={{ typography: "s1", fontWeight: "fontWeightMedium", color: "text.primary" }}>
+                No observability platforms connected yet
+              </Typography>
+              <Typography sx={{ typography: "s2", color: "text.secondary" }}>
+                Connect Langfuse, Datadog and others to bring traces, spans and evaluations into Future AGI.
+              </Typography>
+            </Box>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Iconify icon="solar:add-circle-linear" />}
+              onClick={() => setSelectedPlatform("")}
+              disabled={!RolePermission.API_KEYS[PERMISSIONS.CREATE][role]}
+              sx={{ fontWeight: 500, flexShrink: 0 }}
+            >
+              Connect a platform
+            </Button>
+          </Box>
         </Card>
       )}
 
       {/* Available Platforms */}
       <Typography
         sx={{
-          typography: "s2",
+          typography: "s3",
           fontWeight: "fontWeightMedium",
-          color: "text.secondary",
-          mb: theme.spacing(2),
+          color: "text.disabled",
+          mb: theme.spacing(1.5),
         }}
       >
-        Available Platforms
+        Available platforms
       </Typography>
       <Grid container spacing={2}>
         {PLATFORMS.map((platform) => (

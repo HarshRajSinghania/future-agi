@@ -5,6 +5,7 @@ import Iconify from "src/components/iconify";
 const PersonasBulkActionsBar = ({
   selectedCount,
   deletableCount,
+  onUse,
   onDelete,
   onCancel,
 }) => {
@@ -32,6 +33,17 @@ const PersonasBulkActionsBar = ({
       </Typography>
 
       <Divider orientation="vertical" flexItem />
+
+      {onUse && (
+        <Button
+          size="small"
+          startIcon={<Iconify icon="solar:add-square-linear" width={16} />}
+          onClick={onUse}
+          sx={{ fontSize: "13px", textTransform: "none", color: "text.primary" }}
+        >
+          Use in environment
+        </Button>
+      )}
 
       <Tooltip
         title={
@@ -74,6 +86,7 @@ const PersonasBulkActionsBar = ({
 PersonasBulkActionsBar.propTypes = {
   selectedCount: PropTypes.number.isRequired,
   deletableCount: PropTypes.number.isRequired,
+  onUse: PropTypes.func,
   onDelete: PropTypes.func.isRequired,
   onCancel: PropTypes.func.isRequired,
 };

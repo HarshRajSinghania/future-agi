@@ -37,13 +37,13 @@ export const personaCreationTypes = [
   {
     title: "Voice Type",
     description: "Create personas for your voice agent",
-    icon: "/assets/icons/ic_voice.svg",
+    icon: "solar:microphone-3-bold",
     value: "voice",
   },
   {
     title: "Chat Type",
     description: "Create personas for your chat agent",
-    icon: "/assets/icons/ic_chat_single.svg",
+    icon: "solar:chat-round-line-bold",
     value: "text",
   },
 ];

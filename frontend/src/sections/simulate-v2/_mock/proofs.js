@@ -16,6 +16,7 @@
  */
 
 import { environmentVersions, currentEnvVersion, versionNumber } from "./versions";
+import { admissionOf } from "./coverage";
 
 /* A scenario added on a later environment version isn't part of an older
    pinned one — nothing to prove, and nothing to break, until that version
@@ -37,6 +38,7 @@ export const INVALIDATING = {
   seed: "the seeded world changed, so the state a scenario presumes may be gone",
   checks: "the checks changed, so a check proved to fail on an empty run may now pass",
   contract: "the tools changed, so the reference solution may no longer run",
+  toolbehaviour: "a tool now reads or writes differently, so the reference solution may play out differently",
   edited: "the scenario was edited after it was proved, so the proof is of a different scenario",
 };
 
@@ -205,6 +207,9 @@ export const autoReprove = (scenarios = [], env, envState) => {
   const now = new Date().toISOString();
   return scenarios.map((s) => {
     if (laterThan(s, currentLabel)) return s;
+    /* Already found broken on this world and not edited since — same verdict,
+       same row, so callers that persist this don't loop on fresh objects. */
+    if (s.provedBroke && s.brokeAgainst === currentLabel && !(s.editedAt && (!s.brokeAt || s.editedAt > s.brokeAt))) return s;
     const status = proofStatus(s, env, envState);
     if (!status.stale) return s;
     const roll = seededFraction(`${s.id}::${currentLabel}`);
@@ -227,6 +232,7 @@ export const autoReprove = (scenarios = [], env, envState) => {
       provedBroke: true,
       brokeReasons: status.reasons,
       brokeAgainst: currentLabel,
+      brokeAt: now,
     };
   });
 };
@@ -236,3 +242,126 @@ export const brokenScenarios = (scenarios = [], env, envState) => {
   const label = env ? currentEnvVersion(env, envState).label : null;
   return scenarios.filter((s) => (label ? brokenOn(s, label) : s.provedBroke));
 };
+
+/* ── what a run will actually run ────────────────────────────────────────── */
+
+/**
+ * The scenarios a run on `envVersion` will run, and the ones it leaves out.
+ *
+ * Re-proves first, against that version — a stale proof is settled at run
+ * start rather than whenever someone next opens the Scenarios tab. What still
+ * can't stage (broke, quarantined, stale) is skipped and listed, never run and
+ * written off as "not measured". A selection is never widened: if none of it
+ * can run, `run` is empty and the caller says why.
+ *
+ * Every count of "what Run will do" reads from here, so the header, the
+ * Repeats picker and the live run agree.
+ */
+export const runPlan = (env, envState, { only, envVersion, applies } = {}) => {
+  const label = envVersion || currentEnvVersion(env, envState)?.label;
+  const pinned = { ...envState, activeEnvVersion: label };
+  /* Re-proved rows, in place — the caller may persist them. */
+  const reproofed = autoReprove(envState?.scenarios || [], env, pinned);
+  /* Archived scenarios (retired, before v7) stay in the set but never run. */
+  const inVersion = reproofed.filter((sc) => !laterThan(sc, label) && !sc.archived && !sc.retired);
+  const wanted = only?.length ? new Set(only) : null;
+  const pool = wanted ? inVersion.filter((sc) => wanted.has(sc.id)) : inVersion;
+  const run = [];
+  const skipped = [];
+  pool.forEach((sc) => {
+    /* `applies(row)` → { applies, reason } (decoupled.js applicabilityOf for
+       the agent version under test): not applicable isn't run or charged. */
+    const app = applies ? applies(sc) : null;
+    const why = app && !app.applies ? `Not applicable — ${app.reason || "an approved applicability rule"}.` : skipReasonFor(sc, env, pinned, label);
+    if (why) skipped.push({ ...sc, skipReason: why });
+    else run.push(sc);
+  });
+  return {
+    envVersion: label,
+    reproofed,
+    run,
+    skipped,
+    poolSize: inVersion.length,
+    /* Asked for scenarios, none of which are in this version. */
+    selectionMissing: !!wanted && pool.length === 0,
+  };
+};
+
+/* Why a scenario can't be run on this world, or null when it can. */
+const skipReasonFor = (sc, env, envState, label) => {
+  if (brokenOn(sc, label)) return "Its proof broke when the environment changed. Edit it or re-prove it to run it again.";
+  const adm = admissionOf(sc, env);
+  if (!adm.admitted) return `Quarantined — ${adm.reason}`;
+  const proof = proofStatus(sc, env, envState);
+  if (proof.stale) return proof.edited ? "Edited since it was proved — re-prove it to run it." : `Not proved on environment ${label}.`;
+  return null;
+};
+
+/**
+ * What proves a scenario before it runs — the World tab's view of a proof.
+ * Pass or fail on a run is the evaluations' call, not these.
+ */
+export const PROOF_CHECKS = [
+  {
+    id: "setup",
+    name: "setup.py",
+    desc: "Stages the state the scenario presumes — the rows, accounts and history it needs.",
+    file: "scenarios/<id>/setup.py",
+    code: "def setup(world, scenario):\n    for row in scenario.presumes:\n        world.insert(row.table, row.values)\n    assert world.holds(scenario.presumes), \"world can't stage this scenario\"\n",
+  },
+  {
+    id: "reference",
+    name: "reference_solution",
+    desc: "A known-good run that must reach the expected end state.",
+    file: "scenarios/<id>/reference.py",
+    code: "def reference(world, scenario):\n    trace = world.replay(scenario.reference_calls)\n    assert scenario.end_state.matches(world), \"reference solution doesn't solve it\"\n    return trace\n",
+  },
+  {
+    id: "empty-run",
+    name: "empty_run_fails",
+    desc: "Doing nothing must fail — otherwise the scenario passes vacuously.",
+    file: "scenarios/<id>/empty_run.py",
+    code: "def empty_run(world, scenario):\n    world.reset()\n    assert not scenario.end_state.matches(world), \"passes with no agent at all\"\n",
+  },
+  /* The admission gates past the first three (§9.3b) — what makes the checks
+     themselves trustworthy. A failure quarantines the scenario with its
+     reason; see admissionGates.js. */
+  {
+    id: "mutation",
+    name: "mutation_controls",
+    desc: "A wrong action fails the checks, and every check has a passing and a failing demonstration — no check that can't fail.",
+    file: "scenarios/<id>/mutations.py",
+    code: "def mutation_controls(world, scenario):\n    for mutant in scenario.wrong_actions():\n        assert not scenario.checks.pass_on(world.replay(mutant)), f\"{mutant} still passes\"\n    for check in scenario.checks:\n        assert check.demo_pass and check.demo_fail, f\"{check.id} can't fail\"\n",
+  },
+  {
+    id: "altpaths",
+    name: "alternate_paths_pass",
+    desc: "A second valid solution, reached another way, passes too — the checks aren't overfit to one path.",
+    file: "scenarios/<id>/alt_paths.py",
+    code: "def alternate_paths(world, scenario):\n    for path in scenario.alternate_solutions:\n        world.reset()\n        assert scenario.checks.pass_on(world.replay(path)), f\"overfit: {path.order} fails\"\n",
+  },
+  {
+    id: "setup-credit",
+    name: "setup_earns_nothing",
+    desc: "Nothing setup.py writes counts toward a check — credit is only for the agent's own actions.",
+    file: "scenarios/<id>/setup_credit.py",
+    code: "def setup_earns_nothing(world, scenario):\n    staged = world.diff_since_setup()\n    for check in scenario.checks:\n        assert not check.credited_by(staged), f\"{check.id} counts setup state\"\n",
+  },
+  /* PRD v7 §4.10.9 — a refusal, guardrail or transfer scenario passes an
+     empty run by design, so it proves positive evidence instead; and an
+     exploit agent told to cheat must score 0. */
+  {
+    id: "evidence",
+    name: "positive_evidence",
+    desc: "Where declining is correct — a refusal, a guardrail, a transfer — a required utterance or a transfer call must appear. Replaces empty_run_fails there.",
+    file: "scenarios/<id>/positive_evidence.py",
+    code: "def positive_evidence(world, scenario):\n    trace = world.replay([])\n    assert not scenario.checks.pass_on(trace), \"an empty run passes a refusal\"\n    ref = world.replay(scenario.reference_calls)\n    assert scenario.evidence.found_in(ref), \"no required utterance or transfer call\"\n",
+  },
+  {
+    id: "exploit",
+    name: "exploit_control",
+    desc: "A scripted agent told to cheat — an off-limits tool, claiming success, talking to the judge or the caller — must score 0.",
+    file: "scenarios/<id>/exploit_control.py",
+    code: "def exploit_control(world, scenario):\n    for exploit in EXPLOITS:  # off-limits call, false claim, judge or caller steering\n        world.reset()\n        trace = world.replay(exploit.against(scenario))\n        assert scenario.score(trace) == 0, f\"{exploit.id} passes\"\n",
+  },
+];

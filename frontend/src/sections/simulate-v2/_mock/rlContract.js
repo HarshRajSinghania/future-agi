@@ -20,6 +20,15 @@
 import { MODALITY_FOR } from "./fidelity";
 import { getAgentType } from "./agentTypes";
 import { actorsOf } from "./actors";
+import { toolImplFor } from "./envInternals";
+import { argSpecOf } from "./toolArgSpec";
+import { contractFor } from "./contract";
+import { rulesOf, ruleOfScenario, subGoalsOfScenario, useCaseId as stableCaseId } from "./envModel";
+import { environmentVersions, nextEnvVersion, pendingEnvChanges } from "./versions";
+import { nextSnapshotLabel } from "./envSnapshot";
+import { proofStatus, provedAgainst } from "./proofs";
+import { ruleChangesOnFlow } from "./scenarioStates";
+import { knownToolsFor, requiredToolsOf, withPinnedWorld } from "./toolFit";
 
 /* ── 1. modality adapter ─────────────────────────────────────────────────── */
 
@@ -285,3 +294,301 @@ export const contractParts = (env, envState) => [
   { id: "reward", label: "Reward spec", done: (envState?.evals || []).length > 0 },
   { id: "episode", label: "Episode contract", done: true },
 ];
+
+/* ── tools: arguments and their allowed values (the contract's spec) ─────── */
+
+/*
+  Each tool's arguments, with their type and what values the contract allows
+  — enums, ranges, required flags. Read from the agent's code at build time
+  ("Taking each tool's signature from the code rather than its name, so the
+  arguments and their permitted values are exact"); the mock keeps the known
+  signatures here and derives a plain one for any other tool. Corrections
+  made after the build (`envState.toolArgEdits`, keyed "tool.arg") lay over
+  them — each one minted an environment version.
+
+  An argument: { name, type: str|int|float|bool|enum|date, required,
+  values?: [..] (enum, or a bool that must be one value), min?, max?
+  (number, or a word like "order total"), unit?, format?, note? }
+*/
+/*
+  Where the names come from, in order: the tool's own signature as the build
+  read it (`tool.args`, e.g. issue_refund(order_id, amount, caller_confirmed)),
+  else the handler the World tab shows (`toolImplFor`), so the two never
+  disagree. What each argument allows comes from `toolArgSpec.js` — by tool
+  and argument where it differs, else by argument name.
+*/
+/* "order_id: str, email: str | None = None" → [{ name, pyType, optional }]. */
+const parseSignature = (sig) => String(sig || "").split(/,(?![^[]*\])/).map((x) => x.trim()).filter((x) => x && !x.startsWith("*")).map((x) => {
+  const [name, rest = ""] = x.split(":").map((y) => y.trim());
+  return { name, pyType: rest.split("=")[0].replace(/\| None/, "").trim(), optional: /=/.test(rest) };
+});
+const PY_TYPE = { str: "str", int: "int", float: "float", bool: "bool", dict: "object", "list[str]": "enum" };
+
+const specFor = (tool, name, pyType) => ({ type: PY_TYPE[pyType] || "str", ...argSpecOf(tool, name) });
+
+/* Any other tool: an id named for what it acts on ("cancel_booking" → booking_id). */
+const derivedArgs = (tool) => {
+  const parts = String(tool?.name || "").split("_");
+  const noun = parts.length > 1 ? parts.slice(1).join("_") : null;
+  return noun ? [{ name: `${noun}_id`, type: "str", required: true }] : [];
+};
+
+const baseArgsOf = (tool) => {
+  if (Array.isArray(tool?.args)) {
+    return tool.args.map((name) => ({ name, required: true, ...specFor(tool.name, name, null) }));
+  }
+  const sig = toolImplFor(tool).code.match(/def [a-z0-9_]+\((.*?)\) ->/)?.[1] || "";
+  if (sig.includes("**")) return derivedArgs(tool);
+  return parseSignature(sig).map((a) => ({ name: a.name, required: !a.optional, ...specFor(tool.name, a.name, a.pyType) }));
+};
+
+const argKey = (tool, arg) => `${tool}.${arg}`;
+
+/** One tool's arguments, corrections applied. */
+export const toolArgsOf = (tool, envState) => {
+  const base = baseArgsOf(tool);
+  const edits = envState?.toolArgEdits || {};
+  return base.map((a) => {
+    const e = edits[argKey(tool.name, a.name)];
+    if (!e) return a;
+    const { at, envVersion, from, ...change } = e;
+    return { ...a, ...change, editedIn: envVersion || null };
+  });
+};
+
+/** "order_id · email · phone", "0–order total £", "true only", "A-#####" — what the contract allows. */
+export const allowedLine = (a) => {
+  if (!a) return "";
+  if (a.type === "enum") return (a.values || []).join(" · ");
+  if (a.type === "bool") return a.values?.length === 1 ? `${a.values[0]} only` : "true · false";
+  if (a.min != null || a.max != null) {
+    const words = typeof a.min !== "number" || typeof a.max !== "number";
+    const unit = a.unit && a.unit !== "£" ? (words ? `, in ${a.unit}` : ` ${a.unit}`) : "";
+    const pre = a.unit === "£" ? "£" : "";
+    const lo = a.min != null ? `${typeof a.min === "number" ? pre : ""}${a.min}` : "any";
+    const hi = a.max != null ? `${typeof a.max === "number" ? pre : ""}${a.max}` : "any";
+    return a.min === a.max ? `${lo} only${unit}` : `${lo}–${hi}${unit}`;
+  }
+  return a.format || "any";
+};
+
+/** "order_id: str (A-#####) · amount: float (£0–order total)" — one tool's signature, as the build narrates it. */
+export const argsSignatureLine = (tool, envState) => toolArgsOf(tool, envState)
+  .map((a) => {
+    const allowed = allowedLine(a);
+    const extra = [allowed !== "any" ? allowed : null, a.note].filter(Boolean).join(" — ");
+    return `${a.name}: ${a.type}${extra ? ` (${extra})` : ""}`;
+  })
+  .join(" · ");
+
+/** An argument that rules values out — a list, a fixed yes/no, or a range. Plain formats (A-#####) aren't limits. */
+export const isArgLimit = (a) => a.type === "enum" || (a.type === "bool" && a.values?.length === 1) || a.min != null || a.max != null;
+
+/** Every tool on the contract with its arguments — what the Contract tab lists. */
+export const contractToolsOf = (env, envState) => (env?.tools || []).map((t) => ({ ...t, args: toolArgsOf(t, envState) }));
+
+/* ── use cases, with corrections ─────────────────────────────────────────── */
+
+/**
+ * The use cases the contract lists, each with an id that survives
+ * rewording — corrections (`envState.useCaseChanges`) keep the id and
+ * record the new words, the way rule changes do.
+ */
+export const contractUseCasesOf = (env, envState) => {
+  const changes = envState?.useCaseChanges || [];
+  const removed = new Set(changes.filter((c) => c.kind === "removed").map((c) => c.id));
+  const base = contractFor(env).useCases.map((text) => {
+    const id = stableCaseId(text);
+    const last = [...changes].reverse().find((c) => c.id === id && c.kind === "changed");
+    return { id, text: last?.to || text, original: text, changedIn: last?.envVersion || null };
+  });
+  const added = changes.filter((c) => c.kind === "added").map((c) => ({ id: c.id, text: c.to, original: null, changedIn: c.envVersion }));
+  return [...base, ...added].filter((u) => !removed.has(u.id));
+};
+
+/* ── correcting the contract after the build (v7) ────────────────────────── */
+
+/*
+  A correction to the contract — a rule, a use case, or the values a tool
+  argument allows — is a change to this environment's spec. Each one states
+  what it costs before it lands ("This creates environment v4; 6 scenarios
+  that use issue_refund will be marked Re-check"), then mints the next
+  environment version and marks the scenarios that depend on it Re-check.
+  Everything else carries over to the new version unchanged.
+
+    edit = { target: "rule" | "useCase" | "toolArg", op: "add" | "edit" | "remove",
+             id?, text?, tool?, arg?, values?, add?, remove?, min?, max? }
+
+  The chat (chatActions.js) and the Contract tab's Edit both go through
+  `contractEditPlan` → `plan.patch(latestEnvState)`.
+*/
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const clip = (s, n = 64) => (String(s || "").length > n ? `${String(s).slice(0, n - 1)}…` : String(s || ""));
+
+const rowsOf = (envState) => (envState?.scenarios || []).filter((r) => !r.retired && !r.archived);
+
+/* The scenarios a rule touches — the ones testing it, and the ones whose
+   flow calls a tool it names — exactly as the Scenarios tab will read them. */
+const ruleDependents = (env, envState, change) => {
+  const known = knownToolsFor(env, envState);
+  const probe = { ...envState, ruleChanges: [change] };
+  const rules = rulesOf(env, envState);
+  return rowsOf(envState).filter((row) => ruleOfScenario(row, rules)?.id === change.id
+    || ruleChangesOnFlow(row, { env, envState: probe, tools: requiredToolsOf(row, known) }).length > 0).map((r) => r.id);
+};
+
+const toolDependents = (env, envState, tool) => {
+  const known = knownToolsFor(env, envState);
+  return rowsOf(envState).filter((row) => requiredToolsOf(row, known).includes(tool)
+    || subGoalsOfScenario(row, env, envState).some((g) => g.id === `SG-tool-${tool}`)).map((r) => r.id);
+};
+
+const caseDependents = (env, envState, uc) => {
+  const tool = String(uc.original || uc.text).match(/using ([a-z0-9_]+)\.?$/i)?.[1];
+  const byTool = tool ? new Set(toolDependents(env, envState, tool)) : new Set();
+  return rowsOf(envState).filter((row) => (row.useCase && (stableCaseId(row.useCase) === uc.id || row.useCase === uc.text || row.useCase === uc.original))
+    || byTool.has(row.id)).map((r) => r.id);
+};
+
+const nextRuleId = (env, envState) => {
+  const ids = [...(env?.rules || []).map((_, i) => i + 1), ...(envState?.ruleChanges || []).map((c) => parseInt(String(c.id).replace(/\D/g, ""), 10) || 0)];
+  return `R${Math.max(0, ...ids) + 1}`;
+};
+
+const sameList = (a = [], b = []) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * What a correction would do, before it lands: { ok, error?, title, subject,
+ * next, affected[], costLine, detail, patch(latestEnvState) }.
+ */
+export const contractEditPlan = (env, envState, edit) => {
+  const world = withPinnedWorld(env, envState) || env;
+  const fail = (error) => ({ ok: false, error });
+  /* Named as the environment version it mints (a snapshot — envSnapshot.js);
+     the world version underneath is minted in `patch`. */
+  const next = nextSnapshotLabel(env, envState);
+  let kind;
+  let detail;
+  let subject;
+  let affected = [];
+  let title;
+  let apply;
+
+  if (edit.target === "rule") {
+    const rules = rulesOf(env, envState);
+    const rule = edit.op === "add" ? null : rules.find((r) => r.id.toLowerCase() === String(edit.id || "").toLowerCase());
+    if (edit.op !== "add" && !rule) return fail(`There's no rule ${edit.id || ""} on this contract. Rules are ${rules.map((r) => r.id).join(", ") || "none yet"}.`);
+    const text = String(edit.text || "").trim().replace(/^["“]|["”]$/g, "");
+    if (edit.op !== "remove" && !text) return fail("Say what the rule should read.");
+    if (edit.op === "edit" && text === rule.text) return fail(`${rule.id} already reads that way — nothing to change.`);
+    kind = "rules";
+    const id = rule?.id || nextRuleId(env, envState);
+    const probe = edit.op === "add"
+      ? { id, kind: "added", to: text }
+      : { id, kind: "changed", to: edit.op === "remove" ? rule.text : text };
+    affected = ruleDependents(env, envState, probe);
+    subject = rule ? `that test or walk through rule ${id}` : "that the new rule touches";
+    title = edit.op === "add" ? `Add rule ${id}` : edit.op === "remove" ? `Remove rule ${id}` : `Change rule ${id}`;
+    detail = edit.op === "add" ? `Rule ${id} added: ${clip(text)}` : edit.op === "remove" ? `Rule ${id} removed: ${clip(rule.text)}` : `Rule ${id} changed: ${clip(text)}`;
+    apply = (es, label, now) => {
+      const entries = edit.op === "remove"
+        ? [{ id, kind: "removed", envVersion: label, at: now, scenarios: affected },
+          /* Re-check the scenarios that tested it or walked through it. */
+          { id, kind: "changed", to: rule.text, envVersion: label, at: now, scenarios: affected, removal: true }]
+        : [{ ...probe, envVersion: label, at: now, scenarios: affected }];
+      return { ruleChanges: [...(es?.ruleChanges || []), ...entries] };
+    };
+  } else if (edit.target === "useCase") {
+    const list = contractUseCasesOf(env, envState);
+    const uc = edit.op === "add" ? null : list.find((u) => u.id.toLowerCase() === String(edit.id || "").toLowerCase());
+    if (edit.op !== "add" && !uc) return fail(`There's no use case ${edit.id || ""} on this contract.`);
+    const text = String(edit.text || "").trim().replace(/^["“]|["”]$/g, "");
+    if (edit.op !== "remove" && !text) return fail("Say what the use case should read.");
+    kind = "contract";
+    const id = uc?.id || stableCaseId(text);
+    if (edit.op === "add" && list.some((u) => u.id === id)) return fail(`That use case is already on the contract (${id}).`);
+    affected = uc ? caseDependents(env, envState, uc) : [];
+    subject = uc ? `in use case ${id}` : "in the new use case";
+    title = edit.op === "add" ? "Add a use case" : edit.op === "remove" ? `Remove use case ${id}` : `Change use case ${id}`;
+    detail = edit.op === "add" ? `Use case ${id} added: ${clip(text)}` : edit.op === "remove" ? `Use case ${id} removed: ${clip(uc.text)}` : `Use case ${id} reworded: ${clip(text)}`;
+    apply = (es, label, now) => ({
+      useCaseChanges: [...(es?.useCaseChanges || []), {
+        id, kind: { add: "added", edit: "changed", remove: "removed" }[edit.op], ...(edit.op !== "remove" && { to: text }), envVersion: label, at: now, scenarios: affected,
+      }],
+    });
+  } else if (edit.target === "toolArg") {
+    const tool = (world?.tools || []).find((t) => t.name === edit.tool);
+    if (!tool) return fail(`There's no tool ${edit.tool || ""} on this contract.`);
+    const args = toolArgsOf(tool, envState);
+    const arg = args.find((a) => a.name === edit.arg) || (args.length === 1 ? args[0] : null);
+    if (!arg) return fail(`${tool.name} takes ${args.map((a) => a.name).join(", ") || "no arguments"} — say which one.`);
+    let change = null;
+    if (arg.type === "enum" || (arg.type === "bool" && edit.values)) {
+      const cur = arg.values || [];
+      const values = edit.values
+        ? edit.values
+        : edit.add ? [...new Set([...cur, ...edit.add])]
+          : edit.remove ? cur.filter((v) => !edit.remove.includes(v)) : cur;
+      if (!values.length) return fail(`${tool.name}.${arg.name} has to allow at least one value.`);
+      if (edit.remove && edit.remove.every((v) => !cur.includes(v))) return fail(`${tool.name}.${arg.name} doesn't allow ${edit.remove.join(", ")} now — it allows ${cur.join(", ")}.`);
+      if (sameList(values, cur)) return fail(`${tool.name}.${arg.name} already allows exactly that.`);
+      change = { type: arg.type === "bool" ? "bool" : "enum", values };
+    } else if (edit.min != null || edit.max != null) {
+      const min = edit.min != null ? edit.min : arg.min;
+      const max = edit.max != null ? edit.max : arg.max;
+      if (typeof min === "number" && typeof max === "number" && min > max) return fail(`The lowest value (${min}) is above the highest (${max}).`);
+      if (min === arg.min && max === arg.max) return fail(`${tool.name}.${arg.name} already allows ${allowedLine(arg)}.`);
+      change = { min, max };
+    } else if (edit.values) {
+      change = { type: "enum", values: edit.values };
+    } else {
+      return fail(`Say what ${tool.name}.${arg.name} should allow — a list of values, or a range like 0 to 500.`);
+    }
+    kind = "contract";
+    affected = toolDependents(env, envState, tool.name);
+    subject = `that use ${tool.name}`;
+    const after = { ...arg, ...change };
+    title = `${tool.name}.${arg.name}: ${allowedLine(arg)} → ${allowedLine(after)}`;
+    detail = `${tool.name}.${arg.name} allows ${allowedLine(after)} (was ${allowedLine(arg)})`;
+    apply = (es, label, now) => ({
+      toolArgEdits: { ...(es?.toolArgEdits || {}), [argKey(tool.name, arg.name)]: { ...change, from: allowedLine(arg), envVersion: label, at: now } },
+    });
+  } else {
+    return fail("That isn't a part of the contract I can change.");
+  }
+
+  const n = affected.length;
+  const costLine = n
+    ? `This creates environment ${next}; ${plural(n, "scenario")} ${subject} will be marked Re-check.`
+    : `This creates environment ${next}; there are no scenarios ${subject}, so none is marked Re-check.`;
+
+  /* Against the newest state: mint the version (folding in any edits still
+     pending, as saving them would), record the correction, and carry every
+     scenario that doesn't depend on it over to the new version. */
+  const patch = (latest = envState) => {
+    const now = new Date().toISOString();
+    const pending = pendingEnvChanges(latest);
+    const list = latest?.envVersions?.length ? latest.envVersions : [...environmentVersions(env, latest)].reverse();
+    const minted = nextEnvVersion(env, latest, {
+      changed: [...new Set([...pending.map((c) => c.kind), kind])],
+      note: [detail, ...pending.map((c) => c.detail).filter(Boolean)].slice(0, 3).join("; "),
+      now,
+    });
+    const hit = new Set(affected);
+    const scenarios = (latest?.scenarios || []).map((row) => {
+      if (hit.has(row.id) || row.retired || row.archived) return row;
+      if (proofStatus(row, env, latest).stale) return row;
+      const on = row.provedOn || [provedAgainst(row, env, latest)];
+      return { ...row, provedOn: [...new Set([...on.filter(Boolean), minted.label])] };
+    });
+    return {
+      envVersions: [...list, minted],
+      activeEnvVersion: minted.label,
+      unsavedEnvChanges: [],
+      scenarios,
+      ...apply(latest, minted.label, now),
+    };
+  };
+
+  return { ok: true, title, subject, next, affected, costLine, detail, kind, patch };
+};

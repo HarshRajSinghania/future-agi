@@ -9,8 +9,10 @@ import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import { SectionCard } from "../components/primitives";
 import TwinLogo from "../components/TwinLogo";
+import SecretRefField from "../agents/connect/SecretRefField";
 import { twinById, twinsByCategory } from "../_mock/twins";
 import { useCreateTwinEnv, defaultEnvName } from "../twins/useCreateTwinEnv";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * Create an environment whose world is a live sandbox of one or more
@@ -49,7 +51,8 @@ export default function NewTwinEnvironment() {
   const [searchParams] = useSearchParams();
   const preselect = searchParams.get("service");
   return (
-    <Box sx={{ p: 3 }}>
+    /* Page gutter matches the other Environments screens; the composer adds none of its own. */
+    <Box sx={{ p: 2 }}>
       <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 2 }}>
         <Tooltip arrow title="Back to environments">
           <IconButton size="small" onClick={() => navigate(paths.dashboard.simulate.environments)}>
@@ -76,7 +79,7 @@ export default function NewTwinEnvironment() {
  * tab can embed it inline. When embedded there is no back-arrow header;
  * the gallery tabs provide navigation context.
  */
-export function TwinComposer({ preselect, embedded = false }) {
+export function TwinComposer({ preselect }) {
   const createTwinEnv = useCreateTwinEnv();
   const [selected, setSelected] = useState(
     preselect && twinById(preselect) ? [preselect] : [],
@@ -136,13 +139,13 @@ export function TwinComposer({ preselect, embedded = false }) {
       ttlMinutes: ttl === "persistent" ? null : Number(ttl),
       agent: {
         sdkEndpoint: sdkEndpoint.trim(),
-        authToken: authToken.trim() || null,
+        authTokenRef: authToken.trim() || null,
       },
     });
   };
 
   return (
-    <Box sx={{ p: embedded ? 0 : 3 }}>
+    <Box sx={{ p: 0 }}>
       {/*
         One-liner explainer. Sits above the picker as prose rather than
         a component — the surrounding page already frames this as
@@ -177,8 +180,8 @@ export function TwinComposer({ preselect, embedded = false }) {
                       {cat.items.map((t) => {
                         const on = selected.includes(t.id);
                         return (
-                          <Box key={t.id} onClick={() => toggle(t.id)}
-                            sx={{
+                          <Box key={t.id} {...clickable(() => toggle(t.id), { role: "checkbox", checked: on })}
+                            sx={{ ...focusRing,
                               p: 1.25, borderRadius: 1.25, cursor: "pointer",
                               border: "1px solid",
                               borderColor: (th) => on
@@ -245,15 +248,16 @@ export function TwinComposer({ preselect, embedded = false }) {
                     {showAuth ? "Hide auth token" : "Auth token (optional)"}
                   </Button>
                   {showAuth && (
-                    <TextField
-                      fullWidth size="small" type="password"
-                      value={authToken}
-                      onChange={(e) => setAuthToken(e.target.value)}
-                      placeholder="Bearer …"
-                      sx={{ mt: 1, "& .MuiInputBase-input": { typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" } }}
-                      helperText="Only if your endpoint requires an Authorization header."
-                      FormHelperTextProps={{ sx: { typography: "s3", mx: 0 } }}
-                    />
+                    <Box sx={{ mt: 1 }}>
+                      {/* A reference, never the token — the same field the connect flows use. */}
+                      <SecretRefField
+                        fullWidth
+                        value={authToken}
+                        onChange={setAuthToken}
+                        placeholder="vault://acme/sim/endpoint_token"
+                        helper="Only if your endpoint requires an Authorization header. A path in your secret manager — the token itself never leaves it."
+                      />
+                    </Box>
                   )}
                 </Box>
               </Stack>
@@ -278,7 +282,7 @@ export function TwinComposer({ preselect, embedded = false }) {
 
             <SectionCard
               title="4 · Lifetime"
-              subtitle="How long the sandbox stays alive. Short-lived envs auto-expire."
+              subtitle="How long the sandbox stays alive. Short-lived environments auto-expire."
             >
               <Box sx={{ p: 2 }}>
                 <Stack spacing={0.5}>
@@ -340,7 +344,6 @@ export function TwinComposer({ preselect, embedded = false }) {
 }
 TwinComposer.propTypes = {
   preselect: PropTypes.string,
-  embedded: PropTypes.bool,
 };
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
@@ -377,8 +380,8 @@ const TTL_OPTIONS = [
 function TtlChip({ label, sub, icon, on, onClick }) {
   return (
     <Stack direction="row" alignItems="center" spacing={1}
-      onClick={onClick}
-      sx={{
+      {...clickable(onClick, { role: "radio", checked: on })}
+      sx={{ ...focusRing,
         px: 1.25, py: 1, borderRadius: 1, cursor: "pointer",
         border: "1px solid",
         borderColor: (th) => on

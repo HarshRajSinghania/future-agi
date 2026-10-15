@@ -26,12 +26,15 @@ const PersonaCreateEditForm = ({
   onSuccess,
   onCancel,
   editPersona,
+  prefill,
   type = AGENT_TYPES.VOICE,
 }) => {
   const isEditMode = Boolean(editPersona);
+  /* `prefill` starts a new persona from existing values (e.g. saving a
+     scenario's caller to the library) — still a create, unlike editPersona. */
   const form = useForm({
     defaultValues: getPersonaDefaultValues({
-      ...editPersona,
+      ...(editPersona || prefill),
       simulationType: type,
     }),
     resolver: zodResolver(PersonCreateValidationSchema),
@@ -208,6 +211,7 @@ PersonaCreateEditForm.propTypes = {
   onSuccess: PropTypes.func,
   onCancel: PropTypes.func,
   editPersona: PropTypes.object,
+  prefill: PropTypes.object,
   type: PropTypes.string,
 };
 

@@ -66,8 +66,8 @@ export default function CoverageMatrix({ scenarios, env, onClose }) {
         What this panel answers
       </Typography>
       <Typography sx={{ typography: "s2", color: (t) => alpha(t.palette.common.white, 0.85), mb: 1.5 }}>
-        Not "how many tests do we have" — but{" "}
-        <b style={{ color: "#fff" }}>"what kinds of situations did we forget to test?"</b>
+        Not &ldquo;how many tests do we have&rdquo; — but{" "}
+        <b style={{ color: "#fff" }}>&ldquo;what kinds of situations did we forget to test?&rdquo;</b>
       </Typography>
 
       <Typography sx={{ typography: "s3", fontWeight: 700, color: (t) => alpha(t.palette.common.white, 0.7), textTransform: "uppercase", letterSpacing: 0.4, fontSize: 10.5, mb: 0.75 }}>
@@ -148,9 +148,9 @@ export default function CoverageMatrix({ scenarios, env, onClose }) {
             {`${scenarios.length} scenarios · what kinds of situations did we forget to test?`}
           </Typography>
         </Box>
-        <SummaryStat label="Axes"   value={`${Math.round(overall * 100)}%`}  color={toneColor(overall)} />
-        <SummaryStat label="Pairs"  value={`${Math.round(pairAvg * 100)}%`}  color={toneColor(pairAvg)} />
-        <SummaryStat label="Forced" value={`${forced.length - forcedMissing.length}/${forced.length}`} color={toneColor((forced.length - forcedMissing.length) / Math.max(1, forced.length))} />
+        <SummaryStat label="Axes"   value={`${Math.round(overall * 100)}%`}  color={toneText(overall)} />
+        <SummaryStat label="Pairs"  value={`${Math.round(pairAvg * 100)}%`}  color={toneText(pairAvg)} />
+        <SummaryStat label="Forced" value={`${forced.length - forcedMissing.length}/${forced.length}`} color={toneText((forced.length - forcedMissing.length) / Math.max(1, forced.length))} />
         {onClose && (
           <IconButton size="small" onClick={onClose} aria-label="Close coverage">
             <Iconify icon="eva:close-fill" width={18} />
@@ -168,7 +168,7 @@ export default function CoverageMatrix({ scenarios, env, onClose }) {
         },
       }}>
         <TableHead>
-          <TableRow>
+          <TableRow sx={{ "&:last-of-type .MuiTableCell-root": { borderColor: "divider" } }}>
             <TableCell sx={headerCellSx} width={220}>Axis</TableCell>
             <TableCell sx={headerCellSx} width={110} align="right">Covered</TableCell>
             <TableCell sx={headerCellSx}>Missing levels</TableCell>
@@ -194,7 +194,7 @@ export default function CoverageMatrix({ scenarios, env, onClose }) {
                   <MicroBar ratio={a.ratio} />
                   <Typography sx={{
                     typography: "s2", fontWeight: 600, fontVariantNumeric: "tabular-nums",
-                    color: toneColor(a.ratio),
+                    color: toneText(a.ratio),
                     minWidth: 36, textAlign: "right",
                   }}>
                     {a.hit}/{a.total}
@@ -406,15 +406,14 @@ CoverageMatrix.propTypes = {
   onClose: PropTypes.func,
 };
 
+/* The product's DataTable header: no fill (the theme's grey gradient off), a quiet 13px title. */
 const headerCellSx = {
-  typography: "s3",
-  fontWeight: 600,
-  color: "text.subtitle",
-  fontSize: 11,
-  textTransform: "uppercase",
-  letterSpacing: 0.6,
-  py: 0.75,
-  bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.02 : 0.015),
+  fontSize: 13,
+  fontWeight: 500,
+  color: "text.secondary",
+  py: 1,
+  bgcolor: "background.paper",
+  backgroundImage: "none",
 };
 
 function SummaryStat({ label, value, color }) {
@@ -468,6 +467,13 @@ function toneColor(ratio) {
   if (r < 0.34) return "#DC2626";
   if (r < 0.67) return "#CA8A04";
   return "#16A34A";
+}
+
+/** Same tiers for text — the amber middle band reads as neutral words; the
+ *  micro-bar beside it carries the colour. */
+function toneText(ratio) {
+  const c = toneColor(ratio);
+  return c === "#CA8A04" ? "text.primary" : c;
 }
 
 function AxisPick({ label, value, onChange, exclude }) {

@@ -6,7 +6,7 @@ import { SegmentedTabs } from "src/components/tabs/tabs";
 import Iconify from "src/components/iconify";
 import { SectionCard } from "../components/primitives";
 import { contractFor } from "../_mock/contract";
-import { ACTOR_LIBRARY, actorsOf } from "../_mock/actors";
+import { actorsOf, castOf } from "../_mock/actors";
 
 /**
  * The capability graph.
@@ -21,7 +21,7 @@ import { ACTOR_LIBRARY, actorsOf } from "../_mock/actors";
  * and mangles SVG geometry.
  */
 const BRANCHES = [
-  { id: "tools", label: "Tools", color: "#EA580C", icon: "solar:settings-minimalistic-linear" },
+  { id: "tools", label: "Tools", color: "#EA580C", neutralText: true, icon: "solar:settings-minimalistic-linear" },
   { id: "flows", label: "Flows", color: "#2563EB", icon: "solar:route-linear" },
   { id: "people", label: "Personas & actors", color: "#7857FC", icon: "solar:users-group-rounded-linear" },
   { id: "guardrails", label: "Guardrails", color: "#DC2626", icon: "solar:shield-check-linear" },
@@ -55,7 +55,7 @@ export default function CapabilityGraph({ env, envState, onGo }) {
     flows: (contract.useCases || []).map((u) => u.replace(/ using .*/, "").replace(/^Refuse the request that would break: /, "Refuse: ")),
     people: [
       ...personaNames,
-      ...ACTOR_LIBRARY.filter((a) => actorIds.includes(a.id)).map((a) => a.name),
+      ...castOf(env, envState).map((a) => a.name),
     ],
     guardrails: contract.hardRules || [],
   };
@@ -141,16 +141,18 @@ export default function CapabilityGraph({ env, envState, onGo }) {
 
           {placed.map((b) => {
             const leaves = b.items.slice(0, MAX_LEAVES);
+            // Amber/orange stays on the hub fill, stroke and dots — never on the words.
+            const labelFill = b.neutralText ? strong : b.color;
             return (
               <g key={b.id}>
                 {/* hub */}
                 <rect x={colX - 10} y={b.top} width={130} height={headH - 6} rx={6}
                   fill={alpha(b.color, theme.palette.mode === "dark" ? 0.16 : 0.09)}
                   stroke={alpha(b.color, 0.45)} strokeWidth={1} />
-                <text x={colX + 2} y={b.top + 18} fill={b.color} fontSize={11} fontWeight={700}>
+                <text x={colX + 2} y={b.top + 18} fill={labelFill} fontSize={11} fontWeight={700}>
                   {b.label}
                 </text>
-                <text x={colX + 112} y={b.top + 18} textAnchor="end" fill={b.color} fontSize={11} fontWeight={700}>
+                <text x={colX + 112} y={b.top + 18} textAnchor="end" fill={labelFill} fontSize={11} fontWeight={700}>
                   {b.items.length}
                 </text>
 

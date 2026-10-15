@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import {
   Avatar,
   AvatarGroup,
@@ -44,7 +45,7 @@ const mapGraph = (graph) => {
   };
 };
 
-export default function AgentListView() {
+export default function AgentListView({ embedded = false }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { setCurrentAgent } = useAgentPlaygroundStoreShallow((s) => ({
@@ -279,13 +280,14 @@ export default function AgentListView() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        p: 2,
+        p: embedded ? 0 : 2,
         gap: 1.5,
         overflow: "hidden",
         minHeight: 0,
       }}
     >
-      {/* Header */}
+      {/* Header — the Agents landing supplies its own when embedded. */}
+      {!embedded && (
       <Box
         sx={{
           display: "flex",
@@ -323,6 +325,7 @@ export default function AgentListView() {
           </Typography>
         </Button>
       </Box>
+      )}
 
       {/* Search + bulk actions / create */}
       <Box
@@ -414,7 +417,7 @@ export default function AgentListView() {
               </Typography>
             </Button>
           </Box>
-        ) : (
+        ) : embedded ? null : (
           <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
             <Button
               variant="outlined"
@@ -500,3 +503,5 @@ export default function AgentListView() {
     </Box>
   );
 }
+
+AgentListView.propTypes = { embedded: PropTypes.bool };

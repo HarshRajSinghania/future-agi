@@ -1,0 +1,952 @@
+/**
+ * The workspace's connected agents.
+ *
+ * An agent is connected in one of two places — while building an environment,
+ * or from the Agents page — and both have to land in the same list. Each
+ * environment keeps its own copy of the agent it tests, so the list is built
+ * by identity: two environments pointed at the same Vapi assistant are one
+ * agent with one version history, used in two places.
+ *
+ * An agent version is not a prompt. It is a snapshot of everything that
+ * decides behaviour — instructions, model, voice, tools, knowledge and how we
+ * reach it. How much of that we can see depends on where the agent lives: a
+ * hosted platform hands us its whole config, a repo its code at a commit, an
+ * endpoint nothing but what it does.
+ */
+import { getAgentType } from "./agentTypes";
+import { agentVersions, currentAgentVersion, versionNumber } from "./versions";
+import { agentToolsFor } from "./toolFit";
+import { agentPromptOf } from "./agentPrompt";
+import { getEnvironment } from "./environments";
+import { installedRepos, repoNameOf } from "./integrations";
+
+/* ── identity ─────────────────────────────────────────────────────────────── */
+
+const slugOf = (s) => String(s || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+const hash = (s) => {
+  let h = 0;
+  const str = String(s || "");
+  for (let i = 0; i < str.length; i += 1) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  return Math.abs(h);
+};
+
+/**
+ * One spelling per repository: "acme/repo", "github.com/acme/repo",
+ * "https://github.com/acme/repo.git/" are all the same place. Everything that
+ * stores or compares a repo URL goes through this.
+ */
+export const normalizeRepoUrl = (url) => {
+  let u = String(url || "").trim().replace(/\.git$/i, "").replace(/\/+$/, "");
+  if (!u) return "";
+  if (/^[\w.-]+\/[\w.-]+$/.test(u)) u = `https://github.com/${u}`;
+  else if (/^(github|gitlab|bitbucket)\.(com|org)\//i.test(u)) u = `https://${u}`;
+  return u.replace(/^http:\/\//i, "https://");
+};
+
+/** A repo agent is its repository + entry file — a monorepo holds several. */
+export const repoAgentKey = (url, entry) => `repo:${normalizeRepoUrl(url).toLowerCase()}${entry ? `#${String(entry).toLowerCase()}` : ""}`;
+
+/** Stable identity across environments — provider + where it lives. Once
+    an agent has a key it keeps it, even when a later version reaches it a
+    different way. */
+export const agentKeyOf = (agent) => {
+  if (agent?.key) return agent.key;
+  const v = agent?.values || {};
+  const d = agent?.definition || {};
+  /* Same rule as agentRecordFromSource, wherever it was connected: a hosted
+     assistant is its provider + assistant ID — a linked repository is an
+     attribute, not who it is; a repo agent is its repository + entry. */
+  if (v.provider && v.provider !== "other" && v.agentId) return `${v.provider}:${String(v.agentId).toLowerCase()}`;
+  if (v.phoneNumber) return `phone:${String(v.phoneNumber).replace(/[^\d+]/g, "")}`;
+  const def = definitionOf(agent);
+  if (def.kind === "repo" && def.repoUrl) return repoAgentKey(def.repoUrl, def.entry);
+  const where = d.repoUrl || v.repoUrl || v.endpoint || v.sdkEndpoint || v.mcpUrl || agent?.location || null;
+  return where ? `${v.provider || agent?.sourceKind || "agent"}:${String(where).toLowerCase()}` : null;
+};
+
+/** An environment's agent always has an identity — when its connection
+    doesn't name where it lives, the environment it was connected for does. */
+export const envAgentKey = (agent, envId) => (agent ? agentKeyOf(agent) || `env:${envId}` : null);
+
+export const PROVIDER_LABELS = {
+  vapi: "Vapi", retell: "Retell AI", bland: "Bland.ai", elevenlabs: "ElevenLabs", livekit: "LiveKit",
+  openai_assistants: "OpenAI Assistants", langgraph: "LangGraph Cloud", crewai: "CrewAI", claude_agents: "Claude Agents",
+  github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket", other: "Custom platform",
+  builtin: "Future AGI",
+};
+
+/* Frameworks our SDK adapter wraps. The adapter serves the agent and reports
+   its structure — a graph, agents with handoffs, or a crew. */
+export const FRAMEWORK_META = {
+  langgraph: { label: "LangGraph", icon: "simple-icons:langgraph", structure: "Graph" },
+  "openai-agents": { label: "OpenAI Agents SDK", icon: "simple-icons:openai", structure: "Agents & handoffs" },
+  crewai: { label: "CrewAI", icon: "simple-icons:crewai", structure: "Crew" },
+};
+
+/*
+  An agent has two independent facts, and the environment flow keeps them
+  apart:
+    definition — where we READ what the agent is made of (a repo at a ref,
+                 the platform's config, a prompt pasted in, an uploaded
+                 bundle). Decides what the Files tab can show and whether
+                 Sync means anything.
+    runtime    — how we REACH it to run a simulation (the platform's API or
+                 phone line, an HTTP endpoint, the SDK). Making the copy a
+                 simulation drives is the platform's job, not the user's
+                 (see replication.js): code is built in our sandbox or run
+                 through the SDK, a hosted assistant is cloned or exported,
+                 and only an opaque endpoint is driven as it is.
+  A hosted platform is both at once. A bare endpoint is a runtime with no
+  readable definition.
+*/
+export const definitionOf = (agent) => {
+  if (agent?.definition) return agent.definition;
+  const v = agent?.values || {};
+  const sk = agent?.sourceKind;
+  if (sk === "builtin") return { kind: "builtin" };
+  if (sk === "framework") return { kind: "framework", framework: v.framework || null };
+  if (v.repoUrl || sk === "repo") return { kind: "repo", repoUrl: v.repoUrl || null, ref: agent?.ref?.value || v.ref || null };
+  if (sk === "upload") return { kind: "upload", bundle: agent?.location || null };
+  if (sk === "mcp" || v.mcpUrl) return { kind: "mcp" };
+  if (sk === "platform" || (v.provider && v.agentId) || agent?.typeId === "voice_platform" || agent?.typeId === "chat_openai") {
+    return { kind: "platform" };
+  }
+  return { kind: "none" };
+};
+
+/*
+  The reading surface, which is what the Files tab and Sync key off:
+    platform — a managed assistant; its full config is one API call away
+    repo     — code at a ref; prompt files, model config and tool defs
+    prompt   — instructions pasted in when it was connected
+    upload   — code read once from a bundle; nothing to re-read
+    endpoint — a black box we drive; we see what it does, not how
+    builtin  — built in Future AGI: its prompt, tools and model are defined
+               here and it runs here, so there is nothing external to read
+    framework — code wrapped by our SDK adapter (LangGraph, OpenAI Agents
+               SDK, CrewAI): the adapter serves it and reports its structure,
+               prompts, tools and model, so it reads like a repository
+    mcp      — legacy: environments that read tools from an MCP manifest
+*/
+export const sourceKindOf = (agent) => {
+  const d = definitionOf(agent).kind;
+  if (d === "none") return "endpoint";
+  /*
+    A prompt pasted in isn't a source of its own (RSI PRD, "Ways an agent
+    comes in": GitHub, upload, Vapi or Retell, built in Future AGI). On a
+    hosted platform we can reach by its agent ID it's that platform — we
+    import its configuration through the API. Otherwise the prompt runs here,
+    which is an agent built in Future AGI.
+  */
+  if (d === "prompt") {
+    const v = agent?.values || {};
+    return v.provider && v.provider !== "other" && v.agentId ? "platform" : "builtin";
+  }
+  return d;
+};
+
+const SOURCE_META = {
+  platform: { icon: "solar:cloud-linear" },
+  repo: { icon: "solar:code-linear", label: "Source repository" },
+  prompt: { icon: "solar:document-text-linear", label: "Pasted prompt" },
+  upload: { icon: "solar:cloud-upload-linear", label: "Code upload" },
+  endpoint: { icon: "solar:global-linear", label: "Endpoint" },
+  builtin: { icon: "solar:widget-add-linear", label: "Built in Future AGI" },
+  /* Label and icon come from the framework; this is the fallback. */
+  framework: { icon: "solar:layers-minimalistic-linear", label: "SDK adapter" },
+  mcp: { icon: "solar:plug-circle-linear", label: "MCP manifest" },
+};
+
+/** How we reach the agent when a simulation runs. */
+export const runtimeOf = (agent) => {
+  const v = agent?.values || {};
+  /* Built here, so it runs here — nothing of theirs to call or deploy. */
+  if (definitionOf(agent).kind === "builtin") {
+    return { kind: "platform", label: "Runs in Future AGI", where: "nothing to deploy", by: v.contact?.mode === "phone" ? "phone" : v.contact ? "web call" : null };
+  }
+  if (v.provider && v.agentId) {
+    const by = v.contact?.mode === "phone" ? `phone${v.contact.number ? ` ${v.contact.countryCode || ""} ${v.contact.number}` : ""}` : v.contact?.mode === "web" ? "web call" : null;
+    return { kind: "platform", label: `${PROVIDER_LABELS[v.provider] || "Hosted platform"} API`, where: v.agentId, by };
+  }
+  /* A pasted prompt runs here — an agent built in Future AGI. */
+  if (v.provider === "other" || definitionOf(agent).kind === "prompt") {
+    const by = v.contact?.mode === "phone" ? `phone${v.contact.number ? ` ${v.contact.countryCode || ""} ${v.contact.number}` : ""}` : "web call";
+    return { kind: "platform", label: "Runs in Future AGI", where: "nothing to deploy", by };
+  }
+  /* A phone number we dial — test only. */
+  if (v.phoneNumber) return { kind: "endpoint", label: "Phone number", where: `${v.countryCode || ""} ${v.phoneNumber}`.trim(), by: "phone" };
+  const url = v.endpoint || v.sdkEndpoint;
+  /* The adapter's serve() — still an endpoint we call, but one that speaks
+     the framework's own run loop. */
+  if (url && definitionOf(agent).kind === "framework") return { kind: "endpoint", label: "SDK adapter", where: url };
+  if (url) return { kind: "endpoint", label: "HTTP endpoint", where: url };
+  if (v.mcpUrl) return { kind: "endpoint", label: "MCP server", where: v.mcpUrl };
+  return { kind: "none", label: "Not recorded", where: "" };
+};
+
+/**
+ * Read from code (a repository or an upload), set to run through the SDK, but
+ * with nowhere to reach it — connected and versioned, but a simulation has
+ * nothing to drive yet. One set to the hosted sandbox needs nothing: we build
+ * it from the code ourselves.
+ */
+export const agentNeedsRuntime = (agent) => {
+  if (!agent) return false;
+  const kind = sourceKindOf(agent);
+  if (agent.values?.runLocation === "hosted") return false;
+  return (kind === "repo" || kind === "upload" || kind === "framework") && !runtimeOf(agent).where;
+};
+
+/** { kind, label, icon, syncable, where, runtime } — where we read it, whether we can re-read it, and how we reach it. */
+export const agentSourceOf = (agent) => {
+  const kind = sourceKindOf(agent);
+  const v = agent?.values || {};
+  const d = definitionOf(agent);
+  const meta = SOURCE_META[kind] || SOURCE_META.endpoint;
+  /* Linked through GitHub when its repository is in an installation right
+     now — however it was connected. If the installation went away, the agent
+     stays but can't be re-read, pushed to or fixed by PR. */
+  const repoName = d.repoUrl ? repoNameOf(normalizeRepoUrl(d.repoUrl)).toLowerCase() : null;
+  const viaApp = (kind === "repo" || kind === "framework") && !!repoName && installedRepos().some((r) => r.name.toLowerCase() === repoName);
+  const appLost = d.app === "github" && !viaApp;
+  /* A framework agent is named for its framework, wherever its code lives. */
+  const fw = kind === "framework" ? FRAMEWORK_META[d.framework] : null;
+  const label = kind === "platform"
+    ? (PROVIDER_LABELS[v.provider] || getAgentType(agent?.typeId)?.label || "Hosted platform")
+    : fw ? fw.label
+      : viaApp ? "GitHub" : appLost ? "GitHub · disconnected"
+        /* A GitHub repository the app can't see — read once, can't sync or open PRs. */
+        : kind === "repo" && /github\.com/i.test(d.repoUrl || "") ? "GitHub · app not installed" : meta.label;
+  const runtime = runtimeOf(agent);
+  const where = kind === "repo" ? (d.repoUrl ? `${d.repoUrl}${d.ref ? ` @ ${d.ref}` : ""}` : "repository not recorded")
+    : kind === "framework" ? [d.repoUrl && repoNameOf(normalizeRepoUrl(d.repoUrl)), d.entry || "entry not recorded"].filter(Boolean).join(" · ")
+    : kind === "upload" ? (d.bundle || "bundle")
+      : kind === "platform" ? (v.agentId || "")
+        : kind === "prompt" ? "pasted when connected"
+          : kind === "builtin" ? (d.kind === "prompt" ? "prompt written here" : `${d.model || "model not set"} · ${(d.tools || []).length} tool${(d.tools || []).length === 1 ? "" : "s"}`)
+            : runtime.where;
+  /* Sync re-reads the definition, so it needs one we can read again — a
+     framework agent is re-read by asking its adapter, wherever it runs. */
+  const syncable = kind === "platform" ? !!v.agentId : kind === "repo" ? !!d.repoUrl && !appLost
+    : kind === "framework" ? !!runtime.where : kind === "mcp";
+  /* A platform agent that lost its assistant ID — it can be re-read again
+     once the ID is back, so this is "reconnect", not "can't be synced". */
+  const idMissing = kind === "platform" && !v.agentId && v.provider !== "other";
+  const icon = fw ? fw.icon : viaApp || appLost ? "mdi:github" : meta.icon;
+  /* A phone number is named for how we reach it, whatever it pasted. */
+  if (v.phoneNumber) {
+    return { kind, label: v.closedPlatform ? `${CLOSED_LABELS[v.closedPlatform] || "Closed platform"} · phone` : "Phone number", icon: "solar:phone-linear", syncable: false, where: runtime.where, runtime, viaApp: false, appLost: false, idMissing: false, phone: true };
+  }
+  return { kind, label, icon, syncable, where, runtime, viaApp, appLost, idMissing, ...(fw && { framework: d.framework }) };
+};
+
+const CLOSED_LABELS = { sierra: "Sierra", decagon: "Decagon", intercom_fin: "Intercom Fin", zendesk: "Zendesk" };
+
+const tail = (s) => String(s || "").replace(/\/+$/, "").split("/").pop();
+
+/** A readable name — what the person would call this agent. */
+export const agentNameOf = (agent) => {
+  if (agent?.name) return agent.name;
+  const v = agent?.values || {};
+  const d = definitionOf(agent);
+  if (d.repoUrl) return tail(d.repoUrl);
+  if (v.provider && v.agentId) return v.agentId;
+  if (v.phoneNumber) return `Phone line ${`${v.countryCode || ""} ${v.phoneNumber}`.trim()}`;
+  const url = v.endpoint || v.sdkEndpoint || v.mcpUrl;
+  if (url) {
+    try { return new URL(url).hostname; } catch { return url; }
+  }
+  return agent?.location || "Connected agent";
+};
+
+/* ── turning a connect form into an agent record ──────────────────────────── */
+
+/* A credential the form captured: present, and — when it came as one — the
+   secret-manager reference it resolves through. A legacy raw value only
+   marks the flag; it is never copied onto the record. */
+const secretFlag = (flag, refKey, ref, legacy) => {
+  const r = typeof ref === "string" ? ref.trim() : "";
+  if (r) return { [flag]: true, [refKey]: r };
+  return legacy ? { [flag]: true } : {};
+};
+
+/**
+ * The connect panels hand back a `source` object (the same one the
+ * environment builder receives). Turned into the agent record every other
+ * surface reads — keeping everything the form asked for, because a field
+ * the person filled in and we threw away is a field they'll fill in again.
+ * Secrets are noted as present, never stored in the prototype.
+ */
+export const agentRecordFromSource = (source, now = new Date().toISOString()) => {
+  const kind = source?.kind || "repo";
+  const voice = source?.agentType === "voice";
+  const runtime = source?.runtime?.endpoint ? { endpoint: source.runtime.endpoint.trim(), ...secretFlag("hasToken", "tokenRef", source.runtime.tokenRef, source.runtime.token) } : {};
+  const linkedRepo = (source?.linkedRepo || source?.repoUrl || "").trim();
+  let record;
+
+  if (kind === "platform") {
+    const pasted = source?.agentMode === "prompt";
+    record = {
+      typeId: voice || !source?.agentType ? "voice_platform" : "chat_openai",
+      values: {
+        provider: source?.provider || "vapi",
+        ...(!pasted && { agentId: (source?.agentId || source?.value || "").trim() }),
+        ...secretFlag("hasApiKey", "apiKeyRef", source?.apiKeyRef, source?.apiKey),
+        ...(source?.callDirection && { callDirection: source.callDirection }),
+        ...(source?.contact && { contact: source.contact }),
+        /* The model the assistant runs, when listing the account told us. */
+        ...(!pasted && source?.model && { model: source.model }),
+        /* Watching production: on straight away for a hosted agent — we pull
+           its calls with the provider key. */
+        ...(!pasted && source?.observability && { observability: { on: true, since: now, project: source?.observeProject?.id || slugOf(source?.name || source?.agentName || source?.agentId) } }),
+      },
+      definition: pasted
+        ? { kind: "prompt", prompt: source?.prompt || "" }
+        : linkedRepo ? { kind: "platform", repoUrl: normalizeRepoUrl(linkedRepo) } : { kind: "platform" },
+    };
+  } else if (kind === "endpoint" && source?.phone) {
+    /* A phone number: we dial it, with the pasted instructions as the
+       reference for what it should do. Test only. */
+    const number = String(source.phoneNumber || source.value || "").replace(/^tel:/, "").trim();
+    record = {
+      typeId: "voice_sip",
+      values: {
+        phoneNumber: number,
+        ...(source.countryCode && { countryCode: source.countryCode }),
+        callDirection: "inbound",
+        contact: { mode: "phone-only", number, ...(source.countryCode && { countryCode: source.countryCode }) },
+        ...(source.closedPlatform && { closedPlatform: source.closedPlatform }),
+      },
+      definition: source.systemPrompt ? { kind: "prompt", prompt: source.systemPrompt } : { kind: "none" },
+    };
+  } else if (kind === "endpoint") {
+    record = {
+      typeId: voice ? "voice_sip" : "chat_webhook",
+      values: {
+        endpoint: (source?.value || "").trim(),
+        ...secretFlag("hasToken", "tokenRef", source?.tokenRef, source?.token),
+        /* HTTP or WebSocket, and where in its response the reply sits. */
+        ...(source?.transport && { transport: source.transport }),
+        ...(source?.replyPath && { replyPath: source.replyPath }),
+        ...(source?.callDirection && { callDirection: source.callDirection }),
+        /* An endpoint needs the team to add tracing — recorded as asked for,
+           and on once they confirm the snippet is in. */
+        ...(source?.observability && { observability: { on: false, requested: true } }),
+      },
+      definition: linkedRepo ? { kind: "repo", repoUrl: normalizeRepoUrl(linkedRepo), ref: "main" }
+        : source?.systemPrompt ? { kind: "prompt", prompt: source.systemPrompt }
+          : { kind: "none" },
+    };
+  } else if (kind === "builtin") {
+    /* Defined here — instructions, tools and model — and run here. */
+    record = {
+      typeId: voice ? "voice_platform" : "chat_openai",
+      values: { ...(source?.contact && { contact: source.contact }) },
+      definition: {
+        kind: "builtin",
+        prompt: source?.prompt || "",
+        model: source?.model || "gpt-4o",
+        ...(source?.temperature != null && { temperature: source.temperature }),
+        tools: source?.tools || [],
+      },
+    };
+  } else if (kind === "repo") {
+    record = {
+      typeId: "framework_agent",
+      values: runtime,
+      definition: {
+        kind: "repo", repoUrl: normalizeRepoUrl(source?.value), ref: source?.ref || "main", provider: source?.provider, entry: source?.entry || null,
+        ...(source?.githubApp && { app: "github", framework: source.framework }),
+        /* What the person confirmed (or corrected) on "Here's what we found". */
+        ...(source?.folder && { folder: source.folder }),
+        ...(source?.prompts?.length && { prompts: source.prompts }),
+        ...(source?.tools?.length && { tools: source.tools }),
+        ...(source?.model && { model: source.model }),
+        ...(source?.runCommand && { runCommand: source.runCommand }),
+      },
+    };
+  } else if (kind === "framework") {
+    /* Wrapped by the SDK adapter: serve() is how we reach it, and what the
+       adapter reported — structure, prompts, tools, model — is the version. */
+    record = {
+      typeId: "framework_agent",
+      values: runtime,
+      definition: {
+        kind: "framework", framework: source?.framework || "langgraph", entry: source?.entry || null,
+        ...(source?.graph && { graph: source.graph }),
+        ...(source?.agents && { agents: source.agents }),
+        ...(source?.guardrails?.length && { guardrails: source.guardrails }),
+        ...(source?.crew && { crew: source.crew }),
+        ...(source?.prompts?.length && { prompts: source.prompts }),
+        tools: source?.tools || [],
+        ...(source?.model && { model: source.model }),
+        /* Where its code lives, when they told us — improvements open a PR
+           there; without it they come back as a patch. */
+        ...(linkedRepo && { repoUrl: normalizeRepoUrl(linkedRepo), ref: source?.ref || "main", ...(source?.githubApp && { app: "github" }) }),
+      },
+    };
+  } else {
+    const bundle = (source?.files || []).map((f) => f.name).join(" + ") || source?.entry || "bundle";
+    record = {
+      typeId: "framework_agent",
+      values: runtime,
+      definition: { kind: "upload", bundle, entry: source?.entry || null },
+    };
+  }
+
+  /* How the platform copies it, when the connect flow settled it: an
+     override (a key without create scope runs on the exported definition),
+     where a code agent runs, and the endpoint acknowledgment. */
+  const runLocation = source?.runLocation || source?.runtime?.location;
+  record.values = {
+    ...record.values,
+    ...(source?.replicationMode && { replicationMode: source.replicationMode }),
+    ...(runLocation && { runLocation }),
+    ...(source?.endpointConsent && { endpointConsent: source.endpointConsent }),
+    /* What the person settled on "What we found" (code agents) and the
+       platform steps (Phase 2 sources). */
+    ...(source?.neverRunForReal && { neverRunForReal: source.neverRunForReal }),
+    ...(source?.repoTests && { repoTests: source.repoTests }),
+    ...(source?.testCredentialsRef && { testCredentialsRef: source.testCredentialsRef }),
+    ...(source?.channels?.length && { channels: source.channels }),
+    ...(source?.versioningOnAt && { versioningOnAt: source.versioningOnAt }),
+    ...(source?.releaseDetection && { releaseDetection: source.releaseDetection }),
+    /* Who it is and how it's reached — the New agent confirm step. */
+    ...(source?.owner && { owner: source.owner }),
+    ...(source?.languages?.length && { languages: source.languages }),
+    ...(source?.description && { description: source.description }),
+    ...(source?.reach && Object.keys(source.reach).length && { reach: source.reach }),
+    /* What importing or reading it found. */
+    ...(source?.retellKind && { retellKind: source.retellKind }),
+    ...(source?.fagiPrompts?.length && { fagiPrompts: source.fagiPrompts }),
+    ...(source?.gitHost && { gitHost: source.gitHost }),
+    ...(source?.localSdk && { localSdk: true }),
+    /* A hosted assistant imported into our sandbox with its tool code
+       uploaded — tested as a sealed copy (rsiModel's proofKindOf). */
+    ...(source?.importedCopy && { importedCopy: true }),
+    ...(source?.toolCodeUploaded && { toolCodeUploaded: true }),
+    ...(source?.toolCodeFiles?.length && { toolCodeFiles: source.toolCodeFiles }),
+  };
+  /* The Observe project picked at connect: an existing one is already
+     receiving traces; a new one waits for them (a hosted agent's key pulls
+     them straight away). */
+  const observe = source?.observeProject;
+  if (observe?.id) {
+    const own = record.values.observability;
+    record.values.observability = observe.mode === "existing"
+      ? { ...(own || {}), on: true, since: own?.since || now, project: observe.id }
+      : { ...(own || { on: false, requested: true }), project: observe.id };
+  }
+  /* Several agents working as one (a squad, a flow, handoffs), and what a
+     code read found beyond prompts, tools and model. */
+  record.definition = {
+    ...record.definition,
+    ...(source?.members?.length && { members: source.members }),
+    ...(source?.language && { language: source.language }),
+    ...(source?.installCommand && { installCommand: source.installCommand }),
+    ...(source?.modelAtRuntime && { modelAtRuntime: true }),
+    ...(source?.runtimePrompts?.length && { runtimePrompts: source.runtimePrompts }),
+    ...(source?.credentialKeys?.length && { credentialKeys: source.credentialKeys }),
+  };
+
+  /* Identity never comes out empty: the definition's location when there is
+     one, else how we reach it, else the name. No timestamps — connecting the
+     same agent twice must land on the same row. */
+  const d = record.definition;
+  const v = record.values;
+  /* A hosted assistant is its provider + ID, whatever repository it links;
+     a repository can hold several agents — the entry file tells them apart;
+     a pasted prompt is its instructions, not the name someone typed. */
+  /* A framework agent in a repository is that repository + entry, the same
+     agent a scan of the repo finds; otherwise its framework + where it's served. */
+  const key = v.phoneNumber ? `phone:${v.phoneNumber.replace(/[^\d+]/g, "")}`
+    : v.agentId ? `${v.provider}:${v.agentId.toLowerCase()}`
+    : d.repoUrl ? repoAgentKey(d.repoUrl, d.entry)
+      : kind === "framework" ? `framework:${d.framework}:${(v.endpoint || slugOf(source?.name)).toLowerCase()}${d.entry ? `#${d.entry.toLowerCase()}` : ""}`
+      : kind === "upload" ? `upload:${d.bundle.toLowerCase()}${v.endpoint ? `@${v.endpoint.toLowerCase()}` : ""}`
+        /* A built-in agent is its name and instructions — creating the same
+           one twice lands on the same row. */
+        : kind === "builtin" ? `builtin:${slugOf(source?.name)}-${hash(d.prompt).toString(36)}`
+        : v.endpoint ? `endpoint:${v.endpoint.toLowerCase()}`
+          : `${v.provider || kind}:prompt-${hash(`${d.prompt || ""}|${v.contact?.number || ""}`).toString(36)}`;
+
+  const full = { ...record, sourceKind: kind === "platform" && d.kind === "prompt" ? "prompt" : kind, via: "endpoint", connectedAt: now };
+  return { ...full, key, name: source?.name?.trim() || source?.agentName || agentNameOf(full) };
+};
+
+/** The reverse: an agent record as a build source for the environment builder. */
+export const sourceFromAgentRecord = (agent) => {
+  const kind = sourceKindOf(agent);
+  const v = agent?.values || {};
+  const d = definitionOf(agent);
+  const voice = agent?.typeId === "voice_platform" || agent?.typeId === "voice_sip";
+  const copy = {
+    ...(v.replicationMode && { replicationMode: v.replicationMode }),
+    ...(v.runLocation && { runLocation: v.runLocation }),
+    ...(v.endpointConsent && { endpointConsent: v.endpointConsent }),
+  };
+  return { ...sourceOf(agent, kind, v, d, voice), ...copy };
+};
+const sourceOf = (agent, kind, v, d, voice) => {
+  if (v.phoneNumber) {
+    return { kind: "endpoint", phone: true, value: `tel:${v.phoneNumber}`, phoneNumber: v.phoneNumber, countryCode: v.countryCode, agentType: "voice", ...(d.prompt && { systemPrompt: d.prompt }), ...(v.closedPlatform && { closedPlatform: v.closedPlatform }) };
+  }
+  if (v.provider && v.agentId) {
+    return {
+      kind: "platform", provider: v.provider, agentId: v.agentId, value: v.agentId,
+      agentType: voice ? "voice" : "chat", callDirection: v.callDirection, contact: v.contact,
+      ...(d.repoUrl && { repoUrl: d.repoUrl }),
+    };
+  }
+  if ((kind === "repo" || kind === "framework") && d.repoUrl) return { kind: "repo", provider: d.provider || "github", value: d.repoUrl, ref: d.ref || "main" };
+  if (kind === "prompt") return { kind: "platform", provider: v.provider || "other", agentMode: "prompt", prompt: d.prompt, agentType: voice ? "voice" : "chat", contact: v.contact };
+  /* Run here like a pasted prompt — the builder reads the same instructions. */
+  if (kind === "builtin") return { kind: "platform", provider: "builtin", agentMode: "prompt", prompt: d.prompt, agentType: voice ? "voice" : "chat", contact: v.contact };
+  return { kind: "endpoint", value: v.endpoint || v.sdkEndpoint || agent?.location || "", agentType: voice ? "voice" : "chat" };
+};
+
+/** URL-safe id for an agent's identity key. */
+export const agentIdOf = (key) => `agt_${hash(key).toString(36)}`;
+
+/* ── the merged list ──────────────────────────────────────────────────────── */
+
+const versionsOfEnv = (es) => agentVersions(es).map((v, i) => (
+  /* The implicit first version has no stored timestamp; anchor it to when the
+     agent was connected so it doesn't claim "just now" on every render. */
+  !es?.agentVersions?.length && i === 0 ? { ...v, createdAt: es?.agent?.connectedAt || v.createdAt } : v
+));
+
+const mergeVersions = (into, more) => {
+  const byLabel = new Map(into.map((v) => [v.label, v]));
+  more.forEach((v) => { if (!byLabel.has(v.label)) byLabel.set(v.label, v); });
+  return [...byLabel.values()].sort((a, b) => versionNumber(a.label) - versionNumber(b.label));
+};
+
+/**
+ * Every agent the workspace knows about, newest activity first.
+ *   versions — union of every environment's history for this agent
+ *   usedIn   — each environment testing it, and the version it runs
+ */
+/**
+ * A hosted-platform agent can't be connected without its assistant ID — the
+ * connect forms require it — so a stored platform agent without one is
+ * leftover prototype data: an older version-save replaced the agent's
+ * connection with the new version's (which carries no ID). Put it back:
+ *   1. from the identity key, when it is "<provider>:<assistant id>"
+ *   2. from the connection note ("Vapi assistant asst_…") or location
+ *   3. otherwise a stable stand-in derived from the identity, so the record
+ *      matches what the product guarantees rather than showing a state it
+ *      can't reach
+ * The identity is frozen on the record first (`fallbackKey` for an
+ * environment's agent), so adding the ID never turns it into another agent.
+ */
+const ASSISTANT_ID = /\b((?:asst|agent|assistant|agt)_[A-Za-z0-9-]+)\b/;
+export const repairAgentRecord = (agent, fallbackKey = null) => {
+  if (!agent) return agent;
+  const v = agent.values || {};
+  if (v.provider === "other" || definitionOf(agent).kind !== "platform") return agent;
+  /* Connecting a hosted agent requires its API key, so every one connected
+     has it. Records saved before the key was tracked just lack the flag —
+     fill it rather than ask for a key the user already gave. */
+  if (v.agentId) return v.hasApiKey === undefined ? { ...agent, values: { ...v, hasApiKey: true } } : agent;
+  const key = agent.key || agentKeyOf(agent) || fallbackKey;
+  const m = /^([a-z_]+):(.+)$/.exec(key || "");
+  const fromKey = m && PROVIDER_LABELS[m[1]] && m[1] !== "env" ? m : null;
+  const fromNote = ASSISTANT_ID.exec(`${agent.via || ""} ${agent.location || ""}`);
+  const agentId = fromKey?.[2] || fromNote?.[1] || `asst_${hash(key || agent.name || "agent").toString(36)}`;
+  return {
+    ...agent,
+    ...(key && { key }),
+    values: { ...v, provider: v.provider || fromKey?.[1] || "vapi", agentId, hasApiKey: v.hasApiKey ?? true },
+  };
+};
+
+export const connectedAgentsFrom = (state) => {
+  const map = new Map();
+  (state?.connectedAgents || []).map((a) => repairAgentRecord(a)).forEach((a) => {
+    map.set(a.key, { ...a, versions: [...(a.versions || [])], usedIn: [], origin: a.origin || "agents" });
+  });
+  (state?.myEnvironments || []).forEach((env) => {
+    const raw = state?.byEnv?.[env.id];
+    const es = raw?.agent ? { ...raw, agent: repairAgentRecord(raw.agent, `env:${env.id}`) } : raw;
+    const key = envAgentKey(es?.agent, env.id);
+    if (!key) return;
+    const existing = map.get(key);
+    const entry = existing || {
+      key,
+      /* An environment-connected agent has no name of its own; the
+         environment it was connected for is what people call it. */
+      name: es.agent.name || `${env.name} agent`,
+      /* Named after its environment, not by anyone — two such agents can
+         share a name, and get told apart below. */
+      derivedName: !es.agent.name,
+      /* A template's stand-in, not anyone's agent — kept off the Agents list. */
+      placeholder: !!es.agent.seeded,
+      typeId: es.agent.typeId,
+      values: es.agent.values,
+      sourceKind: es.agent.sourceKind,
+      location: es.agent.location,
+      definition: es.agent.definition,
+      ref: es.agent.ref,
+      connectedAt: es.agent.connectedAt,
+      versions: [],
+      usedIn: [],
+      origin: "environment",
+      firstEnvName: env.name,
+    };
+    /* Each environment keeps its own copy of the agent. A field one copy lost
+       (an assistant ID, a definition) is filled from another, so the page
+       never shows a copy that can't be re-read while another one can. */
+    if (existing) {
+      entry.values = { ...(es.agent.values || {}), ...(entry.values || {}) };
+      Object.keys(entry.values).forEach((k) => {
+        if ((entry.values[k] === undefined || entry.values[k] === "") && es.agent.values?.[k]) entry.values[k] = es.agent.values[k];
+      });
+      if (!entry.definition && es.agent.definition) entry.definition = es.agent.definition;
+    }
+    entry.versions = mergeVersions(entry.versions, versionsOfEnv(es));
+    entry.usedIn.push({
+      envId: env.id,
+      envName: env.name,
+      running: currentAgentVersion(es)?.label || "v1",
+    });
+    if (!existing) map.set(key, entry);
+  });
+  /* Environments that tested an agent before changing to another one. */
+  (state?.myEnvironments || []).forEach((env) => {
+    (state?.byEnv?.[env.id]?.previousAgents || []).forEach((p) => {
+      const a = map.get(p.key);
+      if (a && !a.usedIn.some((u) => u.envId === env.id)) {
+        a.formerlyIn = [...(a.formerlyIn || []), { envId: env.id, envName: env.name, replacedAt: p.replacedAt }];
+      }
+    });
+  });
+  /* Two different agents named after same-named environments: add what
+     tells them apart — the assistant ID or where the code lives — instead of
+     showing the same name twice. Nothing is renamed in storage. */
+  const nameCount = new Map();
+  [...map.values()].forEach((a) => nameCount.set(a.name, (nameCount.get(a.name) || 0) + 1));
+  map.forEach((a) => {
+    if (!a.derivedName || nameCount.get(a.name) < 2) return;
+    const v = a.values || {};
+    const tell = v.agentId || (v.repoUrl && String(v.repoUrl).split("/").pop()) || v.endpoint || a.location || a.firstEnvName;
+    /* Display only — the original name still names what's derived from it
+       (its default Observe project). */
+    if (tell) { a.baseName = a.name; a.name = `${a.name} · ${tell}`; }
+  });
+  /* Versions any environment has released — a draft stays a draft until
+     its label is released somewhere (the PR merged, the copy went live,
+     someone marked it released). */
+  const releasedLabels = new Set(Object.values(state?.byEnv || {}).flatMap((es) => (es?.releases || []).map((r) => r.version)));
+  return [...map.values()].map((a) => {
+    if (!a.versions.length) a.versions = [{ id: "agent-v1", label: "v1", note: "First version connected.", createdAt: a.connectedAt, origin: "connect" }];
+    /* A proposal's version before anyone released it: on record, not live. */
+    a.versions = a.versions.map((v) => ({ ...v, pendingDraft: v.status === "draft" && !releasedLabels.has(v.label) }));
+    const latest = a.versions[a.versions.length - 1];
+    /* What's in production: the version a workspace admin made active (a
+       built-in agent's release), else the newest that isn't a pending draft —
+       one answer for the header, lists, "behind" and the Versions tab. */
+    const madeActive = a.values?.activeVersion?.label && a.versions.find((v) => v.label === a.values.activeVersion.label);
+    const production = madeActive || [...a.versions].reverse().find((v) => !v.pendingDraft) || a.versions[0];
+    /* Connected when its first version was — an environment's copy of the
+       agent can carry a later stamp than the version history it holds. */
+    const firstAt = a.versions[0]?.createdAt || a.versions[0]?.connectedAt;
+    const connectedAt = [a.connectedAt, firstAt].filter(Boolean).sort((x, y) => Date.parse(x) - Date.parse(y))[0] || null;
+    /* Every version read from the source — a sync, a push or a merged PR. */
+    const lastSync = [...a.versions].reverse().find((v) => ["sync", "push", "pr"].includes(v.origin));
+    return {
+      ...a,
+      connectedAt,
+      id: agentIdOf(a.key),
+      latest: latest?.label || "v1",
+      latestIsDraft: !!latest?.pendingDraft,
+      production: production?.label || "v1",
+      lastSyncedAt: lastSync?.createdAt || null,
+      updatedAt: latest?.createdAt || a.connectedAt,
+      /* Behind production, not behind a draft nobody released yet. */
+      usedIn: a.usedIn.map((u) => ({ ...u, behind: versionNumber(u.running) < versionNumber(production?.label) })),
+    };
+  }).sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+};
+
+/* ── what a version is made of ────────────────────────────────────────────── */
+
+const MODELS = ["gpt-4o", "gpt-4.1", "claude-sonnet-4", "gemini-2.5-pro"];
+const VOICES = [
+  { stt: "Deepgram nova-3", tts: "ElevenLabs turbo v2.5", voice: "Rachel · en-US" },
+  { stt: "Deepgram nova-3", tts: "Cartesia sonic-2", voice: "Marcus · en-US" },
+  { stt: "AssemblyAI universal", tts: "PlayHT 3.0", voice: "Ava · en-GB" },
+];
+
+const knowledgeFor = (env) => {
+  const name = (env?.name || "Support").replace(/\s+line$/i, "");
+  return [
+    { name: `${name} policy.pdf`, meta: "12 pages" },
+    { name: "Shipping & returns FAQ", meta: "48 entries" },
+  ];
+};
+
+const UNSEEN = {
+  endpoint: "Your agent runs behind an endpoint — we see what it does, not how it is configured.",
+  upload: "Read once from the uploaded bundle.",
+  local: "Read on your machine; nothing is uploaded.",
+  mcp: "MCP servers publish tools and instructions, not the model behind them.",
+  repo: "Not declared in the repository.",
+  prompt: "Only the instructions were pasted in — the model and tools live wherever the agent runs.",
+  builtin: "Nothing attached yet — a built-in agent reads only what's added to it here.",
+  framework: "The adapter reports the graph, prompts and tools — not documents the agent retrieves at run time.",
+};
+
+/**
+ * Every section of an agent version. A section is `{ visible, ... }`; when
+ * the source can't show it, `visible` is false and `why` says so — the
+ * reader should see the gap, not a blank.
+ */
+export const agentDefinitionOf = ({ agent, version, env, envState }) => {
+  const kind = sourceKindOf(agent);
+  const label = version?.label || currentAgentVersion(envState)?.label || "v1";
+  const list = envState ? agentVersions(envState) : (agent?.versions || []);
+  const upTo = list.filter((v) => versionNumber(v.label) <= versionNumber(label));
+  const voice = agent?.typeId === "voice_platform" || agent?.typeId === "voice_sip" || env?.surface === "voice";
+  const seed = hash(agentKeyOf(agent));
+  const v = agent?.values || {};
+
+  /* A pasted prompt edited in Add version carries its full new text — that
+     becomes the base, and only later additions stack on it. */
+  const promptAt = kind === "prompt" || kind === "builtin" || (kind === "platform" && definitionOf(agent).prompt) ? [...upTo].reverse().findIndex((x) => (x.changes || []).some((c) => typeof c.prompt === "string")) : -1;
+  const editedPrompt = promptAt >= 0 ? [...upTo].reverse()[promptAt].changes.find((c) => typeof c.prompt === "string").prompt : null;
+  const stacked = promptAt >= 0 ? upTo.slice(upTo.length - promptAt) : upTo;
+  /* Changes synced into later versions stack on top of the base read. */
+  /* A rule two versions both added (a sync, then a draft) reads once. */
+  const addenda = [...new Set(stacked.flatMap((x) => (x.changes || []).filter((c) => c.addendum).map((c) => c.addendum)))];
+  const modelChange = [...upTo].reverse().flatMap((x) => x.changes || []).find((c) => c.kind === "model");
+  const voiceChange = [...upTo].reverse().flatMap((x) => x.changes || []).find((c) => c.kind === "voice");
+
+  const def = definitionOf(agent);
+  const prompt = kind === "prompt" || kind === "builtin" || (kind === "platform" && def.prompt)
+    ? { text: editedPrompt ?? def.prompt ?? "", origin: editedPrompt != null ? "Edited in a later version" : kind === "platform" ? `Imported from ${PROVIDER_LABELS[v.provider] || "the platform"}` : "Written in Future AGI" }
+    : agentPromptOf(
+      { kind, value: def.repoUrl || agent?.location || v.endpoint || v.mcpUrl || "" },
+      { ...env, tools: env && envState ? agentToolsFor(env, envState, label) : env?.tools },
+    );
+  const instructionsVisible = kind === "platform" || kind === "repo" || kind === "mcp" || kind === "upload" || kind === "prompt" || kind === "builtin" || kind === "framework";
+  const instructions = instructionsVisible
+    ? {
+      visible: true,
+      text: [prompt.text, ...(addenda.length ? ["", "## Additional rules", ...addenda] : [])].join("\n"),
+      origin: kind === "mcp" ? "Read from the MCP server's instructions"
+        : kind === "framework" ? `Reported by the ${FRAMEWORK_META[def.framework]?.label || "SDK"} adapter`
+          : prompt.origin,
+    }
+    : { visible: false, why: UNSEEN.endpoint };
+
+  const modelVisible = kind === "platform" || kind === "repo" || kind === "upload" || kind === "builtin" || kind === "framework";
+  const baseModel = v.model || def.model || MODELS[seed % 2];
+  const model = modelVisible
+    ? { visible: true, name: modelChange?.to || baseModel, temperature: def.temperature ?? 0.3, maxTokens: 1024 }
+    : { visible: false, why: UNSEEN[kind] || UNSEEN.endpoint };
+
+  const baseVoice = VOICES[seed % VOICES.length];
+  const voiceSection = !voice
+    ? null
+    : kind === "platform" || kind === "builtin"
+      ? { visible: true, ...baseVoice, ...(voiceChange?.voice && { voice: voiceChange.voice }), interruptions: "Allowed after 300ms" }
+      : { visible: false, why: kind === "endpoint" ? UNSEEN.endpoint : "Voice settings live with the telephony provider, not in the source." };
+
+  /* Not in an environment yet: what the source itself declares. Endpoints
+     declare nothing — their tools only show up once runs observe them. */
+  const declared = def.tools ? def.tools
+    : kind === "endpoint" || kind === "prompt" ? [] : (getEnvironment("env-voice-support")?.tools || []).slice(0, 5);
+  const ownTools = [...upTo].reverse().find((x) => x.tools)?.tools;
+  const tools = env && envState ? agentToolsFor(env, envState, label) : (ownTools || env?.tools || declared);
+  const toolsSection = {
+    visible: true,
+    observed: kind === "endpoint",
+    items: tools.map((t) => ({ name: t.name, desc: t.desc || "", args: t.args || [] })),
+  };
+
+  const knowledge = kind === "platform"
+    ? { visible: true, items: knowledgeFor(env) }
+    : kind === "repo"
+      ? { visible: true, items: [{ name: "policies.md", meta: "docs/ · indexed at build" }, { name: "faq.md", meta: "docs/ · indexed at build" }] }
+      : { visible: false, why: kind === "mcp" ? "An MCP server publishes tools and instructions, not the documents the agent reads." : UNSEEN[kind] || UNSEEN.endpoint };
+
+  const SECRET_FLAGS = { hasApiKey: "API key", hasToken: "Auth token" };
+  /* Lifecycle and policy marks have their own rows on Connections. */
+  const LIFECYCLE_KEYS = new Set(["mainEnvId", "versioningOnAt", "closedPlatform", "phoneNumber", "countryCode"]);
+  const connection = Object.entries(v)
+    /* The model is part of the definition (above), not how we reach it. */
+    /* References and migration marks ride with their flag's row below. */
+    .filter(([k, val]) => val != null && val !== "" && typeof val !== "object" && !SECRET_FLAGS[k] && k !== "model" && !/(Ref|Migrated)$/.test(k) && !LIFECYCLE_KEYS.has(k))
+    .map(([k, val]) => ({
+      /* Sentence case, like every other label: "callDirection" → "Call direction". */
+      label: k.replace(/([A-Z])/g, " $1").toLowerCase().replace(/^./, (c) => c.toUpperCase()),
+      value: /key|token|secret|password/i.test(k) ? "••••••••" : String(val),
+      /* Identifiers read as code; plain words don't. */
+      mono: /id$|url|endpoint/i.test(k),
+    }));
+  /* A credential shows the reference it resolves through — safe to show —
+     or, for one connected before references, that it is held. */
+  const SECRET_REFS = { hasApiKey: "apiKeyRef", hasToken: "tokenRef" };
+  Object.entries(SECRET_FLAGS).forEach(([k, label]) => {
+    const ref = v[SECRET_REFS[k]];
+    if (v[k] || ref) connection.push({ label, value: ref || "Held by the connection · no reference recorded", ...(ref && { ref, mono: true }) });
+  });
+  if (kind === "builtin") connection.unshift({ label: "Runs in", value: "Future AGI — nothing to deploy" });
+  if (v.contact) {
+    connection.push({ label: "Simulated calls", value: v.contact.mode === "phone" ? `Phone${v.contact.number ? ` · ${v.contact.countryCode || ""} ${v.contact.number}` : ""}` : "Web call (WebRTC)" });
+    if (v.contact.agentSpeaksFirst != null) connection.push({ label: "Agent speaks first", value: v.contact.agentSpeaksFirst ? "Yes" : "No" });
+  }
+
+  /* Several agents working together (a Vapi squad, a Retell or ElevenLabs
+     flow, a code app with handoffs) are one agent: each member with its own
+     instructions, model and tools. */
+  const members = (def.members || []).map((m) => ({
+    id: m.id, name: m.name, role: m.role || "", instructions: m.instructions || "", model: m.model || baseModel, tools: m.tools || [],
+  }));
+  return {
+    kind, label, instructions, model, voice: voiceSection, tools: toolsSection, knowledge, connection, structure: structureOf(def),
+    ...(members.length && { members }),
+    ...(kind === "framework" && { entry: def.entry || null }),
+  };
+};
+
+/**
+ * How a framework agent is put together, as the adapter reported it — a
+ * LangGraph graph, OpenAI agents and their handoffs, or a CrewAI crew. Null
+ * for every other kind: nothing else has a structure we can read.
+ *   { label, summary, items: [{ name, detail }] }
+ */
+export const structureOf = (def) => {
+  if (def?.kind !== "framework") return null;
+  const label = FRAMEWORK_META[def.framework]?.structure || "Structure";
+  if (def.graph) {
+    return {
+      label,
+      summary: def.graph.flow,
+      items: (def.graph.nodes || []).map((n) => ({ name: n.id, detail: n.prompt || (n.tools?.length ? `${n.tools.length} tools` : "no prompt") })),
+    };
+  }
+  if (def.agents) {
+    return {
+      label,
+      summary: def.agents.filter((a) => a.handoffs?.length).map((a) => `${a.name} → ${a.handoffs.join(" | ")}`).join(" · ") || `${def.agents.length} agents, no handoffs`,
+      items: def.agents.map((a) => ({ name: a.name, detail: a.handoffs?.length ? `hands off to ${a.handoffs.join(", ")}` : `${(a.tools || []).length} tools` })),
+    };
+  }
+  if (def.crew) {
+    return {
+      label,
+      summary: `${def.crew.name} · ${def.crew.process} · ${def.crew.agents.length} agents · ${def.crew.tasks.length} tasks`,
+      items: def.crew.agents.map((a) => ({ name: a.role, detail: a.goal })),
+    };
+  }
+  return { label, summary: "Not reported", items: [] };
+};
+
+/* ── sync ─────────────────────────────────────────────────────────────────── */
+
+const NEW_TOOLS = [
+  { name: "check_loyalty_status", desc: "Look up the caller's loyalty tier before offering goodwill", args: ["customer_id"] },
+  { name: "send_sms_receipt", desc: "Text the caller a summary of what was done", args: ["phone", "summary"] },
+  { name: "lookup_store_hours", desc: "Answer opening hours for a store location", args: ["store_id"] },
+];
+/* The first touches a rule the seeded suites test (R1 on the support lines),
+   so a sync can raise the fix-or-spec-change question. */
+const ADDENDA = [
+  "Refunds above $200 can be approved without a supervisor for loyalty-tier callers.",
+  "If the caller mentions a chargeback, stop and hand over to a human.",
+  "Never quote a delivery date the carrier hasn't confirmed.",
+];
+const NEW_VOICES = ["Sarah · en-US", "Leo · en-AU", "Ivy · en-US"];
+
+/**
+ * What re-reading the source finds. Deterministic per agent and version, so
+ * the demo is repeatable: a source that hasn't been synced since its newest
+ * version reports changes; syncing again straight after reports none.
+ */
+export const syncCheck = ({ agent, versions, env }) => {
+  const source = agentSourceOf(agent);
+  const latest = versions[versions.length - 1];
+  if (!source.syncable) return { ok: false, reason: "no-source" };
+  /* Connecting, a sync, a push or a merged PR all read the source as it
+     stands — nothing new until it changes again. */
+  if (["connect", "sync", "push", "pr"].includes(latest?.origin)) return { ok: true, upToDate: true, latest: latest.label };
+  return { ok: true, upToDate: false, ...changesSince({ agent, versions, env, source }) };
+};
+
+/* What changed in the source since the newest version. */
+const changesSince = ({ agent, versions, env, source }) => {
+  const latest = versions[versions.length - 1];
+  const n = versionNumber(latest?.label) + 1;
+  const seed = hash(`${agentKeyOf(agent)}:${n}`);
+  const known = new Set((latest?.tools || env?.tools || []).map((t) => t.name));
+  const tool = NEW_TOOLS.find((t, i) => !known.has(t.name) && (seed + i) % 2 === 0) || NEW_TOOLS.find((t) => !known.has(t.name));
+  const addendum = ADDENDA[seed % ADDENDA.length];
+  const changes = [
+    { kind: "instructions", title: "Instructions edited", detail: `Added: "${addendum}"`, addendum: `- ${addendum}` },
+  ];
+  /* A sync doesn't always bring a new tool — most changes to a live agent
+     are wording and settings. One in three adds one, so tools don't pile up. */
+  if (tool && seed % 3 === 0) changes.push({ kind: "tool", title: `Tool added · ${tool.name}`, detail: tool.desc, tool });
+  if (source.kind === "platform" && (agent?.typeId === "voice_platform")) {
+    changes.push({ kind: "voice", title: "Voice changed", detail: `Now speaking as ${NEW_VOICES[seed % NEW_VOICES.length]}`, voice: NEW_VOICES[seed % NEW_VOICES.length] });
+  } else if (source.kind !== "mcp") {
+    const from = MODELS[hash(agentKeyOf(agent)) % 2];
+    const to = MODELS.find((m) => m !== from && MODELS.indexOf(m) === (seed % 3) + 1) || "gpt-4.1";
+    changes.push({ kind: "model", title: "Model changed", detail: `${from} → ${to}`, to });
+  }
+  return { label: `v${n}`, basedOn: latest?.label || "v1", changes, source };
+};
+
+const COMMIT_MESSAGES = [
+  "Tighten refund confirmation wording",
+  "Hand chargebacks to a human",
+  "Switch to the newer model for long calls",
+  "Add order lookup by email",
+  "Don't promise unconfirmed delivery dates",
+];
+const AUTHORS = ["maya.k", "devon", "priya.s", "sam-ops"];
+
+/**
+ * A push to the default branch that touched the agent — what the GitHub
+ * webhook delivers when "Sync on push" is on. Saved like a sync, but carries
+ * the commit so every version points at the exact code it was made from.
+ */
+export const pushedVersion = ({ agent, versions, env, baseTools, now = new Date().toISOString() }) => {
+  const source = agentSourceOf(agent);
+  const result = changesSince({ agent, versions, env, source });
+  const seed = hash(`${agentKeyOf(agent)}:push:${result.label}`);
+  const commit = {
+    /* Low digits — the ones that move when only the version number changes. */
+    sha: (Math.imul(seed, 2654435761) >>> 0).toString(16).padStart(8, "0").slice(-7),
+    message: COMMIT_MESSAGES[seed % COMMIT_MESSAGES.length],
+    author: AUTHORS[seed % AUTHORS.length],
+    branch: definitionOf(agent).ref || "main",
+  };
+  return {
+    ...syncedVersion({ result, baseTools, now }),
+    origin: "push",
+    commit,
+    note: `Pushed ${commit.sha} by ${commit.author} — ${commit.message}.`,
+  };
+};
+
+/** The version record a sync saves. */
+export const syncedVersion = ({ result, baseTools, now = new Date().toISOString() }) => {
+  const tool = result.changes.find((c) => c.kind === "tool")?.tool;
+  return {
+    id: `agent-${result.label}`,
+    label: result.label,
+    note: `Synced from ${result.source.label} — ${result.changes.map((c) => c.title.split(" · ")[0].toLowerCase()).join(", ")}.`,
+    reach: "endpoint",
+    createdAt: now,
+    connectedAt: now,
+    origin: "sync",
+    /* Anything a re-read finds was changed outside Future AGI. */
+    outsideChange: true,
+    basedOnVersion: result.basedOn,
+    changes: result.changes,
+    ...(tool && { tools: [...(baseTools || []), tool] }),
+  };
+};

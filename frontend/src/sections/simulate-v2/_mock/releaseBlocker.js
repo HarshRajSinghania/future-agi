@@ -17,6 +17,10 @@ const quotedRule = (row) => (row.expected || row.outcome || "").match(/rule: "(.
 /** Why the scenario was written as a release blocker — ignores any override. */
 export function writtenReason(row) {
   const category = row?.branchCategory || "";
+  if (row?.regressionMemory) {
+    const m = row.regressionMemory;
+    return `Regression memory — kept from the fix for ${m.issueId}, released as ${m.version}. If it fails again, the issue is back.`;
+  }
   if (row?.productionCluster) {
     const c = row.productionCluster;
     return `Reproduces a critical production failure — ${(c.kindLabel || "failure").toLowerCase()}, seen ${c.count} time${c.count === 1 ? "" : "s"}.`;
@@ -38,19 +42,20 @@ export function writtenReason(row) {
     return `Safety test — ${(row.title || "").replace(/ — safety test$/, "").toLowerCase()}. Always included, and has to pass.`;
   }
   if (row?.origin) return `A step the ${row.origin} script says can't be skipped.`;
-  return "Marked as a release blocker when it was written.";
+  return "Marked must-pass when it was written.";
 }
 
 /** The sentence the red triangle shows on hover. */
 export function blockerReason(row) {
   if (!row?.critical) return null;
-  return row.criticalBy === "you" ? "You marked this as a release blocker." : writtenReason(row);
+  if (row.mustPassGoal) return "Must-pass with its goal — you marked the goal, so scenarios added to it join too.";
+  return row.criticalBy === "you" ? "You marked this must-pass." : writtenReason(row);
 }
 
 /** Shown on the hollow triangle of a scenario someone un-marked. */
 export function unmarkedNote(row) {
   if (row?.critical || row?.criticalBy !== "you" || !row?.criticalWas) return null;
-  return `Was a release blocker — ${writtenReason(row).replace(/^./, (c) => c.toLowerCase())} You un-marked it.`;
+  return `Was must-pass — ${writtenReason(row).replace(/^./, (c) => c.toLowerCase())} You un-marked it.`;
 }
 
 /**

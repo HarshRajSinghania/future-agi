@@ -1,20 +1,47 @@
 import PropTypes from "prop-types";
-import { useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { alpha, useTheme } from "@mui/material/styles";
-import { Box, Stack, Typography, Button, Chip, Tooltip, IconButton, Tabs, Tab, Divider, Menu, MenuItem, ListItemIcon, ListItemText } from "@mui/material";
+import { Box, Stack, Typography, Button, Chip, Tooltip, IconButton, Tabs, Tab } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { RunTracePanel, RunTraceLog } from "../../components/RunTrace";
-import { searchTrace } from "../../_mock/optimizer";
-import { optimizationVerdict, OPTIMIZER_MODELS } from "../../_mock/optimizationRuns";
+import { clickable, focusRing } from "../../components/clickable";
+import { RunTraceLog } from "../../components/RunTrace";
+import ImprovementProgress from "./ImprovementProgress";
+import { searchTrace, blockingVerdict, KIND_SURFACE, rejectedFor, compatFailed, staticFailed, diagnosisSummaryOf, paretoPool, goalWords } from "../../_mock/optimizer";
+import { staleSince, optimizationVerdict, OPTIMIZER_MODELS, OPT_STATUS, DEFAULT_LIMITS, improvementOutcome, issueLine, limitRows, searchSpend, judgeFor, ladderOf, improvementPhaseOf, repeatsOf, TRACE_STEP_MS } from "../../_mock/optimizationRuns";
+import { proofKindOf, fixDepthOf } from "../../_mock/rsiModel";
+import { membersChanged, proposalMembers, uncheckedChannelNotes } from "../../_mock/improvementPolicy";
+import { improvementScenariosNotIn, addImprovementScenariosPatch } from "../../_mock/improvementScenarios";
+import { currentEnvVersion } from "../../_mock/versions";
+import { useSimStore } from "../../store";
+import { FinalistsTable, MustPassNote, ContractNotice, IssueScenariosNotice, ChangeScope, UnfitNotice, OtherEnvironments, CodePlan, StaticNotice } from "./ImprovementPanels";
+import { improvementIdentityOf } from "../../improvements/improvementRows";
+import { proofDisplay } from "./proofBlock";
+import { snapshotOfImprovement } from "../../_mock/envSnapshot";
+import { envLabelOf } from "../../_mock/envVersionKinds";
+import { briefEvidenceOf, contractApprovalPatch, methodLabelOf, nextContractVersion, visibleFailingOf } from "./improvementView";
+import { agentDefinitionOf, agentSourceOf } from "../../_mock/agentRegistry";
 import { useNavigate } from "react-router-dom";
 import { paths } from "src/routes/paths";
 import { changeFileFor } from "../../_mock/optimize";
 import TrialHeatmap from "./TrialHeatmap";
 import OmegaHandoff from "../OmegaHandoff";
 import TaskLinks from "./TaskLinks";
+import CopyBriefButton from "../../components/CopyBriefButton";
+import { codingAgentBrief } from "../../_mock/codingAgentBrief";
+import { proofMarkdown } from "./proofBlock";
+import ImproverAttempts from "./ImproverAttempts";
+import TradeoffView from "./TradeoffView";
+import { shippedCandidate } from "./tradeoffs";
+import { CheckGroup, FrozenInputs, ReceiptButton, VerificationLadder } from "./ProofParts";
+import { codingAgentById, connectedCodingAgent, improverSessionFor, startImproverSession, useIntegrations } from "../../_mock/integrations";
+import { shippedStateOf } from "../../errorFeed/issueFixModel";
+import { attemptsOf, sessionState } from "../../_mock/improverAttempts";
+import { candidateSourceOf, takesSnapshot } from "../../_mock/candidateSource";
+import CandidateSourcePicker from "../CandidateSourcePicker";
+import { creditsLabel } from "../../_mock/metering";
 
 /**
- * One optimization run.
+ * One improvement run.
  *
  * The old screen had the right bones — a header with the run's identity, the
  * steps it took, a graph, a bar of results and a grid of trials — so those are
@@ -30,12 +57,15 @@ import TaskLinks from "./TaskLinks";
  * this whole product exists to prevent; it would be strange to build the
  * machine that produces it and not look.
  *
- * The winner is the best candidate that did not break a release blocker, not
- * the best candidate. And the grid shows which scenarios each trial moved,
- * because two candidates a point apart are usually fixing different things.
+ * The winner is the best candidate that did not break a critical scenario, not
+ * the best candidate — and when every candidate broke one, there is no winner.
+ * The grid shows which scenarios each trial moved, because two candidates a
+ * point apart are usually fixing different things.
  */
 
-export default function OptimizationRunView({ record, env, envState, patch, tasks, onOpenTask, onBack, onClose, onDone, onRerun }) {
+export default function OptimizationRunView({
+  record, name, env, envState, patch, tasks, onOpenTask, onBack, backLabel, onClose, onDone, onRunWinner, handoff, decisionOnly = false,
+}) {
   const theme = useTheme();
   const navigate = useNavigate();
   const openTrialRun = (trialN) => {
@@ -43,12 +73,149 @@ export default function OptimizationRunView({ record, env, envState, patch, task
     navigate(paths.dashboard.simulate.simulationRun(env.id, `${record.id}-t${trialN}`));
     onClose?.();
   };
-  const [tab, setTab] = useState("trials");
+  /* Opened beside the improvement's runs list, it's the decision only — the
+     runs and their chart are already on the page. */
+  const [tab, setTab] = useState(decisionOnly ? "changes" : "trials");
   const [openTrial, setOpenTrial] = useState(null);
-  const running = record.status === "running";
+  /* Running for over a day without finishing means it was timed out — the
+     same reading the Improvements list and the Error Feed chip use. */
+  const timedOut = record.status === "running" && staleSince(record);
+  const running = record.status === "running" && !timedOut;
+  /* Started from an Error Feed issue whose failure didn't happen — stops here. */
+  const notReproduced = record.status === OPT_STATUS.NOT_REPRODUCED;
+  const failedToRun = record.status === OPT_STATUS.FAILED || timedOut;
+  /* A new goal improvement where nothing fell short of the goal. */
+  const nothing = record.status === OPT_STATUS.NOTHING;
   const result = record.result;
-  const verdict = optimizationVerdict(record);
+  /* Where a running improvement is — Reproducing, Searching, Verifying —
+     re-read while the trace plays. */
+  const [phaseNow, setPhaseNow] = useState(Date.now());
+  useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(() => setPhaseNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+  const phase = running ? improvementPhaseOf(record, phaseNow) : null;
+  /* "agent v3 × env v2" — the same pairing every run is named by. */
+  const identity = improvementIdentityOf(record, env, envState);
+  const diag = result ? diagnosisSummaryOf(record, result) : null;
+  const winner = result?.winner || null;
+  /* The model the agent runs on — the one a fix must leave alone. */
+  const agentModel = useMemo(() => {
+    if (!envState?.agent) return null;
+    const def = agentDefinitionOf({ agent: envState.agent, env, envState });
+    return def.model?.visible ? def.model.name : null;
+  }, [env, envState]);
+  /* One reading of the run: its ending, the plain-language verdict, the limits. */
+  const outcome = improvementOutcome(record, { model: agentModel });
+  const ending = outcome.ending.key;
+  const shippable = ending === "ready" || ending === "budget";
+  /* Cautions the verdict sentence doesn't already carry (a large overfit gap,
+     a held-out set that couldn't show a gain). */
+  /* A fix that fixed its issue isn't cautioned for the rest of the suite
+     standing still — that's the issue line's job. */
+  const soft = optimizationVerdict(record);
+  const caution = shippable ? (blockingVerdict(result) || (outcome.issue?.fixed && soft?.tone === "#DC2626" ? null : soft)) : null;
+  const blockedBy = shippable ? null : outcome.headline;
   const model = OPTIMIZER_MODELS.find((m) => m.id === record.model);
+  /* What ships — the search's pick, or another trade-off someone chose. */
+  const shipped = shippedCandidate(record);
+  const choose = (n) => patch({
+    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id ? { ...o, preferredTrial: n || undefined } : o)),
+  });
+  const winnerFiles = (shipped?.proposals || [])
+    .map((p) => changeFileFor(env, p)?.path)
+    .filter(Boolean);
+  const fromRun = (envState?.runs || []).find((r) => r.id === record.fromRunId);
+  const { state: simState } = useSimStore();
+  const agent = envState?.agent || null;
+  /* Where candidates ran and how far the proof can be trusted. */
+  const proof = record.proof || (agent ? (() => { const p = proofKindOf(agent); return { kind: p.kind, label: p.label, tier: p.tier, tierLabel: p.tierLabel }; })() : null);
+  const suggestion = ending === "suggestion";
+  /* Which members the change touches, and the channels it wasn't checked on. */
+  const scope = membersChanged(shipped?.proposals || outcome.suggestion || winner?.proposals || [], { agent, limits: record.limits, target: record.targetMember });
+  const checkedSurfaces = [...new Set([env?.surface, ...(record.regressionEnvIds || []).map((id) => (simState?.myEnvironments || []).find((e) => e.id === id)?.surface)].filter(Boolean))];
+  const channelNotes = uncheckedChannelNotes(agent, checkedSurfaces);
+  /* Scenarios this improvement wrote that the environment doesn't have yet. */
+  const issueRows = improvementScenariosNotIn(envState, record);
+  const addIssueRows = () => patch(addImprovementScenariosPatch(envState, record));
+  const envVersion = env && envState ? currentEnvVersion(env, envState)?.label || null : null;
+  /* Approving mints the environment version with the new parameter, runs
+     the baseline again on it, and only then compares the candidate there. */
+  const contractNext = env && envState ? nextContractVersion(env, envState) : null;
+  const approveContract = () => patch(contractApprovalPatch({ env, envState, record, from: envVersion }));
+  /* Shown as environment versions (snapshots): the one the improvement was
+     frozen on, and the one the approval minted. */
+  const frozenOn = env && envState ? snapshotOfImprovement(record, env, envState)?.label || null : null;
+  const ca = record.contractApproval;
+  const shownApproval = ca ? {
+    ...ca,
+    to: ca.toSnapshot || (env && envState ? envLabelOf(env, envState, ca.to) : ca.to),
+    from: ca.fromSnapshot || frozenOn || ca.from,
+  } : ca;
+
+  /* The customer's coding agent on this improvement, if one was handed it. */
+  const integrations = useIntegrations();
+  /* Once the winner ships, the page follows it: Draft shipped → Released →
+     Watching → Resolved or Reopened (RSI PRD, Part 3) — the same reading the
+     Error Feed's chip uses. */
+  const lifecycle = shippedStateOf(record, envState, integrations.prs || []);
+  const session = env?.id ? improverSessionFor(env.id, record.id, integrations) : null;
+  const [, setTick] = useState(0);
+  const attemptsNow = session && result
+    ? attemptsOf(record, session, { surface: env?.surface, budgetLeft: (record.budget || Infinity) - searchSpend(result, env?.surface) })
+    : [];
+  const sessionNow = session && result ? sessionState(session, attemptsNow) : null;
+  const improverLabel = codingAgentById(session?.agentId)?.label || "Your coding agent";
+  /* Re-read while the coding agent is still submitting. */
+  useEffect(() => {
+    if (sessionNow?.key !== "waiting") return undefined;
+    const t = setInterval(() => setTick((n) => n + 1), 2000);
+    return () => clearInterval(t);
+  }, [sessionNow?.key]);
+  const briefTarget = env?.id ? { kind: "improvement", envId: env.id, optId: record.id } : undefined;
+  /* Handing the brief over starts the session: its submissions show here. */
+  const handBrief = () => {
+    if (env?.id && record.result) {
+      const deployed = ["endpoint", "framework"].includes(agentSourceOf(envState?.agent).kind);
+      startImproverSession({ agentId: connectedCodingAgent()?.id || null, envId: env.id, optId: record.id, where: deployed ? "deployed" : "local" });
+    }
+    return brief();
+  };
+
+  /* Everything a coding agent needs to take this further — the issue or
+     goal, what the search found, what still fails, and the constraints. */
+  const brief = () => {
+    const proposals = winner?.proposals || result?.pool || [];
+    /* Only what the search could see — the held-back set never leaves here. */
+    const stillFailing = visibleFailingOf(result, winner, tasks);
+    return codingAgentBrief({
+      agent: { name: envState?.agent?.name || env?.name, key: envState?.agent?.key },
+      env,
+      pairing: identity,
+      /* An issue fix — from the Error Feed or a run's Insights — hands over the issue itself. */
+      issue: record.trigger?.kind === "error-feed" || record.trigger?.source === "run-insights"
+        ? { id: record.trigger.issueId, title: record.trigger.issueTitle, severity: record.trigger.severity }
+        : record.trigger?.goal ? `Raise ${record.trigger.goal.label || "the pass rate"}` : name || record.name,
+      rootCause: outcome.headline || record.trigger?.issueRoot?.subGoal || null,
+      suggestedFix: (outcome.suggestion || proposals).slice(0, 4),
+      /* Production-derived: scrubbed of personal data inside the brief. */
+      evidence: briefEvidenceOf({ record, result, winner, tasks }),
+      failingScenarios: stillFailing,
+      limits: record.limits,
+      model: agentModel,
+      proof: proofDisplay(proof),
+      members: scope.names,
+    });
+  };
+
+  /* A finished run that hasn't shipped reads quietly: no stepper (the status
+     chip says how it ended), the trigger folded into the subtitle. */
+  const quietHeader = !running && !lifecycle && !!result && !notReproduced && !failedToRun;
+  const startedFrom = record.trigger?.kind === "error-feed"
+    ? `from ${record.trigger.issueId}`
+    : fromRun ? `from Run ${fromRun.ordinal || ""}`.trim()
+      : record.trigger?.kind === "schedule" ? "scheduled" : record.trigger?.kind === "goal" ? "from a goal" : "from Debug failures";
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
@@ -57,307 +224,376 @@ export default function OptimizationRunView({ record, env, envState, patch, task
         direction="row" alignItems="center" spacing={1.5}
         sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
       >
-        <IconButton size="small" onClick={onBack}>
-          <Iconify icon="eva:arrow-ios-back-fill" width={17} />
-        </IconButton>
+        {backLabel ? (
+          /* Where back goes, said — an issue's fix returns to the issue. */
+          <Button
+            size="small" onClick={onBack}
+            startIcon={<Iconify icon="eva:arrow-ios-back-fill" width={15} />}
+            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0, ...(/^ISS-/.test(backLabel) && { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }) }}
+          >
+            {backLabel}
+          </Button>
+        ) : (
+          <IconButton size="small" onClick={onBack}>
+            <Iconify icon="eva:arrow-ios-back-fill" width={17} />
+          </IconButton>
+        )}
         <Box flex={1} minWidth={0}>
           <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" rowGap={0.5}>
-            <Typography sx={{ typography: "s1", fontWeight: 700 }}>{record.name}</Typography>
+            <Typography sx={{ typography: "s1", fontWeight: 700 }}>{name || record.name}</Typography>
             <Chip
               size="small"
-              label={running ? "Running" : "Completed"}
+              label={phase?.label || (lifecycle ? `${lifecycle.label}${lifecycle.detail && lifecycle.key === "watching" ? ` · ${lifecycle.detail}` : ""}` : outcome.ending.label)}
               sx={{
-                height: 19, borderRadius: 0.5,
-                color: running ? "#CA8A04" : "#16A34A",
-                border: "1px solid",
-                borderColor: alpha(running ? "#CA8A04" : "#16A34A", 0.4),
-                bgcolor: "transparent",
+                height: 19, borderRadius: 0.5, bgcolor: "transparent", border: "1px solid",
+                color: running ? "#2563EB" : lifecycle ? "text.primary" : ending === "ready" ? "#16A34A" : "text.secondary",
+                borderColor: running ? alpha("#2563EB", 0.4) : lifecycle ? "divider" : ending === "ready" ? alpha("#16A34A", 0.4) : "divider",
                 "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 700 },
               }}
             />
           </Stack>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            {record.id} · {result?.optimizer?.label} · {model?.label || record.model} ·{" "}
-            {result?.trials?.length || 0} trials × {result?.trainMeasured || 0} scenarios
+            {identity ? `${identity} · ` : ""}
+            {/* Finished and ready: just where it came from — counts and ids are in the Receipt. */}
+            {quietHeader ? startedFrom : notReproduced || failedToRun || !result
+              ? `${record.id} · stopped before searching`
+              : suggestion
+                ? `${record.id} · ${record.reproduce?.total ? `reproduced on ${record.reproduce.reproduced || 0} of ${record.reproduce.total} scenarios` : `${result.trainMeasured + result.heldMeasured} scenarios measured`} · no change tried`
+                : `${record.id} · ${record.stoppedAtBudget ? `${result.trials.length} of ${record.stoppedAtBudget.of}` : result.trials.length} runs × ${result.trainMeasured} training scenarios${result.stoppedEarly ? ` · stopped early, no gain in the last four` : ""}`}
           </Typography>
         </Box>
+        {!running && result && <ReceiptButton record={record} outcome={outcome} attempts={attemptsNow} identity={identity} envSnapshot={frozenOn} />}
+        {!running && result && <CopyBriefButton getBrief={handBrief} size="small" target={briefTarget} />}
         <IconButton size="small" onClick={onClose}>
           <Iconify icon="eva:close-fill" width={17} />
         </IconButton>
       </Stack>
 
+      {!quietHeader && <ImprovementSteps
+        shipped={lifecycle}
+        record={record}
+        fromRun={fromRun}
+        running={running}
+        phase={phase}
+        diag={diag}
+        outcome={outcome}
+        onOpenIssue={() => { navigate(paths.dashboard.errorFeed.detail(record.trigger.issueId)); onClose?.(); }}
+        onOpenRun={fromRun && env?.id ? () => { navigate(paths.dashboard.simulate.simulationRun(env.id, fromRun.id)); onClose?.(); } : null}
+      />}
+
+      {nothing && (
+        <Box sx={{ flex: 1, overflowY: "auto", px: 2.5, py: 2.5 }}>
+          <Typography sx={{ typography: "s1", fontWeight: 700 }}>{outcome.ending.label}</Typography>
+          <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, maxWidth: 640 }}>
+            {`${outcome.headline} Nothing was searched and nothing was charged beyond measuring it. Pick another goal, or add harder scenarios for this one.`}
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+            <Button
+              size="small" variant="outlined"
+              onClick={() => { navigate(paths.dashboard.simulate.environmentStep(env.id, "scenarios")); onClose?.(); }}
+              sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
+            >
+              Add scenarios
+            </Button>
+          </Stack>
+        </Box>
+      )}
+
+      {(notReproduced || failedToRun) && (
+        <Box sx={{ flex: 1, overflowY: "auto", px: 2.5, py: 2.5 }}>
+          <Typography sx={{ typography: "s1", fontWeight: 700 }}>{outcome.ending.label}</Typography>
+          <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, maxWidth: 640 }}>
+            {notReproduced
+              ? `None of the ${record.reproduce?.total || 0} scenarios built from ${record.trigger?.issueId} failed reliably on ${record.baseAgentVersion || "today's agent"}${record.reproduce?.inconclusive ? ` — ${record.reproduce.inconclusive} failed once in ${repeatsOf(record)} tries, which is inconclusive, not a reproduction` : ""}. The failure may depend on something they don't capture — a caller detail, live data, or timing. Searching for a fix to a failure that doesn't happen would only prove nothing.`
+              : outcome.headline}
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+            {notReproduced && (
+              <Button
+                size="small" variant="outlined"
+                onClick={() => { navigate(paths.dashboard.simulate.environmentStep(env.id, "scenarios")); onClose?.(); }}
+                sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
+              >
+                Edit scenarios
+              </Button>
+            )}
+            <Button
+              size="small"
+              onClick={() => patch({
+                optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id
+                  ? { ...o, status: OPT_STATUS.RUNNING, result: o.result || o.pendingResult, pendingResult: undefined, ...(notReproduced && { reproduce: { ...o.reproduce, overridden: true } }) }
+                  : o)),
+              })}
+              sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}
+            >
+              {notReproduced ? "Continue anyway" : "Try again"}
+            </Button>
+          </Stack>
+        </Box>
+      )}
+
       {running && (
         <Box sx={{ flex: 1, overflowY: "auto" }}>
-          <RunTracePanel
-            title={`Searching with ${result.optimizer.label}`}
-            subtitle={`${result.trials.length} trials × ${result.trainMeasured} training scenarios — each trial is a full run`}
-            steps={searchTrace(result)}
-            stepMs={800}
+          {/* What every candidate is held to, visible while they're tried. */}
+          <RunningConstraints record={record} model={agentModel} />
+          {/* The same shape as Debug failures' read: a strip, the steps one
+              line each, and candidate runs arriving one at a time. */}
+          <ImprovementProgress
+            title={phase?.label || (record.fixDepth === "suggestion" ? "Reproducing" : "Searching")}
+            subtitle={record.fixDepth === "suggestion"
+              ? `${result.trainMeasured + result.heldMeasured} scenarios on the agent as it runs today`
+              : `${result.trials.length} runs × ${result.trainMeasured} training scenarios${result.textSearch ? " in text" : ""}`}
+            steps={searchTrace(result, record)}
+            trials={record.fixDepth === "suggestion" ? [] : result.trials}
+            stepMs={TRACE_STEP_MS}
             onDone={onDone}
           />
         </Box>
       )}
 
-      {!running && (
-        <Box sx={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-          {/* ── the numbers ── */}
-          <Stack
-            direction="row" alignItems="flex-start" spacing={4} flexWrap="wrap" rowGap={2}
-            sx={{ px: 2.5, py: 2, bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.08 : 0.04) }}
-          >
-            <Metric label="Best on training" value={`${result.winner.score}%`}
-              sub={`trial ${result.winner.n} of ${result.trials.length} · from ${result.base}%`} />
-            <Metric
-              label="Held out" value={`${result.heldScore}%`}
-              /* Green only when the winner actually lifted the held-out score.
-                 Equal (the common "didn't generalise" case) is neutral, not a
-                 win — otherwise the number reads green while the verdict below
-                 says "no improvement on held-out scenarios". */
-              tone={result.heldScore < result.heldBase ? "#DC2626"
-                : result.heldScore > result.heldBase ? "#16A34A"
-                  : undefined}
-              sub={result.heldBase >= 100
-                ? `${result.heldMeasured} scenarios · all passing already`
-                : `${result.heldMeasured} scenarios · from ${result.heldBase}%`}
-              hint="Scenarios the self improver never saw. This is the number worth quoting — the training score is what the search was allowed to fit to."
-            />
-            {/* Signed and labelled, because "+6" under the word "gap" reads as
-                six points of overfitting when it means the opposite. */}
-            <Metric
-              label={result.gap > 0 ? "Overfit gap" : "Held out vs training"}
-              value={result.gap > 0 ? `−${result.gap}` : `+${-result.gap}`}
-              tone={result.gap > 12 ? "#DC2626" : result.gap > 6 ? "#CA8A04" : undefined}
-              sub={result.gap > 12
-                ? "large — the prompt learned the suite"
-                : result.gap > 0 ? "training score did not fully hold" : "held out scored higher"}
-            />
-            <Metric
-              label="Training scenarios moved" value={`+${result.winner.fixed || 0}`}
-              tone={result.winner.broke ? "#CA8A04" : "#16A34A"}
-              sub={result.winner.broke ? `${result.winner.broke} regressed` : "none regressed"}
-            />
-          </Stack>
+      {!running && suggestion && result && (
+        <SuggestionBody
+          record={record} outcome={outcome} env={env} envState={envState} patch={patch} agent={agent}
+          scope={scope} channelNotes={channelNotes} issueRows={issueRows} onAddIssueRows={addIssueRows}
+          handoff={handoff} brief={handBrief} briefTarget={briefTarget} name={name} agentModel={agentModel} identity={identity} frozenOn={frozenOn}
+        />
+      )}
 
-          {/* ── the verdict, which is often not the headline ── */}
-          {verdict && (
-            <Stack
-              direction="row" alignItems="flex-start" spacing={1.5}
+      {!running && !suggestion && !notReproduced && !failedToRun && result && (
+        <Box sx={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {/* ── the verdict, in plain words, first ── */}
+          <Box sx={{ px: 2.5, pt: 2.25 }}>
+            <Stack direction="row" alignItems="flex-start" spacing={1.25}>
+              <Iconify
+                icon={ending === "ready" ? "solar:check-circle-bold" : ending === "budget" ? "solar:pause-circle-linear" : "solar:close-circle-linear"}
+                width={20}
+                sx={{ color: ending === "ready" ? "#16A34A" : "text.secondary", flexShrink: 0, mt: "2px" }}
+              />
+              <Typography sx={{ typography: "m3", fontWeight: 600, lineHeight: 1.35 }}>{outcome.headline}</Typography>
+            </Stack>
+            {/* The facts behind the headline, one per row, so they scan. */}
+            <Facts
+              rows={[
+                diag?.surface && ["Changed", `${diag.surface.label.charAt(0).toUpperCase()}${diag.surface.label.slice(1)}`],
+                issueLine(outcome.issue, outcome.held, { thin: outcome.thin }) && ["Issue scenarios", issueLine(outcome.issue, outcome.held, { thin: outcome.thin })],
+                ["Proof", proof ? proofDisplay(proof).line : "Run by Future AGI"],
+              ]}
+            />
+            {/* A fix also answers for the issue it was started for. */}
+            {/* The smallest change that verifies was kept over a deeper one. */}
+            {result.shallower && winner && (
+              <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, pl: 4 }}>
+                {`Run ${winner.n} was kept over Run ${result.shallower.over} (${result.shallower.gap ? `+${result.shallower.gap} pt${result.shallower.gap === 1 ? "" : "s"}` : "same score"}): it fixes this with a ${surfaceWord(winner, result)} change instead of a ${surfaceWord(result.trials.find((t) => t.n === result.shallower.over), result)} one — the smallest change that verifies wins.`}
+              </Typography>
+            )}
+            {/* Another trade-off was chosen over the search's pick. */}
+            {shipped?.chosen && (
+              <Typography
+                {...clickable(() => setTab("tradeoffs"))}
+                sx={{ typography: "s2", color: "text.secondary", mt: 0.5, pl: 4, cursor: "pointer", "&:hover": { color: "text.primary" }, ...focusRing }}
+              >
+                {`You chose Run ${shipped.n} over the search's pick (Run ${winner.n}): ${winner.score - shipped.score} pts lower on training, cost ${shipped.cost > 0 ? "+" : ""}${shipped.cost}% instead of ${outcome.effect.cost > 0 ? "+" : ""}${outcome.effect.cost}%, about ${shipped.held}% held back. It ships instead — see Trade-offs.`}
+              </Typography>
+            )}
+            {/* The coding agent's progress, one click from its attempts. */}
+            {sessionNow && (
+              /* Beside the runs list there's no Runs tab here — the runs are on the page. */
+              <Typography
+                {...clickable(decisionOnly ? null : () => setTab("trials"))}
+                sx={{ typography: "s2", color: "text.secondary", mt: 0.5, pl: 4, ...(!decisionOnly && { cursor: "pointer", "&:hover": { color: "text.primary" } }), ...focusRing }}
+              >
+                {sessionNow.key === "accepted"
+                  ? shippable
+                    ? `${sessionNow.attempt.label} was also accepted by Future AGI — see Runs.`
+                    : `Our own search found no safe change, but ${sessionNow.attempt.label} passed every check — see Runs for its proof.`
+                  : sessionNow.key === "budget"
+                    ? `${improverLabel} stopped without an accepted run — see Runs.`
+                    : `${improverLabel} is working on this — its attempts show in Runs.`}
+              </Typography>
+            )}
+            {/* Re-read is on the stepper; only an outside change needs saying. */}
+            {record.reread?.changed && (
+              <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, pl: 4 }}>
+                {`Changed outside Future AGI, so the baseline ran on ${record.reread.version || "the new version"}.`}
+              </Typography>
+            )}
+            {/* Which members it touches — only when there's something to watch for. */}
+            {winner && channelNotes.length > 0 && (
+              <Box sx={{ pl: 4, mt: 0.5 }}>
+                <ChangeScope scope={scope} channelNotes={channelNotes} target={record.targetMember} />
+              </Box>
+            )}
+            {/* A caution in one line; the why on hover. */}
+            {caution && caution.tone !== "#16A34A" && (
+              <Tooltip arrow placement="bottom-start" title={caution.body || ""}>
+                <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.75, pl: 4 }}>
+                  <Box component="span" sx={{ cursor: "help", borderBottom: "1px dotted", borderColor: "text.disabled" }}>{`${caution.title}.`}</Box>
+                </Typography>
+              </Tooltip>
+            )}
+            {!!result.hollow?.length && (
+              <Box sx={{ pl: 4 }}><TaskLinks ids={result.hollow.map((h) => h.id)} tasks={tasks} onOpen={onOpenTask} /></Box>
+            )}
+          </Box>
+
+          {/* ── the numbers behind it ── */}
+          {winner && (
+            <Box sx={{ px: 2.5, pt: 2.25 }}>
+            <Box
               sx={{
-                mx: 2.5, mt: 2, px: 2, py: 1.75, borderRadius: 1, border: "1px solid",
-                borderColor: alpha(verdict.tone, 0.35),
-                bgcolor: (t) => alpha(verdict.tone, t.palette.mode === "dark" ? 0.1 : 0.05),
+                display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden",
+                "& > *": { px: 1.75, py: 1.25, borderLeft: "1px solid", borderColor: "divider", ml: "-1px" },
               }}
             >
-              <Iconify
-                icon={verdict.tone === "#16A34A" ? "solar:check-circle-bold" : "solar:danger-triangle-bold"}
-                width={16} sx={{ color: verdict.tone, flexShrink: 0, mt: "1px" }}
+              <Metric
+                label="Held back" value={result.split?.thin ? "Thin" : `${signedPts(result.heldScore - result.heldBase)}`}
+                tone={result.split?.thin ? undefined : result.heldScore < result.heldBase ? "#DC2626" : result.heldScore > result.heldBase ? "#16A34A" : undefined}
+                sub={result.split?.thin
+                  ? "too few groups reproduced to hold any back"
+                  : `${result.heldBase}% → ${result.heldScore}%${result.noise ? ` · noise ±${result.noise}` : ""}`}
+                hint={`Scenarios the search never saw — ${result.heldMeasured} here${result.split?.kind === "issue" ? `: ${result.split.held} of ${result.split.reproducing} reproducing groups + ${result.split.fresh} fresh` : ""}. This is the number worth quoting; the training score is what the search was allowed to fit to. Noise is what two runs of the same agent differ by; a gain has to clear it.`}
               />
-              <Box flex={1} minWidth={0}>
-                <Typography sx={{ typography: "s2", fontWeight: 700 }}>{verdict.title}</Typography>
-                <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>{verdict.body}</Typography>
-                {!!result.hollow?.length && (
-                  <TaskLinks ids={result.hollow.map((h) => h.id)} tasks={tasks} onOpen={onOpenTask} />
-                )}
-              </Box>
-            </Stack>
+              <Metric label="Training" value={signedPts(winner.score - result.base)} sub={`${result.base}% → ${winner.score}%`} />
+              <Metric
+                label="Cost per conversation"
+                value={outcome.costKnown ? signedPct(outcome.effect.cost) : "—"}
+                sub={outcome.costKnown ? "vs today" : "not measured"}
+                hint={outcome.costKnown ? undefined : "This agent reports no cost: only Vapi and Retell do, or traceAI spans. Turn on production tracing to measure it."}
+              />
+              <Metric label="Latency" value={signedPct(outcome.effect.latency)} sub="vs today" />
+            </Box>
+            </Box>
           )}
 
           {/*
-            The winner as an action — right after the numbers, so "what
-            now" is answered before the trials list. Two paths sit here:
-            run the winner in simulation as v_next, or export the code
-            (patch, zip, clipboard, PR). Everything below stays for the
-            reader who wants to walk the search.
+            The winner's next step, right after the verdict: run it on the
+            full suite. Hand-off sits at the bottom, once.
           */}
-          <WinnerActions
-            env={env}
-            envState={envState}
-            winner={result.winner}
-            onRun={() => onRerun?.(result.winner.proposals || [])}
-          />
+          {/* Only a winner that can ship gets the next step; a run that found
+              nothing safe doesn't offer one. */}
+          {winner && shippable && (
+            <WinnerBar
+              winner={shipped || winner} files={winnerFiles} blockedBy={blockedBy} onRun={onRunWinner}
+              agent={envState?.agent} agentVersion={record.baseAgentVersion}
+            />
+          )}
 
-          {/* ── the search that produced it ── */}
-          <Box sx={{ px: 2.5, pt: 3 }}>
-            <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, mb: 1.5 }}>
-              How the search got here
-            </Typography>
-            <Typography sx={{ typography: "s2", fontWeight: 700, mb: 1 }}>Best so far</Typography>
-            <Growth trials={result.trials} base={result.base} theme={theme} winner={result.winner} />
-          </Box>
+          {/* ── the limits and the proof: one line each while they all held ── */}
+          {(!!outcome.checks?.length || winner) && (
+            <Stack spacing={1} sx={{ px: 2.5, pt: 2.25 }}>
+              {!!outcome.checks?.length && <LimitsChecklist checks={outcome.checks} />}
+              {winner && <VerificationLadder record={record} trial={shipped || winner} footer={<MustPassNote result={result} bare />} />}
+            </Stack>
+          )}
 
-          {/* ── trials, two ways to read them ── */}
+
+          {/* Each finalist, once in every other environment picked. */}
+          <OtherEnvironments result={result} />
+
+          {/* Candidates stopped at Static checks, before anything ran. */}
+          <StaticNotice result={result} />
+
+          {/* A change the frozen environment can't prove. */}
+          <ContractNotice contract={result.contract} envVersion={shownApproval?.from || frozenOn} nextVersion={contractNext} approval={shownApproval} onApprove={approveContract} />
+
+          {/* Code candidates the sealed environment can't run. */}
+          <UnfitNotice result={result} />
+
+          {/* The scenarios this improvement wrote, until they're added. */}
+          <IssueScenariosNotice rows={issueRows} envName={env?.name} onAdd={addIssueRows} />
+
+          {/* ── trials, what changed, and what it did to each scenario ── */}
           <Box sx={{ px: 2.5, pt: 2 }}>
             <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
               <Tabs
                 value={tab} onChange={(_, v) => setTab(v)}
                 sx={{ px: 1.5, minHeight: 40, borderBottom: "1px solid", borderColor: "divider" }}
               >
-                <Tab value="trials" label="Trials" sx={{ minHeight: 40 }} />
-                <Tab value="code" label="Code" sx={{ minHeight: 40 }} />
-                <Tab value="grid" label="Per scenario" sx={{ minHeight: 40 }} />
+                {!decisionOnly && <Tab value="trials" label="Runs" sx={{ minHeight: 40 }} />}
+                {!!result.finalists?.length && <Tab value="finalists" label="Finalists" sx={{ minHeight: 40 }} />}
+                <Tab value="changes" label="Changes" sx={{ minHeight: 40 }} />
+                <Tab value="scenarios" label="Per scenario" sx={{ minHeight: 40 }} />
+                <Tab value="tradeoffs" label="Trade-offs" sx={{ minHeight: 40 }} />
               </Tabs>
 
               {tab === "trials" && (
-                <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-                  {result.trials.map((t) => {
-                    const win = t.n === result.winner.n;
-                    const open = openTrial === t.n;
-                    return (
-                      <Box key={t.n}>
-                        <Stack
-                          direction="row" alignItems="center" spacing={1.5}
-                          onClick={() => setOpenTrial(open ? null : t.n)}
-                          sx={{
-                            px: 2, py: 1.25, cursor: "pointer",
-                            bgcolor: (th) => (win ? alpha("#16A34A", th.palette.mode === "dark" ? 0.08 : 0.04) : "transparent"),
-                            "&:hover": { bgcolor: "action.hover" },
-                          }}
-                        >
-                          <Typography sx={{ typography: "s3", color: "text.disabled", width: 26, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                            {t.n}
-                          </Typography>
-                          <Typography sx={{ typography: "s2", fontWeight: 700, width: 44, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                            {t.score}%
-                          </Typography>
-                          <Typography
-                            sx={{
-                              typography: "s3", width: 40, flexShrink: 0, fontVariantNumeric: "tabular-nums",
-                              color: t.delta > 0 ? "#16A34A" : t.delta < 0 ? "#DC2626" : "text.disabled",
-                            }}
-                          >
-                            {t.delta > 0 ? `+${t.delta}` : t.delta}
-                          </Typography>
-                          <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>
-                            {t.tried}
-                          </Typography>
-                          {t.brokeBlocker && (
-                            <Tooltip arrow title="Rejected — broke a scenario that blocks a release">
-                              <Chip
-                                size="small" label="blocker"
-                                sx={{
-                                  height: 18, borderRadius: 0.5, flexShrink: 0, color: "#DC2626",
-                                  border: "1px solid", borderColor: alpha("#DC2626", 0.4), bgcolor: "transparent",
-                                  "& .MuiChip-label": { px: 0.625, typography: "s3", fontWeight: 700 },
-                                }}
-                              />
-                            </Tooltip>
-                          )}
-                          {win && (
-                            <Chip
-                              size="small" label="winner"
-                              sx={{
-                                height: 18, borderRadius: 0.5, flexShrink: 0, color: "#16A34A",
-                                border: "1px solid", borderColor: alpha("#16A34A", 0.4), bgcolor: "transparent",
-                                "& .MuiChip-label": { px: 0.625, typography: "s3", fontWeight: 700 },
-                              }}
-                            />
-                          )}
-                          <Tooltip arrow title="Open this trial's run — Traces / Analytics / Verify">
-                            <IconButton
-                              size="small"
-                              onClick={(e) => { e.stopPropagation(); openTrialRun(t.n); }}
-                              sx={{ p: 0.25, flexShrink: 0 }}
-                            >
-                              <Iconify icon="solar:arrow-right-up-linear" width={14} sx={{ color: "text.subtitle" }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Iconify
-                            icon={open ? "eva:arrow-ios-upward-fill" : "eva:arrow-ios-downward-fill"}
-                            width={14} sx={{ color: "text.disabled", flexShrink: 0 }}
-                          />
-                        </Stack>
-                        {open && (
-                          <Stack spacing={0.5} sx={{ px: 2, pb: 2, pl: 6 }}>
-                            {t.lines.length ? t.lines.map((line) => (
-                              <Stack
-                                key={line} direction="row" spacing={1}
-                                sx={{ px: 1.5, py: 1, borderRadius: 1, bgcolor: (th) => alpha("#16A34A", th.palette.mode === "dark" ? 0.1 : 0.05) }}
-                              >
-                                <Typography sx={{ typography: "s2", fontWeight: 700, color: "#16A34A", flexShrink: 0 }}>+</Typography>
-                                <Typography sx={{ typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" }}>
-                                  {line}
-                                </Typography>
-                              </Stack>
-                            )) : (
-                              <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-                                This candidate changed nothing — the score is the starting prompt re-run, which is
-                                how much of the spread between trials is noise rather than the search.
-                              </Typography>
-                            )}
-                          </Stack>
-                        )}
-                      </Box>
-                    );
-                  })}
-                </Stack>
+                <>
+                  {/* The coding agent's submissions first, judged the same way. */}
+                  {session && (
+                    <ImproverAttempts
+                      record={record} env={env} envState={envState} session={session}
+                      name={name || record.name} searchSpent={searchSpend(result, env?.surface)}
+                    />
+                  )}
+                  {session && (
+                    <Typography sx={{ px: 2, py: 1, typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid", borderColor: "divider" }}>
+                      Future AGI search
+                    </Typography>
+                  )}
+                  {/* Best so far, then every run — open one to see its calls. */}
+                  <Box sx={{ px: 2, pt: 1.5, pb: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+                    <Growth trials={result.trials} base={result.base} theme={theme} winner={winner} />
+                  </Box>
+                  <TrialList trials={result.trials} winner={winner} openTrial={openTrial} setOpenTrial={setOpenTrial} onOpenRun={openTrialRun} record={record} />
+                </>
               )}
-
-              {tab === "code" && (
-                <TrialCodeView
-                  env={env}
-                  trials={result.trials}
-                  pool={result.pool || []}
-                  winner={result.winner}
-                />
-              )}
-
-              {tab === "grid" && (
-                <TrialHeatmap trials={result.trials} scenarios={result.trainMeasuredTasks || []} winner={result.winner} />
-              )}
-            </Box>
-
-            <Box sx={{ mt: 0.5, mx: -1 }}>
-              <RunTraceLog
-                label={`Searched by ${result.optimizer.label} · ${result.trials.length} trials`}
-                steps={searchTrace(result)}
-              />
+              {tab === "finalists" && <FinalistsTable result={result} bare />}
+              {tab === "changes" && <WinnerChanges env={env} winner={shipped || winner} record={record} members={scope.hasMembers ? proposalMembers(shipped?.proposals || winner?.proposals || [], { agent, limits: record.limits, target: record.targetMember }) : null} />}
+              {tab === "scenarios" && <ScenarioOutcomes result={result} winner={winner} />}
+              {tab === "tradeoffs" && <TradeoffView record={record} chosen={record.preferredTrial} onChoose={choose} />}
             </Box>
           </Box>
 
           {/* ── the winner still has to reach the agent ── */}
-          <Box sx={{ px: 2.5, py: 2.5 }}>
-            <Typography sx={{ typography: "s2", fontWeight: 700 }}>Hand the winner over</Typography>
-            {/*
-              The boundary between what was optimised and what decides a
-              release. The search moves the pass rate; the gate also weighs mean
-              return, latency and cost. Calling a winning prompt "released"
-              because one of those numbers went up is how a regression on the
-              other three ships unnoticed.
-            */}
-            <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1.5 }}>
-              This search optimised the pass rate. The release gate also weighs mean return, latency and cost —
-              so the winner is a candidate for release, and the gate still has to be run against it.
-            </Typography>
-            {/* Draft-state reassurance — the winner is not shipped on its own;
-                exporting opens a PR / patch the user reviews and merges. */}
-            <Stack
-              direction="row" alignItems="flex-start" spacing={1.5}
-              sx={{
-                mb: 1.5, px: 2, py: 1.5, borderRadius: 1, border: "1px solid",
-                borderColor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.3 : 0.2),
-                bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.08 : 0.04),
-              }}
-            >
-              <Iconify icon="solar:lock-keyhole-minimalistic-linear" width={16} sx={{ color: "#7857FC", flexShrink: 0, mt: "1px" }} />
-              <Box flex={1} minWidth={0}>
-                <Typography sx={{ typography: "s2", fontWeight: 700 }}>Nothing has been applied yet</Typography>
-                <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>
-                  The winner is a draft. It stays in your source — exporting opens a pull request or patch you
-                  review and merge. The change belongs to your agent, so the delta stays yours.
-                </Typography>
-              </Box>
-            </Stack>
-            <OmegaHandoff
-              env={env}
-              envState={envState}
-              patch={patch}
-              included={result.winner.proposals || []}
-              projected={result.heldScore}
-              current={result.heldBase}
-              willFix={result.winner.fixed || 0}
-              onRerun={() => onRerun?.(result.winner.proposals || [])}
-            />
-          </Box>
+          {winner && shippable && (
+            <Box sx={{ px: 2.5, py: 2.5 }}>
+              {/* Before it ships: nothing is applied — it goes out as a draft.
+                  After: say where it is, never "nothing applied". */}
+              <Typography sx={{ typography: "s2", fontWeight: 700 }}>
+                {!lifecycle ? "Hand the winner over" : lifecycle.key === "review" ? "Shipped as a draft" : "Released"}
+              </Typography>
+              <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1.5 }}>
+                {lifecycle?.key === "review"
+                  ? lifecycle.label === "Awaiting release"
+                    ? `Landed as ${lifecycle.detail}. Mark it released once it's live — the Error Feed then watches for the issue.`
+                    : `${lifecycle.via || "The draft"} is waiting for someone to deploy it. Once it's live, mark it released below — the Error Feed then watches for the issue.`
+                  : lifecycle?.key === "watching"
+                    ? `Released as ${lifecycle.version} — the new baseline. The Error Feed is watching for the issue · ${lifecycle.detail}.`
+                    : lifecycle?.key === "resolved"
+                      ? `Released as ${lifecycle.version} — it held through the watch window.`
+                      : lifecycle?.key === "reopened"
+                        ? `Released, but the issue was ${lifecycle.detail}. Fix again from the issue starts a new fix, linked to this one.`
+                        : ending === "budget"
+                          ? `The best of a partial search — it stopped at the budget after ${record.stoppedAtBudget.trials} of ${record.stoppedAtBudget.of} runs. It passed every check; a bigger budget might find a better change. Nothing has been applied yet — it ships as a draft for someone to approve.`
+                          : "Nothing has been applied yet — it ships as a draft for someone to approve."}
+              </Typography>
+              <OmegaHandoff
+                env={env}
+                envState={envState}
+                patch={patch}
+                included={shipped?.proposals || winner.proposals || []}
+                projected={shipped?.held ?? result.heldScore}
+                projectedOn="held-back scenarios"
+                current={result.heldBase}
+                willFix={(shipped || winner).fixed || 0}
+                handoffKey={handoff?.key}
+                landedVersion={handoff?.landedVersion}
+                provenance={handoff?.provenance}
+                onLand={handoff?.onLand}
+                onRerun={handoff?.onRerun}
+                brief={handBrief}
+                briefTarget={briefTarget}
+                proof={proofMarkdown({ record, outcome, name, agent, members: scope.names, channelNotes: scope.shared || !scope.hasMembers ? channelNotes : [], identity })}
+              />
+            </Box>
+          )}
+
+          {/* ── what it was all measured against ── */}
+          <FrozenInputs record={record} model={agentModel} identity={identity} envSnapshot={frozenOn} />
+
+          {/* ── how it searched, for whoever wants it ── */}
+          <SearchDetails record={record} result={result} model={model} />
         </Box>
       )}
     </Stack>
@@ -365,17 +601,110 @@ export default function OptimizationRunView({ record, env, envState, patch, task
 }
 
 OptimizationRunView.propTypes = {
+  /* Beside the runs list: hide the runs and the search chart. */
+  decisionOnly: PropTypes.bool,
   record: PropTypes.object,
+  name: PropTypes.string,
   env: PropTypes.object,
   envState: PropTypes.object,
   patch: PropTypes.func,
   tasks: PropTypes.array,
   onOpenTask: PropTypes.func,
   onBack: PropTypes.func,
+  /* Names where back goes, when that isn't obvious (an Error Feed issue id). */
+  backLabel: PropTypes.string,
   onClose: PropTypes.func,
   onDone: PropTypes.func,
-  onRerun: PropTypes.func,
+  onRunWinner: PropTypes.func,
+  handoff: PropTypes.object,
 };
+
+/*
+  Suggestion only — an agent we can only call. The failure was reproduced
+  and diagnosed; the fix is a suggestion, not a proof, because no candidate
+  can be tried on an agent we don't hold. Once it's applied and the new
+  version is marked released, a re-run on the same environment version
+  proves it.
+*/
+function SuggestionBody({ record, outcome, env, envState, patch, agent, scope, channelNotes, issueRows, onAddIssueRows, handoff, brief, briefTarget, agentModel, identity, frozenOn }) {
+  const fix = outcome.suggestion || [];
+  const depth = fixDepthOf(agent);
+  return (
+    <Box sx={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+      <Box sx={{ px: 2.5, pt: 2.25 }}>
+        <Stack direction="row" alignItems="flex-start" spacing={1.25}>
+          <Iconify icon="solar:lightbulb-linear" width={20} sx={{ color: "text.secondary", flexShrink: 0, mt: "2px" }} />
+          <Typography sx={{ typography: "m3", fontWeight: 600, lineHeight: 1.35 }}>{outcome.headline}</Typography>
+        </Stack>
+        <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, pl: 4, maxWidth: 720 }}>{depth.note}</Typography>
+        <Box sx={{ pl: 4, mt: 0.5 }}>
+          <ChangeScope scope={scope} channelNotes={channelNotes} target={record.targetMember} />
+        </Box>
+      </Box>
+
+      <Box sx={{ px: 2.5, pt: 2.25 }}>
+        <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, mb: 0.75 }}>
+          Suggested fix
+        </Typography>
+        <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+          <WinnerChanges env={env} winner={{ proposals: fix }} />
+        </Box>
+      </Box>
+
+      <IssueScenariosNotice rows={issueRows} envName={env?.name} onAdd={onAddIssueRows} />
+
+      {fix.length > 0 && (
+        <Box sx={{ px: 2.5, py: 2.5 }}>
+          <Typography sx={{ typography: "s2", fontWeight: 700 }}>Apply it, then prove it</Typography>
+          <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1.5 }}>
+            {"Nothing has been applied — we can't reach inside this agent. Apply the change where it runs, mark the new version released, and re-run on the same environment version."}
+          </Typography>
+          <OmegaHandoff
+            env={env}
+            envState={envState}
+            patch={patch}
+            included={fix}
+            projected={null}
+            current={null}
+            willFix={0}
+            handoffKey={handoff?.key}
+            landedVersion={handoff?.landedVersion}
+            provenance={handoff?.provenance}
+            onLand={handoff?.onLand}
+            onRerun={handoff?.onRerun}
+            brief={brief}
+            briefTarget={briefTarget}
+            suggestion
+          />
+        </Box>
+      )}
+
+      <FrozenInputs record={record} model={agentModel} identity={identity} envSnapshot={frozenOn} />
+    </Box>
+  );
+}
+SuggestionBody.propTypes = {
+  record: PropTypes.object, outcome: PropTypes.object, env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func, agent: PropTypes.object,
+  scope: PropTypes.object, channelNotes: PropTypes.array, issueRows: PropTypes.array, onAddIssueRows: PropTypes.func,
+  handoff: PropTypes.object, brief: PropTypes.func, briefTarget: PropTypes.object, agentModel: PropTypes.string, identity: PropTypes.string, frozenOn: PropTypes.string,
+};
+
+/* Label and value rows under the verdict — the reasons, not a paragraph of them. */
+function Facts({ rows }) {
+  const list = rows.filter(Boolean);
+  if (!list.length) return null;
+  return (
+    <Box sx={{ display: "grid", gridTemplateColumns: "116px minmax(0, 1fr)", columnGap: 2, rowGap: 0.5, mt: 1.25, pl: 4, maxWidth: 980 }}>
+      {list.map(([k, v]) => (
+        <Fragment key={k}>
+          <Typography sx={{ typography: "s2", color: "text.subtitle" }}>{k}</Typography>
+          <Typography sx={{ typography: "s2", color: "text.secondary" }}>{v}</Typography>
+        </Fragment>
+      ))}
+    </Box>
+  );
+}
+Facts.propTypes = { rows: PropTypes.array };
 
 function Metric({ label, value, sub, tone, hint }) {
   return (
@@ -418,16 +747,16 @@ function Growth({ trials, base, theme, winner }) {
   const B = 20;
   /*
     Monotonic view of the score. Each trial is displayed at the running
-    max, not its own raw score — self improvement, in the way the user
+    max, not its own raw score — improvement, in the way the user
     reads it, only goes up. The raw scatter of "this candidate lost" is a
     detail the trials grid can carry; the headline chart states the story.
   */
   const running = trials.reduce((acc, t, i) => {
     const prev = i === 0 ? base : acc[i - 1];
-    /* A trial that broke a release blocker is rejected — it can't raise the
-       best-so-far line, otherwise the peak (and the winner's on-chart value)
-       would show a score no shippable candidate actually reached. */
-    acc.push(t.brokeBlocker ? prev : Math.max(prev, t.score));
+    /* A trial that broke a critical scenario or cheated is rejected — it
+       can't raise the best-so-far line, otherwise the peak (and the winner's
+       on-chart value) would show a score no shippable candidate reached. */
+    acc.push(t.brokeBlocker || t.cheats || compatFailed(t) || staticFailed(t) || t.overLimit ? prev : Math.max(prev, t.score));
     return acc;
   }, []);
   const top = Math.min(100, Math.max(base, ...running) + 6);
@@ -570,642 +899,497 @@ Growth.propTypes = {
 };
 
 /**
- * The code, evolving trial by trial.
+ * The winner, and the one thing to do with it next.
  *
- * The concept: an optimizer trial is not just a score — it is a version of
- * the agent's code. Each trial's `picks` map to a subset of the candidate
- * proposals, and each proposal has a filepath and a diff. So per trial we
- * can reconstruct what the agent's files would look like at that trial —
- * and, more usefully, the delta from the previous trial's version.
- *
- * Layout: rail of trials on the left (scores, delta, winner badge, dot on
- * the currently-selected one), code pane on the right showing every file
- * this trial touches. Lines the trial added are green, lines it removed
- * are red; a small "added / removed / unchanged from trial N-1" badge sits
- * at the top of each file. Winner is preselected so you land on it.
+ * Trials were scored on the training split, so the winner's number is a
+ * training number. Before anything is handed over, it runs on the full
+ * scenario set — and not at all when the held-out verdict is red.
  */
-function TrialCodeView({ env, trials, pool, winner }) {
-  const proposalById = useMemo(
-    () => Object.fromEntries((pool || []).map((p) => [p.id, p])),
-    [pool],
-  );
-  const [selected, setSelected] = useState(() => winner?.n || trials[0]?.n);
-
-  const trial = trials.find((t) => t.n === selected) || trials[0];
-  const prev = trials.find((t) => t.n === selected - 1);
-
-  /* The candidate proposals this trial ran with, and the ones the previous
-     trial ran with — used together to show what CHANGED between them. */
-  const currentPicks = (trial?.picks || []).map((id) => proposalById[id]).filter(Boolean);
-  const prevPicks = (prev?.picks || []).map((id) => proposalById[id]).filter(Boolean);
-
-  /* Every file the current trial's picks touch, plus the picks assigned to
-     that file for both the current and the previous trial, so the per-file
-     view can render the state and the delta. */
-  const files = useMemo(() => {
-    const map = new Map();
-    currentPicks.forEach((p) => {
-      const file = changeFileFor(env, p);
-      if (!file) return;
-      if (!map.has(file.path)) {
-        map.set(file.path, { file, current: [], previous: [] });
-      }
-      map.get(file.path).current.push(p);
-    });
-    prevPicks.forEach((p) => {
-      const file = changeFileFor(env, p);
-      if (!file) return;
-      if (!map.has(file.path)) {
-        map.set(file.path, { file, current: [], previous: [] });
-      }
-      map.get(file.path).previous.push(p);
-    });
-    return [...map.values()].sort((a, b) => a.file.path.localeCompare(b.file.path));
-  }, [currentPicks, prevPicks, env]);
-
+function WinnerBar({ winner, files, blockedBy, onRun, agent, agentVersion }) {
+  const fileCount = new Set(files).size;
+  /* A code agent's winner can also run from a snapshot: the commit the
+     change was pushed as, or an uploaded archive of it. */
+  const [candidate, setCandidate] = useState(null);
+  const snapshot = takesSnapshot(agent) ? candidateSourceOf(candidate, agent) : null;
   return (
-    <Stack direction="row" sx={{ minHeight: 0 }}>
-      {/* ── rail: trials ── */}
-      <Box
-        sx={{
-          width: 200, flexShrink: 0, borderRight: "1px solid", borderColor: "divider",
-          maxHeight: 520, overflowY: "auto",
-        }}
+    <Box sx={{ px: 2.5, pt: 2.5 }}>
+      <Box sx={{ borderRadius: 1.25, border: "1px solid", borderColor: "divider" }}>
+      <Stack
+        direction="row" alignItems="center" spacing={1.5} flexWrap="wrap" rowGap={1.25}
+        sx={{ px: 2, py: 1.75 }}
       >
-        {trials.map((t) => {
-          const win = t.n === winner?.n;
-          const on = t.n === selected;
-          return (
-            <Stack
-              key={t.n} direction="row" alignItems="center" spacing={1}
-              onClick={() => setSelected(t.n)}
-              sx={{
-                px: 1.5, py: 1, cursor: "pointer",
-                borderLeft: "2px solid",
-                borderLeftColor: on ? "#7857FC" : "transparent",
-                bgcolor: (th) => (on
-                  ? alpha("#7857FC", th.palette.mode === "dark" ? 0.08 : 0.04)
-                  : "transparent"),
-                "&:hover": { bgcolor: "action.hover" },
-              }}
+        <Box flex={1} minWidth={0}>
+          <Typography sx={{ typography: "s2", fontWeight: 700 }}>
+            {`Run ${winner.n} wins · ${files.length} ${files.length === 1 ? "change" : "changes"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}`}
+          </Typography>
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+            Run it on the full suite before handing it over.
+          </Typography>
+        </Box>
+        <Tooltip arrow title={blockedBy ? `Blocked — ${blockedBy}` : ""}>
+          <Box component="span">
+            <Button
+              variant="contained" color="primary" size="small"
+              disabled={!!blockedBy}
+              onClick={() => onRun?.(snapshot?.param || null)}
+              startIcon={<Iconify icon="solar:play-bold" width={14} />}
+              sx={{ typography: "s2", fontWeight: 700 }}
             >
-              <Typography sx={{ typography: "s3", color: "text.disabled", width: 22, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                {t.n}
-              </Typography>
-              <Typography sx={{ typography: "s2", fontWeight: 700, fontVariantNumeric: "tabular-nums", width: 40, flexShrink: 0 }}>
-                {t.score}%
-              </Typography>
-              <Typography
-                sx={{
-                  typography: "s3", flex: 1, fontVariantNumeric: "tabular-nums", textAlign: "right",
-                  color: t.delta > 0 ? "#16A34A" : t.delta < 0 ? "#DC2626" : "text.disabled",
-                }}
-              >
-                {t.delta > 0 ? `+${t.delta}` : t.delta}
-              </Typography>
-              {win && (
-                <Iconify icon="solar:crown-bold" width={12} sx={{ color: "#CA8A04", flexShrink: 0 }} />
+              Run winner on full suite
+            </Button>
+          </Box>
+        </Tooltip>
+      </Stack>
+      {takesSnapshot(agent) && (
+        <CandidateSourcePicker agent={agent} agentVersion={agentVersion} current={snapshot} onPick={setCandidate} />
+      )}
+      </Box>
+    </Box>
+  );
+}
+
+WinnerBar.propTypes = {
+  winner: PropTypes.object, files: PropTypes.array, blockedBy: PropTypes.string, onRun: PropTypes.func,
+  agent: PropTypes.object, agentVersion: PropTypes.string,
+};
+
+const signedPts = (n) => `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n)} pts`;
+const signedPct = (n) => `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n)}%`;
+
+/*
+  Where the improvement run is, as the steps a fix takes: reproduce the
+  failure (or start from the run it came from), search, verify, and how it
+  ended. An improvement from the Error Feed also says which issue.
+*/
+function ImprovementSteps({ record, fromRun, running, phase, diag, outcome, onOpenIssue, onOpenRun, shipped }) {
+  const feed = record.trigger?.kind === "error-feed";
+  const r = record.reproduce || {};
+  const ending = outcome.ending.key;
+  const notReproduced = ending === "not-reproduced";
+  const stopped = notReproduced || ending === "failed" || ending === "nothing";
+  const finalIcon = { ready: "solar:check-circle-linear", budget: "solar:pause-circle-linear", "no-fix": "solar:close-circle-linear", failed: "solar:close-circle-linear", suggestion: "solar:lightbulb-linear", nothing: "solar:check-circle-linear" }[ending];
+  /* While it runs, each step reads done, now or to do from the phase the
+     trace has reached. */
+  const ORDER = ["reproducing", "diagnosing", "searching", "verifying"];
+  const live = (stepPhase, fallback) => {
+    if (!running || !phase) return fallback;
+    const a = ORDER.indexOf(stepPhase);
+    const b = ORDER.indexOf(phase.key);
+    return a < b ? "done" : a === b ? "now" : "todo";
+  };
+  /* Re-read at the start, so the baseline matches production. */
+  const reread = record.reread
+    ? { label: "Synced", sub: record.reread.changed ? `changed outside Future AGI → ${record.reread.version || "new version"}` : "no outside change", state: "done" }
+    : null;
+  const reproduced = r.total
+    ? { label: r.overridden && !r.reproduced ? "Reproduce" : `Reproduced on ${r.reproduced || 0} of ${r.total} scenarios`, sub: [r.overridden && !r.reproduced ? "continued anyway" : null, r.inconclusive ? `${r.inconclusive} inconclusive` : null].filter(Boolean).join(" · ") || null }
+    : { label: "Reproduce", sub: null };
+  /* Newer records: the baseline run twice, and the Diagnose step. */
+  const cal = record.calibration || record.result?.calibration || null;
+  const calibrated = cal
+    ? { label: "Baseline twice", sub: `${cal.disagreed} of ${cal.scenarios} disagreed`, state: stopped && !running ? "done" : live("reproducing", "done") }
+    : null;
+  const diagnose = record.frozen?.diagnoseStep && !stopped
+    ? { label: "Diagnose", sub: diag?.surface ? `smallest surface: ${diag.surface.label}` : null, state: live("diagnosing", "done") }
+    : null;
+  const suggestion = ending === "suggestion" || (running && record.fixDepth === "suggestion");
+  const steps = suggestion ? [
+    ...(reread ? [reread] : []),
+    { ...reproduced, state: running ? live("reproducing", "now") : "done" },
+    { label: "Diagnose", state: running ? live("diagnosing", "todo") : "done" },
+    { label: "Suggestion only", sub: running ? null : "no change tried", state: running ? "todo" : "done", icon: finalIcon },
+  ] : [
+    ...(reread ? [reread] : []),
+    feed
+      ? { ...reproduced, state: notReproduced ? "fail" : "done" }
+      : calibrated ? null : { label: "Baseline", sub: fromRun ? `Run ${fromRun.ordinal || ""}`.trim() : null, state: "done" },
+    ...(calibrated ? [calibrated] : []),
+    ...(diagnose ? [diagnose] : []),
+    { label: "Search", sub: record.stoppedAtBudget ? `${record.stoppedAtBudget.trials} of ${record.stoppedAtBudget.of} runs` : null, state: stopped ? "todo" : running ? live("searching", "now") : "done" },
+    { label: "Verify", sub: !stopped && !running ? `${record.result?.finalists?.length || 1} ${record.result?.finalists?.length === 1 ? "finalist" : "finalists"} held back + limits` : null, state: stopped || running ? (running ? live("verifying", "todo") : "todo") : "done" },
+    { label: running || (stopped && ending !== "nothing") ? "Ready for review" : outcome.ending.label, state: running || (stopped && ending !== "nothing") ? "todo" : ending === "ready" || ending === "nothing" ? "done" : ending === "budget" ? "partial" : "fail", icon: finalIcon },
+    /* After review: where the shipped change is now. */
+    ...(shipped ? [{ label: shipped.label, sub: shipped.detail || null, state: shipped.key === "reopened" ? "fail" : "done" }] : []),
+  ].filter(Boolean);
+  return (
+    <Box sx={{ px: 2.5, py: 1.25, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+        <Iconify icon={feed ? "solar:bug-linear" : "solar:magnifer-linear"} width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+        <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", minWidth: 0 }}>
+          {feed ? (
+            <>
+              {"From Error Feed · "}
+              <Box component="span" {...clickable(onOpenIssue, { role: "link" })} sx={{ color: "text.primary", fontWeight: 600, cursor: "pointer", "&:hover": { textDecoration: "underline" }, ...focusRing }}>
+                {record.trigger.issueId}
+              </Box>
+              {` · ${record.trigger.issueTitle}`}
+            </>
+          ) : (
+            <>
+              {record.trigger?.kind === "goal" ? "Goal" : record.trigger?.kind === "schedule" ? `Scheduled · ${record.trigger.cadence === "new-issue" ? "new issue" : "weekly"}` : record.trigger?.source === "run-insights" ? `From run insights · ${record.trigger.issueTitle || record.trigger.issueId}` : "From Debug failures"}
+              {/* The run it started from — a link to it, not a page behind it. */}
+              {fromRun && (
+                <>
+                  {" · started from "}
+                  <Box
+                    component="span" {...clickable(onOpenRun, { role: "link" })}
+                    sx={{ color: "text.primary", fontWeight: 600, ...(onOpenRun && { cursor: "pointer", "&:hover": { textDecoration: "underline" } }), ...focusRing }}
+                  >
+                    {`Run ${fromRun.ordinal || ""}`.trim()}
+                  </Box>
+                </>
               )}
+              {[
+                record.baseAgentVersion ? `agent ${record.baseAgentVersion}` : null,
+                record.trigger?.goal ? `Goal: ${record.trigger.goal.id === "pass-rate" ? "raise the pass rate" : `raise ${record.trigger.goal.label}`}` : null,
+                record.lineage?.length ? `searched across ${record.lineage[0]}–${record.baseAgentVersion || "now"}` : null,
+              ].filter(Boolean).map((part) => ` · ${part}`).join("")}
+            </>
+          )}
+        </Typography>
+      </Stack>
+      {/* One line: the step names carry the story; each step's detail is on hover. */}
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.75 }} flexWrap="wrap" rowGap={0.5}>
+        {steps.map((st, i) => {
+          const icon = st.state === "fail" ? "solar:close-circle-linear"
+            : st.state === "partial" ? "solar:pause-circle-linear"
+              : st.state === "done" ? (st.icon || "solar:check-circle-linear")
+                : "solar:circle-linear";
+          const strong = st.state !== "todo";
+          return (
+            <Stack key={st.label + i} direction="row" alignItems="center" spacing={0.5}>
+              {i > 0 && <Box sx={{ width: 14, height: "1px", bgcolor: "divider", mr: 0.5 }} />}
+              <Tooltip arrow disableHoverListener={!st.sub} title={st.sub || ""}>
+                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ cursor: st.sub ? "help" : "default" }}>
+                  <Iconify icon={icon} width={13} sx={{ color: strong ? "text.primary" : "text.subtitle" }} />
+                  <Typography sx={{ typography: "s3", fontWeight: strong ? 600 : 400, color: strong ? "text.primary" : "text.subtitle", whiteSpace: "nowrap" }}>
+                    {st.state === "now" ? `${st.label}…` : st.label}
+                  </Typography>
+                </Stack>
+              </Tooltip>
             </Stack>
           );
         })}
-      </Box>
+      </Stack>
+    </Box>
+  );
+}
+ImprovementSteps.propTypes = {
+  record: PropTypes.object, fromRun: PropTypes.object, running: PropTypes.bool, phase: PropTypes.object, diag: PropTypes.object, outcome: PropTypes.object, onOpenIssue: PropTypes.func, onOpenRun: PropTypes.func, shipped: PropTypes.object,
+};
 
-      {/* ── pane: files for the selected trial ── */}
-      <Box sx={{ flex: 1, minWidth: 0, p: 2, maxHeight: 520, overflowY: "auto" }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
-          <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-            Trial {trial?.n} · agent code
-          </Typography>
-          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            {prev ? `changes from trial ${prev.n}` : "the starting point"}
-          </Typography>
-          <Box flex={1} />
-          {trial?.n === winner?.n && (
-            <Chip
-              size="small" label="winner"
-              sx={{
-                height: 20, borderRadius: 0.5, color: "#CA8A04",
-                border: "1px solid", borderColor: alpha("#CA8A04", 0.4), bgcolor: "transparent",
-                "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 700 },
-              }}
-            />
-          )}
-        </Stack>
-
-        {files.length === 0 ? (
-          <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-            This trial re-ran the incumbent — no code changed since the last one.
-          </Typography>
-        ) : (
-          <Stack spacing={1.5}>
-            {files.map(({ file, current, previous }) => (
-              <FileTrialDiff
-                key={file.path}
-                file={file}
-                current={current}
-                previous={previous}
-                showDelta={!!prev}
-              />
-            ))}
-          </Stack>
-        )}
-      </Box>
+/* The constraints in force while the search runs — a candidate that breaks one is dropped. */
+function RunningConstraints({ record, model }) {
+  const rows = [
+    ...limitRows(record.limits || DEFAULT_LIMITS, model),
+    ...(record.budget ? [{ id: "spend", label: "This improvement", value: creditsLabel(record.budget) }] : []),
+  ];
+  return (
+    <Stack direction="row" alignItems="baseline" flexWrap="wrap" columnGap={2} rowGap={0.5} sx={{ px: 2.5, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}>
+      <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5 }}>
+        Held to
+      </Typography>
+      {rows.map((c) => (
+        <Typography key={c.id} sx={{ typography: "s3", color: "text.secondary" }}>
+          {`${c.label} · `}
+          <Box component="span" sx={{ color: "text.primary", fontWeight: 600 }}>{c.value}</Box>
+        </Typography>
+      ))}
     </Stack>
   );
 }
+RunningConstraints.propTypes = { record: PropTypes.object, model: PropTypes.string };
 
-TrialCodeView.propTypes = {
-  env: PropTypes.object, trials: PropTypes.array, pool: PropTypes.array, winner: PropTypes.object,
+/* The agent's constraints a candidate had to keep, each passed or broken, with the measure. */
+function LimitsChecklist({ checks }) {
+  const broken = checks.filter((c) => c.pass === false);
+  const unknown = checks.filter((c) => c.pass === null).length;
+  return (
+    <CheckGroup
+      title="Constraints"
+      failed={broken.length > 0}
+      summary={broken.length
+        ? `${broken.length} broken — ${broken.map((c) => c.label).join(", ")}`
+        : `All ${checks.length - unknown} held${unknown ? ` · ${unknown} not measured` : ""}`}
+    >
+      {checks.map((c, i) => (
+        <Stack key={c.id} direction="row" alignItems="center" spacing={1.25} sx={{ px: 1.5, py: 0.875, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+          <Iconify
+            icon={c.pass === null ? "solar:question-circle-linear" : c.pass ? "solar:check-circle-linear" : "solar:close-circle-bold"}
+            width={15} sx={{ color: c.pass === false ? "#DC2626" : c.pass === null ? "text.disabled" : "text.secondary", flexShrink: 0 }}
+          />
+          <Typography sx={{ typography: "s2", flex: 1, minWidth: 0 }}>{c.label}</Typography>
+          <Typography sx={{ typography: "s2", color: c.pass === false ? "#DC2626" : "text.subtitle", fontVariantNumeric: "tabular-nums" }}>{c.actual}</Typography>
+        </Stack>
+      ))}
+    </CheckGroup>
+  );
+}
+LimitsChecklist.propTypes = { checks: PropTypes.array };
+
+function TrialList({ trials, winner, openTrial, setOpenTrial, onOpenRun, record }) {
+  const finalists = new Set((record?.result?.finalists || []).map((f) => f.n));
+  return (
+    <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+      {trials.map((t) => {
+        const win = !!winner && t.n === winner.n;
+        const open = openTrial === t.n;
+        /* Stopped at Static checks or Fits the environment — no scenario ran, so no score. */
+        const unfit = compatFailed(t) || staticFailed(t);
+        const stat = staticFailed(t);
+        return (
+          <Box key={t.n}>
+            <Stack
+              direction="row" alignItems="center" spacing={1.5}
+              {...clickable(() => setOpenTrial(open ? null : t.n), { expanded: open })}
+              sx={{
+                ...focusRing,
+                px: 2, py: 1.25, cursor: "pointer",
+                bgcolor: (th) => (win ? alpha("#16A34A", th.palette.mode === "dark" ? 0.08 : 0.04) : "transparent"),
+                "&:hover": { bgcolor: "action.hover" },
+              }}
+            >
+              <Typography sx={{ typography: "s3", color: "text.disabled", width: 26, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{t.n}</Typography>
+              <Typography sx={{ typography: "s2", fontWeight: 700, width: 44, flexShrink: 0, fontVariantNumeric: "tabular-nums", color: unfit ? "text.disabled" : "text.primary" }}>{unfit ? "—" : `${t.score}%`}</Typography>
+              <Typography sx={{ typography: "s3", width: 40, flexShrink: 0, fontVariantNumeric: "tabular-nums", color: unfit ? "text.disabled" : t.delta > 0 ? "#16A34A" : t.delta < 0 ? "#DC2626" : "text.disabled" }}>
+                {unfit ? "not run" : t.delta > 0 ? `+${t.delta}` : t.delta}
+              </Typography>
+              <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>{t.tried}</Typography>
+              {/* Where verification stopped it — the first tier it failed. */}
+              {!win && stoppedAt(record, t) && (
+                <Typography sx={{ typography: "s3", color: "text.disabled", flexShrink: 0 }}>{`stopped at ${stoppedAt(record, t)}`}</Typography>
+              )}
+              {rejectedFor(t) && (
+                <Tooltip arrow title={`Rejected — ${rejectedFor(t)}`}>
+                  <Chip size="small" label={t.cheats ? "cheat" : t.brokeBlocker ? "must-pass" : stat ? "static check" : unfit ? "doesn't fit" : t.overLimit ? "over limit" : "tests"} sx={{ height: 18, borderRadius: 0.5, flexShrink: 0, color: "#DC2626", border: "1px solid", borderColor: alpha("#DC2626", 0.4), bgcolor: "transparent", "& .MuiChip-label": { px: 0.625, typography: "s3", fontWeight: 700 } }} />
+                </Tooltip>
+              )}
+              {!win && finalists.has(t.n) && (
+                <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>finalist</Typography>
+              )}
+              {win && (
+                <Chip size="small" label="winner" sx={{ height: 18, borderRadius: 0.5, flexShrink: 0, color: "#16A34A", border: "1px solid", borderColor: alpha("#16A34A", 0.4), bgcolor: "transparent", "& .MuiChip-label": { px: 0.625, typography: "s3", fontWeight: 700 } }} />
+              )}
+              {!unfit && (
+                <Tooltip arrow title={`Run ${t.n} is its own simulation — open it`}>
+                  <Button
+                    size="small" onClick={(e) => { e.stopPropagation(); onOpenRun(t.n); }}
+                    endIcon={<Iconify icon="solar:arrow-right-up-linear" width={12} />}
+                    sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", minWidth: 0, px: 0.75, py: 0, flexShrink: 0 }}
+                  >
+                    View run
+                  </Button>
+                </Tooltip>
+              )}
+              <Iconify icon={open ? "eva:arrow-ios-upward-fill" : "eva:arrow-ios-downward-fill"} width={14} sx={{ color: "text.disabled", flexShrink: 0 }} />
+            </Stack>
+            {open && (
+              <Stack spacing={0.5} sx={{ px: 2, pb: 2, pl: 6 }}>
+                {unfit && (
+                  <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ px: 1.5, py: 1, borderRadius: 1, border: "1px solid", borderColor: "divider" }}>
+                    <Iconify icon="solar:close-circle-bold" width={15} sx={{ color: "#DC2626", flexShrink: 0, mt: "2px" }} />
+                    <Box minWidth={0}>
+                      <Typography sx={{ typography: "s2", fontWeight: 600 }}>{stat ? "Stopped at Static checks" : "Stopped at Fits the environment"}</Typography>
+                      <Typography sx={{ typography: "s2", color: "text.secondary" }}>{stat ? t.static.reason : t.compat.reason}</Typography>
+                    </Box>
+                  </Stack>
+                )}
+                {t.lines.length ? t.lines.map((line) => (
+                  <Stack key={line} direction="row" spacing={1} sx={{ px: 1.5, py: 1, borderRadius: 1, bgcolor: (th) => alpha("#16A34A", th.palette.mode === "dark" ? 0.1 : 0.05) }}>
+                    <Typography sx={{ typography: "s2", fontWeight: 700, color: "#16A34A", flexShrink: 0 }}>+</Typography>
+                    <Typography sx={{ typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" }}>{line}</Typography>
+                  </Stack>
+                )) : (
+                  <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
+                    This run changed nothing — the score is the starting prompt re-run, which is how much of the spread between runs is noise rather than the search.
+                  </Typography>
+                )}
+              </Stack>
+            )}
+          </Box>
+        );
+      })}
+    </Stack>
+  );
+}
+TrialList.propTypes = { trials: PropTypes.array, winner: PropTypes.object, openTrial: PropTypes.number, setOpenTrial: PropTypes.func, onOpenRun: PropTypes.func, record: PropTypes.object };
+
+const stoppedAt = (record, t) => {
+  const fail = ladderOf(record, t).find((x) => x.state === "fail");
+  return fail ? fail.label.toLowerCase() : null;
 };
+
+/* The deepest kind of change a trial makes, in a word. */
+const SURFACE_WORD = { prompt: "prompt", tools: "tool-description", settings: "settings", model: "model", code: "code", structure: "structural" };
+const DEPTH_ORDER = ["prompt", "tools", "settings", "model", "code", "structure"];
+const surfaceWord = (trial, result) => {
+  const kinds = (result?.pool || []).filter((p) => trial?.picks?.includes(p.id)).map((p) => KIND_SURFACE[p.kind] || "code");
+  const deepest = kinds.sort((a, b) => DEPTH_ORDER.indexOf(b) - DEPTH_ORDER.indexOf(a))[0] || "prompt";
+  return SURFACE_WORD[deepest] || deepest;
+};
+
+/* What the winner changes — each file, why, and the lines. */
+function WinnerChanges({ env, winner, members, record }) {
+  const proposals = winner?.proposals || [];
+  if (!proposals.length) {
+    return <Typography sx={{ px: 2, py: 2.5, typography: "s2", color: "text.subtitle" }}>No change to show — no run qualified.</Typography>;
+  }
+  return (
+    <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+      {/* A code or structural change says its plan before its diff. */}
+      <CodePlan env={env} record={record} proposals={proposals} />
+      {proposals.map((p) => (
+        <Box key={p.id} sx={{ px: 2, py: 1.5 }}>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
+            <Typography sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", color: "text.secondary" }}>{changeFileFor(env, p)?.path || p.kind}</Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{`· ${p.kind}`}</Typography>
+            {members?.[p.id] && (
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                {members[p.id].member ? `· changes ${members[p.id].member.name}` : "· shared by every member"}
+              </Typography>
+            )}
+          </Stack>
+          <Typography sx={{ typography: "s2", fontWeight: 700 }}>{p.title}</Typography>
+          {p.why && <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>{`Why: ${p.why}`}</Typography>}
+          {/* A settings change is a typed edit within the platform's allowed values. */}
+          {p.setting && (
+            <Typography sx={{ typography: "s3", color: p.setting.inRange ? "text.subtitle" : "#DC2626", mt: 0.25 }}>
+              {`${p.setting.label}: ${p.setting.value} · allowed ${p.setting.range}${p.setting.inRange ? "" : " — out of range, rejected at Static checks"}`}
+            </Typography>
+          )}
+          {!!p.diff?.length && (
+            <Stack spacing={0.25} sx={{ mt: 1 }}>
+              {p.diff.map((d, i) => (
+                <Stack
+                  key={`${d.type}-${i}`} direction="row" spacing={1}
+                  sx={{ px: 1.25, py: 0.5, borderRadius: 0.5, bgcolor: (th) => (d.type === "add" ? alpha("#16A34A", th.palette.mode === "dark" ? 0.1 : 0.05) : d.type === "remove" ? alpha("#DC2626", th.palette.mode === "dark" ? 0.1 : 0.05) : "transparent") }}
+                >
+                  <Typography sx={{ typography: "s2", fontWeight: 700, width: 10, flexShrink: 0, color: d.type === "add" ? "#16A34A" : d.type === "remove" ? "#DC2626" : "text.disabled" }}>
+                    {d.type === "add" ? "+" : d.type === "remove" ? "−" : " "}
+                  </Typography>
+                  <Typography sx={{ typography: "s2", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "pre-wrap", textDecoration: d.type === "remove" ? "line-through" : "none", color: d.type === "remove" ? "text.secondary" : "text.primary" }}>
+                    {d.text}
+                  </Typography>
+                </Stack>
+              ))}
+            </Stack>
+          )}
+        </Box>
+      ))}
+    </Stack>
+  );
+}
+WinnerChanges.propTypes = { env: PropTypes.object, winner: PropTypes.object, members: PropTypes.object, record: PropTypes.object };
+
+const OUTCOME = { fixed: "Fixed", broke: "Broke", "still-failing": "Still failing", flaky: "Flaky", inconclusive: "Inconclusive", same: "Unchanged" };
+const OUTCOME_ORDER = ["fixed", "broke", "still-failing", "flaky", "inconclusive", "same"];
 
 /*
-  One file's diff at one trial.
-
-  Each proposal that touches this file is rendered as a block. Lines that
-  were newly added by THIS trial (not present in the previous trial's
-  picks) get a purple "new" dot so it is visible what the search's most
-  recent step actually did.
+  What the winner did to each scenario — fixed, broke, still failing,
+  unchanged — on the held-back set it never saw and the training split it
+  was tuned on. Every trial against every scenario is one click further.
 */
-function FileTrialDiff({ file, current, previous, showDelta }) {
-  const prevIds = new Set(previous.map((p) => p.id));
+function ScenarioOutcomes({ result, winner }) {
+  const [only, setOnly] = useState(null);
+  const [grid, setGrid] = useState(false);
+  const rows = [
+    ...(result.heldTasks || []).map((t) => ({ ...t, split: "Held back", outcome: result.heldPerScenario?.[t.id] || "same" })),
+    ...(result.trainMeasuredTasks || []).map((t) => ({ ...t, split: "Training", outcome: winner?.perScenario?.[t.id] || "same" })),
+  ];
+  const counts = Object.fromEntries(OUTCOME_ORDER.map((k) => [k, rows.filter((x) => x.outcome === k).length]));
+  const shown = rows
+    .filter((x) => !only || x.outcome === only)
+    .sort((a, b) => OUTCOME_ORDER.indexOf(a.outcome) - OUTCOME_ORDER.indexOf(b.outcome));
   return (
-    <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden" }}>
-      <Stack
-        direction="row" alignItems="center" spacing={1}
-        sx={{ px: 1.5, py: 0.875, bgcolor: "background.neutral", borderBottom: "1px solid", borderColor: "divider" }}
-      >
-        <Iconify icon="solar:file-text-linear" width={13} sx={{ color: "text.subtitle" }} />
-        <Typography noWrap sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", color: "text.secondary", flex: 1 }}>
-          {file.path}
-        </Typography>
-        <Typography sx={{ typography: "s3", color: "text.disabled" }}>{file.language}</Typography>
-      </Stack>
-
-      <Stack divider={<Box sx={{ borderTop: "1px dashed", borderColor: "divider" }} />}>
-        {current.map((p) => {
-          const isNewInThisTrial = showDelta && !prevIds.has(p.id);
-          return (
-            <Box key={p.id} sx={{ px: 1.5, py: 1.25 }}>
-              <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.5 }}>
-                {isNewInThisTrial && (
-                  <Box
-                    sx={{
-                      width: 6, height: 6, borderRadius: "50%", bgcolor: "#7857FC", flexShrink: 0,
-                    }}
-                  />
-                )}
-                <Typography sx={{ typography: "s2", fontWeight: 700 }}>{p.title}</Typography>
-                {isNewInThisTrial && (
-                  <Typography sx={{ typography: "s3", color: "#7857FC", fontWeight: 700 }}>
-                    added this trial
-                  </Typography>
-                )}
-              </Stack>
-              <Stack spacing={0.375}>
-                {p.diff.map((d, i) => (
-                  <Stack
-                    key={`${d.type}-${i}`} direction="row" spacing={1}
-                    sx={{
-                      px: 1, py: 0.5, borderRadius: 0.5,
-                      bgcolor: (t) => alpha(d.type === "add" ? "#16A34A" : "#DC2626", t.palette.mode === "dark" ? 0.1 : 0.05),
-                    }}
-                  >
-                    <Typography sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, flexShrink: 0, color: d.type === "add" ? "#16A34A" : "#DC2626" }}>
-                      {d.type === "add" ? "+" : "−"}
-                    </Typography>
-                    <Typography sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", color: d.type === "add" ? "text.primary" : "text.disabled", textDecoration: d.type === "add" ? "none" : "line-through" }}>
-                      {d.text}
-                    </Typography>
-                  </Stack>
-                ))}
-              </Stack>
-            </Box>
-          );
-        })}
-      </Stack>
-    </Box>
-  );
-}
-
-FileTrialDiff.propTypes = {
-  file: PropTypes.object, current: PropTypes.array, previous: PropTypes.array, showDelta: PropTypes.bool,
-};
-
-/**
- * What to do with the winner.
- *
- * The optimizer produced a candidate; this bar is the two decisions the
- * user cares about — run it against the environment (it lands as a new
- * agent version, ready to be compared to v1 in the runs table), or
- * export the code (four routes: patch download, zip download, clipboard
- * copy, GitHub PR). Both are one click from here so a user doesn't have
- * to scroll past the trial history to make either.
- */
-/* Verified, both ways — the winner re-scored two ways: the failing cluster it
- * targeted (how many now pass, how many still fail) and every scenario that
- * was already passing (did any regress). The cards summarise; the table below
- * lists each scenario's before → after verdict.
- *
- * Reads the winner trial's per-scenario verdict: "fixed" (fail → pass),
- * "still-failing" (fail → fail), "broke" (pass → fail — a regression),
- * "same" (unchanged). */
-function WinnerScenarioDiff({ scenarios, winner }) {
-  const rows = useMemo(() => {
-    const RANK = { broke: 0, fixed: 1, "still-failing": 2 };
-    return scenarios
-      .map((s) => ({ ...s, st: winner?.perScenario?.[s.id] }))
-      .filter((r) => ["fixed", "still-failing", "broke"].includes(r.st))
-      .sort((a, b) =>
-        (b.critical ? 1 : 0) - (a.critical ? 1 : 0)
-        || (RANK[a.st] ?? 9) - (RANK[b.st] ?? 9));
-  }, [scenarios, winner]);
-
-  if (!rows.length) return null;
-
-  const st = (s) => winner?.perScenario?.[s.id];
-  const nowPass = scenarios.filter((s) => st(s) === "fixed").length;
-  const stillFails = scenarios.filter((s) => st(s) === "still-failing").length;
-  const broke = scenarios.filter((s) => st(s) === "broke").length;
-  const cluster = nowPass + stillFails;                       // the failing set it targeted
-  const prevPassing = scenarios.filter((s) => ["same", "broke"].includes(st(s))).length;
-  const total = scenarios.length;
-  const passBefore = prevPassing;
-  const passAfter = prevPassing - broke + nowPass;
-  const pct = (n) => (total ? Math.round((n / total) * 100) : 0);
-  const pctBefore = pct(passBefore);
-  const pctAfter = pct(passAfter);
-
-  /* from/to pass state for each verdict. */
-  const beforeAfter = (v) =>
-    v === "fixed" ? [false, true]
-      : v === "broke" ? [true, false]
-        : [false, false];
-
-  return (
-    <Box sx={{ px: 2.5, pt: 2.5 }}>
-      <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 1.25 }}>
-        <Typography sx={{ typography: "s2", fontWeight: 700 }}>Verified, both ways</Typography>
-        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          re-ran the failing cluster, then re-ran every scenario that was passing
-        </Typography>
-      </Stack>
-
-      {/* ── outcome cards ── */}
-      <Stack direction="row" spacing={1.5} flexWrap="wrap" rowGap={1.5} sx={{ mb: 2 }}>
-        <VCard value={`+${nowPass}`} tone="#16A34A" label="now pass" sub={`of ${cluster} in the cluster`} />
-        <VCard value={`${stillFails}`} tone={stillFails ? "#DC2626" : undefined} label="still fails" sub={stillFails ? "needs a deeper change" : "cluster fully cleared"} />
-        <VCard value={`${broke}`} tone={broke ? "#DC2626" : undefined} label={broke === 1 ? "regression" : "regressions"} sub={`across ${prevPassing} that were passing`} />
-        <VCard
-          value={<>{pctBefore}<Box component="span" sx={{ px: 0.5, color: "text.disabled" }}>→</Box>{pctAfter}<Box component="span" sx={{ typography: "s1" }}>%</Box></>}
-          label="run score"
-          sub={`${passBefore} → ${passAfter} of ${total}`}
-        />
-      </Stack>
-
-      {/* ── before → after table ── */}
-      <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden" }}>
-        <Stack
-          direction="row" alignItems="center"
-          sx={{
-            px: 1.75, py: 1, borderBottom: "1px solid", borderColor: "divider",
-            bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.03 : 0.02),
-          }}
-        >
-          <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", flex: 1 }}>Scenario</Typography>
-          <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", flexShrink: 0 }}>
-            before → after (with the fix)
-          </Typography>
-        </Stack>
-        <Box sx={{ maxHeight: 320, overflowY: "auto" }}>
-          {rows.map((r, i) => {
-            const [from, to] = beforeAfter(r.st);
-            return (
-              <Stack
-                key={r.id}
-                direction="row" alignItems="flex-start" spacing={2}
-                sx={{
-                  px: 1.75, py: 1.25,
-                  borderTop: i === 0 ? "none" : "1px solid", borderColor: "divider",
-                }}
-              >
-                <Box flex={1} minWidth={0}>
-                  <Stack direction="row" alignItems="center" spacing={0.75}>
-                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>{r.title}</Typography>
-                    {r.critical && (
-                      <Tooltip arrow title="Critical — a failure here is a release blocker">
-                        <Box sx={{ display: "flex" }}>
-                          <Iconify icon="solar:danger-triangle-bold" width={12} sx={{ color: "#DC2626" }} />
-                        </Box>
-                      </Tooltip>
-                    )}
-                  </Stack>
-                  {r.st === "broke" && (
-                    <Typography sx={{ typography: "s3", color: "#DC2626", mt: 0.25 }}>
-                      Regressed — this scenario was passing before the change.
-                    </Typography>
-                  )}
-                  {r.st === "still-failing" && (
-                    <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-                      Still fails — needs a deeper change than this prompt edit.
-                    </Typography>
-                  )}
-                </Box>
-                <Stack direction="row" alignItems="center" spacing={1} sx={{ flexShrink: 0, mt: "1px" }}>
-                  <Outcome pass={from} />
-                  <Iconify icon="solar:arrow-right-linear" width={14} sx={{ color: "text.disabled" }} />
-                  <Outcome pass={to} strong />
-                </Stack>
-              </Stack>
-            );
-          })}
-        </Box>
-      </Box>
-      {/* regression guard */}
-      <Stack direction="row" alignItems="center" spacing={0.875} sx={{ mt: 1.25 }}>
-        <Iconify
-          icon={broke ? "solar:shield-warning-linear" : "solar:shield-check-linear"}
-          width={15} sx={{ color: broke ? "#DC2626" : "#16A34A", flexShrink: 0 }}
-        />
-        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          Regression guard: all {prevPassing} previously-passing scenarios were re-run —{" "}
-          <Box component="span" sx={{ color: broke ? "#DC2626" : "#16A34A", fontWeight: 700 }}>
-            {broke ? `${broke} broke` : "none broke"}
-          </Box>.
-        </Typography>
-      </Stack>
-    </Box>
-  );
-}
-WinnerScenarioDiff.propTypes = { scenarios: PropTypes.array, winner: PropTypes.object };
-
-function VCard({ value, label, sub, tone }) {
-  return (
-    <Box
-      sx={{
-        flex: "1 1 0", minWidth: 150,
-        px: 1.75, py: 1.25, borderRadius: 1.25,
-        border: "1px solid", borderColor: "divider", bgcolor: "background.paper",
-      }}
-    >
-      <Typography sx={{ typography: "m2", fontWeight: 800, color: tone || "text.primary", fontVariantNumeric: "tabular-nums", lineHeight: 1.2 }}>
-        {value}
-      </Typography>
-      <Typography sx={{ typography: "s2", fontWeight: 700, mt: 0.5 }}>{label}</Typography>
-      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{sub}</Typography>
-    </Box>
-  );
-}
-VCard.propTypes = {
-  value: PropTypes.node, label: PropTypes.string, sub: PropTypes.string, tone: PropTypes.string,
-};
-
-function Outcome({ pass, strong }) {
-  const color = pass ? "#16A34A" : "#DC2626";
-  return (
-    <Stack direction="row" alignItems="center" spacing={0.5}>
-      <Iconify icon={pass ? "solar:check-circle-bold" : "solar:close-circle-bold"} width={15} sx={{ color }} />
-      <Typography sx={{ typography: "s2", fontWeight: strong ? 700 : 500, color }}>
-        {pass ? "pass" : "fail"}
-      </Typography>
-    </Stack>
-  );
-}
-Outcome.propTypes = { pass: PropTypes.bool, strong: PropTypes.bool };
-
-/* "The change" — a compact preview of the winner's actual diff, shown inline
-   so the reader sees what shipped without opening the Code tab. One boxed
-   hunk per file: a header with the path and the added-line count, then the
-   +/− lines the optimizer wrote. */
-function WinnerChange({ env, winner }) {
-  const proposals = winner?.proposals || [];
-  const filed = proposals
-    .map((p) => ({ p, file: changeFileFor(env, p) }))
-    .filter((row) => row.file);
-  if (!filed.length) return null;
-
-  const groups = new Map();
-  filed.forEach(({ p, file }) => {
-    if (!groups.has(file.path)) groups.set(file.path, { file, changes: [] });
-    groups.get(file.path).changes.push(p);
-  });
-
-  return (
-    <Box sx={{ px: 2.5, pt: 2.5 }}>
-      <Typography sx={{ typography: "s2", fontWeight: 700, mb: 1 }}>The change</Typography>
-      <Stack spacing={1.25}>
-        {[...groups.values()].map(({ file, changes }) => {
-          const added = changes.reduce((n, p) => n + p.diff.filter((d) => d.type === "add").length, 0);
-          return (
-            <Box
-              key={file.path}
-              sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden" }}
-            >
-              <Stack
-                direction="row" alignItems="center" spacing={1}
-                sx={{
-                  px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider",
-                  bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.03 : 0.02),
-                }}
-              >
-                <Iconify icon="solar:document-text-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
-                <Typography sx={{ typography: "s3", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", flex: 1, minWidth: 0 }} noWrap>
-                  {file.path}
-                </Typography>
-                {added > 0 && (
-                  <Typography sx={{ typography: "s3", color: "#16A34A", fontWeight: 700, flexShrink: 0 }}>
-                    +{added} line{added === 1 ? "" : "s"}
-                  </Typography>
-                )}
-              </Stack>
-              <Box sx={{ py: 0.5 }}>
-                {changes.flatMap((p) => p.diff.map((d, i) => (
-                  <Stack
-                    key={`${p.id}-${i}`}
-                    direction="row" spacing={1}
-                    sx={{
-                      px: 1.5, py: 0.375,
-                      bgcolor: (t) => alpha(d.type === "add" ? "#16A34A" : "#DC2626", t.palette.mode === "dark" ? 0.1 : 0.06),
-                    }}
-                  >
-                    <Typography sx={{
-                      typography: "s3", fontWeight: 700, flexShrink: 0,
-                      color: d.type === "add" ? "#16A34A" : "#DC2626",
-                      fontFamily: "ui-monospace, Menlo, monospace",
-                    }}>
-                      {d.type === "add" ? "+" : "−"}
-                    </Typography>
-                    <Typography sx={{
-                      typography: "s3", fontFamily: "ui-monospace, Menlo, monospace",
-                      color: "text.primary", minWidth: 0,
-                    }}>
-                      {d.text}
-                    </Typography>
-                  </Stack>
-                )))}
-              </Box>
-            </Box>
-          );
-        })}
-      </Stack>
-    </Box>
-  );
-}
-WinnerChange.propTypes = { env: PropTypes.object, winner: PropTypes.object };
-
-function WinnerActions({ env, envState, winner, onRun }) {
-  const [exportAnchor, setExportAnchor] = useState(null);
-  const [feedback, setFeedback] = useState(null);
-  const closeExport = () => setExportAnchor(null);
-
-  const proposals = winner?.proposals || [];
-  const filed = proposals
-    .map((p) => ({ p, file: changeFileFor(env, p) }))
-    .filter((row) => row.file);
-
-  /* The diff, as text — one hunk per file, `+` for added lines and `−`
-     for removed. Human-readable, and small enough to hold a whole set of
-     optimizer proposals without any special formatter. */
-  const patchText = () => {
-    const groups = new Map();
-    filed.forEach(({ p, file }) => {
-      if (!groups.has(file.path)) groups.set(file.path, { file, changes: [] });
-      groups.get(file.path).changes.push(p);
-    });
-    return [...groups.values()].map(({ file, changes }) => {
-      const lines = [`# ${file.path}`];
-      changes.forEach((p) => {
-        lines.push(`## ${p.kind}: ${p.title}`);
-        p.diff.forEach((d) => {
-          lines.push(`${d.type === "add" ? "+" : "-"} ${d.text}`);
-        });
-      });
-      return lines.join("\n");
-    }).join("\n\n");
-  };
-
-  const downloadBlob = (name, mime, contents) => {
-    const blob = new Blob([contents], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const doPatch = () => {
-    downloadBlob(`${env?.id || "agent"}-self-improved.diff`, "text/plain", patchText());
-    setFeedback("patch");
-    closeExport();
-  };
-  const doZip = () => {
-    /* The prototype ships the diff as a text bundle rather than a real
-       zip — a real backend would build the tree with the changes applied
-       and stream it back. Named .zip so the flow reads correctly. */
-    downloadBlob(`${env?.id || "agent"}-self-improved-bundle.txt`, "text/plain", patchText());
-    setFeedback("zip");
-    closeExport();
-  };
-  const doCopy = () => {
-    navigator.clipboard?.writeText(patchText()).catch(() => {});
-    setFeedback("clipboard");
-    closeExport();
-  };
-  const doPR = () => {
-    /* Reuses the repo-connect flow the OmegaHandoff panel below already
-       handles — the button here opens the same panel by scrolling to it.
-       Without a repo we can't open a PR ourselves, so the user is
-       redirected to the connect flow rather than being handed a broken
-       success state. */
-    closeExport();
-    const repo = envState?.agentRepo?.url || (env?.builtFrom?.kind === "repo" ? env.builtFrom.value : null);
-    if (!repo) {
-      setFeedback("need-repo");
-    } else {
-      setFeedback("pr");
-    }
-  };
-
-  return (
-    <Box sx={{ px: 2.5, pt: 2.5 }}>
-      <Stack
-        direction="row" alignItems="center" spacing={1.5} flexWrap="wrap" rowGap={1.25}
-        sx={{
-          px: 2, py: 1.75, borderRadius: 1.25, border: "1px solid",
-          borderColor: (t) => alpha("#16A34A", 0.35),
-          bgcolor: (t) => alpha("#16A34A", t.palette.mode === "dark" ? 0.08 : 0.04),
-        }}
-      >
-        <Iconify icon="solar:crown-bold" width={16} sx={{ color: "#CA8A04", flexShrink: 0 }} />
-        <Box flex={1} minWidth={0}>
-          <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-            Trial {winner?.n} wins · +{winner?.delta}%
-          </Typography>
-          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            {filed.length} {filed.length === 1 ? "change" : "changes"} across{" "}
-            {new Set(filed.map((r) => r.file.path)).size} {new Set(filed.map((r) => r.file.path)).size === 1 ? "file" : "files"}.
-            {" "}Every trial already ran against this environment — the winner's number is the run.
-          </Typography>
-        </Box>
-        <Button
-          variant="contained" color="primary" size="small"
-          onClick={(e) => setExportAnchor(e.currentTarget)}
-          startIcon={<Iconify icon="solar:download-minimalistic-linear" width={15} />}
-          endIcon={<Iconify icon="solar:alt-arrow-down-linear" width={12} />}
-          sx={{ typography: "s2", fontWeight: 700 }}
-        >
-          Export winner
+    <Box>
+      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 2, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }} flexWrap="wrap" rowGap={0.75}>
+        {OUTCOME_ORDER.map((k) => (
+          <Chip
+            key={k} size="small" clickable onClick={() => setOnly(only === k ? null : k)}
+            label={`${OUTCOME[k]} ${counts[k]}`}
+            sx={{ height: 24, borderRadius: 0.75, border: "1px solid", color: "text.primary", borderColor: only === k ? "text.primary" : "divider", bgcolor: only === k ? "action.selected" : "transparent", "& .MuiChip-label": { px: 1, typography: "s3", fontWeight: 600 } }}
+          />
+        ))}
+        <Box flex={1} />
+        <Button size="small" onClick={() => setGrid((g) => !g)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>
+          {grid ? "Hide every run" : "Every run"}
         </Button>
       </Stack>
-
-      {feedback && (
-        <Typography sx={{ typography: "s3", color: feedback === "need-repo" ? "#CA8A04" : "text.subtitle", mt: 0.875, ml: 0.5 }}>
-          {feedback === "patch"     && "Diff downloaded — apply with git apply."}
-          {feedback === "zip"       && "Bundle downloaded — the prototype ships text; a real export would build the tree."}
-          {feedback === "clipboard" && "Diff copied to clipboard."}
-          {feedback === "pr"        && "Ready to raise — the hand-off panel below carries the PR options."}
-          {feedback === "need-repo" && "Connect your agent's repository in the hand-off panel below to open a PR."}
-        </Typography>
+      {grid ? (
+        <TrialHeatmap trials={result.trials} scenarios={result.trainMeasuredTasks || []} winner={winner} />
+      ) : (
+        <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />} sx={{ maxHeight: 420, overflowY: "auto" }}>
+          {shown.map((x) => (
+            <Stack key={`${x.split}-${x.id}`} direction="row" alignItems="center" spacing={1.5} sx={{ px: 2, py: 0.875 }}>
+              <Typography noWrap sx={{ typography: "s2", flex: 1, minWidth: 0 }}>{x.title}</Typography>
+              {x.fromIssue && (
+                <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
+                  {`${x.fromIssue}${x.before === "flaky" ? " · inconclusive" : x.before === "passed" ? " · didn't reproduce" : ""}`}
+                </Typography>
+              )}
+              {x.fresh && <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>fresh variation</Typography>}
+              {x.critical && <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>must-pass</Typography>}
+              <Typography sx={{ typography: "s3", color: "text.subtitle", width: 70, flexShrink: 0 }}>{x.split}</Typography>
+              <Typography sx={{ typography: "s3", fontWeight: 600, width: 84, flexShrink: 0, color: x.outcome === "fixed" ? "#16A34A" : x.outcome === "broke" ? "#DC2626" : "text.secondary" }}>
+                {OUTCOME[x.outcome]}
+              </Typography>
+            </Stack>
+          ))}
+        </Stack>
       )}
-
-      <Menu
-        anchorEl={exportAnchor}
-        open={!!exportAnchor}
-        onClose={closeExport}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{ paper: { sx: { minWidth: 240 } } }}
-      >
-        <MenuItem onClick={doPatch} sx={{ typography: "s2", gap: 1 }}>
-          <Iconify icon="solar:file-download-linear" width={16} />
-          <ListItemText primary="Download patch (.diff)" primaryTypographyProps={{ sx: { typography: "s2" } }} />
-        </MenuItem>
-        <MenuItem onClick={doZip} sx={{ typography: "s2", gap: 1 }}>
-          <Iconify icon="solar:archive-down-minimlistic-linear" width={16} />
-          <ListItemText primary="Download agent as zip" primaryTypographyProps={{ sx: { typography: "s2" } }} />
-        </MenuItem>
-        <MenuItem onClick={doCopy} sx={{ typography: "s2", gap: 1 }}>
-          <Iconify icon="solar:copy-linear" width={16} />
-          <ListItemText primary="Copy diff to clipboard" primaryTypographyProps={{ sx: { typography: "s2" } }} />
-        </MenuItem>
-        <Divider sx={{ my: 0.5 }} />
-        <MenuItem onClick={doPR} sx={{ typography: "s2", gap: 1, alignItems: "flex-start", py: 1 }}>
-          <Iconify icon="solar:code-square-linear" width={16} style={{ marginTop: 2 }} />
-          <ListItemText
-            primary="Push as GitHub PR"
-            secondary={envState?.agentRepo?.url ? envState.agentRepo.url : "Repository not connected"}
-            primaryTypographyProps={{ sx: { typography: "s2" } }}
-            secondaryTypographyProps={{ sx: { typography: "s3", color: "text.subtitle" } }}
-          />
-        </MenuItem>
-      </Menu>
     </Box>
   );
 }
+ScenarioOutcomes.propTypes = { result: PropTypes.object, winner: PropTypes.object };
 
-WinnerActions.propTypes = {
-  env: PropTypes.object, envState: PropTypes.object, winner: PropTypes.object, onRun: PropTypes.func,
-};
+/* Which optimizer and model searched, and the full trace — kept out of the way. */
+function SearchDetails({ record, result, model }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Box sx={{ px: 2.5, pb: 2.5 }}>
+      <Button
+        size="small" onClick={() => setOpen((o) => !o)}
+        endIcon={<Iconify icon={open ? "eva:arrow-ios-upward-fill" : "eva:arrow-ios-downward-fill"} width={13} />}
+        sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", px: 0.5 }}
+      >
+        Search details
+      </Button>
+      {open && (
+        <Box sx={{ mt: 0.5 }}>
+          <Typography sx={{ typography: "s3", color: "text.subtitle", px: 0.5 }}>
+            {`${methodLabelOf(result.optimizer?.id)} (${result.optimizer?.label}) · changes written by ${model?.label || record.model}, judged by ${judgeFor(record.model)} — a different model family, so no model grades its own work · ${result.trials.length}${result.planned && result.planned !== result.trials.length ? ` of ${result.planned}` : ""} runs · ${result.trainMeasured} training / ${result.heldMeasured} held-back scenarios${result.goal ? ` · targets: scenarios short of ${goalWords(result.goal)}` : ""}`}
+          </Typography>
+          {/* GEPA keeps the best candidate for each scenario, not one overall best. */}
+          {result.optimizer?.id === "gepa" && <ParetoPool result={result} />}
+          <Box sx={{ mx: -1 }}>
+            <RunTraceLog label={`Searched by ${result.optimizer?.label} · ${result.trials.length} runs`} steps={searchTrace(result)} />
+          </Box>
+        </Box>
+      )}
+    </Box>
+  );
+}
+SearchDetails.propTypes = { record: PropTypes.object, result: PropTypes.object, model: PropTypes.object };
+
+/* GEPA's pool: each trial that is the best at fixing at least one scenario. */
+function ParetoPool({ result }) {
+  const pool = paretoPool(result);
+  if (!pool.length) return null;
+  return (
+    <Box sx={{ mt: 1, mx: 0.5, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+      <Typography sx={{ px: 1.5, py: 0.75, typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: "1px solid", borderColor: "divider" }}>
+        {`Kept · best per scenario · ${pool.length} ${pool.length === 1 ? "run" : "runs"}`}
+      </Typography>
+      {pool.map((x, i) => (
+        <Stack key={x.n} direction="row" spacing={1.5} sx={{ px: 1.5, py: 0.75, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+          <Typography sx={{ typography: "s2", fontWeight: 600, width: 64, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{`Run ${x.n}`}</Typography>
+          <Typography sx={{ typography: "s2", color: "text.secondary", width: 44, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{`${x.score}%`}</Typography>
+          <Typography noWrap sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 0 }}>
+            {`best on ${x.scenarios.length}: ${x.scenarios.slice(0, 3).join(", ")}${x.scenarios.length > 3 ? ` +${x.scenarios.length - 3}` : ""}`}
+          </Typography>
+        </Stack>
+      ))}
+    </Box>
+  );
+}
+ParetoPool.propTypes = { result: PropTypes.object };

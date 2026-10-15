@@ -19,12 +19,14 @@ import GraphSkeleton from "src/sections/projects/LLMTracing/GraphSection/GraphSk
 import { buildTraceGraph } from "src/components/traceDetail/buildTraceGraph";
 import { error as errorPalette, success } from "src/theme/palette";
 import { useGetTraceDetail } from "src/api/project/trace-detail";
-import { useErrorFeedOverview } from "src/api/errorFeed/error-feed";
+import { useErrorFeedOverview } from "src/api/errorFeed/mockAdapter";
 import EvalIOPanel from "./EvalIOPanel";
 import VoiceEvalPanel from "./VoiceEvalPanel";
 import { buildGraphDiff, comparisonGraphForMode } from "./buildGraphDiff";
 import { useErrorFeedStore } from "../store";
 import { TOKEN_PRICE_USD, TRACE_STATUS } from "../constants";
+import { textTone } from "src/sections/simulate-v2/components/textTone";
+import { clickable, focusRing } from "src/sections/simulate-v2/components/clickable";
 
 const estimateTraceCost = (inputTokens = 0, outputTokens = 0) =>
   inputTokens * TOKEN_PRICE_USD.INPUT + outputTokens * TOKEN_PRICE_USD.OUTPUT;
@@ -58,8 +60,9 @@ function SectionCard({
         direction="row"
         alignItems="center"
         gap={0.75}
-        onClick={collapsible ? () => setOpen((v) => !v) : undefined}
+        {...clickable(collapsible ? () => setOpen((v) => !v) : undefined, { expanded: open })}
         sx={{
+          ...focusRing,
           px: 1.75,
           py: 1.1,
           borderBottom: isOpen ? "1px solid" : "none",
@@ -415,7 +418,7 @@ function EventsUsersChart({
             offsetY: 6,
             orientation: "vertical",
             style: {
-              color: "#F5A623",
+              color: theme.palette.text.secondary,
               background: annotBg,
               cssClass: "",
               fontSize: "9px",
@@ -603,8 +606,9 @@ function TraceList({ traces, selectedIndex, onSelect, loading = false }) {
         return (
           <Box
             key={t.id}
-            onClick={() => onSelect(i)}
+            {...clickable(() => onSelect(i), { pressed: isSelected })}
             sx={{
+              ...focusRing,
               px: 1.5,
               py: 1.1,
               cursor: "pointer",
@@ -1083,7 +1087,7 @@ function TraceGraphCompare({ failingTraceId, workingTraceId, mode }) {
       }}
     >
       <Typography fontSize="12px" color="text.disabled">
-        No matching working trace yet for this cluster — backend KNN matching
+        No matching working trace yet for this issue — backend KNN matching
         will populate it shortly.
       </Typography>
     </Box>
@@ -1392,8 +1396,9 @@ function ReelStep({ step, isFailReel, isLast }) {
           {header}
           {raw && (
             <Box
-              onClick={() => setShowRaw((v) => !v)}
+              {...clickable(() => setShowRaw((v) => !v), { expanded: showRaw })}
               sx={{
+                ...focusRing,
                 fontSize: "10.5px",
                 color: "text.disabled",
                 mt: 0.4,
@@ -1616,8 +1621,9 @@ function ViewModeToggle({ value, onChange }) {
             direction="row"
             alignItems="center"
             gap={0.4}
-            onClick={() => onChange(opt.v)}
+            {...clickable(() => onChange(opt.v), { pressed: isActive })}
             sx={{
+              ...focusRing,
               px: 1.25,
               py: "5px",
               borderRadius: "6px",
@@ -1685,8 +1691,9 @@ function ReelTabs({ value, onChange }) {
             direction="row"
             alignItems="center"
             gap={0.5}
-            onClick={() => onChange(v)}
+            {...clickable(() => onChange(v), { pressed: isActive })}
             sx={{
+              ...focusRing,
               px: 1.25,
               py: "5px",
               borderRadius: "6px",
@@ -1979,7 +1986,7 @@ function TraceEvidence({ evidence, trace, traceId, workingTraceId }) {
                 accentColor={PASS_COLOR}
                 steps={passReel}
                 isFailReel={false}
-                emptyMessage="No matching passing trace found for this cluster yet."
+                emptyMessage="No matching passing trace found for this issue yet."
               />
             </Box>
           ))}
@@ -2054,7 +2061,7 @@ function CoOccurringIssues({ issues }) {
                 fontWeight: 600,
                 borderRadius: "3px",
                 bgcolor: alpha(sColor, 0.1),
-                color: sColor,
+                color: textTone(sColor),
                 "& .MuiChip-label": { px: "6px" },
                 flexShrink: 0,
               }}
@@ -2159,8 +2166,6 @@ const PRIORITY_META = {
     icon: "mdi:check-circle-outline",
   },
 };
-const EFFORT_COLOR = { Low: "#5ACE6D", Medium: "#F5A623", High: "#DB2F2D" };
-
 // Shared sub-heading style inside expanded card
 function RecSectionLabel({ icon, label }) {
   return (
@@ -2201,6 +2206,7 @@ function RecommendationCard({ rec, rootCauses, isDark }) {
         alignItems="center"
         gap={1}
         sx={{
+          ...focusRing,
           px: 1.5,
           py: 1,
           cursor: "pointer",
@@ -2208,7 +2214,7 @@ function RecommendationCard({ rec, rootCauses, isDark }) {
             bgcolor: isDark ? alpha("#fff", 0.03) : alpha("#000", 0.02),
           },
         }}
-        onClick={() => setExpanded((v) => !v)}
+        {...clickable(() => setExpanded((v) => !v), { expanded })}
       >
         <Stack flex={1} gap={0} minWidth={0}>
           <Stack direction="row" alignItems="center" gap={0.75}>
@@ -2228,7 +2234,7 @@ function RecommendationCard({ rec, rootCauses, isDark }) {
                 fontSize="9px"
                 fontWeight={700}
                 sx={{
-                  color: pm.color,
+                  color: textTone(pm.color),
                   textTransform: "uppercase",
                   letterSpacing: "0.05em",
                 }}
@@ -2288,11 +2294,11 @@ function RecommendationCard({ rec, rootCauses, isDark }) {
               </Typography>
             </Box>
 
-            {/* Immediate Fix */}
+            {/* Suggested fix */}
             <Box>
               <RecSectionLabel
                 icon="mdi:wrench-outline"
-                label="Immediate Fix"
+                label="Suggested fix"
               />
               <Box
                 sx={{
@@ -2469,7 +2475,7 @@ function DeepAnalysisResults({ rootCauses, recommendations }) {
       )}
       {recommendations?.length > 0 && (
         <SectionCard
-          title="Recommendations & Fixes"
+          title="Recommendations"
           icon="mdi:lightbulb-on-outline"
         >
           <Recommendations recs={recommendations} rootCauses={rootCauses} />
@@ -2557,10 +2563,10 @@ export default function OverviewTab({ _error: currentError }) {
 
   return (
     <Stack gap={1.5} sx={{ minHeight: 0 }}>
-      {/* ── Patterns across the cluster ── */}
+      {/* ── Patterns across the issue ── */}
       {(patternSummary?.insights ?? []).some((i) => i && i.title) && (
         <SectionCard
-          title="Patterns across the cluster"
+          title="Patterns across the issue"
           icon="mdi:clipboard-text-outline"
         >
           <PatternSummary summary={patternSummary} />
@@ -2757,7 +2763,7 @@ export default function OverviewTab({ _error: currentError }) {
                 sx={{ color: "text.disabled", mb: 1.5 }}
               />
               <Typography fontSize="13px" color="text.disabled">
-                No trace evidence available for this cluster yet.
+                No trace evidence available for this issue yet.
               </Typography>
             </Stack>
           ) : (

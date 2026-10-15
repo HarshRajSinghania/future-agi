@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildRun } from "../_mock/runStream";
+import { clarifyPlanOf } from "../_mock/clarify";
+import { causeOf, outcomeOfCause } from "../_mock/decoupled";
 
 const EMPTY = [];
 
@@ -19,11 +21,26 @@ export default function useRunPlayer({
   seed, scenarios, stage, evals, tools = [], agentTools = null, failRate, concurrency = 4, repeats = 3, phrasing = 0,
   /* The run's cast and world — without them no actor ever joined a live run,
      and the live verdicts could differ from the same run read back later. */
-  actors = EMPTY, envVersion = null,
+  actors = EMPTY, envVersion = null, toolFaults = null,
+  /* Which generation of admission gates judges this run — pinned, so a
+     finished run isn't re-judged by gates added later. */
+  admissionGates = 3,
+  /* Cheat checks the run pinned (null: none — see runInputs). */
+  cheatChecks = null,
+  /* The updated RSI PRD's run rules the run pinned (0: none — see runInputs). */
+  outcomes = 0, requiredEvals = 0,
+  /* Sub-goals deciding and the turn limit, as the run pinned them (0: none). */
+  gradingRule = 0, turnLimits = 0, turnLimit = undefined,
+  /* Outdated / Re-check scenarios as the run started ({ id: state }) — they
+     run, but count toward no decision. */
+  staleIds = null,
+  /* Whether this run may stop a scenario on a clarifying question (AC-15.13).
+     Only a live run ever asks; one read back from history never plays. */
+  clarify = true,
 }) {
   const run = useMemo(
-    () => buildRun({ seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion }),
-    [seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion],
+    () => buildRun({ seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion, toolFaults, admissionGates, cheatChecks, outcomes, requiredEvals, gradingRule, turnLimits, ...(turnLimit != null && { turnLimit }) }),
+    [seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion, toolFaults, admissionGates, cheatChecks, outcomes, requiredEvals, gradingRule, turnLimits, turnLimit],
   );
 
   const [phase, setPhase] = useState("booting"); // booting | running | done
@@ -44,10 +61,33 @@ export default function useRunPlayer({
   const [focusId, setFocusId] = useState(run.tasks[0]?.id || null);
   const [elapsed, setElapsed] = useState(0);
 
+  /*
+    The one clarifying question this run asks, if any — fixed by the run's
+    seed. While it's open, that scenario holds at the turn it reached; the
+    other scenarios carry on, and the run can't finish until it's answered
+    (or the run is stopped).
+  */
+  const plan = useMemo(
+    () => (clarify ? clarifyPlanOf({ seed, tasks: run.tasks, concurrency }) : null),
+    [clarify, seed, run, concurrency],
+  );
+  const [blocked, setBlocked] = useState(null);
+  const [clarifications, setClarifications] = useState([]);
+  const holdRef = useRef(false);
+  const doneWaitingRef = useRef(false);
+  const resumeRef = useRef(null);
+  const driveRef = useRef(null);
+
   const timers = useRef([]);
   const clearTimers = () => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
+  };
+  const clearHold = () => {
+    holdRef.current = false;
+    doneWaitingRef.current = false;
+    resumeRef.current = null;
+    setBlocked(null);
   };
 
   // Reset whenever the underlying run changes.
@@ -56,6 +96,8 @@ export default function useRunPlayer({
     setPhase("booting");
     setElapsed(0);
     setFocusId(run.tasks[0]?.id || null);
+    clearHold();
+    setClarifications([]);
     return clearTimers;
   }, [run]);
 
@@ -74,24 +116,38 @@ export default function useRunPlayer({
     return () => clearInterval(id);
   }, [phase]);
 
-  /** Drives one task through its steps, then grading, then a verdict. */
+  /**
+   * Drives one task through its steps, then grading, then a verdict.
+   * `from` resumes a held task at the turn after it stopped; `blockAt` holds
+   * it at that turn on the run's clarifying question and frees its lane.
+   */
   const driveTask = useCallback(
-    (task, startDelay) => {
+    (task, startDelay, { from = 0, blockAt = null } = {}) => {
       const push = (fn, ms) => {
         timers.current.push(setTimeout(fn, ms));
       };
       let t = startDelay;
 
-      push(() => patchTask(task.id, { status: "running", stepIndex: 0 }), t);
+      if (from === 0) push(() => patchTask(task.id, { status: "running", stepIndex: 0 }), t);
 
-      task.steps.forEach((step, i) => {
-        t += step.duration / speed;
+      for (let i = from; i < task.steps.length; i += 1) {
+        const at = i;
+        t += task.steps[i].duration / speed;
         push(() => {
           // A failing task stops progressing at its failure point.
-          if (task.failStep != null && i > task.failStep) return;
-          patchTask(task.id, { stepIndex: i });
+          if (task.failStep != null && at > task.failStep) return;
+          patchTask(task.id, { stepIndex: at });
         }, t);
-      });
+        if (blockAt != null && at === blockAt) {
+          push(() => {
+            holdRef.current = true;
+            resumeRef.current = () => driveRef.current?.(task, 0, { from: at + 1 });
+            patchTask(task.id, { blocked: true });
+            setBlocked({ ...plan, askedAt: Date.now() });
+          }, t + 1);
+          return t;
+        }
+      }
 
       t += 400 / speed;
       push(() => patchTask(task.id, { status: "grading" }), t);
@@ -107,10 +163,22 @@ export default function useRunPlayer({
         t,
       );
 
+      /* A resumed task was the last thing holding the run open. */
+      if (from > 0) {
+        push(() => {
+          holdRef.current = false;
+          if (doneWaitingRef.current) {
+            doneWaitingRef.current = false;
+            setPhase("done");
+          }
+        }, t + 500);
+      }
+
       return t;
     },
-    [patchTask, speed],
+    [patchTask, speed, plan],
   );
+  driveRef.current = driveTask;
 
   const start = useCallback(() => {
     clearTimers();
@@ -121,12 +189,28 @@ export default function useRunPlayer({
     run.tasks.forEach((task) => {
       const lane = task.worker;
       const startAt = (lanes[lane] || 0) + Math.random() * 200;
-      lanes[lane] = driveTask(task, startAt);
+      lanes[lane] = driveTask(task, startAt, { blockAt: plan?.taskId === task.id ? plan.step : null });
     });
 
     const total = Math.max(...Object.values(lanes), 1000);
-    timers.current.push(setTimeout(() => setPhase("done"), total + 500));
-  }, [run.tasks, driveTask]);
+    timers.current.push(setTimeout(() => {
+      /* Still waiting on an answer: finish when that scenario does. */
+      if (holdRef.current) doneWaitingRef.current = true;
+      else setPhase("done");
+    }, total + 500));
+  }, [run.tasks, driveTask, plan]);
+
+  /* Answer the open question; the held scenario picks up from the next turn. */
+  const answer = useCallback((text) => {
+    if (!blocked) return;
+    const entry = { taskId: blocked.taskId, question: blocked.question, answer: text, at: new Date().toISOString() };
+    setClarifications((c) => [...c, entry]);
+    patchTask(blocked.taskId, { blocked: false, clarified: entry });
+    setBlocked(null);
+    const resume = resumeRef.current;
+    resumeRef.current = null;
+    resume?.();
+  }, [blocked, patchTask]);
 
   /*
     Stop, for the demo, means "the run is over": every scenario jumps to the
@@ -135,8 +219,10 @@ export default function useRunPlayer({
   */
   const finishNow = useCallback(() => {
     clearTimers();
+    clearHold();
     setTasks((ts) => ts.map((t) => ({
       ...t,
+      blocked: false,
       status: t.verdict,
       stepIndex: t.failStep != null ? Math.min(t.failStep, t.steps.length - 1) : t.steps.length - 1,
       evalIndex: t.evalResults.length,
@@ -159,14 +245,21 @@ export default function useRunPlayer({
   const stats = useMemo(() => {
     const FINISHED = ["passed", "failed", "flaky", "unmeasured"];
     const done = tasks.filter((t) => FINISHED.includes(t.status));
-    const passed = tasks.filter((t) => t.status === "passed").length;
-    const failed = tasks.filter((t) => t.status === "failed").length;
+    /* Pulled (test invalid twice) and Outdated / Re-check scenarios are left
+       out of every count — listed on their own. */
+    const counted = tasks.filter((t) => !t.pulled && !staleIds?.[t.id]);
+    const passed = counted.filter((t) => t.status === "passed").length;
+    const failed = counted.filter((t) => t.status === "failed").length;
     /* Scenarios whose samples disagreed with each other. Counted apart from
        both — calling them failures blames the agent for the scenario. */
-    const flaky = tasks.filter((t) => t.status === "flaky").length;
+    const flaky = counted.filter((t) => t.status === "flaky").length;
     /* Scenarios nothing could be measured on — ours to fix, not the agent's. */
-    const unmeasured = tasks.filter((t) => t.status === "unmeasured").length;
-    const measured = done.filter((t) => t.status !== "unmeasured");
+    const unmeasuredTasks = counted.filter((t) => t.status === "unmeasured");
+    const unmeasured = unmeasuredTasks.length;
+    /* …by outcome: inconclusive, test invalid, error. */
+    const notCounted = { inconclusive: 0, "test-invalid": 0, error: 0 };
+    unmeasuredTasks.forEach((t) => { const o = outcomeOfCause(causeOf(t)); if (o in notCounted) notCounted[o] += 1; });
+    const measured = done.filter((t) => t.status !== "unmeasured" && !t.pulled && !staleIds?.[t.id]);
     const active = tasks.filter((t) => ["running", "grading"].includes(t.status)).length;
     return {
       total: tasks.length,
@@ -175,6 +268,10 @@ export default function useRunPlayer({
       failed,
       flaky,
       unmeasured,
+      notCounted,
+      pulled: done.filter((t) => t.pulled).length,
+      stale: done.filter((t) => staleIds?.[t.id]).length,
+      retried: done.filter((t) => t.retried).length,
       measured: measured.length,
       repeats: run.repeats || 1,
       active,
@@ -186,10 +283,12 @@ export default function useRunPlayer({
         ? measured.reduce((a, t) => a + (t.passShare ?? (t.status === "passed" ? 1 : 0)), 0) / measured.length
         : 0,
       progress: tasks.length ? (done.length / tasks.length) * 100 : 0,
-      cost: done.reduce((a, t) => a + t.cost, 0),
+      /* Cost the agent's side didn't report is unverified, not $0. */
+      cost: done.filter((t) => !t.costUnverified).reduce((a, t) => a + t.cost, 0),
+      costUnverified: done.filter((t) => t.costUnverified && t.status !== "unmeasured").length,
       tokens: done.reduce((a, t) => a + t.tokens, 0),
     };
-  }, [tasks, run.repeats]);
+  }, [tasks, run.repeats, staleIds]);
 
   return {
     phase, setPhase, start, finishNow,
@@ -198,8 +297,11 @@ export default function useRunPlayer({
     /* Seconds since anything last changed, and whether that is long enough to
        stop calling it slow. */
     sinceLastEvent: Math.max(0, Math.round((now - lastEventAt) / 1000)),
-    stalled: phase === "running" && now - lastEventAt > 15000,
+    /* Waiting on a person is not a stall. */
+    stalled: phase === "running" && !blocked && now - lastEventAt > 15000,
     speed, setSpeed,
     stage: run.stage,
+    /* The open clarifying question, how to answer it, and what was answered. */
+    blocked, answer, clarifications,
   };
 }

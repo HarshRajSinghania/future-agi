@@ -3,8 +3,13 @@ import { alpha } from "@mui/material/styles";
 import { Box, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { behaviourDiff } from "../_mock/compareView";
+import { runIdentityOf } from "../_mock/runIdentity";
 import { twinTimelineFor, twinById } from "../_mock/twins";
 import { Verdict } from "../components/primitives";
+import { textTone } from "../components/textTone";
+import { csatOf } from "./traceTableHelpers";
+import OutcomeChip from "./CompareOutcome";
+import { clickable, focusRing } from "../components/clickable";
 
 const TWIN_TINT = "#7857FC";
 
@@ -15,7 +20,6 @@ const hashStr = (s) => {
   for (let i = 0; i < String(s || "").length; i += 1) h = (h * 31 + String(s).charCodeAt(i)) >>> 0;
   return h;
 };
-const csatOf = (t) => (t ? Math.max(1, Math.round((t.evalResults?.[0]?.score ?? 0.5) * 10) - 4) : null);
 const turnsOf = (t) => (t ? (t.steps?.length ?? 0) : null);
 const latencyOf = (t) => (t ? (t.latencyMs ?? (280 + (hashStr(t.id) % 320))) : null);
 
@@ -31,7 +35,7 @@ const latencyOf = (t) => (t ? (t.latencyMs ?? (280 + (hashStr(t.id) % 320))) : n
  * graders — because the whole value of the layout is that your eye can compare
  * position to position without re-reading the labels.
  */
-export default function CompareGrid({ comparison, groups, evals, envState, view, onOpen }) {
+export default function CompareGrid({ comparison, groups, evals, env, envState, view, onOpen, bandAction }) {
   const { runs, baseline } = comparison;
   const twinBacked = !!envState?.twinBacking;
 
@@ -60,9 +64,7 @@ export default function CompareGrid({ comparison, groups, evals, envState, view,
             >
               <Letter letter={r.letter} color={r.color} />
               <Typography noWrap sx={{ typography: "s2", fontWeight: 700, minWidth: 0 }}>
-                {r.kind === "trial"
-                  ? `Run ${r.trialN} · ${r.selfImprovementName}`
-                  : `agent ${r.agentVersion}`}
+                {r.kind === "trial" ? `Run ${r.trialN} · ${r.selfImprovementName ? `${r.selfImprovementName} · ` : ""}` : ""}{runIdentityOf(r, envState, env).label}
               </Typography>
               {r.id === baseline.id && (
                 <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>baseline</Typography>
@@ -75,7 +77,7 @@ export default function CompareGrid({ comparison, groups, evals, envState, view,
 
         {groups.map((group) => (
           <Box key={group.id}>
-            {group.label && <GroupBand label={group.label} count={group.rows.length} />}
+            {group.label && <GroupBand group={group} columns={runs.length} action={bandAction?.(group)} />}
 
             {group.rows.map((row) => (
               <Box key={row.id}>
@@ -83,15 +85,16 @@ export default function CompareGrid({ comparison, groups, evals, envState, view,
                     every column below is answering */}
                 <Stack
                   direction="row" alignItems="center" spacing={1}
-                  onClick={() => onOpen(row)}
+                  {...clickable(() => onOpen(row))}
                   sx={{
                     px: 2.5, py: 1.25, cursor: "pointer",
-                    bgcolor: "background.neutral",
                     borderBottom: "1px solid", borderColor: "divider",
                     "&:hover": { bgcolor: "action.hover" },
+                    ...focusRing,
                   }}
                 >
                   <Iconify icon="solar:layers-minimalistic-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+                  <OutcomeChip pair={row.pair} />
                   <Typography noWrap sx={{ typography: "s2", fontWeight: 700 }}>{row.title}</Typography>
                   {row.critical && (
                     <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: "#DC2626", flexShrink: 0 }} />
@@ -142,8 +145,8 @@ export default function CompareGrid({ comparison, groups, evals, envState, view,
 
 CompareGrid.propTypes = {
   comparison: PropTypes.object, groups: PropTypes.array,
-  evals: PropTypes.array, envState: PropTypes.object,
-  view: PropTypes.object, onOpen: PropTypes.func,
+  evals: PropTypes.array, env: PropTypes.object, envState: PropTypes.object,
+  view: PropTypes.object, onOpen: PropTypes.func, bandAction: PropTypes.func,
 };
 
 function Cell({ cell, baselineCell, evals, envState, twinBacked, view, onOpen }) {
@@ -174,10 +177,11 @@ function Cell({ cell, baselineCell, evals, envState, twinBacked, view, onOpen })
 
   return (
     <Box
-      onClick={onOpen}
+      {...clickable(onOpen)}
       sx={{
         px: 2, py: 2, borderLeft: "1px solid", borderColor: "divider",
         cursor: "pointer", "&:hover": { bgcolor: "action.hover" },
+        ...focusRing,
       }}
     >
       <Box sx={{ mb: 1 }}>
@@ -191,7 +195,7 @@ function Cell({ cell, baselineCell, evals, envState, twinBacked, view, onOpen })
 
       <Stack direction="row" spacing={2} sx={{ mb: (view.columns.scorers || twinBreakdown) ? 1.5 : 0 }} flexWrap="wrap" rowGap={1}>
         {view.columns.csat && (
-          <Stat label="CSAT" value={cell.task ? String(csatOf(cell.task)) : "—"} />
+          <Stat label="CSAT" value={csatOf(cell.task) != null ? String(csatOf(cell.task)) : "—"} />
         )}
         {view.columns.turns && (
           <Stat label="Turns" value={cell.task ? String(turnsOf(cell.task)) : "—"} />
@@ -378,20 +382,42 @@ Stat.propTypes = {
   delta: PropTypes.number, lowerIsBetter: PropTypes.bool,
 };
 
-function GroupBand({ label, count }) {
-  return (
-    <Stack
-      direction="row" alignItems="center" spacing={1}
-      sx={{ px: 2.5, py: 1, bgcolor: "background.neutral", borderBottom: "1px solid", borderColor: "divider" }}
-    >
-      <Typography sx={{ typography: "s3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>
-        {label}
+/* A group's band. Grouped by sub-goal, each run's pass rate on it sits in
+   that run's column, so the band reads across like the rows under it. */
+function GroupBand({ group, columns, action }) {
+  const head = (
+    <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, py: 1, minWidth: 0 }}>
+      <Typography noWrap sx={{ fontSize: 13, fontWeight: 600, minWidth: 0, flexShrink: group.note ? 0 : 1, color: group.tone === "bad" ? "#C2603F" : "text.secondary" }}>
+        {group.label}
       </Typography>
-      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{count}</Typography>
+      {group.mark === "critical" && <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>critical</Typography>}
+      <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>{group.rows.length}</Typography>
+      {group.note && <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", minWidth: 0 }}>· {group.note}</Typography>}
+      {action && !group.rates && <><Box flex={1} />{action}</>}
     </Stack>
   );
+  if (!group.rates) {
+    return <Box sx={{ borderBottom: "1px solid", borderColor: "divider" }}>{head}</Box>;
+  }
+  return (
+    <Box
+      sx={{
+        display: "grid", gridTemplateColumns: `220px repeat(${columns}, 1fr)`, alignItems: "center",
+        borderBottom: "1px solid", borderColor: "divider",
+      }}
+    >
+      {head}
+      {group.rates.map((r) => (
+        <Tooltip key={r.runId} arrow title={r.n ? `Passed on ${r.n} shared scenario${r.n === 1 ? "" : "s"} that check it` : "No shared scenario measured in every run"}>
+          <Typography sx={{ px: 2, py: 1, borderLeft: "1px solid", borderColor: "divider", fontSize: 13, fontWeight: 600, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+            {r.rate == null ? "—" : `${r.rate}%`}
+          </Typography>
+        </Tooltip>
+      ))}
+    </Box>
+  );
 }
-GroupBand.propTypes = { label: PropTypes.string, count: PropTypes.number };
+GroupBand.propTypes = { group: PropTypes.object, columns: PropTypes.number, action: PropTypes.node };
 
 function Letter({ letter, color }) {
   return (
@@ -399,7 +425,7 @@ function Letter({ letter, color }) {
       sx={{
         width: 20, height: 20, borderRadius: 0.75, flexShrink: 0,
         display: "grid", placeItems: "center", typography: "s3", fontWeight: 700,
-        color, bgcolor: (t) => alpha(color, t.palette.mode === "dark" ? 0.22 : 0.14),
+        color: textTone(color), bgcolor: (t) => alpha(color, t.palette.mode === "dark" ? 0.22 : 0.14),
       }}
     >
       {letter}

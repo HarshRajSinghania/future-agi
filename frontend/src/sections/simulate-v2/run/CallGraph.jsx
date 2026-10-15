@@ -3,6 +3,8 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { alpha, useTheme } from "@mui/material/styles";
 import { Box, Stack, Typography, IconButton, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { textTone } from "../components/textTone";
+import { clickable } from "../components/clickable";
 
 /**
  * The trajectory.
@@ -143,7 +145,7 @@ export default function CallGraph({ spine = [], branches = [], diff, focus, onNo
     return (
       <g
         key={`${n.id}-${row}`}
-        onClick={() => onNodeClick?.(n)}
+        {...clickable(onNodeClick ? () => onNodeClick(n) : null, { label: n.label })}
         style={{ cursor: onNodeClick ? "pointer" : "default" }}
       >
         {lit && (
@@ -165,7 +167,7 @@ export default function CallGraph({ spine = [], branches = [], diff, focus, onNo
         <circle cx={x + 14} cy={y + NODE_H / 2} r={3.5} fill={tone.color} />
         <text
           x={x + 26} y={y + 20}
-          style={{ font: "600 12px ui-monospace, Menlo, monospace", fill: tone.color }}
+          style={{ font: "600 12px ui-monospace, Menlo, monospace", fill: textTone(tone.color, theme.palette.text.primary) }}
         >
           {n.label.length > 20 ? `${n.label.slice(0, 19)}…` : n.label}
         </text>

@@ -11,11 +11,17 @@ import { getSurface } from "../_mock/surfaces";
 import { browserAppOf } from "../_mock/runStream";
 import BrowserApp, { deriveState, focusOf, urlFor } from "./stages/BrowserApps";
 import { callDetail } from "../_mock/callDetail";
+import { subGoalResultsOf, rollupLine } from "../_mock/scenarioSubGoals";
 import CallGraph from "./CallGraph";
 import TwinStateTimeline from "./TwinStateTimeline";
 import TwinRequestStream from "./TwinRequestStream";
 import EvalsTabView from "src/components/traceDetail/EvalsTabView";
 import { localizeEval } from "../_mock/errorLocalization";
+import TraceWaterfall from "./TraceWaterfall";
+import { VERDICT_CAUSES } from "../_mock/decoupled";
+import { STALE_LABEL, verdictLineOf } from "../_mock/runCauses";
+import { textTone } from "../components/textTone";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * One call, in full.
@@ -57,10 +63,12 @@ const SURFACE_COPY = {
   sim: { id: "Episode ID", analytics: "Episode analytics", log: "Tool calls" },
 };
 
-export default function CallDrawer({ task, env, envState, focus, focusEvalName, onClose, onPrev, onNext }) {
+export default function CallDrawer({ task, env, envState, focus, focusEvalName, initialPane, onClose, onPrev, onNext, verdict = null }) {
   /* Opened from a diagnosis that named a step, so open on the trajectory with
-     that step lit rather than on the transcript with the reader hunting. */
-  const [pane, setPane] = useState(focus ? "graph" : "transcript");
+     that step lit rather than on the transcript with the reader hunting.
+     Opened from Insights evidence, it lands on the trace, pinned to the span
+     where the scenario went wrong. */
+  const [pane, setPane] = useState(initialPane || (focus ? "graph" : "transcript"));
   const [side, setSide] = useState(focusEvalName ? "evals" : "analytics");
   /* Same row shape the voice drawer feeds EvalsTabView, so both drawers show
      the explanation + error localization identically. */
@@ -138,6 +146,7 @@ export default function CallDrawer({ task, env, envState, focus, focusEvalName, 
             <Iconify icon="solar:copy-linear" width={14} sx={{ color: "text.subtitle" }} />
           </IconButton>
         </Tooltip>
+        <VerdictCauseChip verdict={verdict || task.verdictCause} task={task} />
         <Box flex={1} />
         <IconButton size="small" onClick={onPrev} disabled={!onPrev}>
           <Iconify icon="eva:arrow-ios-upward-fill" width={16} sx={{ color: "text.subtitle" }} />
@@ -166,6 +175,7 @@ export default function CallDrawer({ task, env, envState, focus, focusEvalName, 
             <Tab value="transcript" label={conversational ? "Transcript" : "Actions"} sx={{ minHeight: 40 }} />
             <Tab value="checklist" label="Checklist" sx={{ minHeight: 40 }} />
             <Tab value="graph" label="Graph" sx={{ minHeight: 40 }} />
+            <Tab value="trace" label="Trace" sx={{ minHeight: 40 }} />
             {envState?.twinBacking && (
               <Tab value="twin" label="Clone state" sx={{ minHeight: 40 }} />
             )}
@@ -249,16 +259,23 @@ export default function CallDrawer({ task, env, envState, focus, focusEvalName, 
                 which step was skipped is two products. */}
             {pane === "checklist" && (
               <Stack sx={{ p: 2 }} spacing={1}>
+                {/* The scenario's sub-goals first — each critical or
+                    supporting, and the verdict they roll up to — then the
+                    reference path step by step. */}
+                <SubGoalRollup task={task} env={env} envState={envState} />
+                <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4, pt: 1 }}>
+                  Reference path
+                </Typography>
                 <Stack direction="row" alignItems="center" spacing={1.5} sx={{ pb: 0.5 }}>
                   <Typography sx={{ typography: "s2", fontWeight: 700 }}>
                     {detail.checklist.pct}% · {detail.checklist.pass + detail.checklist.partial}/{detail.checklist.steps.length} steps
                   </Typography>
                   <Typography sx={{ typography: "s3", color: "#16A34A" }}>{detail.checklist.pass} pass</Typography>
-                  <Typography sx={{ typography: "s3", color: "#CA8A04" }}>{detail.checklist.partial} partial</Typography>
+                  <Typography sx={{ typography: "s3", color: "text.secondary" }}>{detail.checklist.partial} partial</Typography>
                   <Typography sx={{ typography: "s3", color: "#DC2626" }}>{detail.checklist.missed} missed</Typography>
                 </Stack>
                 {detail.checklist.steps.map((c) => {
-                  const tone = c.status === "addressed" ? "#16A34A" : c.status === "partial" ? "#CA8A04" : "#DC2626";
+                  const tone = c.status === "addressed" ? "#16A34A" : c.status === "partial" ? "text.secondary" : "#DC2626";
                   return (
                     <Stack
                       key={c.id} direction="row" spacing={1.25} alignItems="flex-start"
@@ -291,6 +308,11 @@ export default function CallDrawer({ task, env, envState, focus, focusEvalName, 
                   );
                 })}
               </Stack>
+            )}
+
+            {/* Session → turns → LLM, tool and guard spans on one time axis. */}
+            {pane === "trace" && (
+              <TraceWaterfall task={task} env={env} envState={envState} />
             )}
 
             {pane === "twin" && envState?.twinBacking && (
@@ -340,7 +362,7 @@ export default function CallDrawer({ task, env, envState, focus, focusEvalName, 
             >
               <Iconify icon="solar:shield-cross-bold" width={15} sx={{ color: detail.domain.color, flexShrink: 0, mt: "1px" }} />
               <Box minWidth={0}>
-                <Typography sx={{ typography: "s2", fontWeight: 700, color: detail.domain.color }}>
+                <Typography sx={{ typography: "s2", fontWeight: 700, color: textTone(detail.domain.color) }}>
                   {detail.domain.label} — this scenario produced no verdict
                 </Typography>
                 <Typography sx={{ typography: "s2", color: "text.secondary" }}>{detail.fault}</Typography>
@@ -531,9 +553,66 @@ export default function CallDrawer({ task, env, envState, focus, focusEvalName, 
 
 CallDrawer.propTypes = {
   task: PropTypes.object, env: PropTypes.object, envState: PropTypes.object, focus: PropTypes.string,
-  focusEvalName: PropTypes.string,
-  onClose: PropTypes.func, onPrev: PropTypes.func, onNext: PropTypes.func,
+  focusEvalName: PropTypes.string, initialPane: PropTypes.string,
+  onClose: PropTypes.func, onPrev: PropTypes.func, onNext: PropTypes.func, verdict: PropTypes.object,
 };
+
+/*
+  The scenario's outcome and its cause (PRD v7 §4.10.10, updated RSI PRD), in
+  the drawer header: "Failed · capability-missing", "Test invalid · simulator",
+  "Failed a required evaluation · Policy adherence", "N/A". Red only for a
+  fail; the evidence for a cheat, the missing capability, or why it doesn't
+  apply sits in the tooltip. A retry and a stale scenario trail it.
+*/
+function VerdictCauseChip({ verdict, task }) {
+  if (!verdict) return null;
+  const fail = !verdict.pulled && verdict.cause?.startsWith("fail-");
+  const tip = verdict.pulled ? `${verdict.reason} Outside every count.`
+    : verdict.cause === "fail-cheat" ? verdict.cheat?.evidence
+      : verdict.cause === "fail-capability" ? `Needs ${verdict.missing.join(", ")}, which this agent version doesn't have. The scenario still ran; the label is applied after the fail and it counts in the score.`
+        : verdict.na || verdict.canary ? verdictLineOf(verdict)
+          : VERDICT_CAUSES[verdict.cause]?.note || "";
+  const label = verdict.cause === "fail-required" && !verdict.pulled ? verdictLineOf(verdict) : verdict.label;
+  const retried = verdict.retried || task?.retried;
+  return (
+    <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+      <Tooltip arrow title={tip || ""}>
+        <Box
+          sx={{
+            px: 0.75, height: 22, display: "inline-flex", alignItems: "center", borderRadius: 0.75, flexShrink: 0,
+            border: "1px solid", borderStyle: verdict.cause?.startsWith("inc-") || verdict.na || verdict.pulled ? "dashed" : "solid",
+            borderColor: fail ? alpha("#DC2626", 0.3) : "divider",
+            bgcolor: fail ? (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.16 : 0.08) : "transparent",
+            color: fail ? "#DC2626" : "text.secondary",
+          }}
+        >
+          <Typography noWrap sx={{ typography: "s3", fontWeight: 600, color: "inherit" }}>{label}</Typography>
+        </Box>
+      </Tooltip>
+      {retried && (
+        <Tooltip arrow title={`First try ended ${retried.kind === "error" ? "error" : "test invalid"} — ${String(retried.first || "").replace(/\.$/, "")}.`}>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
+            {retried.recovered ? "Retried once" : "Retried once · same again"}
+          </Typography>
+        </Tooltip>
+      )}
+      {verdict.stale && (
+        <Tooltip arrow title="It ran, but counts toward no decision until it's updated or archived.">
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{`${STALE_LABEL[verdict.stale]} · not counted`}</Typography>
+        </Tooltip>
+      )}
+      {task?.suspected && !task.cheat && (
+        <Tooltip arrow title={task.suspected.evidence}>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>Suspected shortcut · for review</Typography>
+        </Tooltip>
+      )}
+      {task?.regraded?.changed && (
+        <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{`Re-graded · was ${task.regraded.from}`}</Typography>
+      )}
+    </Stack>
+  );
+}
+VerdictCauseChip.propTypes = { verdict: PropTypes.object, task: PropTypes.object };
 
 /**
  * The recording, stated as absent.
@@ -654,7 +733,7 @@ function ActionTrace({ task, stage, at, onScrub }) {
             <React.Fragment key={st.id || i}>
             <Stack
               direction="row" alignItems="flex-start" spacing={1.25}
-              onClick={() => onScrub(i)}
+              {...clickable(() => onScrub(i))}
               sx={{
                 px: 1.25, py: 0.875, borderRadius: 1, cursor: "pointer",
                 border: "1px solid",
@@ -662,6 +741,7 @@ function ActionTrace({ task, stage, at, onScrub }) {
                 bgcolor: "transparent",
                 opacity: future ? 0.45 : 1,
                 "&:hover": { bgcolor: "action.hover" },
+                ...focusRing,
               }}
             >
               <Typography sx={{ typography: "s3", color: "text.disabled", fontFamily: "ui-monospace, Menlo, monospace", width: 22, flexShrink: 0 }}>
@@ -673,7 +753,7 @@ function ActionTrace({ task, stage, at, onScrub }) {
                   bgcolor: (t) => alpha("#EA580C", t.palette.mode === "dark" ? 0.18 : 0.1),
                 }}
               >
-                <Typography sx={{ typography: "s3", fontWeight: 700, color: "#EA580C", fontFamily: "ui-monospace, Menlo, monospace" }}>
+                <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.primary", fontFamily: "ui-monospace, Menlo, monospace" }}>
                   {verb(st)}
                 </Typography>
               </Box>
@@ -741,3 +821,48 @@ function Attr({ label, value }) {
   );
 }
 Attr.propTypes = { label: PropTypes.string, value: PropTypes.string };
+
+/*
+  The checklist's sub-goals: one failed critical sub-goal fails the scenario,
+  an unsure critical one makes it inconclusive (never a pass), supporting
+  misses are reported and don't fail it.
+*/
+const SUBGOAL_STATUS = {
+  met: { icon: "solar:check-circle-linear", color: "#16A34A", label: "Met" },
+  failed: { icon: "solar:close-circle-linear", color: "#DC2626", label: "Failed" },
+  inconclusive: { icon: "solar:question-circle-linear", color: "text.subtitle", label: "Inconclusive" },
+};
+
+function SubGoalRollup({ task, env, envState }) {
+  const { items, rollup } = subGoalResultsOf(task, env, envState);
+  if (!items.length) return null;
+  return (
+    <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+      <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+        <Typography sx={{ typography: "s2", fontWeight: 700, color: rollup.verdict === "failed" ? "#DC2626" : "text.primary" }}>
+          {rollupLine(rollup)}
+        </Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          {`${items.filter((x) => x.status === "met").length} of ${items.length} sub-goals met · score ${rollup.score}`}
+        </Typography>
+      </Box>
+      {items.map((x) => {
+        const st = SUBGOAL_STATUS[x.status];
+        return (
+          <Stack
+            key={x.key} direction="row" alignItems="center" spacing={1}
+            sx={{ px: 1.5, py: 0.75, "&:not(:last-of-type)": { borderBottom: "1px solid", borderColor: "divider" } }}
+          >
+            <Iconify icon={st.icon} width={14} sx={{ color: st.color, flexShrink: 0 }} />
+            <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1, minWidth: 0 }}>{x.text}</Typography>
+            <Typography sx={{ typography: "s3", fontWeight: x.mark === "critical" ? 700 : 500, color: x.mark === "critical" ? "text.primary" : "text.subtitle", flexShrink: 0 }}>
+              {x.mark === "critical" ? "Critical · decides" : "Supporting · reported"}
+            </Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle", width: 76, textAlign: "right", flexShrink: 0 }}>{st.label}</Typography>
+          </Stack>
+        );
+      })}
+    </Box>
+  );
+}
+SubGoalRollup.propTypes = { task: PropTypes.object, env: PropTypes.object, envState: PropTypes.object };

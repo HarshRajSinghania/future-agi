@@ -26,6 +26,8 @@ export const useErrorFeedStore = create((set, get) => ({
 
   // ── Detail view state ──────────────────────────────────────────────────
   activeTab: "overview", // "overview" | "traces" | "trends" | "analyze"
+  // The Fix sheet (prototype) — opened from the header or the Fix tab.
+  fixSheetOpen: false,
   // Per-cluster selected trace id for the Overview list + sidebar sync.
   // { [clusterId]: traceId } — null / missing means "use cluster's latest".
   selectedTraceIdByCluster: {},
@@ -67,6 +69,7 @@ export const useErrorFeedStore = create((set, get) => ({
   },
   setPage: (p) => set({ page: p }),
   setActiveTab: (tab) => set({ activeTab: tab }),
+  setFixSheetOpen: (open) => set({ fixSheetOpen: open }),
 
   toggleClusterAnalysisCollapsed: () =>
     set((s) => ({ clusterAnalysisCollapsed: !s.clusterAnalysisCollapsed })),

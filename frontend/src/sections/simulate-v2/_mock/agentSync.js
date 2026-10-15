@@ -18,6 +18,9 @@
  * number that looks like an improvement and is not, so the UI states the
  * consequence rather than presenting two equal buttons.
  */
+import { agentSourceOf, connectedAgentsFrom, syncCheck, syncedVersion } from "./agentRegistry";
+import { agentToolsFor } from "./toolFit";
+import { mainEnvOf } from "./agentLifecycle";
 
 export const SYNC_SOURCES = [
   { id: "git", label: "Sync from git", blurb: "Pull the latest commit, or a tag you name.", icon: "solar:code-square-linear", placeholder: "main" },
@@ -94,4 +97,60 @@ export const scenarioDelta = (env, scenarios) => {
     before: outcomes[i % outcomes.length] === "fixed" ? "fail" : "pass",
     after: outcomes[i % outcomes.length] === "broke" ? "fail" : "pass",
   }));
+};
+
+/* ── re-reading the agent (updated RSI PRD, "Agents, defined") ──────────── */
+
+/*
+  Sync, and an improvement starting, re-read the agent. Anything found was
+  changed outside Future AGI — on the platform, in the repository — so it is
+  saved as a new version marked as an outside change. The improvement then
+  baselines on what actually runs in production.
+*/
+
+export const OUTSIDE_CHANGE_LABEL = "Changed outside Future AGI";
+
+/** A version a re-read found — a sync or a push — rather than one made here. */
+export const isOutsideChange = (v) => !!v && !v.applied?.length && (v.outsideChange === true || v.origin === "sync" || v.origin === "push");
+
+/**
+ * Re-read the agent as it is now.
+ *   { changed, version, label, result, reason }
+ *     changed  — the source moved since the newest version
+ *     version  — the version record to save (recordAgentVersion), marked
+ *                outsideChange; null when nothing changed. Prints as its
+ *                label, so `${version}` reads "v2".
+ *     reason   — why it couldn't be read ("no-source", "archived",
+ *                "disconnected"), when it couldn't
+ * Pure: the caller records the version. Re-reading again after recording it
+ * finds nothing new.
+ */
+export const rereadAgent = (agent, state, { now = new Date().toISOString(), reason: why = "an improvement starting", force = false } = {}) => {
+  if (!agent) return { changed: false, version: null, reason: "no-agent" };
+  /* A merged record carries every environment's versions; a raw one doesn't. */
+  const full = agent.versions ? agent : connectedAgentsFrom(state).find((a) => a.key === agent.key) || agent;
+  const v = full.values || {};
+  if (v.archived?.at) return { changed: false, version: null, reason: "archived" };
+  if (v.disconnected?.at || v.disconnected?.reason) return { changed: false, version: null, reason: "disconnected" };
+  const versions = full.versions || [];
+  /* The prototype's scripted next change is what Sync finds when someone
+     presses it. An improvement starting finds an outside change only when one
+     has really been made (the Connections tab's "Simulate an edit made outside
+     Future AGI") — otherwise every Fix would quietly mint the scripted v2. */
+  if (!force && !v.pendingOutsideChange?.at) return { changed: false, version: null, label: versions[versions.length - 1]?.label || null, reason: "up-to-date" };
+  const main = mainEnvOf(full, state);
+  const env = main?.env || null;
+  const es = env ? state?.byEnv?.[env.id] : null;
+  const r = syncCheck({ agent: full, versions, env });
+  if (!r.ok) return { changed: false, version: null, reason: r.reason || "no-source" };
+  if (r.upToDate) return { changed: false, version: null, label: r.latest, result: r };
+  const latest = versions[versions.length - 1]?.label;
+  const baseTools = env && es ? agentToolsFor(env, { ...es, agentVersions: versions }, latest) : (versions[versions.length - 1]?.tools || []);
+  const record = {
+    ...syncedVersion({ result: r, baseTools, now }),
+    outsideChange: true,
+    note: `${OUTSIDE_CHANGE_LABEL} — found re-reading ${agentSourceOf(full).label} at ${why}: ${r.changes.map((c) => c.title.split(" · ")[0].toLowerCase()).join(", ")}.`,
+  };
+  Object.defineProperty(record, "toString", { value: () => record.label, enumerable: false });
+  return { changed: true, version: record, label: record.label, result: r };
 };

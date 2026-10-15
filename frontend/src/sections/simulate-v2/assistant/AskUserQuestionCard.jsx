@@ -3,6 +3,7 @@ import { useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, Button, TextField } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * Claude-style AskUserQuestion card, ported for use inside the
@@ -84,8 +85,8 @@ export default function AskUserQuestionCard({ question, onSubmit, onSkip }) {
         <Box
           sx={{
             px: 0.75, py: 0.125, borderRadius: 999, flexShrink: 0,
-            bgcolor: (t) => alpha("#B45309", t.palette.mode === "dark" ? 0.28 : 0.16),
-            color: "#B45309",
+            bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.1 : 0.06),
+            color: "text.secondary",
             typography: "s3", fontWeight: 700, fontVariantNumeric: "tabular-nums",
           }}
         >
@@ -180,8 +181,8 @@ AskUserQuestionCard.propTypes = {
 function AskOptionRow({ label, description, selected, multi, index, onSelect, bottomChildren }) {
   return (
     <Box
-      onClick={onSelect}
-      sx={{
+      {...clickable(onSelect, { role: multi ? "checkbox" : "radio", checked: selected })}
+      sx={{ ...focusRing,
         p: 1.25, borderRadius: 1.25, cursor: "pointer",
         bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.05 : 0.03),
         "&:hover": {

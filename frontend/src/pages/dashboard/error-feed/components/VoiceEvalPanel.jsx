@@ -14,6 +14,7 @@ import PropTypes from "prop-types";
 import Iconify from "src/components/iconify";
 import { useVoiceCallDetail } from "src/sections/agents/helper";
 import { error as errorPalette, success } from "src/theme/palette";
+import { clickable, focusRing } from "src/sections/simulate-v2/components/clickable";
 
 // Module-scoped (used outside component bodies), so read the palette export
 // rather than the theme hook.
@@ -130,11 +131,15 @@ function Scrubber({ duration, currentTime, markers, onSeek, seed, dense }) {
         return (
           <Tooltip key={i} title={`${fmtTime(m.t)} · ${m.label}`} arrow>
             <Box
-              onClick={(e) => {
-                e.stopPropagation();
-                onSeek?.(m.t);
-              }}
+              {...clickable(
+                (e) => {
+                  e.stopPropagation();
+                  onSeek?.(m.t);
+                },
+                { label: `${fmtTime(m.t)} · ${m.label}` },
+              )}
               sx={{
+                ...focusRing,
                 position: "absolute",
                 top: 2,
                 bottom: 2,
@@ -339,8 +344,9 @@ function Transcript({ lines, currentTime, onSeek, dense }) {
               direction="row"
               gap={1}
               data-line={i}
-              onClick={() => onSeek?.(line.t)}
+              {...clickable(() => onSeek?.(line.t))}
               sx={{
+                ...focusRing,
                 px: 1.5,
                 py: 0.85,
                 borderBottom: "1px solid",

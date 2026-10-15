@@ -1,6 +1,7 @@
 import React from "react";
 import { Chip, useTheme } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { textTone } from "src/sections/simulate-v2/components/textTone";
 import PropTypes from "prop-types";
 
 const STATUS_CONFIG = {
@@ -27,6 +28,14 @@ const STATUS_CONFIG = {
     bg: "#FDEEE2",
     darkBg: "rgba(245,166,35,0.15)",
     darkColor: "#F5A623",
+  },
+  ignored: {
+    label: "Ignored",
+    icon: "mdi:eye-off-outline",
+    color: "#605C70",
+    bg: "#F1F0F5",
+    darkBg: "rgba(148,143,163,0.15)",
+    darkColor: "#938FA3",
   },
   resolved: {
     label: "Resolved",
@@ -65,7 +74,7 @@ export default function ErrorStatusChip({ status, size = "small", onClick }) {
         fontSize: "11px",
         fontWeight: 500,
         letterSpacing: "0.01em",
-        color: isDark ? cfg.darkColor : cfg.color,
+        color: textTone(isDark ? cfg.darkColor : cfg.color),
         bgcolor: baseBg,
         border: "1px solid",
         borderColor: isDark ? `${cfg.darkColor}40` : `${cfg.color}30`,
@@ -84,6 +93,7 @@ ErrorStatusChip.propTypes = {
     "acknowledged",
     "for_review",
     "resolved",
+    "ignored",
   ]),
   size: PropTypes.oneOf(["small", "medium"]),
   onClick: PropTypes.func,

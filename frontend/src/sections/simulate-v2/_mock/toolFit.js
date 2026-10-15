@@ -21,6 +21,7 @@ import { getRows } from "./scenarios";
 import { actorsOf, getActor } from "./actors";
 import { inferTools } from "./toolInference";
 import { agentVersions, environmentVersions, currentEnvVersion, currentAgentVersion, nextEnvVersion, versionNumber } from "./versions";
+import { toolFaultsOf } from "./toolEnv";
 
 const pick = (t) => ({ ...t, desc: t.desc || "" });
 
@@ -244,7 +245,22 @@ export const scenariosInEnvVersion = (envState, envLabel) => (envState?.scenario
  * run and every later replay of it read the same inputs, so the numbers you
  * watched are the numbers the run keeps.
  */
-export const runInputs = (env, envState, { agent, envVersion, actors }) => ({
+export const runInputs = (env, envState, { agent, envVersion, actors, actorEdits, toolFaults, admissionGates = 3, cheatChecks = 0, outcomes = 0, requiredEvals = 0, gradingRule = 0, turnLimits = 0, turnLimit = undefined }) => ({
+  admissionGates,
+  /* "Environments, defined" — sub-goals decide (gradingRule 2) and the turn
+     limit (turnLimits 1, at the environment limit the run pinned). Only runs
+     that pinned them; missing → 0, and the run replays as it always did. */
+  gradingRule,
+  turnLimits,
+  ...(turnLimit != null && { turnLimit }),
+  /* The updated RSI PRD's run rules — retry once, pull a scenario test invalid
+     twice, required evaluations. Only runs that pinned them; missing → 0. */
+  outcomes,
+  requiredEvals,
+  /* Cheat checks (PRD v7 §4.10.10): a run that pinned them is checked against
+     the environment's off-limits tools and canary scenarios; a run from before
+     them (missing → 0) replays without. */
+  cheatChecks: cheatChecks ? { offLimits: Array.isArray(envState?.offLimits) ? envState.offLimits : [] } : null,
   /* The world the run is on — a scenario's "broken" is about one world. */
   envVersion: envVersion || currentEnvVersion(env, envState)?.label,
   tools: worldToolsFor(env, envState, envVersion),
@@ -253,7 +269,13 @@ export const runInputs = (env, envState, { agent, envVersion, actors }) => ({
   phrasing: versionNumber(agent),
   /* The cast the run had — a stored run carries its own, so a later edit to
      the actors doesn't replay history differently. */
-  actors: (actors || actorsOf(env, envState)).map((id) => getActor(id)).filter(Boolean),
+  actors: (actors || actorsOf(env, envState))
+    /* …and the actor edits it pinned, not today's. */
+    .map((id) => getActor(id, actorEdits !== undefined ? { ...envState, actorEdits: actorEdits || {} } : envState))
+    .filter(Boolean),
+  /* Injected faults: a stored run replays the ones it pinned (none, for runs
+     from before the dial); a new run takes the current dial. */
+  toolFaults: toolFaults !== undefined ? toolFaults : toolFaultsOf(env, envState),
 });
 
 /**

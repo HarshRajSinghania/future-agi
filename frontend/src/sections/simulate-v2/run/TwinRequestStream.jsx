@@ -8,6 +8,7 @@ import Iconify from "src/components/iconify";
 import { SegmentedTabs } from "src/components/tabs/tabs";
 import { twinById, twinRequestStreamFor } from "../_mock/twins";
 import TwinLogo from "../components/TwinLogo";
+import { clickable, focusRing } from "../components/clickable";
 
 const TWIN_TINT = "#7857FC";
 
@@ -111,6 +112,8 @@ TwinRequestStream.propTypes = {
 function RequestRow({ req, open, onToggle }) {
   const twin = twinById(req.service);
   const methodC = methodColor(req.method);
+  // PUT is amber — keep it on the tint, not the letters.
+  const methodText = req.method === "PUT" ? "text.secondary" : methodC;
   const statusC = req.isError ? "#DC2626" : "#16A34A";
   return (
     <Box sx={{
@@ -123,10 +126,11 @@ function RequestRow({ req, open, onToggle }) {
     }}>
       <Stack
         direction="row" alignItems="center" spacing={1.25}
-        onClick={onToggle}
+        {...clickable(onToggle, { expanded: open })}
         sx={{
           px: 1.5, py: 1, cursor: "pointer",
           "&:hover": { bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.03 : 0.02) },
+          ...focusRing,
         }}
       >
         <Iconify
@@ -147,7 +151,7 @@ function RequestRow({ req, open, onToggle }) {
           sx={{
             height: 18, borderRadius: 0.5, fontFamily: "ui-monospace, Menlo, monospace",
             bgcolor: (t) => alpha(methodC, t.palette.mode === "dark" ? 0.16 : 0.09),
-            color: methodC,
+            color: methodText,
             "& .MuiChip-label": { px: 0.75, fontSize: 10, fontWeight: 700, letterSpacing: 0.3 },
           }}
         />

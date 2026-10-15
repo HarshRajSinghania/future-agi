@@ -16,6 +16,7 @@ import { purple } from "src/theme/palette";
 import openExternal from "../openExternal";
 import { useErrorFeedStore } from "../store";
 import { CONFIDENCE, MESSAGE_TYPE, RUN_STATE, STEP_STATUS } from "../constants";
+import { clickable, focusRing } from "src/sections/simulate-v2/components/clickable";
 
 // Short relative label for the cached-analysis timestamp (date-fns, same
 // pattern as ErrorFeedTable / ErrorMetadataPanel).
@@ -77,14 +78,14 @@ function NotAnalyzedState({ onAnalyze }) {
       </Box>
       <Stack flex={1} gap={0.4} minWidth={0}>
         <Typography fontSize="14px" fontWeight={600} color="text.primary">
-          No analysis yet
+          No root cause yet
         </Typography>
         <Typography
           fontSize="12px"
           color="text.secondary"
           sx={{ lineHeight: 1.55 }}
         >
-          No analysis yet — get a plain-English explanation and a suggested fix.
+          Get a plain-English explanation and a suggested fix.
         </Typography>
       </Stack>
       <Button
@@ -107,7 +108,7 @@ function NotAnalyzedState({ onAnalyze }) {
           flexShrink: 0,
         }}
       >
-        Debug this cluster
+        Find root cause
       </Button>
     </Stack>
   );
@@ -200,7 +201,7 @@ function AnalyzingState({ activeStepIdx }) {
           }}
         />
         <Typography fontSize="13.5px" fontWeight={600} color="text.primary">
-          Debugging this cluster…
+          Finding root cause…
         </Typography>
       </Stack>
       <StepChips activeStepIdx={activeStepIdx} />
@@ -240,7 +241,7 @@ function AnalyzedState({ data, linkedIssue, onCreateLinear, onOpenAnalyze }) {
             bgcolor: alpha("#5ACE6D", isDark ? 0.14 : 0.12),
           }}
         >
-          Fix
+          Suggested fix
         </Typography>
         <Typography
           fontSize="12.5px"
@@ -401,10 +402,10 @@ export default function ClusterHeadlineCard({
 
   const collapsedSummary =
     state === "analyzing"
-      ? "Debugging this cluster…"
+      ? "Finding root cause…"
       : state === "not_analyzed"
-        ? "Not analyzed yet"
-        : `${CONFIDENCE_LABEL[data.confidence] ?? "Analyzed"} · ${data.category}`;
+        ? "No root cause yet"
+        : `${CONFIDENCE_LABEL[data.confidence] ?? "Found"} · ${data.category}`;
 
   return (
     <Box
@@ -430,8 +431,8 @@ export default function ClusterHeadlineCard({
         direction="row"
         alignItems="center"
         gap={1}
-        onClick={toggleCollapsed}
-        sx={{ cursor: "pointer", userSelect: "none", minWidth: 0 }}
+        {...clickable(toggleCollapsed, { expanded: !collapsed })}
+        sx={{ cursor: "pointer", userSelect: "none", minWidth: 0, ...focusRing }}
       >
         <Stack
           direction="row"
@@ -453,7 +454,7 @@ export default function ClusterHeadlineCard({
               letterSpacing: "0.08em",
             }}
           >
-            Cluster Analysis
+            Root cause
           </Typography>
         </Stack>
 
@@ -509,15 +510,19 @@ export default function ClusterHeadlineCard({
               color="text.disabled"
               sx={{ textTransform: "uppercase", letterSpacing: "0.06em" }}
             >
-              Analyzed {data?.analyzedAt ?? "just now"}
+              Found {data?.analyzedAt ?? "just now"}
             </Typography>
-            <CustomTooltip show title="Re-run analysis (1 credit)" arrow>
+            <CustomTooltip show title="Find root cause again (1 credit)" arrow>
               <Box
-                onClick={(e) => {
-                  e.stopPropagation();
-                  runAnalysis();
-                }}
+                {...clickable(
+                  (e) => {
+                    e.stopPropagation();
+                    runAnalysis();
+                  },
+                  { label: "Find root cause again" },
+                )}
                 sx={{
+                  ...focusRing,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",

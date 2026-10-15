@@ -201,6 +201,13 @@ export const menuesConstant = {
     },
     {
       id: 5,
+      icon: "/assets/icons/settings/Integrations_new.svg",
+      title: "Set up GitHub & Slack",
+      status: "incomplete",
+      label: "connectTools",
+    },
+    {
+      id: 6,
       icon: "/assets/icons/navbar/ic_add_team.svg",
       title: "Invite team members",
       status: "incomplete",
@@ -215,5 +222,6 @@ export const menuesConstant = {
     RunFirstExperiment: "experiment",
     SetupObsabilityInApplication: "observe",
     inviteTeamMembers: "invite",
+    connectTools: "tools",
   },
 };

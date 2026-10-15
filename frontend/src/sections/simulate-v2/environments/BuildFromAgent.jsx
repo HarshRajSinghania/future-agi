@@ -4,8 +4,10 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Button, TextField, InputAdornment, MenuItem, Tooltip, IconButton, Collapse, Popover,
+  Dialog, DialogContent,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { useSnackbar } from "notistack";
 import { Upload } from "src/components/upload";
 import { formatFileSize } from "src/utils/utils";
 import { paths } from "src/routes/paths";
@@ -13,8 +15,9 @@ import { pipelineStatus, pipelineSummary } from "../_mock/buildPipeline";
 import { subscribeScenarioSelection, getScenarioSelection } from "../_mock/scenarioSelectionBus";
 import TrialsPicker from "../workspace/scenarios/TrialsPicker";
 import { setupGaps, gapCounts } from "../_mock/setupGaps";
-import { useSimStore, useEnvState } from "../store";
+import { useSimStore, useEnvState, useConnectedAgents } from "../store";
 import { SectionCard } from "../components/primitives";
+import { textTone } from "../components/textTone";
 import {
   HARNESS_STAGES, REF_KINDS, DERIVATION_OUTPUTS,
   builderRun, derivedEnvironment, detectedStack, assistantIdLabel,
@@ -23,19 +26,28 @@ import {
 import { ADAPTERS } from "../_mock/rlContract";
 import { generatedPool } from "../_mock/scenarios";
 import { agentPromptOf } from "../_mock/agentPrompt";
+import { agentRecordFromSource, envAgentKey } from "../_mock/agentRegistry";
+import { MODE_ICONS, REPLICATION_MODES, replicationRecordOf } from "../_mock/replication";
 import AgentPromptDrawer from "../workspace/agents/AgentPromptDrawer";
 import { stampProvenance as provStamp, currentUser } from "../_mock/scenarioProvenance";
 import { detectAddScenariosIntent } from "../_mock/addScenariosIntent";
-import { stampNewBatch, unanswerableNote } from "../_mock/addScenarios";
+import { stampNewBatch, unanswerableNote, rejectedNote } from "../_mock/addScenarios";
+import { asProposal } from "../_mock/scenarioSources";
 import { parseCurl, describeFill } from "../_mock/curl";
 import { detectEndpoints, CONFIDENCE } from "../_mock/endpoints";
 import AssistantConsole from "../assistant/AssistantConsole";
+import BuilderRail from "../workspace/BuilderRail";
+import { readBuilderCollapsed, writeBuilderCollapsed } from "../workspace/builderCollapse";
 import VoiceInput from "../assistant/VoiceInput";
 import DerivedPanels from "./DerivedPanels";
 import AddEvalsDrawer from "../workspace/evals/AddEvalsDrawer";
 import DynamicField from "../workspace/connect/DynamicField";
+import SecretRefField from "../agents/connect/SecretRefField";
+import { isSecretRef, withoutRawSecrets } from "../_mock/secretRefs";
 import AgentReadReceipt from "./AgentReadReceipt";
-import EnvVersionPin from "../workspace/EnvVersionPin";
+import { clickable, focusRing } from "../components/clickable";
+import { LiveConsentCard } from "../agents/AgentLiveConsent";
+import { uniqueEnvName } from "../_mock/envNames";
 
 /**
  * Stage 1 — connect an agent source.
@@ -66,13 +78,30 @@ function sizeToCount(pool, count) {
 export default function BuildFromAgent() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { dispatch } = useSimStore();
+  const { state: storeState, dispatch } = useSimStore();
+  /* Every write below waits for the saved state to load: a page reached from
+     another area mounts a fresh store that hydrates from IndexedDB a moment
+     later, and hydrating replaces state — a write made before it is lost
+     (the build's agent, env v1 and adoption all were, once per environment). */
+  const hydrated = !!storeState.hydrated;
+  /* Read inside the adopt effect without re-running it on every store write. */
+  const envsRef = useRef(storeState.myEnvironments);
+  envsRef.current = storeState.myEnvironments;
   /* When the new "Create Environments" picker in StartEnvironment sends a
      user here, the source they picked (kind + value + credentials + agent
      type) rides along in location.state.presetSource. That skips the
      modality/kind selection UI and lands the user straight in the chat
      + derivation view. */
   const presetSource = location.state?.presetSource || null;
+  /* Sent here by an Error Feed issue's Fix: the agent had no environment, and
+     this first one becomes its main — Fix runs there. */
+  const fromIssue = location.state?.fromIssue || null;
+  /* Set on this history entry once the build is in My environments — so
+     coming back to it (Back from the first run, a reload) opens that
+     environment instead of building a second copy from the same source. */
+  /* Read once, on arrival: the build marks its own entry while it runs, and
+     that must not send it away from itself. */
+  const [builtEnvId] = useState(() => location.state?.builtEnvId || null);
   const bootedPresetRef = useRef(false);
 
   const [modality, setModality] = useState(null);
@@ -81,7 +110,8 @@ export default function BuildFromAgent() {
   const [refKind, setRefKind] = useState("branch");
   const [refValue, setRefValue] = useState("");
   const [provider, setProvider] = useState("vapi");
-  const [apiKey, setApiKey] = useState("");
+  /* The provider key by reference (AC-6.12) — never the value. */
+  const [keyRef, setKeyRef] = useState("");
   const [file, setFile] = useState(null);
   const [runtime, setRuntime] = useState({});
   /* Name and difficulty live in the header now — an auto-generated name you
@@ -162,10 +192,13 @@ export default function BuildFromAgent() {
   /* The contract as it's written: how many tools, rules and stores the
      builder has found so far. The Overview's build table fills in from this
      while the agent is read and the world is seeded. */
-  const [contractFound, setContractFound] = useState({ tools: 0, rules: 0, stores: 0 });
+  const [contractFound, setContractFound] = useState({ tools: 0, rules: 0, stores: 0, handlers: 0 });
+  /* Streaming from the first frame of the build, not from the first tool:
+     before any tool had been read this was false, and the table showed the
+     whole finished contract for the two seconds until the first one landed. */
   const contractProgress = {
     ...contractFound,
-    streaming: !buildDone && contractFound.tools > 0,
+    streaming: !!source && !buildDone,
   };
   /* Spread `count` reveals of one kind across a stretch of a stage's steps. */
   const streamFound = (kind, count, fromMs, toMs) => {
@@ -262,7 +295,7 @@ export default function BuildFromAgent() {
       value: kind === "upload" ? (file?.name || chosen.placeholder) : (value.trim() || chosen.placeholder),
       ref,
       provider: kind === "platform" ? provider : null,
-      credential: kind === "platform" ? apiKey.trim() || undefined : undefined,
+      ...(kind === "platform" && isSecretRef(keyRef) && { apiKeyRef: keyRef.trim() }),
     };
     src.runtimeTypeId = runtimeTypeId;
     src.runtime = { ...runtimeValuesFrom({ ...src }), ...runtime };
@@ -298,7 +331,7 @@ export default function BuildFromAgent() {
        pace the table can visibly fill at: tools while their signatures are
        read (steps 3–5), rules while they're separated out (steps 6–8). */
     const pace = 600;
-    setContractFound({ tools: 0, rules: 0, stores: 0 });
+    setContractFound({ tools: 0, rules: 0, stores: 0, handlers: 0 });
     streamFound("tools", env?.tools?.length || 0, pace * 3, pace * 5);
     streamFound("rules", env?.rules?.length || 0, pace * 6, pace * 8);
     play(stage.title, stage.steps, stage.chips, "understand", pace);
@@ -311,13 +344,20 @@ export default function BuildFromAgent() {
      builder chat + derivation panels straight away — the whole point of
      clicking "Build environment" from the new picker. */
   useEffect(() => {
-    if (!presetSource || bootedPresetRef.current) return;
+    if (!builtEnvId || !hydrated) return;
+    if (storeState.myEnvironments?.some((e) => e.id === builtEnvId)) {
+      bootedPresetRef.current = true;
+      navigate(paths.dashboard.simulate.environmentDetail(builtEnvId), { replace: true });
+    }
+  }, [builtEnvId, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!presetSource || bootedPresetRef.current || builtEnvId) return;
     bootedPresetRef.current = true;
     if (presetSource.modality) setModality(presetSource.modality);
     if (presetSource.kind) setKind(presetSource.kind);
     if (presetSource.provider) setProvider(presetSource.provider);
     if (presetSource.value) setValue(presetSource.value);
-    if (presetSource.credential) setApiKey(presetSource.credential);
+    if (isSecretRef(presetSource.apiKeyRef)) setKeyRef(presetSource.apiKeyRef);
     setSource(presetSource);
   }, [presetSource]);
 
@@ -362,7 +402,8 @@ export default function BuildFromAgent() {
        rewritten and re-checked. */
     const pace = id === "scenarios" ? 650 : id === "build" ? 550 : 380;
     if (id === "build") {
-      /* Seeding the world (steps 3–5) is where the stores land. */
+      /* Writing handlers (steps 1–3), then seeding the world (steps 3–5). */
+      streamFound("handlers", env?.tools?.length || 0, pace, pace * 3);
       streamFound("stores", env?.seed?.tables?.length || 0, pace * 3, pace * 5);
     }
     if (id === "scenarios" && draftCount) {
@@ -406,19 +447,21 @@ export default function BuildFromAgent() {
       const fresh = pool.slice(0, intent.count);
       /* Stamped like every other add route — tools, proof, the environment
          version it was added under — so the tool check runs here too. */
-      const batch = stampNewBatch(fresh, { env, envState, source: "builder-chat", actor: currentUser() });
+      const batch = stampNewBatch(fresh.map((r) => ({ ...r, chatAsk: text })), { env, envState, source: "chat", actor: currentUser() });
+      /* Chat-written scenarios get the same review as every other source:
+         proposed, in exploration, until someone approves them. */
       if (fresh.length > 0) {
-        envPatch({ scenarios: [...(envState?.scenarios || []), ...batch.rows] });
+        envPatch({ scenarios: [...(envState?.scenarios || []), ...batch.rows.map((r) => asProposal(r, "chat"))] });
       }
-      const warn = fresh.length > 0 ? unanswerableNote(batch) : null;
+      const warn = fresh.length > 0 ? [unanswerableNote(batch), rejectedNote(batch)].filter(Boolean).join(" ") || null : null;
       setTurns((prev) => [...prev, {
         id: `a-${Date.now()}`,
         role: "assistant",
         steps: [{ kind: "note", text: fresh.length === 0
           ? "This environment has already used every derived scenario in the pool — delete a few first, or connect a fresh source."
           : fresh.length < intent.count
-            ? `Added ${fresh.length} scenarios as a new batch — the derivation pool only had ${fresh.length} unused left.${warn ? ` ${warn}` : ""}`
-            : `Added ${fresh.length} scenarios as a new batch on the Scenarios tab.${warn ? ` ${warn}` : ""}` }],
+            ? `${batch.rows.length} proposed — review and add them on the Scenarios tab. The derivation pool only had ${fresh.length} unused left.${warn ? ` ${warn}` : ""}`
+            : `${batch.rows.length} proposed — review and add them on the Scenarios tab.${warn ? ` ${warn}` : ""}` }],
       }]);
       return;
     }
@@ -427,7 +470,7 @@ export default function BuildFromAgent() {
   };
 
   /*
-    Broadcast a builder turn from a downstream panel (e.g. AgentsPanel when the
+    Broadcast a builder turn from a downstream panel (e.g. a panel when the
     user promotes an additional agent to source). Same shape as an internal
     stage — just no next-stage chaining and no gap-check. Keeps the panels
     unaware of `setTurns` / timers / running-state, and reuses the streaming
@@ -448,23 +491,12 @@ export default function BuildFromAgent() {
     is idempotent for the same id, so re-priming is safe.
   */
   const prime = (confirmed) => {
-    dispatch({ type: "adoptEnvironment", env: confirmed, now: new Date().toISOString() });
-    const rt = runtimeTypeFor(source?.modality, source?.kind, source?.runtimeTypeId);
+    dispatch({ type: "adoptEnvironment", env: { ...confirmed, ...(buildReplication && { replication: buildReplication }) }, now: new Date().toISOString() });
+    /* The agent itself was attached when the environment was first created
+       (see the seeding effect) — priming only carries the derived content. */
     const patch = {};
     if (scenarios?.length) patch.scenarios = scenarios;
     if (evalIds?.length) patch.evals = evalIds;
-    if (rt && source?.runtime) {
-      /* Record which source kind the agent was attached from so downstream
-         version-add flows can lock to it. Falls back to "repo" for legacy
-         sources that don't carry `kind` yet. */
-      patch.agent = {
-        typeId: rt.id,
-        values: source.runtime,
-        via: "endpoint",
-        sourceKind: source.kind || "repo",
-        connectedAt: new Date().toISOString(),
-      };
-    }
     if (Object.keys(patch).length) {
       dispatch({ type: "patchEnvState", envId: confirmed.id, patch });
     }
@@ -490,11 +522,21 @@ export default function BuildFromAgent() {
     } else {
       target = paths.dashboard.simulate.environmentDetail(confirmed.id);
     }
-    navigate(target);
+    /* Replace the build in history: Back from here goes to where the build
+       started, never to a build that would start again. */
+    navigate(target, { replace: true, ...(fromIssue && { state: { fromIssue } }) });
   };
 
   /* Live envState for whichever env has been primed. Feeds the panels below. */
   const { envState, patch: envPatch } = useEnvState(env?.id);
+  /* What kind of copy this build runs against — recorded on the environment
+     so every result can say where it came from. A provider clone is created
+     here, labelled fagi-sim-<env>-<build>. */
+  const buildReplication = useMemo(() => {
+    if (!env || !buildsAgent(source)) return null;
+    const agent = source.connectedAgent || agentForBuild(source, env, "");
+    return agent ? replicationRecordOf(agent, env, 1) : null;
+  }, [env, source]);
 
   /*
     Derivation being done + a name being set is the *floor* to run —
@@ -554,13 +596,13 @@ export default function BuildFromAgent() {
     this env id. */
   const evalsResetRef = useRef(null);
   useEffect(() => {
-    if (!env?.id) return;
+    if (!env?.id || !hydrated) return;
     if (evalsResetRef.current === env.id) return;
     evalsResetRef.current = env.id;
     const preset = env.evalPreset || [];
     dispatch({ type: "patchEnvState", envId: env.id, patch: { evals: preset } });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [env?.id]);
+  }, [env?.id, hydrated]);
 
   /*
     A build from an agent is a *fresh* environment at v1 — for both the agent
@@ -570,7 +612,7 @@ export default function BuildFromAgent() {
   */
   const versionsSeededRef = useRef(null);
   useEffect(() => {
-    if (!env?.id) return;
+    if (!env?.id || !hydrated) return;
     if (versionsSeededRef.current === env.id) return;
     versionsSeededRef.current = env.id;
     const now = new Date().toISOString();
@@ -580,9 +622,48 @@ export default function BuildFromAgent() {
        the demo state under the shared id.) v1's tools are read from its
        source, and env v1's world is built to answer exactly those. */
     const v1Tools = (env.tools || []).map((t) => ({ ...t }));
+    /* The real agent from the first moment — identity, definition (GitHub
+       link, entry file) and where it runs — so leaving mid-build never leaves
+       a placeholder behind for "Use a connected agent" to duplicate. */
+    const connected = source?.connectedAgent;
+    if (connected && !envState.agent) {
+      const { versions: connectedVersions, usedIn, latest, id, ...record } = connected;
+      dispatch({
+        type: "patchEnvState",
+        envId: env.id,
+        patch: {
+          agent: { ...record, connectedAt: record.connectedAt || now },
+          ...(connectedVersions?.length && { agentVersions: connectedVersions }),
+          activeAgentVersion: source.agentVersion || latest || "v1",
+          envVersions: [
+            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: `First build, read from agent ${source.agentVersion || latest || "v1"}.`, scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools, builtFor: source.agentVersion || latest || "v1" },
+          ],
+          activeEnvVersion: "v1",
+          runs: [],
+        },
+      });
+      return;
+    }
     const agent = envState.agent
       ? { ...envState.agent, sourceKind: source?.kind || envState.agent.sourceKind || "repo" }
-      : agentFromSource(source, env, now);
+      : agentForBuild(source, env, now);
+    /* An MCP server or a local runtime is the world, not an agent — the
+       environment starts with no test subject, like one built from scratch. */
+    if (!agent) {
+      dispatch({
+        type: "patchEnvState",
+        envId: env.id,
+        patch: {
+          agent: null,
+          envVersions: [
+            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: "First build — no agent connected yet.", scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools },
+          ],
+          activeEnvVersion: "v1",
+          runs: [],
+        },
+      });
+      return;
+    }
     dispatch({
       type: "patchEnvState",
       envId: env.id,
@@ -607,28 +688,35 @@ export default function BuildFromAgent() {
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [env?.id]);
+  }, [env?.id, hydrated]);
   useEffect(() => {
-    if (!env?.id) return;
+    if (!env?.id || !hydrated) return;
     const understandDone = done.includes("understand");
-    const readyToAdopt = understandDone && (evalIds?.length || 0) > 0;
+    /* The derived evals land in the environment's state (its preset); ones
+       added here by hand are in evalIds. Either counts. */
+    const readyToAdopt = understandDone && ((evalIds?.length || 0) > 0 || (envState.evals?.length || 0) > 0);
     const allDone = STAGE_ORDER.every((s) => done.includes(s));
     const buildProgress = { done: done.length, total: STAGE_ORDER.length };
     const buildStatus = allDone ? "ready" : "building";
 
     if (readyToAdopt && adoptedRef.current !== env.id) {
+      /* The store numbers a name that's taken; show the same name here. */
+      const adoptedName = uniqueEnvName((name || env.name || "").trim(), envsRef.current, env.id);
+      if (adoptedName && adoptedName !== name) setName(adoptedName);
       dispatch({
         type: "adoptEnvironment",
         env: {
           ...env,
-          name: (name || env.name || "").trim(),
+          name: adoptedName,
           difficulty,
           buildStatus,
           buildProgress,
+          ...(buildReplication && { replication: buildReplication }),
         },
         now: new Date().toISOString(),
       });
       adoptedRef.current = env.id;
+      navigate(location.pathname, { replace: true, state: { ...(location.state || {}), builtEnvId: env.id } });
       if (allDone) readyStampedRef.current = true;
     } else if (adoptedRef.current === env.id) {
       /* Keep the card in sync as the pipeline advances — buildProgress ticks
@@ -655,14 +743,10 @@ export default function BuildFromAgent() {
     if (evalIds?.length && (envState.evals?.length || 0) !== evalIds.length) {
       nextPatch.evals = evalIds;
     }
-    const rt = runtimeTypeFor(source?.modality, source?.kind, source?.runtimeTypeId);
-    if (rt && source?.runtime && !envState.agent) {
-      nextPatch.agent = { typeId: rt.id, values: source.runtime, via: "endpoint", connectedAt: new Date().toISOString() };
-    }
     if (Object.keys(nextPatch).length) {
       dispatch({ type: "patchEnvState", envId: env.id, patch: nextPatch });
     }
-  }, [env?.id, done, scenarios?.length, scenarioSyncKey, evalIds?.length, envState.scenarios?.length, envState.evals?.length, envState.agent, source, name, difficulty, dispatch]);
+  }, [env?.id, hydrated, done, scenarios?.length, scenarioSyncKey, evalIds?.length, envState.scenarios?.length, envState.evals?.length, envState.agent, source, name, difficulty, dispatch, buildReplication]);
 
   /* Back out of the source picker leaves the route; back out of a derivation
      returns to the picker, so a wrong URL is one click to fix, not a reload.
@@ -672,6 +756,9 @@ export default function BuildFromAgent() {
   const goBack = () => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
+    /* A finished build is kept as it stands — the name typed in the header
+       included — before leaving; there's no separate "Open environment". */
+    if (env && done.includes("build")) prime({ ...env, name: name.trim() || env.name, difficulty });
     if (!source || presetSource) return navigate(paths.dashboard.simulate.environments);
     setSource(null);
     setTurns([]);
@@ -695,13 +782,30 @@ export default function BuildFromAgent() {
         done={done}
         scenarioCount={scenarios?.length || 0}
         scenarioProgress={scenarioProgress}
-        agentPrompt={source && env ? agentPromptOf(source, env) : null}
+        agentPrompt={buildsAgent(source) && env ? agentPromptOf(source, env) : null}
+        replication={buildReplication}
         name={name} setName={setName}
         editingName={editingName} setEditingName={setEditingName}
         onRun={runNow}
         canGo={canLeave}
         blockedReason={runBlockedReason}
       />
+
+      {fromIssue && (
+        <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2, py: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+          <Iconify icon="solar:bug-linear" width={15} sx={{ color: "text.secondary", flexShrink: 0 }} />
+          <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1, minWidth: 0 }}>
+            {`Building the agent's main environment for ${fromIssue}. Once it's built, Fix on the issue runs here and adds the issue's scenarios to it.`}
+          </Typography>
+          <Button
+            size="small" variant={canLeave ? "contained" : "text"} disabled={!canLeave}
+            onClick={() => navigate(paths.dashboard.errorFeed.detail(fromIssue))}
+            sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}
+          >
+            {`Back to ${fromIssue}`}
+          </Button>
+        </Stack>
+      )}
 
       {/* The build view runs edge to edge — chat and environment split by one
           rule — so it drops the padding the picker and intake steps use. */}
@@ -716,7 +820,7 @@ export default function BuildFromAgent() {
             sources={sources}
             modality={modality} onPickModality={pickModality}
             provider={provider} setProvider={setProvider}
-            apiKey={apiKey} setApiKey={setApiKey}
+            keyRef={keyRef} setKeyRef={setKeyRef}
             file={file} setFile={setFile}
             runtime={runtime} setRuntime={setRuntime}
             runtimeTypeId={runtimeTypeId} setRuntimeTypeId={setRuntimeTypeId}
@@ -869,11 +973,16 @@ function buildQuestions(env) {
 
 function Header({
   onBack, backLabel, source, env, envState, patch, done, running, scenarioCount,
-  scenarioProgress, agentPrompt,
+  scenarioProgress, agentPrompt, replication,
   name, setName, editingName, setEditingName,
   onRun, canGo, blockedReason,
 }) {
   const [promptOpen, setPromptOpen] = useState(false);
+  const navigate = useNavigate();
+  /* Live-test consent, given in place — saved to the agent like its Connections tab does. */
+  const [consentOpen, setConsentOpen] = useState(false);
+  const { setAgentValues } = useConnectedAgents();
+  const { enqueueSnackbar } = useSnackbar();
   /* Hide the header's Run simulation when the Scenarios toolbar has
      transformed into the SelectionBar — its "Run N selected" is
      the primary in that state, and keeping the header CTA visible
@@ -948,12 +1057,7 @@ function Header({
                     <Iconify icon="solar:pen-new-square-linear" width={14} sx={{ color: "text.subtitle" }} />
                   </IconButton>
                 </Tooltip>
-                {/* Environment-version pin — same control the workspace carries,
-                    shown once the env is built so this flow matches the
-                    template-to-environment build. */}
-                {setupDone && env && envState && patch && (
-                  <EnvVersionPin env={env} envState={envState} patch={patch} />
-                )}
+                {/* No env-version chip — the environment's own page has its history. */}
                 {/*
                   Env status chip.
 
@@ -962,6 +1066,7 @@ function Header({
                   group of chips that all describe the same thing — this env's
                   current state. Building/Live/gap/failed states are mutually
                   exclusive; the IIFE picks whichever applies.
+                  Building is purple everywhere (the environments table's colour).
                 */}
                 <Box sx={{ display: { xs: "none", md: "block" } }}>
                   {(() => {
@@ -1000,13 +1105,13 @@ function Header({
                     direction="row" alignItems="center" spacing={0.75}
                     sx={{
                       px: 1.125, py: 0.5, borderRadius: 999,
-                      border: "1px solid", borderColor: alpha("#CA8A04", 0.35),
-                      bgcolor: (t) => alpha("#CA8A04", t.palette.mode === "dark" ? 0.14 : 0.08),
+                      border: "1px solid", borderColor: alpha("#7857FC", 0.35),
+                      bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.14 : 0.08),
                     }}
                   >
                     <Box
                       sx={{
-                        width: 6, height: 6, borderRadius: "50%", bgcolor: "#CA8A04", flexShrink: 0,
+                        width: 6, height: 6, borderRadius: "50%", bgcolor: "#7857FC", flexShrink: 0,
                         animation: "chip-pulse 1.4s ease-in-out infinite",
                         "@keyframes chip-pulse": {
                           "0%,100%": { opacity: 0.4, transform: "scale(1)" },
@@ -1014,7 +1119,7 @@ function Header({
                         },
                       }}
                     />
-                    <Typography sx={{ typography: "s2", fontWeight: 700, color: "#CA8A04", fontVariantNumeric: "tabular-nums" }}>
+                    <Typography sx={{ typography: "s2", fontWeight: 700, color: "#7857FC", fontVariantNumeric: "tabular-nums" }}>
                       {scenarioProgress?.streaming && scenarioProgress.total
                         ? `Writing scenarios · ${scenarioProgress.shown} of ${scenarioProgress.total}`
                         : "Building"}
@@ -1030,29 +1135,29 @@ function Header({
                 generic count so the user knows exactly what to do.
               */
               if (blockingGaps.length > 0) {
-                const label = (() => {
-                  if (blockingGaps.length === 1) {
-                    const g = blockingGaps[0];
-                    if (g.id === "no-evals") return "Add evaluations to run";
-                    return g.title || "1 step to complete";
-                  }
-                  return `${blockingGaps.length} steps to complete`;
-                })();
+                const g = blockingGaps[0];
+                const label = blockingGaps.length === 1
+                  ? (g.id === "no-evals" ? "Add evaluations to run" : g.title || "1 step to complete")
+                  : `${blockingGaps.length} steps to complete`;
+                /* Neutral, with the one red mark. Live-test consent is given right
+                   here in a dialog; anything else goes where the step is done. */
+                const consent = blockingGaps.length === 1 && g.code === "gap_live_consent" && !!envState?.agent;
+                const href = !consent && blockingGaps.length === 1 && g.ask?.href ? g.ask.href : null;
                 return (
-                  <Stack
-                    direction="row" alignItems="center" spacing={0.75}
-                    sx={{
-                      px: 1.125, py: 0.5, borderRadius: 999,
-                      border: "1px solid",
-                      borderColor: alpha("#CA8A04", 0.4),
-                      bgcolor: (t) => alpha("#CA8A04", t.palette.mode === "dark" ? 0.14 : 0.08),
-                    }}
-                  >
-                    <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: "#CA8A04" }} />
-                    <Typography sx={{ typography: "s2", fontWeight: 700, color: "#CA8A04" }}>
-                      {label}
-                    </Typography>
-                  </Stack>
+                  <Tooltip arrow title={blockingGaps.length === 1 ? (g.why || "") : blockingGaps.map((x) => x.title).join(" · ")}>
+                    <Stack
+                      direction="row" alignItems="center" spacing={0.75}
+                      {...clickable(consent ? () => setConsentOpen(true) : href ? () => navigate(href) : undefined)}
+                      sx={{ ...focusRing,
+                        px: 1, height: 24, borderRadius: 0.75, border: "1px solid", borderColor: "divider",
+                        cursor: href || consent ? "pointer" : "default", "&:hover": href || consent ? { bgcolor: "action.hover" } : undefined,
+                      }}
+                    >
+                      <Iconify icon="solar:danger-triangle-linear" width={13} sx={{ color: "#DC2626" }} />
+                      <Typography noWrap sx={{ typography: "s3", fontWeight: 600, color: "text.primary" }}>{label}</Typography>
+                      {(href || consent) && <Iconify icon="solar:arrow-right-linear" width={12} sx={{ color: "text.subtitle" }} />}
+                    </Stack>
+                  </Tooltip>
                 );
               }
 
@@ -1073,28 +1178,43 @@ function Header({
                 >
                   <Box sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "#16A34A" }} />
                   <Typography sx={{ typography: "s2", fontWeight: 700, color: "#16A34A" }}>
-                    Live
+                    Ready
                   </Typography>
                 </Stack>
               );
                   })()}
                 </Box>
+                {/* The copy this build runs against — for a provider clone,
+                    the labelled clone it created. */}
+                {replication && <CopyChip replication={replication} />}
                 {/* The prompt the build is reading — open while it builds and
                     after, so what was derived can be checked against it. */}
                 {agentPrompt && (
-                  <Button
-                    size="small"
-                    onClick={() => setPromptOpen(true)}
-                    startIcon={<Iconify icon="solar:document-text-linear" width={15} />}
-                    sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0, px: 1 }}
-                  >
-                    Agent v1 prompt
-                  </Button>
+                  <Tooltip arrow title="The agent's v1 prompt — what this build read">
+                    <IconButton size="small" onClick={() => setPromptOpen(true)} aria-label="Agent v1 prompt" sx={{ flexShrink: 0 }}>
+                      <Iconify icon="solar:document-text-linear" width={16} sx={{ color: "text.subtitle" }} />
+                    </IconButton>
+                  </Tooltip>
                 )}
               </>
             )}
           </Stack>
           <AgentPromptDrawer open={promptOpen} onClose={() => setPromptOpen(false)} label="v1" prompt={agentPrompt} />
+          {envState?.agent && (
+            <Dialog open={consentOpen} onClose={() => setConsentOpen(false)} maxWidth="sm" fullWidth>
+              <DialogContent sx={{ p: 2 }}>
+                <LiveConsentCard
+                  agent={envState.agent}
+                  env={env}
+                  onSave={(values, msg) => {
+                    setAgentValues(envAgentKey(envState.agent, env?.id), values);
+                    if (msg) enqueueSnackbar(msg, { variant: "success" });
+                    setConsentOpen(false);
+                  }}
+                />
+              </DialogContent>
+            </Dialog>
+          )}
 
           {/* Spacer pushes the Run-simulation button to the far right;
               status chip now lives in the identity cluster on the left. */}
@@ -1108,10 +1228,12 @@ function Header({
         const runLabel = selectionCount > 0 ? `Run simulation (${selectionCount})` : "Run simulation";
         return (
           <Stack direction="row" alignItems="center" spacing={1}>
+            {/* No "Open environment" — this already is the environment; Back keeps it as it stands. */}
             <TrialsPicker
               trials={headerTrials}
               onChange={setHeaderTrials}
               scenarioCount={runCount}
+              unit={env?.surface === "voice" ? "call" : "conversation"}
             />
             <RunButton
               label={runLabel}
@@ -1129,6 +1251,34 @@ function Header({
     </Stack>
   );
 }
+
+/* The copy a build runs against, as one quiet chip: the mode, and for a
+   provider clone the labelled clone's name. The tooltip says the rest. */
+function CopyChip({ replication }) {
+  const meta = REPLICATION_MODES[replication.mode] || {};
+  /* Sealed · Live · Prompt only — recorded with the build since the PRD's live model. */
+  const proof = replication.proofLabel || replication.fidelityLabel;
+  /* The same "Runs: Live" chip the environment page shows; which copy it
+     runs against is on hover. */
+  const tip = replication.cloneName
+    ? `Runs against ${replication.cloneName}, a test copy in your account, called with its real tools. Your live assistant's config hash is checked before and after every run.`
+    : meta.how || replication.label || "";
+  return (
+    <Tooltip arrow title={tip}>
+      <Stack
+        direction="row" alignItems="center" spacing={0.5}
+        sx={{ display: { xs: "none", md: "flex" }, px: 0.75, height: 22, borderRadius: 0.75, border: "1px solid", borderColor: "divider", flexShrink: 0, cursor: "default" }}
+      >
+        <Iconify icon={MODE_ICONS[replication.mode] || "solar:copy-linear"} width={11} sx={{ color: "text.secondary", flexShrink: 0 }} />
+        <Typography noWrap sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}>
+          <Box component="span" sx={{ fontWeight: 500, color: "text.subtitle", mr: 0.5 }}>Runs:</Box>
+          {proof || replication.label}
+        </Typography>
+      </Stack>
+    </Tooltip>
+  );
+}
+CopyChip.propTypes = { replication: PropTypes.object };
 
 /* Header's Run button — kept plain "Run simulation" (run-all) per
    PRD §6.1.2: "hand-curation and chat-curation must not share a
@@ -1161,7 +1311,7 @@ RunButton.propTypes = {
 Header.propTypes = {
   onBack: PropTypes.func, backLabel: PropTypes.string,
   source: PropTypes.object, env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func, scenarioCount: PropTypes.number, done: PropTypes.array, running: PropTypes.bool,
-  scenarioProgress: PropTypes.object, agentPrompt: PropTypes.object,
+  scenarioProgress: PropTypes.object, agentPrompt: PropTypes.object, replication: PropTypes.object,
   name: PropTypes.string, setName: PropTypes.func,
   editingName: PropTypes.bool, setEditingName: PropTypes.func,
   onRun: PropTypes.func, canGo: PropTypes.bool, blockedReason: PropTypes.string,
@@ -1169,7 +1319,10 @@ Header.propTypes = {
 
 /* ── pick a source ───────────────────────────────────────────────────────── */
 
-function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, refValue, setRefValue, chosen, sources, modality, onPickModality, provider, setProvider, apiKey, setApiKey, file, setFile, runtime, setRuntime, runtimeTypeId, setRuntimeTypeId, onStart }) {
+/* Said after a curl fill that held a raw token. */
+const TOKEN_LEFT_OUT = " · token left out — add its reference below";
+
+function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, refValue, setRefValue, chosen, sources, modality, onPickModality, provider, setProvider, keyRef, setKeyRef, file, setFile, runtime, setRuntime, runtimeTypeId, setRuntimeTypeId, onStart }) {
   /* What a run still needs, minus anything the source above already answers. */
   const [showMore, setShowMore] = useState(false);
   const [curl, setCurl] = useState("");
@@ -1208,7 +1361,7 @@ function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, ref
           config. So we read that instead. Still a read, never a form.
         */}
         {chosen.platform && (
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+          <Stack spacing={1.5}>
             <TextField
               select size="small" label="Provider" value={provider}
               onChange={(e) => setProvider(e.target.value)}
@@ -1218,12 +1371,10 @@ function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, ref
                 <MenuItem key={o.value} value={o.value} sx={{ typography: "s2" }}>{o.label}</MenuItem>
               ))}
             </TextField>
-            <TextField
-              fullWidth size="small" type="password" label="API key" value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk_live_…"
-              helperText="Read-only scope is enough. Held for the length of the read."
-              sx={{ "& .MuiInputBase-input": { typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" } }}
+            <SecretRefField
+              label="API key"
+              placeholder={`vault://acme/sim/${provider}_api_key`}
+              value={keyRef} onChange={setKeyRef}
             />
           </Stack>
         )}
@@ -1370,7 +1521,7 @@ function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, ref
                       <Typography noWrap sx={{ typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" }}>
                         {c.url}
                       </Typography>
-                      <Typography sx={{ typography: "s3", color: CONFIDENCE[c.confidence].color, fontWeight: 700, flexShrink: 0 }}>
+                      <Typography sx={{ typography: "s3", color: textTone(CONFIDENCE[c.confidence].color, "text.secondary"), fontWeight: 700, flexShrink: 0 }}>
                         {CONFIDENCE[c.confidence].label}
                       </Typography>
                     </Stack>
@@ -1381,9 +1532,10 @@ function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, ref
                   <Button
                     size="small"
                     onClick={() => {
-                      const extra = c.curl ? parseCurl(c.curl) : null;
+                      /* A curl carries the token itself — that never fills the form. */
+                      const { values: extra, dropped } = c.curl ? withoutRawSecrets(parseCurl(c.curl)) : { values: null, dropped: [] };
                       setRuntime((st) => ({ ...st, ...(extra || {}), endpoint: c.url }));
-                      setCurlNote({ ok: true, text: extra ? `Filled ${describeFill({ ...extra, endpoint: c.url })} from ${c.from}` : `Filled endpoint from ${c.from}` });
+                      setCurlNote({ ok: true, text: `${extra ? `Filled ${describeFill({ ...extra, endpoint: c.url })}` : "Filled endpoint"} from ${c.from}${dropped.length ? TOKEN_LEFT_OUT : ""}` });
                     }}
                     sx={{ typography: "s2", fontWeight: 700, color: "primary.main", flexShrink: 0, minWidth: 0 }}
                   >
@@ -1412,8 +1564,10 @@ function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, ref
                 onClick={() => {
                   const parsed = parseCurl(curl);
                   if (!parsed) return setCurlNote({ ok: false, text: "No URL in that — paste the whole command." });
-                  setRuntime((st) => ({ ...st, ...parsed }));
-                  setCurlNote({ ok: true, text: `Filled ${describeFill(parsed)}` });
+                  /* The token in a pasted curl is the key itself — left out; its reference goes in the field. */
+                  const { values: safe, dropped } = withoutRawSecrets(parsed);
+                  setRuntime((st) => ({ ...st, ...safe }));
+                  setCurlNote({ ok: true, text: `Filled ${describeFill(safe)}${dropped.length ? TOKEN_LEFT_OUT : ""}` });
                 }}
                 sx={{ typography: "s2", fontWeight: 700, flexShrink: 0, mt: 0.25, color: "text.primary", borderColor: "divider" }}
               >
@@ -1500,8 +1654,8 @@ function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, ref
               */
               <Box
                 key={a.id}
-                onClick={() => onPickModality(a.id)}
-                sx={{
+                {...clickable(() => onPickModality(a.id), { role: "radio", checked: on })}
+                sx={{ ...focusRing,
                   p: 1.5, borderRadius: 1.25, cursor: "pointer", border: "1px solid",
                   borderColor: on ? "primary.main" : "divider",
                   bgcolor: (t) => on ? alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.1 : 0.05) : "transparent",
@@ -1533,8 +1687,8 @@ function SourcePicker({ kind, setKind, value, setValue, refKind, setRefKind, ref
                 <Stack
                   key={s.id}
                   direction="row" alignItems="flex-start" spacing={1.75}
-                  onClick={() => setKind(s.id)}
-                  sx={{
+                  {...clickable(() => setKind(s.id), { role: "radio", checked: on })}
+                  sx={{ ...focusRing,
                     p: 1.75, borderRadius: 1.25, cursor: "pointer", border: "1px solid",
                     /*
                       Neutral grey selection in dark mode (matches the
@@ -1645,7 +1799,7 @@ SourcePicker.propTypes = {
   runtime: PropTypes.object, setRuntime: PropTypes.func,
   runtimeTypeId: PropTypes.string, setRuntimeTypeId: PropTypes.func,
   provider: PropTypes.string, setProvider: PropTypes.func,
-  apiKey: PropTypes.string, setApiKey: PropTypes.func,
+  keyRef: PropTypes.string, setKeyRef: PropTypes.func,
   file: PropTypes.object, setFile: PropTypes.func,
 };
 
@@ -1961,8 +2115,8 @@ function IntakeStage({ turns, running, onSend, defaultName, defaultDifficulty, s
  * Claude's AskUserQuestion card, faithful copy of the shell + row shape.
  *
  * Header: amber step pill on the left (`1/3`), the question next to it,
- * chevron-down + close on the right. Options render as inset rows with a
- * numeric badge (single-select) or a real checkbox (multi-select) on the
+ * a chevron on the right that folds the card to its header. Options
+ * render as inset rows with a numeric badge (single-select) or a real checkbox (multi-select) on the
  * right. "Other" sits at the bottom with an inline text input inside a
  * matching row. Bottom bar carries Back / Skip / Next|Submit; Back only
  * shows past the first question, Submit only on the last.
@@ -1972,6 +2126,9 @@ function AskUserQuestionCard({
 }) {
   const otherIndex = question.options.length;
   const otherActive = answer.other.trim().length > 0;
+  /* Folds the card to its header — the question stays, the options and the
+     bar step aside. There is no close: the intake has no other way forward. */
+  const [collapsed, setCollapsed] = useState(false);
 
   const rowIsSelected = (i) => {
     if (i === otherIndex) return otherActive;
@@ -1995,7 +2152,7 @@ function AskUserQuestionCard({
           sx={{
             px: 0.75, py: 0.125, borderRadius: 999, flexShrink: 0,
             bgcolor: (t) => alpha("#B45309", t.palette.mode === "dark" ? 0.28 : 0.16),
-            color: "#B45309",
+            color: "text.secondary",
             typography: "s3", fontWeight: 700,
             fontVariantNumeric: "tabular-nums",
           }}
@@ -2005,14 +2162,19 @@ function AskUserQuestionCard({
         <Typography sx={{ typography: "s2", fontWeight: 700, flex: 1, minWidth: 0 }}>
           {question.prompt}
         </Typography>
-        <IconButton size="small" sx={{ color: "text.subtitle", p: 0.5 }}>
-          <Iconify icon="solar:alt-arrow-down-linear" width={14} />
-        </IconButton>
-        <IconButton size="small" sx={{ color: "text.subtitle", p: 0.5 }}>
-          <Iconify icon="mingcute:close-line" width={14} />
+        <IconButton
+          size="small"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-label={collapsed ? "Expand question" : "Collapse question"}
+          aria-expanded={!collapsed}
+          sx={{ color: "text.subtitle", p: 0.5 }}
+        >
+          <Iconify icon={collapsed ? "solar:alt-arrow-right-linear" : "solar:alt-arrow-down-linear"} width={14} />
         </IconButton>
       </Stack>
 
+      {!collapsed && (
+      <>
       {/* ── options ── */}
       <Stack spacing={0.5} sx={{ px: 1.25, pb: 0.75 }}>
         {question.options.map((opt, i) => (
@@ -2108,6 +2270,8 @@ function AskUserQuestionCard({
           </Button>
         </Stack>
       </Stack>
+      </>
+      )}
     </Box>
   );
 }
@@ -2129,8 +2293,8 @@ AskUserQuestionCard.propTypes = {
 function AskOptionRow({ label, description, selected, multi, index, onSelect, bottomChildren }) {
   return (
     <Box
-      onClick={onSelect}
-      sx={{
+      {...clickable(onSelect, { role: multi ? "checkbox" : "radio", checked: selected })}
+      sx={{ ...focusRing,
         p: 1.25, borderRadius: 1.25, cursor: "pointer",
         bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.05 : 0.03),
         "&:hover": {
@@ -2232,6 +2396,17 @@ function Deriving({
   turns, running, chips, onSend, onChip, done, source, env, envState, patch, scenarios,
   scenarioProgress, contractProgress, evalIds, onAddEvals, onBuilderTurn, onRun,
 }) {
+  /* The builder folds to a rail here too — the same choice as the
+     environment page, remembered across both. */
+  const [collapsed, setCollapsedRaw] = useState(readBuilderCollapsed);
+  const [unseen, setUnseen] = useState(0);
+  const setCollapsed = (v) => { setCollapsedRaw(v); if (!v) setUnseen(0); writeBuilderCollapsed(v); };
+  const seenTurns = useRef(turns.length);
+  useEffect(() => {
+    const added = turns.length - seenTurns.current;
+    seenTurns.current = turns.length;
+    if (collapsed && added > 0 && turns[turns.length - 1]?.role === "assistant") setUnseen((n) => n + 1);
+  }, [turns, collapsed]);
   return (
     <Box
       sx={{
@@ -2243,13 +2418,15 @@ function Deriving({
           into a cramped preview of what it should be showing at full size.
           Ratio is ~1:2.6 on desktop; still stacked on mobile.
         */
-        gridTemplateColumns: { xs: "1fr", lg: "minmax(360px, 400px) 1fr" },
+        gridTemplateColumns: { xs: "1fr", lg: collapsed ? "48px 1fr" : "minmax(360px, 400px) 1fr" },
       }}
     >
+      {collapsed && <BuilderRail running={running} unseen={unseen} onExpand={() => setCollapsed(false)} />}
       {/* One surface, split by a single rule — no card around either side. */}
       <Box
         sx={{
           height: "100%", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden",
+          ...(collapsed && { display: "none" }),
           /* Widths and colour set separately: a responsive "1px solid"
              shorthand resets the colour to the text colour, which drew this
              rule bright white instead of the divider grey. */
@@ -2258,6 +2435,7 @@ function Deriving({
         }}
       >
         <AssistantConsole
+          onCollapse={() => setCollapsed(true)}
           turns={turns}
           running={running}
           chips={chips}
@@ -2299,7 +2477,7 @@ function Deriving({
  * behind the top-level "Houston" page. Users can copy the message
  * and keep working on the left-hand chat.
  */
-import { Component as ReactComponent } from "react";                            // eslint-disable-line import/first
+import { Component as ReactComponent } from "react";
 class PanelBoundary extends ReactComponent {
   constructor(props) { super(props); this.state = { err: null }; }
   static getDerivedStateFromError(err) { return { err }; }
@@ -2478,8 +2656,8 @@ function PipelineRow({ step }) {
     <Box>
       <Stack
         direction="row" alignItems="flex-start" spacing={1.25}
-        onClick={() => failed && setOpen((o) => !o)}
-        sx={{
+        {...clickable(failed ? () => setOpen((o) => !o) : undefined, { expanded: failed ? open : undefined })}
+        sx={{ ...focusRing,
           px: 2, py: 1,
           cursor: failed ? "pointer" : "default",
           "&:hover": failed ? { bgcolor: "action.hover" } : {},
@@ -2554,27 +2732,25 @@ function PipelineRow({ step }) {
 
 PipelineRow.propTypes = { step: PropTypes.object };
 
-/* The agent a build read, as the environment's source agent — the same
-   record shape the connect flow and the Agents panel use. */
-function agentFromSource(source, env, now) {
-  const kind = source?.kind || "repo";
-  const where = (source?.value || "").trim();
-  const values = ({
-    platform: { provider: source?.provider || "vapi", agentId: where, callDirection: "inbound" },
-    endpoint: { endpoint: where },
-    mcp: { mcpUrl: where },
-    upload: {},
-  })[kind] || { repoUrl: where };
-  const via = kind === "platform"
-    ? `${source?.provider || "Hosted"} assistant ${where}`.trim()
-    : kind === "upload" ? `Uploaded — ${where || "bundle"}` : `Read from ${where}`;
+/* An MCP server (the world's tools) and a local runtime (where the world
+   runs) aren't agents — building from either attaches none. */
+const buildsAgent = (source) => !!source && !["mcp", "local", "scratch"].includes(source.kind);
+
+/* The agent a build read: the same record — and the same identity — the
+   Agents page and the GitHub page create for that source, plus how the
+   build reached it. */
+function agentForBuild(source, env, now) {
+  if (!buildsAgent(source)) return null;
+  const rt = runtimeTypeFor(source?.modality, source?.kind, source?.runtimeTypeId);
+  /* Named as typed — else the GitHub agent's name, else where it lives. */
+  const record = agentRecordFromSource(source, now);
+  const where = (source.value || "").trim();
   return {
-    typeId: env?.agentType,
-    values,
-    via,
-    sourceKind: kind,
+    ...record,
+    typeId: rt?.id || env?.agentType || record.typeId,
+    via: source.kind === "platform" ? `${source.provider || "Hosted"} assistant ${where}`.trim()
+      : source.kind === "upload" ? `Uploaded — ${where || "bundle"}` : `Read from ${where}`,
     location: where,
-    connectedAt: now,
     note: "Environment source",
   };
 }

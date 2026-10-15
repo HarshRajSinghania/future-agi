@@ -21,3 +21,21 @@ export function emitBuilderPrompt(text) {
     try { fn(clean); } catch { /* no-op */ }
   });
 }
+
+/*
+  Open the builder chat without sending anything — a scenario's "From chat"
+  badge leads back to the chat that wrote it. The workspace folds the chat
+  to a rail; this unfolds it.
+*/
+const openListeners = new Set();
+
+export function subscribeOpenBuilderChat(fn) {
+  openListeners.add(fn);
+  return () => { openListeners.delete(fn); };
+}
+
+export function openBuilderChat() {
+  openListeners.forEach((fn) => {
+    try { fn(); } catch { /* no-op */ }
+  });
+}

@@ -7,6 +7,9 @@ import VoiceInput from "./VoiceInput";
 import AskUserQuestionCard from "./AskUserQuestionCard";
 import { BUILDER_MODES, getBuilderMode, subscribeBuilderMode, setBuilderMode } from "../_mock/builderModeBus";
 import { subscribeComposerScaffold } from "../_mock/composerScaffoldBus";
+import useChatActions from "./useChatActions";
+import ChatActionCard from "./ChatActionCards";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * The console, as a chat.
@@ -21,7 +24,7 @@ import { subscribeComposerScaffold } from "../_mock/composerScaffoldBus";
  * convey.
  */
 
-export default function StudioConsole({ turns, running, chips, onSend, onChip, preComposer, frozen = false, frozenReason }) {
+export default function StudioConsole({ turns, running, chips, onSend, onChip, preComposer, frozen = false, frozenReason, onCollapse }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState([]);
   /*
@@ -33,6 +36,15 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
   const [scaffolds, setScaffolds] = useState([]);
   const endRef = useRef(null);
   const inputRef = useRef(null);
+  /*
+    Inside an environment's workspace the chat can act on it — set a tool's
+    tier, add an evaluation, answer from the environment's own data. Those
+    turns are kept here and interleaved with the caller's; anything else is
+    sent to the caller exactly as before.
+  */
+  const chat = useChatActions();
+  const chatChips = chat.suggestion && !chips.includes(chat.suggestion) ? [...chips, chat.suggestion] : chips;
+  const take = (text) => chat.active && chat.handle(text, turns.length);
 
   /* A pinned chip means "type here next" — so the cursor goes to the input. */
   useEffect(
@@ -47,13 +59,14 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turns, running]);
+  }, [turns, running, chat.turns, chat.running]);
 
-  /* Frozen === env is not Live yet (still building / re-deriving), so
+  /* Frozen === env is not Ready yet (still building / re-deriving), so
      the builder can't accept edits. Blocks input the same way `running`
-     does, but stays blocked until the env becomes Live rather than
+     does, but stays blocked until the env becomes Ready rather than
      until the last message finishes. */
-  const blocked = running || frozen;
+  const busy = running || chat.running;
+  const blocked = busy || frozen;
 
   const send = () => {
     const text = draft.trim();
@@ -63,7 +76,12 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
     setDraft("");
     setAttachments([]);
     setScaffolds([]);
+    if (!attachments.length && take(combined)) return;
     onSend(combined, attachments);
+  };
+  const chip = (c) => {
+    if (blocked) return;
+    if (!take(c)) onChip(c);
   };
   const removeScaffold = (i) =>
     setScaffolds((prev) => prev.filter((_, idx) => idx !== i));
@@ -83,15 +101,19 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
       <Stack
         direction="row" alignItems="center" spacing={1.25}
         sx={{
-          flexShrink: 0, px: 2.5, py: 1.5,
+          /* The same 42px as the workspace's tab bar beside it, so the two
+             bottom rules meet in one line. */
+          flexShrink: 0, px: 2.5, py: 0, height: 42, boxSizing: "content-box",
           borderBottom: "1px solid", borderColor: "divider",
         }}
       >
         <Box
           sx={{
+            /* Neutral, like the rest of the workspace chrome — the text
+               colour (white in dark mode) on a quiet tile. */
             width: 30, height: 30, borderRadius: 1, display: "grid", placeItems: "center", flexShrink: 0,
-            bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.16 : 0.1),
-            color: "#7857FC",
+            bgcolor: "action.hover",
+            color: "text.primary",
           }}
         >
           <Iconify icon="solar:chat-round-line-linear" width={15} />
@@ -99,8 +121,8 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
         <Box flex={1} minWidth={0}>
           <Typography sx={{ typography: "s3", color: "text.subtitle", lineHeight: 1.2 }}>
             {frozen
-              ? (frozenReason || "Environment is not live yet")
-              : running
+              ? (frozenReason || "Environment is still being built")
+              : busy
                 ? "Working on your last message…"
                 : "Ask, correct, or steer what it builds"}
           </Typography>
@@ -110,11 +132,18 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
           swap in the header already conveys the busy state, and the
           idle green dot read as decorative chrome next to it.
         */}
+        {onCollapse && (
+          <Tooltip arrow title="Collapse builder">
+            <IconButton size="small" onClick={onCollapse} sx={{ color: "text.subtitle", "&:hover": { color: "text.primary" } }}>
+              <Iconify icon="solar:double-alt-arrow-left-linear" width={16} />
+            </IconButton>
+          </Tooltip>
+        )}
       </Stack>
 
       <Box sx={{ flex: 1, overflowY: "auto", px: 2.5, py: 3 }}>
         <Stack spacing={4}>
-          {turns.length === 0 && !running ? (
+          {turns.length === 0 && chat.turns.length === 0 && !busy ? (
             /* Calm empty state — a soft centered line so the pane
                doesn't look broken while the caller collects intake
                below. Replaces the earlier "greeting turn" which read
@@ -135,29 +164,39 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
             </Stack>
           ) : (
             <>
-              {turns.map((turn) => <Turn key={turn.id} turn={turn} />)}
-              {running && <Working />}
+              {chat.turns.filter((t) => t.anchor === 0).map((t) => <ChatTurn key={t.id} turn={t} chat={chat} />)}
+              {turns.map((turn, i) => (
+                <Stack key={turn.id} spacing={4}>
+                  <Turn turn={turn} />
+                  {chat.turns.filter((t) => t.anchor === i + 1).map((t) => <ChatTurn key={t.id} turn={t} chat={chat} />)}
+                </Stack>
+              ))}
+              {busy && <Working />}
             </>
           )}
           <Box ref={endRef} />
         </Stack>
       </Box>
 
-      {chips.length > 0 && !blocked && (
-        <Stack direction="row" spacing={1} sx={{ px: 2.5, pb: 1.5, flexWrap: "wrap", rowGap: 1 }}>
-          {chips.map((c) => (
-            <Button
-              key={c}
-              size="small"
-              onClick={() => onChip(c)}
-              sx={{
-                typography: "s2", fontWeight: 500, px: 1.5, borderRadius: 5,
-                color: "text.secondary", border: "1px solid", borderColor: "divider",
-                "&:hover": { borderColor: "text.subtitle", bgcolor: "action.hover" },
-              }}
-            >
-              {c}
-            </Button>
+      {chatChips.length > 0 && !blocked && (
+        <Stack direction="row" useFlexGap sx={{ px: 2.5, pb: 1.5, flexWrap: "wrap", gap: 1 }}>
+          {/* One line each, left-aligned; a long one ends in an ellipsis with
+              the whole prompt on hover, so no chip turns into a paragraph. */}
+          {chatChips.map((c) => (
+            <Tooltip key={c} arrow title={c.length > 48 ? c : ""} placement="top-start">
+              <Button
+                size="small"
+                onClick={() => chip(c)}
+                sx={{
+                  typography: "s2", fontWeight: 500, px: 1.5, borderRadius: 5, maxWidth: "100%",
+                  justifyContent: "flex-start", textAlign: "left",
+                  color: "text.secondary", border: "1px solid", borderColor: "divider",
+                  "&:hover": { borderColor: "text.subtitle", bgcolor: "action.hover" },
+                }}
+              >
+                <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c}</Box>
+              </Button>
+            </Tooltip>
           ))}
         </Stack>
       )}
@@ -268,7 +307,7 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
             multiline
             maxRows={8}
             variant="standard"
-            placeholder={frozen ? (frozenReason || "Environment is not live yet") : (scaffoldHint || "Reply to the builder…")}
+            placeholder={frozen ? (frozenReason || "Environment is still being built") : (scaffoldHint || "Reply to the builder…")}
             inputRef={inputRef}
             value={draft}
             disabled={blocked}
@@ -328,6 +367,7 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
 }
 
 StudioConsole.propTypes = {
+  onCollapse: PropTypes.func,
   turns: PropTypes.array, running: PropTypes.bool,
   chips: PropTypes.array, onSend: PropTypes.func, onChip: PropTypes.func,
   preComposer: PropTypes.node,
@@ -407,6 +447,15 @@ function ModePicker({ disabled }) {
 ModePicker.propTypes = { disabled: PropTypes.bool };
 
 /* ── one turn ────────────────────────────────────────────────────────────── */
+
+/* A turn the chat answered itself — the user's line, then a card. */
+function ChatTurn({ turn, chat }) {
+  if (turn.role === "user") return <Turn turn={turn} />;
+  return (
+    <ChatActionCard turnId={turn.id} card={turn.card} actions={chat.actions} envState={chat.envState} />
+  );
+}
+ChatTurn.propTypes = { turn: PropTypes.object, chat: PropTypes.object };
 
 function Turn({ turn }) {
   if (turn.role === "user") {
@@ -505,8 +554,8 @@ function Step({ step }) {
       <Box>
         <Stack
           direction="row" alignItems="center" spacing={1}
-          onClick={() => setOpen((o) => !o)}
-          sx={{
+          {...clickable(() => setOpen((o) => !o), { expanded: open })}
+          sx={{ ...focusRing,
             py: 0.5, cursor: "pointer", borderRadius: 1,
             "&:hover": { bgcolor: "action.hover" },
             px: 0.75,

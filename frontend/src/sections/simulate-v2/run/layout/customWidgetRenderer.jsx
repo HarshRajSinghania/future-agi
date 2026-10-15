@@ -9,6 +9,7 @@ import { deriveGoalOutcome, GOAL_OUTCOME_LABELS } from "../goalOutcome";
 import { deriveToolCalls } from "../toolCalls.js";
 import { readPersonaDimensions } from "../personaDimensions.js";
 import { OUTCOME_LABELS, attributionOf, endReasonOf, outcomeOf, passRateOf, sentimentOf } from "../taskOutcome";
+import { clickable, focusRing } from "../../components/clickable";
 
 /**
  * The unified widget renderer.
@@ -471,8 +472,7 @@ export function CustomWidgetBody({ config, ctx }) {
             const p99 = reduce(b.rows, "p99");
             const slo = b.rows[0]?.threshold;
             const violates = slo && p90 > slo;
-            const warn = slo && p90 > slo * 0.7;
-            const p90Color = violates ? "#DC2626" : warn ? "#F59E0B" : "text.primary";
+            const p90Color = violates ? "#DC2626" : "text.primary";
             return (
               <Box key={b.key} sx={{ display: "contents" }}>
                 <Typography noWrap sx={{ fontSize: 13, fontWeight: 600 }}>{b.key}</Typography>
@@ -529,7 +529,15 @@ export function CustomWidgetBody({ config, ctx }) {
           <Typography sx={{ fontSize: 10.5, color: "text.subtitle", textAlign: "right", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>N</Typography>
           {grouped.map((b) => (
             <Box key={b.key} sx={{ display: "contents", cursor: config.drilldown ? "pointer" : "default" }} onClick={() => onBucketClick(b)}>
-              <Typography noWrap sx={{ fontSize: 12.5, color: "text.primary" }}>{b.key}</Typography>
+              {/* The row is display: contents, so it can't take focus — the
+                  bucket's name is the keyboard way into its drill-down. */}
+              <Typography
+                noWrap
+                {...clickable(config.drilldown ? (e) => { e.stopPropagation(); onBucketClick(b); } : null, { label: `Drill into ${b.key}` })}
+                sx={{ fontSize: 12.5, color: "text.primary", ...focusRing }}
+              >
+                {b.key}
+              </Typography>
               <Typography sx={{ fontSize: 12.5, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(b.value)}</Typography>
               <Typography sx={{ fontSize: 12.5, textAlign: "right", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>{b.count}</Typography>
             </Box>

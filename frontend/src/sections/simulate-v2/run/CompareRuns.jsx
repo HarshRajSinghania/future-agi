@@ -1,6 +1,6 @@
 import PropTypes from "prop-types";
 import { useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { alpha, useTheme } from "@mui/material/styles";
 import ReactApexChart from "../components/SafeApexChart";
 import { useSnackbar } from "notistack";
@@ -12,22 +12,30 @@ import { paths } from "src/routes/paths";
 import { getEnvironment } from "../_mock/environments";
 import { neutralCheckboxSx } from "../components/primitives";
 import { protoRunId } from "../_mock/executionAdapter";
-import { versionNumber } from "../_mock/versions";
-import { toolFit } from "../_mock/toolFit";
+import { runIdentityOf } from "../_mock/runIdentity";
 import useRunFitCheck from "./useRunFitCheck";
 import {
-  buildComparison, distributionFor, changedCount, runSummaries, trialSummaries, chipIdentity,
+  buildComparison, distributionFor, changedCount, runSummaries, runSummary, trialSummaries, chipIdentity,
 } from "../_mock/comparison";
 import {
-  emptyFilters, filterRows, sortRows, applyQuick, groupRows, defaultView,
+  emptyFilters, filterRows, sortRows, applyQuick, groupRows, defaultView, bandRows, isExactRegression,
   behaviourDiff, ROW_HEIGHTS, viewSnapshot, snapshotsEqual, newViewId,
 } from "../_mock/compareView";
+import { withPairs, bridgeOf, priceOf, priceLine } from "../_mock/pairs";
 import { useEnvState, useSimStore } from "../store";
 import { SectionCard, EmptyState, PersonaBadge, Verdict, DomainChip } from "../components/primitives";
 import CallCompare from "./CallCompare";
 import CompareActions, { CompareSearchBar, SavedViews } from "./CompareControls";
 import CompareGrid from "./CompareGrid";
 import CompareSummary from "./CompareSummary";
+import OutcomeChip from "./CompareOutcome";
+import { csatOf } from "./traceTableHelpers";
+import RuleChangeDialog from "../components/RuleChangeDialog";
+import { agentSourceOf } from "../_mock/agentRegistry";
+import { textTone } from "../components/textTone";
+import { versionOriginOf } from "../_mock/specChange";
+import { subGoalGroups } from "../_mock/compareHeld";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * Two or more runs of the same scenarios.
@@ -43,11 +51,20 @@ import CompareSummary from "./CompareSummary";
  * because for two versions of one agent the change in behaviour is the finding,
  * and it is the thing a transcript hides.
  *
- * The first run in the URL is the baseline. Everything else is read against it.
+ * The first run in the URL is the baseline. Everything else is read against it,
+ * pair by pair (PRD v7 §4.10.7): each scenario is exact, re-graded, rechecked,
+ * changed, new, not applicable, archived or removed, and the verdict is read
+ * over the comparable pairs with its interval. It is never blocked — a
+ * mismatch between the runs is a warning with a priced offer.
+ *
+ * A run from a forked environment rides in the URL as `<envId>::<runId>` and
+ * compares on carried scenario ids, labelled cross-environment.
  */
 export default function CompareRuns() {
   const { envId } = useParams();
   const navigate = useNavigate();
+  /* Opened from an improvement's runs, Back goes there; else the Runs tab. */
+  const from = useLocation().state?.back || null;
   const theme = useTheme();
   const { enqueueSnackbar } = useSnackbar();
   const [params, setParams] = useSearchParams();
@@ -60,6 +77,11 @@ export default function CompareRuns() {
   const [openRow, setOpenRow] = useState(null);
   const [addAnchor, setAddAnchor] = useState(null);
   const [pickedEval, setPickedEval] = useState(null);
+  /* The rule question, open in its dialog. Unanswered, it's a warning —
+     the comparison is never held back for it. */
+  const [answering, setAnswering] = useState(null);
+  /* Rechecked pairs count in the delta unless this session leaves them out. */
+  const [excludeRechecked] = useState(false);
   /*
     The view is derived from the saved default unless this session has changed
     it. Seeding state from `envState` instead would read the store before it
@@ -127,14 +149,51 @@ export default function CompareRuns() {
   };
 
   const env = getEnvironment(envId) || state.myEnvironments.find((e) => e.id === envId);
+  /* Each run named the way the runs list names it — "agent v3 × env v7". */
+  const identityOf = (r) => {
+    if (!r?._env) return runIdentityOf(r, envState, env);
+    /* A run from another environment is named by where it ran. */
+    const id = runIdentityOf(r, r._envState, r._env);
+    return { ...id, env: `${id.env || ""} · ${r.envName}`.replace(/^ · /, ""), label: `${id.label} · ${r.envName}` };
+  };
   const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
   const runIds = useMemo(() => (params.get("runs") || "").split(",").filter(Boolean), [params]);
-  const comparison = useMemo(
-    () => (env ? buildComparison(env, envState, runIds) : { runs: [], rows: [], evals: [] }),
-    [env, envState, runIds],
+  /* Environments this one is related to by a fork — their runs compare on
+     carried ids (cross-environment); any other environment only side by side. */
+  const envById = (id) => getEnvironment(id) || state.myEnvironments.find((e) => e.id === id);
+  const parentOf = (e) => (typeof e?.forkedFrom === "string" ? e.forkedFrom : e?.forkedFrom?.envId) || null;
+  const foreign = useMemo(() => {
+    const map = new Map();
+    runIds.filter((id) => id.includes("::")).forEach((key) => {
+      const [otherId, runId] = key.split("::");
+      const otherEnv = envById(otherId);
+      const otherState = state.byEnv?.[otherId];
+      const raw = (otherState?.runs || []).find((r) => r.id === runId);
+      if (!otherEnv || !raw) return;
+      const order = [...(otherState.runs || [])].sort((a, b) => Date.parse(a.finishedAt || 0) - Date.parse(b.finishedAt || 0));
+      const sum = runSummary(otherEnv, otherState, raw, Math.max(0, order.findIndex((r) => r.id === runId)));
+      const related = parentOf(otherEnv) === envId || parentOf(env) === otherId;
+      map.set(key, {
+        ...sum, id: key, _env: otherEnv, _envState: otherState, envName: otherEnv.name,
+        letter: `${related ? "F" : "X"}${sum.ordinal}`, color: "#525252",
+      });
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runIds, state.byEnv, state.myEnvironments, envId]);
+  const comparisonRaw = useMemo(
+    () => (env ? buildComparison(env, envState, runIds, { foreign }) : { runs: [], rows: [], evals: [] }),
+    [env, envState, runIds, foreign],
+  );
+  /* Every row classed against the baseline, and the verdict over the pairs. */
+  const { comparison, read } = useMemo(
+    () => (env && comparisonRaw.runs.length >= 2
+      ? withPairs(comparisonRaw, env, envState, { excludeRechecked, regrades: envState.compareRegrades || [] })
+      : { comparison: comparisonRaw, read: null }),
+    [comparisonRaw, env, envState, excludeRechecked],
   );
   /* Every runnable row this environment has — manual runs plus every
-     self-improvement trial — with the unified numeric-chip identity
+     improvement-run trial — with the unified numeric-chip identity
      applied so the Add-run picker matches the runs list badges. */
   const others = useMemo(() => {
     if (!env) return [];
@@ -150,6 +209,26 @@ export default function CompareRuns() {
       });
   }, [env, envState, runIds]);
 
+  /* Runs in other environments: a fork's (or its parent's) compare on
+     carried ids; an unrelated one's latest run only side by side. */
+  const crossOthers = useMemo(() => {
+    if (!env) return [];
+    const out = [];
+    (state.myEnvironments || []).filter((e) => e.id !== envId).forEach((e) => {
+      const related = parentOf(e) === envId || parentOf(env) === e.id || (!!parentOf(e) && parentOf(e) === parentOf(env));
+      const done = (state.byEnv?.[e.id]?.runs || [])
+        .filter((r) => r.finishedAt && !r.pending && r.status !== "running")
+        .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt))
+        .slice(0, related ? 5 : 1);
+      done.forEach((r) => {
+        const key = `${e.id}::${r.id}`;
+        if (!runIds.includes(key)) out.push({ key, related, envName: e.name, run: r });
+      });
+    });
+    return out.sort((a, b) => (a.related === b.related ? 0 : a.related ? -1 : 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [env, envId, state.myEnvironments, state.byEnv, runIds]);
+
   const evalId = comparison.evals.some((e) => e.id === pickedEval)
     ? pickedEval
     : comparison.evals[0]?.id || null;
@@ -159,22 +238,33 @@ export default function CompareRuns() {
     const found = filterRows(comparison.rows, { query, filters, evals: comparison.evals });
     return sortRows(applyQuick(found, view.quick), view.sort);
   }, [comparison.rows, comparison.evals, query, filters, view.quick, view.sort]);
-  const groups = useMemo(() => groupRows(rows, view.group), [rows, view.group]);
+  /* Bands by pair class: exact regressions on top (regressions-first sort),
+     the comparable rows grouped as chosen, every class outside the delta in
+     its own band below. Sub-goal groups the way the single-run table can't. */
+  const groups = useMemo(() => bandRows(rows, {
+    group: view.group,
+    regressionsFirst: view.sort === "movement",
+    groupFn: (rs) => (view.group === "subGoal" && env ? subGoalGroups(rs, comparison.runs, env, envState) : groupRows(rs, view.group)),
+  }), [rows, view.group, view.sort, comparison.runs, env, envState]);
 
-  const back = () => navigate(paths.dashboard.simulate.environmentStep(envId, "runs"));
+  const back = () => (from?.to ? navigate(from.to, { state: from.state }) : navigate(paths.dashboard.simulate.environmentStep(envId, "runs")));
   const setRuns = (ids) => setParams({ runs: ids.join(",") }, { replace: true });
 
   const exportComparison = () => {
     const payload = {
       environment: env?.name,
       baseline: comparison.baseline?.id,
+      verdict: read ? {
+        comparedOn: read.sentence, delta: read.interval.delta, interval: [read.interval.lo, read.interval.hi], label: read.label.label,
+      } : null,
       runs: comparison.runs.map((r) => ({
         id: r.id, agentVersion: r.agentVersion, passRate: r.passRate, tokens: r.tokens, cost: r.cost,
       })),
       scenarios: rows.map((row) => ({
         scenario: row.title,
         critical: !!row.critical,
-        movement: row.broke ? "broke" : row.fixed ? "fixed" : row.changed ? "changed" : "unchanged",
+        pair: row.pair?.cls || null,
+        movement: row.pair?.flip?.text || (row.changed ? "changed" : "unchanged"),
         runs: row.cells.map((c) => ({
           run: c.runId, verdict: c.status, deciding: c.deciding.text,
           durationMs: c.durationMs, tokens: c.tokens,
@@ -190,12 +280,16 @@ export default function CompareRuns() {
   };
 
   if (!env || comparison.runs.length < 2) {
+    /* AC-14.7: say what is missing — never render a version that never ran. */
+    const finishedRuns = (envState.runs || []).filter((r) => r.finishedAt && !r.pending).length;
     return (
       <Box sx={{ p: 3 }}>
         <EmptyState
           icon="solar:transfer-horizontal-linear"
-          title="Nothing to compare"
-          body="Pick two or more runs from the summary and press Compare."
+          title={finishedRuns < 2 ? "Not yet run" : "Nothing to compare"}
+          body={finishedRuns < 2
+            ? `Comparing needs two finished runs; this environment has ${finishedRuns}. Run it, then compare.`
+            : "Pick two or more runs from the summary and press Compare."}
           action={<Button variant="contained" color="primary" size="small" onClick={back}>Back to runs</Button>}
         />
       </Box>
@@ -228,51 +322,37 @@ export default function CompareRuns() {
   };
 
   /*
-    Whether these runs took the same test — and if not, what differs.
-    Different environment versions: the world moved, not just the agent. An
-    older agent fits a newer world (it just never calls the tools it lacks),
-    so the fix is to re-run the older agent on the newer environment — pinned
-    in the URL, so the environment's own active version is left alone, and
-    with the same scenarios and trial count as the run it replaces.
+    A bridge, backfill or top-up is a new run, started only on a click
+    (AC-16.11): the older agent version on the scenarios that need it, at the
+    trial count the comparison reads.
   */
-  const sameTest = (() => {
-    const envs = [...(comparison.coverage.envVersions || [])].sort((a, b) => versionNumber(a) - versionNumber(b));
-    const target = envs[envs.length - 1];
-    const behind = envs.length > 1
-      ? comparison.runs.find((r) => r.envVersion && r.envVersion !== target
-        && r.kind !== "trial"
-        && toolFit(env, envState, { agent: r.agentVersion, envVersion: target }).fits)
-      : null;
-    const notes = [];
-    if (envs.length > 1) {
-      notes.push(`These runs used environments ${envs.join(" and ")}, so part of the difference is the environment, not the agent.`);
-    }
-    if (!comparison.coverage.sameGraders) notes.push("They were graded by different evaluations.");
-    if (comparison.coverage.sameRules === false) {
-      notes.push("They were graded by different rules — a rule read from the source was confirmed or dropped between them.");
-    }
-    /* A batch added between runs changes the test without changing the
-       environment version, so it has to be said here too. */
-    const { notInAll = 0, addedBetween = 0, common = 0 } = comparison.coverage;
-    if (notInAll > 0) {
-      const plural = (n) => `${n} scenario${n === 1 ? " was" : "s were"}`;
-      notes.push(addedBetween > 0
-        ? `${plural(addedBetween)} added after the first of these runs, so not every run had ${addedBetween === 1 ? "it" : "them"} — pass rates compare the ${common} they all share.`
-        : `${plural(notInAll)} not in every run — pass rates compare the ${common} they all share.`);
-    }
-    if (comparison.coverage.toolGapRuns?.length) {
-      notes.push(`${comparison.coverage.toolGapRuns.length === 1 ? "One run was" : "Some runs were"} run anyway on a world that can't answer every tool — those scenarios are not measured.`);
-    }
-    if (!notes.length) return null;
-    return { envs, target, run: behind || null, notes };
-  })();
-
-  const rerunOnSameTest = () => {
-    if (!sameTest?.run) return;
-    const q = new URLSearchParams({ agent: sameTest.run.agentVersion, env: sameTest.target });
-    if (sameTest.run.partial && sameTest.run.scenarioIds?.length) q.set("only", sameTest.run.scenarioIds.join(","));
-    q.set("trials", String(sameTest.run.repeats || 3));
+  const startFix = (fix) => {
+    const q = new URLSearchParams();
+    if (fix.agent) q.set("agent", fix.agent);
+    if (fix.scenarioIds?.length) q.set("only", fix.scenarioIds.join(","));
+    q.set("trials", String(fix.repeats || 3));
     navigate(`${paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)))}?${q.toString()}`);
+  };
+  /* The offer on a band outside the delta: bridge the changed, backfill the new. */
+  const bandAction = (group) => {
+    if (!read || !["changed", "new"].includes(group.cls) || read.relation !== "same") return null;
+    const agent = read.keys.a.agent;
+    const bridge = bridgeOf(env, envState, agent);
+    if (!bridge.can) return <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{bridge.why}</Typography>;
+    const ids = group.rows.map((r) => r.id);
+    const k = read.keys.b.repeats;
+    return (
+      <Tooltip arrow title={`Run ${agent} on these ${ids.length} — it ${bridge.how}. They then pair as exact.`}>
+        <Button
+          size="small" variant="outlined"
+          onClick={(e) => { e.stopPropagation(); startFix({ agent, scenarioIds: ids, repeats: k }); }}
+          startIcon={<Iconify icon="solar:play-linear" width={14} />}
+          sx={{ flexShrink: 0, typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", py: 0.125, "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" } }}
+        >
+          {`${group.cls === "new" ? "Backfill" : "Bridge"} on ${agent} · ${priceLine(priceOf(env, envState, ids.length, k))}`}
+        </Button>
+      </Tooltip>
+    );
   };
 
   const rerunSelected = () => checkRunFit(() => {
@@ -305,7 +385,7 @@ export default function CompareRuns() {
             startIcon={<Iconify icon="eva:arrow-ios-back-fill" width={16} />}
             sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0, minWidth: 0, px: 1 }}
           >
-            Back to runs
+            {from?.label ? `Back to ${from.label}` : "Back to runs"}
           </Button>
           <Box sx={{ height: 20, width: "1px", bgcolor: "divider", flexShrink: 0 }} />
           <Box minWidth={0}>
@@ -367,10 +447,10 @@ export default function CompareRuns() {
                 the label stays scannable when both are the same.
               */}
               <Typography noWrap sx={{ typography: "s3", fontWeight: 600, maxWidth: 280 }}>
-                agent {r.agentVersion}
-                {r.envVersion && (
+                {identityOf(r).agentLabel}
+                {identityOf(r).env && (
                   <Box component="span" sx={{ color: "text.subtitle", fontWeight: 500 }}>
-                    {" "}× env {r.envVersion}
+                    {" "}× environment {identityOf(r).env}
                   </Box>
                 )}
                 {/* When the runs covered different scenarios, the pill reads the
@@ -389,7 +469,7 @@ export default function CompareRuns() {
               )}
             </Stack>
           ))}
-          {others.length > 0 && (
+          {(others.length > 0 || crossOthers.length > 0) && (
             <Button
               size="small"
               onClick={(e) => openAddMenu(e.currentTarget)}
@@ -436,30 +516,15 @@ export default function CompareRuns() {
           />
         </Stack>
 
-        {sameTest && (
-          <Stack
-            direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "center" }} spacing={1.25}
-            sx={{ mx: 2, mb: 1.5, px: 1.5, py: 1.125, borderRadius: 1, border: "1px solid", borderColor: "divider", bgcolor: "background.neutral" }}
-          >
-            <Iconify icon="solar:scale-linear" width={17} sx={{ color: "text.subtitle", flexShrink: 0 }} />
-            <Typography sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>
-              <Box component="span" sx={{ fontWeight: 700, color: "text.primary" }}>Not the same test.</Box>{" "}
-              {sameTest.notes.join(" ")}
-              {sameTest.run && ` Re-run agent ${sameTest.run.agentVersion} on environment ${sameTest.target} to compare on the same test.`}
-            </Typography>
-            {sameTest.run && (
-              <Button
-                size="small" variant="outlined"
-                onClick={rerunOnSameTest}
-                startIcon={<Iconify icon="solar:play-linear" width={14} />}
-                sx={{ flexShrink: 0, typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" } }}
-              >
-                Re-run {sameTest.run.agentVersion} on env {sameTest.target}
-              </Button>
-            )}
-          </Stack>
-        )}
       </Box>
+
+      <RuleChangeDialog
+        open={!!answering}
+        onClose={() => setAnswering(null)}
+        envs={[env]}
+        version={answering}
+        origin={answering ? versionOriginOf(answering, agentSourceOf(envState.agent)) : undefined}
+      />
 
       <Menu
         open={!!addAnchor}
@@ -484,22 +549,11 @@ export default function CompareRuns() {
               />
               <Letter letter={r.letter} color={r.color} />
               <Box component="span" sx={{ flex: 1, minWidth: 0, ml: 1 }}>
-                {r.kind === "trial" ? (
-                  <>
-                    Run {r.trialN}
-                    <Box component="span" sx={{ color: "text.subtitle" }}>
-                      {" "}· {r.selfImprovementName}
-                    </Box>
-                  </>
-                ) : (
-                  <>
-                    Run {r.ordinal} · agent {r.agentVersion}
-                    {r.envVersion && (
-                      <Box component="span" sx={{ color: "text.subtitle" }}>
-                        {" "}× env {r.envVersion}
-                      </Box>
-                    )}
-                  </>
+                {r.kind === "trial" ? `Run ${r.trialN}${r.selfImprovementName ? ` · ${r.selfImprovementName}` : ""}` : `Run ${r.ordinal}`} · {identityOf(r).agentLabel}
+                {identityOf(r).env && (
+                  <Box component="span" sx={{ color: "text.subtitle" }}>
+                    {" "}× environment {identityOf(r).env}
+                  </Box>
                 )}
               </Box>
               <Box component="span" sx={{ color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
@@ -507,6 +561,29 @@ export default function CompareRuns() {
               </Box>
             </MenuItem>
           );
+        })}
+        {crossOthers.map((c, i) => {
+          const picked = addStaging.includes(c.key);
+          const first = i === 0 || crossOthers[i - 1].related !== c.related;
+          return [
+            first && (
+              <Typography key={`h-${c.key}`} sx={{ px: 2, pt: 1, pb: 0.5, typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                {c.related ? "Forked environments · cross-environment" : "Other environments · side by side, no delta"}
+              </Typography>
+            ),
+            <MenuItem
+              key={c.key}
+              sx={{ typography: "s2", gap: 0.5, py: 0.75 }}
+              onClick={() => toggleAddStaging(c.key)}
+              selected={picked}
+            >
+              <Checkbox size="small" checked={picked} tabIndex={-1} sx={{ p: 0.5, mr: 0.5, pointerEvents: "none", ...neutralCheckboxSx }} />
+              <Box component="span" sx={{ flex: 1, minWidth: 0, ml: 0.5 }}>
+                {`Run ${c.run.ordinal || ""} · agent ${c.run.agentVersion || "—"}`.replace("Run  ", "Run ")}
+                <Box component="span" sx={{ color: "text.subtitle" }}>{` · ${c.envName}`}</Box>
+              </Box>
+            </MenuItem>,
+          ];
         })}
         {/* Footer: staging count + commit action. Sticky so it stays put
             while the list scrolls. */}
@@ -543,6 +620,9 @@ export default function CompareRuns() {
       </Menu>
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
+        {/* No verdict card above the distribution — the chips, the
+            distribution and the rows say how the runs differ. */}
+
         {/* One card for both. The distribution is a summary of the rows
             underneath it, so a second border and a gap between them spends
             space on a boundary that is not real. */}
@@ -563,10 +643,10 @@ export default function CompareRuns() {
                     <Stack key={r.id} direction="row" alignItems="center" spacing={0.625}>
                       <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: r.color }} />
                       <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-                        agent {r.agentVersion}
-                        {r.envVersion && (
+                        {identityOf(r).agentLabel}
+                        {identityOf(r).env && (
                           <Box component="span" sx={{ color: "text.subtitle" }}>
-                            {" "}× env {r.envVersion}
+                            {" "}× environment {identityOf(r).env}
                           </Box>
                         )}
                       </Typography>
@@ -590,7 +670,7 @@ export default function CompareRuns() {
                 type="bar"
                 height={140}
                 series={comparison.runs.map((r, i) => ({
-                  name: `${r.letter} · ${r.agentVersion}`,
+                  name: `${r.letter} · ${identityOf(r).label}`,
                   data: bands.map((b) => b.counts[i]),
                 }))}
                 options={{
@@ -626,7 +706,12 @@ export default function CompareRuns() {
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography sx={{ typography: "s1", fontWeight: 600 }}>Scenario by scenario</Typography>
             <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
-              {changed} of {comparison.rows.length} ended differently · showing {rows.length}
+              {changed} of {comparison.rows.length} ended differently
+              {(() => {
+                const n = comparison.rows.filter(isExactRegression).length;
+                return n ? ` · ${n} exact passed → failed` : "";
+              })()}
+              {` · showing ${rows.length}`}
             </Typography>
           </Box>
           <CompareSearchBar
@@ -642,19 +727,22 @@ export default function CompareRuns() {
               body="Loosen the filters, or clear the search."
             />
           ) : view.view === "summary" ? (
-            <CompareSummary comparison={comparison} evals={comparison.evals} />
+            <CompareSummary comparison={comparison} evals={comparison.evals} env={env} envState={envState} />
           ) : view.view === "grid" ? (
             <CompareGrid
               comparison={comparison}
               groups={groups}
               evals={comparison.evals}
+              env={env}
               envState={envState}
               view={view}
               onOpen={setOpenRow}
+              bandAction={bandAction}
             />
           ) : (
             <TableView
               groups={groups}
+              bandAction={bandAction}
               view={view}
               rowPad={rowPad}
               evals={comparison.evals}
@@ -695,11 +783,10 @@ const hashStr = (s) => {
   for (let i = 0; i < String(s || "").length; i += 1) h = (h * 31 + String(s).charCodeAt(i)) >>> 0;
   return h;
 };
-const csatOf = (t) => (t ? Math.max(1, Math.round((t.evalResults?.[0]?.score ?? 0.5) * 10) - 4) : null);
 const turnsOf = (t) => (t ? (t.steps?.length ?? 0) : null);
 const latencyOf = (t) => (t ? (t.latencyMs ?? (280 + (hashStr(t.id) % 320))) : null);
 
-function TableView({ groups, view, rowPad, selected, onToggle, onOpen, evals }) {
+function TableView({ groups, view, rowPad, selected, onToggle, onOpen, evals, bandAction }) {
   /* System-metric strip on the right of the row — same set the traces
      table shows: CSAT, Turns, Latency, Duration, Tokens, Cost. Widens
      with the number of active columns so nothing crushes. */
@@ -761,12 +848,39 @@ function TableView({ groups, view, rowPad, selected, onToggle, onOpen, evals }) 
           {group.label && (
             <Stack
               direction="row" alignItems="center" spacing={1}
-              sx={{ px: 2.5, py: 1, bgcolor: "background.neutral", borderBottom: "1px solid", borderColor: "divider" }}
+              sx={{ px: 2.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}
             >
-              <Typography sx={{ typography: "s3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              <Typography noWrap sx={{ fontSize: 13, fontWeight: 600, minWidth: 0, flexShrink: group.note ? 0 : 1, color: group.tone === "bad" ? "#C2603F" : "text.secondary" }}>
                 {group.label}
               </Typography>
-              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{group.rows.length}</Typography>
+              {group.mark === "critical" && (
+                <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>critical</Typography>
+              )}
+              <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>{group.rows.length}</Typography>
+              {group.note && (
+                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", minWidth: 0 }}>· {group.note}</Typography>
+              )}
+              {!group.rates && bandAction?.(group) && (
+                <>
+                  <Box flex={1} />
+                  {bandAction(group)}
+                </>
+              )}
+              {group.rates && (
+                <>
+                  <Box flex={1} />
+                  {group.rates.map((r) => (
+                    <Tooltip key={r.runId} arrow title={r.n ? `Passed in run ${r.letter} on ${r.n} shared scenario${r.n === 1 ? "" : "s"} that check it` : "No shared scenario measured in every run"}>
+                      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0 }}>
+                        <Letter letter={r.letter} color={r.color} />
+                        <Typography sx={{ typography: "s3", fontWeight: 700, fontVariantNumeric: "tabular-nums", minWidth: 30 }}>
+                          {r.rate == null ? "—" : `${r.rate}%`}
+                        </Typography>
+                      </Stack>
+                    </Tooltip>
+                  ))}
+                </>
+              )}
             </Stack>
           )}
 
@@ -780,13 +894,13 @@ function TableView({ groups, view, rowPad, selected, onToggle, onOpen, evals }) 
                   columnGap: 2, px: 2.5, py: rowPad,
                   cursor: "pointer",
                   "&:hover": { bgcolor: "action.hover", "& .row-open": { opacity: 1 } },
+                  ...focusRing,
                 }}
-                onClick={() => onOpen(row)}
+                {...clickable(() => onOpen(row))}
               >
                 <Box minWidth={0}>
                   <Stack direction="row" alignItems="center" spacing={0.75}>
-                    {row.fixed && <Movement kind="fixed" />}
-                    {row.broke && <Movement kind="broke" />}
+                    <OutcomeChip pair={row.pair} />
                     <Typography sx={{ typography: "s2", fontWeight: 700 }}>{row.title}</Typography>
                   </Stack>
                   {view.rowHeight !== "compact" && (
@@ -940,7 +1054,7 @@ function TableView({ groups, view, rowPad, selected, onToggle, onOpen, evals }) 
 TableView.propTypes = {
   groups: PropTypes.array, view: PropTypes.object, rowPad: PropTypes.number,
   evals: PropTypes.array,
-  selected: PropTypes.array, onToggle: PropTypes.func, onOpen: PropTypes.func,
+  selected: PropTypes.array, onToggle: PropTypes.func, onOpen: PropTypes.func, bandAction: PropTypes.func,
 };
 
 /** The behaviour diff, in one line. */
@@ -974,8 +1088,8 @@ function ColHead({ children, sx }) {
     <Typography
       noWrap
       sx={{
-        typography: "s3", fontWeight: 700, color: "text.subtitle",
-        textTransform: "uppercase", letterSpacing: 0.3, ...sx,
+        /* Reads like the product's DataTable header. */
+        fontSize: 13, fontWeight: 500, color: "text.secondary", ...sx,
       }}
     >
       {children}
@@ -990,7 +1104,7 @@ function Letter({ letter, color }) {
       sx={{
         width: 20, height: 20, borderRadius: 0.75, flexShrink: 0,
         display: "grid", placeItems: "center", typography: "s3", fontWeight: 700,
-        color, bgcolor: (t) => alpha(color, t.palette.mode === "dark" ? 0.22 : 0.14),
+        color: textTone(color), bgcolor: (t) => alpha(color, t.palette.mode === "dark" ? 0.22 : 0.14),
       }}
     >
       {letter}
@@ -998,25 +1112,6 @@ function Letter({ letter, color }) {
   );
 }
 Letter.propTypes = { letter: PropTypes.string, color: PropTypes.string };
-
-function Movement({ kind }) {
-  const fixed = kind === "fixed";
-  const color = fixed ? "#5AA47B" : "#C2603F";
-  return (
-    <Tooltip arrow title={fixed ? "Failed on the baseline, passes on a later run" : "Passed on the baseline, fails on a later run"}>
-      <Typography
-        sx={{
-          px: 0.75, py: 0.125, borderRadius: 0.5, flexShrink: 0,
-          typography: "s3", fontWeight: 700, color,
-          bgcolor: (t) => alpha(color, t.palette.mode === "dark" ? 0.18 : 0.1),
-        }}
-      >
-        {fixed ? "FIXED" : "BROKE"}
-      </Typography>
-    </Tooltip>
-  );
-}
-Movement.propTypes = { kind: PropTypes.string };
 
 function Metric({ value, delta, lowerIsBetter }) {
   const good = delta == null ? null : lowerIsBetter ? delta < 0 : delta > 0;

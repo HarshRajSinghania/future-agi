@@ -10,6 +10,7 @@ import { DATASETS, COLUMN_ROLES, allDatasetRows, defaultColumnRoles } from "../.
 import { scenariosFromDataset, datasetScenarioId } from "../../_mock/scenarios";
 import { sandboxFit, fitStatus } from "../../_mock/datasetWorld";
 import { SectionCard } from "../../components/primitives";
+import { clickable, focusRing } from "../../components/clickable";
 
 /**
  * Import scenarios from a dataset.
@@ -338,8 +339,8 @@ StepLabel.propTypes = { n: PropTypes.number, label: PropTypes.string };
 function DatasetRow({ dataset, active, onClick }) {
   return (
     <Box
-      onClick={onClick}
-      sx={{
+      {...clickable(onClick, { role: "radio", checked: active })}
+      sx={{ ...focusRing,
         p: 1.25, borderRadius: 1.25, cursor: "pointer",
         border: "1px solid",
         borderColor: active ? "text.primary" : "divider",
@@ -399,7 +400,6 @@ function RowsTable({ dataset, rows, roles, onRole, picked, added, fits, onToggle
     ...dataset.columns.filter((c) => roles[c.key] !== "prompt"),
   ];
   const pinned = (c) => roles[c.key] === "prompt";
-  const headBg = isDark ? theme.palette.background.neutral : theme.palette.background.default;
   const selectedTint = isDark ? "rgba(120,87,252,0.12)" : "rgba(120,87,252,0.05)";
   /* Pinned body cells need a solid background to scroll over; the row's
      selected tint is laid on top of it so they still read as selected. */
@@ -415,9 +415,11 @@ function RowsTable({ dataset, rows, roles, onRole, picked, added, fits, onToggle
         <TableHead>
           <TableRow
             sx={{
+              /* No fill, and the theme's grey gradient off — like the product's DataTable. */
               "& .MuiTableCell-head": {
-                bgcolor: headBg,
-                borderBottom: "1px solid", borderColor: "divider",
+                bgcolor: "background.paper", backgroundImage: "none",
+                /* Sticky cells don't paint borders in a collapsed table — a shadow draws the divider. */
+                borderBottom: "none", boxShadow: (t) => `inset 0 -1px 0 ${t.palette.divider}`,
                 py: 1, px: 1.25, verticalAlign: "top",
               },
             }}
@@ -430,7 +432,7 @@ function RowsTable({ dataset, rows, roles, onRole, picked, added, fits, onToggle
                   key={c.key}
                   sx={{
                     width: `${((minOf(c) / total) * 94).toFixed(2)}%`,
-                    ...(pinned(c) ? { left: 44, zIndex: 3, boxShadow: (t) => `inset -1px 0 0 ${t.palette.divider}` } : {}),
+                    ...(pinned(c) ? { left: 44, zIndex: 3, boxShadow: (t) => `inset -1px 0 0 ${t.palette.divider}, inset 0 -1px 0 ${t.palette.divider}` } : {}),
                   }}
                 >
                   <Tooltip title={`${c.label} · ${c.type}`} placement="top-start" arrow>

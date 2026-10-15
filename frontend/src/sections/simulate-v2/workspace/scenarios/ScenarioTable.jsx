@@ -1,9 +1,8 @@
 import PropTypes from "prop-types";
-import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { alpha } from "@mui/material/styles";
+import { Fragment, useContext, useEffect, useMemo, useState } from "react";
 import {
   Box, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
-  IconButton, Tooltip, Checkbox, CircularProgress,
+  IconButton, Tooltip, Checkbox,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { subTasksFor } from "../../_mock/contract";
@@ -11,6 +10,13 @@ import { admissionOf } from "../../_mock/coverage";
 import { versionNumber } from "../../_mock/versions";
 import { ScenarioRowContext } from "./scenarioRowContext";
 import BlockerFlag from "./BlockerFlag";
+import { StateChip, ArchiveControl, TextAction, TierBadge, CanaryBadge, PriorityPicker } from "./ScenarioStateBits";
+import { goalKeyOf } from "../../_mock/mustPassProtection";
+import { stateActionOf, STATE_ACTION_LABEL, archivedOf } from "../../_mock/scenarioStates";
+import { isAnchor } from "../../_mock/tiers";
+import { subGoalResultsOf } from "../../_mock/scenarioSubGoals";
+import { envLabelOf } from "../../_mock/envVersionKinds";
+import { clickable, focusRing } from "../../components/clickable";
 
 /* Neutral white-on-selected checkbox — no primary colour, keeps the
    table's monochrome treatment. */
@@ -21,151 +27,188 @@ const selectableCheckboxSx = {
   "&.MuiCheckbox-indeterminate": { color: "text.primary" },
 };
 
+const PASS = "#16A34A";
+const FAIL = "#DC2626";
+const FLAKY = "#E9690C";
+
+/* Shown on row hover only — so thirty rows of icons don't shout. */
+const onHover = { opacity: 0, transition: "opacity .12s ease", ".MuiTableRow-root:hover &, &:focus-within": { opacity: 1 } };
+
 /**
- * Scenarios as a table.
+ * Scenarios as a table — one calm line each.
  *
- * The list view answers "what is this scenario" — it expands into the brief,
- * the checks and the proof that the task is passable. The table answers a
- * different question: "what is in here, and what is missing". Every scenario
- * is one line, the derived axes are columns, and thirty rows are comparable
- * without opening any of them.
- *
- * Same rows, same derivations as the coverage matrix — nothing here is a
- * second source of truth.
+ * The row answers "which scenario is this, who calls, can I trust it, and how
+ * has it been doing": its name, the caller, its state when it needs
+ * attention, whether it's must-pass or in the anchor core, and its last runs.
+ * Everything else — the situation, sub-goals, tools, ideal outcome, proof —
+ * is one click away in the scenario itself. Edit, archive and delete sit on
+ * the row's hover.
  */
 /* A scenario a later rebuild added is not part of an older pinned version. */
 const laterThanPinned = (row, envVersion) => !!(row?.addedInEnv && envVersion
   && versionNumber(row.addedInEnv) > versionNumber(envVersion));
 
-function StatusChip({ status }) {
-  const tone = status.tone;
-  return (
-    <Tooltip arrow title={status.detail || ""}>
-      <Box
-        sx={{
-          display: "inline-flex", alignItems: "center", gap: 0.625,
-          height: 22, px: 0.875, borderRadius: 0.75, border: "1px solid",
-          borderColor: tone ? alpha(tone, 0.4) : "divider",
-          bgcolor: (t) => (tone ? alpha(tone, t.palette.mode === "dark" ? 0.12 : 0.06) : "transparent"),
-          color: tone || "text.secondary",
-        }}
-      >
-        {status.id === "proved" && <Iconify icon="solar:check-circle-linear" width={12} sx={{ color: "text.disabled" }} />}
-        {status.id === "checking" && <CircularProgress size={10} thickness={6} sx={{ color: "text.disabled" }} />}
-        <Typography noWrap sx={{ typography: "s3", fontWeight: 600, color: "inherit" }}>{status.label}</Typography>
-      </Box>
-    </Tooltip>
-  );
-}
-StatusChip.propTypes = { status: PropTypes.object.isRequired };
+const COLUMNS = [
+  { id: "select", w: 40 },
+  { id: "#", label: "#", w: 40 },
+  { id: "scenario", label: "Scenario", tip: "A status shows only when the scenario needs something" },
+  { id: "persona", label: "Persona", w: 180 },
+  { id: "subgoals", label: "Sub-goals", w: 88, align: "right", tip: "Sub-goals met in the scenario's latest run, of all it's graded on" },
+  { id: "priority", label: "Priority", w: 84, tip: "What a quick run takes, and what goes first when a run is capped. Must-pass scenarios are always high." },
+  { id: "mustPass", label: "Must-pass", w: 84, align: "center", tip: "An improvement that breaks a must-pass scenario is rejected" },
+  { id: "runs", label: "Last runs", w: 116, tip: "This scenario in the environment's last runs, oldest to latest" },
+  { id: "actions", w: 104 },
+];
 
 /*
-  The tools a scenario needs, read against both sides of the pairing:
-    the world can't answer it   → amber: the scenario comes back not measured
-    the agent doesn't call it   → dashed: the scenario still runs, and
-                                  measures that gap in the agent
+  The state only when it asks for something — a column of "Valid" is noise.
+  Its one action shows on hover.
 */
-function ToolChips({ tools, answers, agentCalls, agentLabel, envVersion }) {
-  if (!tools.length) {
+function StatusCell({ row, state, onAction, locked }) {
+  if (!state || state.id === "valid") return null;
+  const action = stateActionOf(state);
+  return (
+    <Stack direction="row" alignItems="center" spacing={1}>
+      <StateChip state={state} />
+      {action && onAction && !locked && (
+        <Box sx={onHover}>
+          <TextAction onClick={(e) => { e.stopPropagation(); onAction(action, row); }}>
+            {STATE_ACTION_LABEL[action]}
+          </TextAction>
+        </Box>
+      )}
+    </Stack>
+  );
+}
+StatusCell.propTypes = { row: PropTypes.object.isRequired, state: PropTypes.object, onAction: PropTypes.func, locked: PropTypes.bool };
+
+/*
+  A tier worth saying on the row: exploration, or a proposal with its Approve.
+  Anchor core and core sit in the scenario itself and in Filter.
+*/
+function TierTag({ row, onAction, locked }) {
+  if (row.proposed) {
     return (
-      <Tooltip arrow title="Not tied to one tool — it tests how the agent behaves across the call.">
-        <Typography sx={{ typography: "s3", color: "text.disabled" }}>Any</Typography>
+      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ flexShrink: 0 }}>
+        <TierBadge row={row} compact />
+        {onAction && !locked && (
+          <TextAction onClick={(e) => { e.stopPropagation(); onAction("approve", row); }}>Approve</TextAction>
+        )}
+      </Stack>
+    );
+  }
+  return row.tier === "exploration" ? <Box sx={{ display: "inline-flex", flexShrink: 0 }}><TierBadge row={row} compact /></Box> : null;
+}
+TierTag.propTypes = { row: PropTypes.object.isRequired, onAction: PropTypes.func, locked: PropTypes.bool };
+
+/* "2/3" — sub-goals met in the latest run the scenario was in, each one on
+   hover. No run yet: just how many it has. */
+function SubGoalsCell({ total, latest, env, envState }) {
+  const results = latest ? subGoalResultsOf(latest.task, env, envState).items : [];
+  /* Never run: just how many it's graded on — "–/3" read as empty. */
+  if (!latest && total) {
+    return (
+      <Tooltip arrow title={`Graded on ${total} sub-goal${total === 1 ? "" : "s"} · how many were met shows after the first run`}>
+        <Typography sx={{ typography: "s2", color: "text.secondary", fontVariantNumeric: "tabular-nums", cursor: "default" }}>{total}</Typography>
       </Tooltip>
     );
   }
+  if (!results.length) {
+    return (
+      <Tooltip arrow title={total ? `${total} sub-goals · not scored in a recent run` : ""}>
+        <Typography sx={{ typography: "s2", color: "text.subtitle", fontVariantNumeric: "tabular-nums", cursor: "default" }}>{total ? `–/${total}` : "—"}</Typography>
+      </Tooltip>
+    );
+  }
+  const met = results.filter((g) => g.status === "met").length;
+  const title = (
+    <Stack spacing={0.25} sx={{ py: 0.25 }}>
+      <Typography sx={{ typography: "s3", fontWeight: 700, color: "inherit" }}>{`${latest.name} · ${met} of ${results.length} met`}</Typography>
+      {results.map((g) => (
+        <Typography key={g.key || g.text} sx={{ typography: "s3", color: "inherit" }}>
+          {`${g.status === "met" ? "✓" : g.status === "inconclusive" ? "?" : "✗"} ${g.text || g.label}`}
+        </Typography>
+      ))}
+    </Stack>
+  );
   return (
-    <Stack direction="row" spacing={0.5} rowGap={0.5} flexWrap="wrap">
-      {tools.map((t) => {
-        const unanswered = answers && !answers.has(t);
-        const notCalled = !unanswered && agentCalls && !agentCalls.has(t);
-        const tip = unanswered
-          ? `Environment ${envVersion || ""} can't answer ${t} — this scenario comes back not measured until the environment is rebuilt.`
-          : notCalled
-            ? `Agent ${agentLabel || ""} doesn't call ${t}. The scenario still runs — it measures that gap in the agent.`
-            : "";
+    <Tooltip arrow title={title}>
+      <Typography sx={{ typography: "s2", fontVariantNumeric: "tabular-nums", cursor: "default", color: "text.secondary" }}>
+        <Box component="span" sx={{ color: met < results.length ? "text.primary" : "text.secondary", fontWeight: met < results.length ? 600 : 400 }}>{met}</Box>
+        <Box component="span" sx={{ color: "text.subtitle" }}>{`/${results.length}`}</Box>
+      </Typography>
+    </Tooltip>
+  );
+}
+SubGoalsCell.propTypes = { total: PropTypes.number, latest: PropTypes.object, env: PropTypes.object, envState: PropTypes.object };
+
+/* The last runs as dots, oldest to latest: green passed, red failed, orange
+   flaky, hollow when the scenario wasn't in that run or wasn't scored. */
+function RunDots({ history }) {
+  if (!history?.length) return <Typography sx={{ typography: "s3", color: "text.disabled" }}>No runs yet</Typography>;
+  return (
+    <Stack direction="row" spacing={0.5} alignItems="center">
+      {history.map((h) => {
+        const color = { passed: PASS, failed: FAIL, flaky: FLAKY }[h.status] || null;
+        const word = { passed: "Passed", failed: "Failed", flaky: "Flaky" }[h.status] || (h.status ? "Not scored" : "Not in this run");
         return (
-          <Tooltip key={t} arrow title={tip}>
+          <Tooltip key={h.runId} arrow title={`${h.name} · ${word}`}>
             <Box
               sx={{
-                px: 0.625, height: 20, display: "inline-flex", alignItems: "center", borderRadius: 0.5,
-                bgcolor: notCalled ? "transparent" : "action.hover",
-                border: notCalled ? "1px dashed" : "1px solid transparent",
-                borderColor: notCalled ? "text.disabled" : "transparent",
-                color: unanswered ? "#CA8A04" : notCalled ? "text.subtitle" : "text.secondary",
+                width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                bgcolor: color || "transparent",
+                border: color ? "none" : "1px solid",
+                borderColor: "text.disabled",
               }}
-            >
-              <Typography noWrap sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11, color: "inherit" }}>{t}</Typography>
-            </Box>
+            />
           </Tooltip>
         );
       })}
     </Stack>
   );
 }
-ToolChips.propTypes = {
-  tools: PropTypes.array.isRequired,
-  answers: PropTypes.object,
-  agentCalls: PropTypes.object,
-  agentLabel: PropTypes.string,
-  envVersion: PropTypes.string,
-};
+RunDots.propTypes = { history: PropTypes.array };
 
 export default function ScenarioTable({
-  rows, groups, env, envVersion, onEdit, onRemove, onToggleBlocker, selectedIds, onSelectionChange, locked = false,
+  rows, groups, env, envState, envVersion, onEdit, onRemove, selectedIds, onSelectionChange, locked = false,
+  goalActions = false, mustPassGoals = [],
 }) {
-  const { statusOf, toolsOf, answers, agentCalls, agentLabel } = useContext(ScenarioRowContext);
+  /* Stored env labels read as major.minor ("v3" → "v2.1"). */
+  const vl = (label) => (envState ? envLabelOf(env, envState, label) : label);
+  const { stateOf, onStateAction, onOpen, historyOf, latestOf } = useContext(ScenarioRowContext);
   /*
     Two shapes come in: pre-grouped (list view mirror) or a flat rows
     array (fallback). If groups are given, render section-header rows
     between them so the table reads the same use-case story as the
     list; if not, fall back to a flat table.
   */
-  const sections = groups?.length
-    ? groups
-    : [{ id: "all", label: null, rows: rows || [] }];
+  const sections = useMemo(
+    () => (groups?.length ? groups : [{ id: "all", label: null, rows: rows || [] }]),
+    [groups, rows],
+  );
 
-  /* All scenario ids across every section — used to compute the
-     header-checkbox tri-state (checked / indeterminate / unchecked)
-     when the user wants a select-all shortcut on the current view. */
   const allIds = useMemo(
     () => sections.flatMap((s) => (s.rows || []).map((r) => r.id)).filter(Boolean),
     [sections],
   );
 
   /*
-    Selection is a bulk-action affordance, not a run gate — every
-    scenario in the table runs on the next simulation regardless of
-    checked state. So the table opens with nothing selected; the
-    checkboxes only light up when the user wants to Delete or edit a
-    group of rows together (via the builder chat on the left).
-
-    Controlled from the parent so the SelectionBar + workspace chat
-    stay in sync. Falls back to internal state when unwired.
+    Selection is a bulk-action affordance, not a run gate — every scenario in
+    the table runs on the next simulation regardless. Controlled from the
+    parent so the SelectionBar and the workspace chat stay in sync; falls
+    back to internal state when unwired.
   */
   const [internalSelected, setInternalSelected] = useState(() => new Set());
   const isControlled = Array.isArray(selectedIds);
   const selected = isControlled ? new Set(selectedIds) : internalSelected;
 
   const commit = (next) => {
-    if (isControlled) {
-      onSelectionChange?.(Array.from(next));
-    } else {
-      setInternalSelected(next);
-      onSelectionChange?.(Array.from(next));
-    }
+    if (!isControlled) setInternalSelected(next);
+    onSelectionChange?.(Array.from(next));
   };
 
-  /*
-    Drop selection ids for rows that no longer exist. Only runs in
-    the UNCONTROLLED case — when the parent owns the selection
-    state (batches rendered per-timeline-node, all sharing the
-    same selectedIds bag), each ScenarioTable only knows its own
-    batch's ids. Running cleanup here would wipe out selections
-    made in sibling batches (any id not in THIS batch would be
-    stripped), which broke cross-batch selection.
-    In controlled mode, the parent (ScenariosStep) is responsible
-    for pruning stale ids across the full scenario set.
-  */
+  /* Uncontrolled only: drop ids for rows that are gone. Controlled tables
+     (one per batch, sharing one selection) leave pruning to the parent. */
   useEffect(() => {
     if (isControlled) return;
     const cleaned = Array.from(selected).filter((id) => allIds.includes(id));
@@ -178,145 +221,57 @@ export default function ScenarioTable({
     if (next.has(id)) next.delete(id); else next.add(id);
     commit(next);
   };
-  /*
-    Select-all in a batch header only affects THIS batch's rows —
-    other batches' selections stay intact. `thisBatchSelectedCount`
-    is the count of currently-selected rows that belong to this
-    table (not the total across every batch), so the header
-    checkbox tri-state reflects only this batch.
-  */
-  const thisBatchSelectedCount = allIds.filter((id) => selected.has(id)).length;
+  /* Select-all affects only this batch's rows. */
+  const hereSelected = allIds.filter((id) => selected.has(id)).length;
   const toggleAll = () => {
-    const allSelectedHere = thisBatchSelectedCount === allIds.length && allIds.length > 0;
     const next = new Set(selected);
-    if (allSelectedHere) {
-      allIds.forEach((id) => next.delete(id));
-    } else {
-      allIds.forEach((id) => next.add(id));
-    }
+    if (hereSelected === allIds.length && allIds.length > 0) allIds.forEach((id) => next.delete(id));
+    else allIds.forEach((id) => next.add(id));
     commit(next);
   };
-  const allChecked = allIds.length > 0 && thisBatchSelectedCount === allIds.length;
-  const someChecked = thisBatchSelectedCount > 0 && thisBatchSelectedCount < allIds.length;
-
-  /*
-    Column order (final): checkbox, scenario, persona, situation, sub-tasks,
-    branch category, ideal outcome. "Conversation branch" was
-    dropped — it duplicated what "Branch category" already carries at
-    a scannable level, and it was the widest, monospace-heaviest
-    column on the table. "Outcome" is renamed "Ideal outcome" so
-    it's obvious the column describes what a good result looks like,
-    not a run's actual result.
-  */
-  const columns = [
-    "select", "#", "Scenario", "Status", "Persona", "Situation",
-    "Sub-goals", "Tools it needs", "Ideal outcome", "",
-  ];
+  const allChecked = allIds.length > 0 && hereSelected === allIds.length;
+  const someChecked = hereSelected > 0 && hereSelected < allIds.length;
   let counter = 0;
 
-  /*
-    The table is wider than most panes, so it scrolls sideways. Two things
-    keep that readable: the identity columns (select, #, Scenario) and the
-    actions stay pinned, and an edge shadow appears only where something is
-    actually scrolled out of view behind a pinned column.
-  */
-  const scrollRef = useRef(null);
-  const [edge, setEdge] = useState({ left: false, right: false, width: 0 });
-  const measure = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const next = {
-      left: el.scrollLeft > 1,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
-      width: el.clientWidth,
-    };
-    setEdge((prev) => (
-      prev.left === next.left && prev.right === next.right && prev.width === next.width ? prev : next
-    ));
-  }, []);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return undefined;
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    if (el.firstElementChild) ro.observe(el.firstElementChild);
-    el.addEventListener("scroll", measure, { passive: true });
-    return () => { ro.disconnect(); el.removeEventListener("scroll", measure); };
-  }, [measure]);
-
-  const edgeShadow = (dir, on) => ({
-    transition: "box-shadow 150ms",
-    boxShadow: (t) => (on
-      ? `${dir === "right" ? 8 : -8}px 0 12px -6px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.55 : 0.1)}`
-      : "none"),
-  });
-  /* Pinned-left cells: opaque so columns slide under them, with the same
-     hover tint as the rest of the row. The last one carries the shadow. */
-  const pin = (i, head) => ({
-    position: "sticky", left: PIN_LEFT[i], zIndex: head ? 3 : 1,
-    bgcolor: "background.paper",
-    boxSizing: "border-box", width: PIN_W[i], minWidth: PIN_W[i], maxWidth: PIN_W[i],
-    ...(!head && {
-      ".MuiTableRow-hover:hover &": {
-        backgroundImage: (t) => `linear-gradient(${t.palette.action.hover}, ${t.palette.action.hover})`,
-      },
-    }),
-    ...(i === PIN_W.length - 1 && edgeShadow("right", edge.left)),
-  });
-
+  const cellSx = { py: 0, height: 48, verticalAlign: "middle", borderColor: "divider" };
+  /* The runs column says how many runs its dots cover — the environment's last
+     eight, or fewer while it has fewer. */
+  const firstRow = (rows && rows[0]) || groups?.find((g) => g.rows?.length)?.rows[0];
+  const runsShown = historyOf && firstRow ? (historyOf(firstRow) || []).length : 0;
+  /* No runs yet: the runs column would be "No runs yet" on every row — leave it out. */
+  const columns = runsShown ? COLUMNS : COLUMNS.filter((c) => c.id !== "runs");
+  const labelOf = (c) => (c.id === "runs" && runsShown ? `Last ${runsShown} run${runsShown === 1 ? "" : "s"}` : c.label);
 
   return (
-    <Box ref={scrollRef} sx={{ overflowX: "auto" }}>
-      <Table size="small" sx={{ minWidth: 1640 }}>
+    <Box sx={{ overflowX: "auto" }}>
+      <Table size="small" sx={{ minWidth: 860, tableLayout: "fixed" }}>
+        <colgroup>
+          {columns.map((c) => <col key={c.id} style={c.w ? { width: c.w } : undefined} />)}
+        </colgroup>
         <TableHead>
           <TableRow>
-            {columns.map((h, i) => {
-              /*
-                The last (empty-label) column is the row-actions column.
-                Pin it to the right edge with sticky positioning so the
-                edit / remove icons stay visible no matter how wide the
-                situation/outcome/branch columns push the table. Header
-                and body cells share the same sticky rule + shadow so
-                the pinned column reads as one thing.
-              */
-              const isActions = i === columns.length - 1;
-              const isSelect = h === "select";
-              const pinned = i < PIN_W.length;
-              return (
-                <TableCell
-                  key={h || i}
-                  align={isActions ? "right" : "left"}
-                  padding={isSelect ? "checkbox" : "normal"}
-                  sx={{
-                    typography: "s3", fontWeight: 700, color: "text.subtitle",
-                    textTransform: "uppercase", letterSpacing: .4,
-                    bgcolor: "background.paper",
-                    borderBottom: "1px solid", borderColor: "divider",
-                    whiteSpace: "nowrap",
-                    ...(pinned && pin(i, true)),
-                    ...(isSelect && { pl: 1.5 }),
-                    ...(h === "#" && { px: 1 }),
-                    ...(isActions && {
-                      position: "sticky", right: 0, zIndex: 3,
-                      width: ACTIONS_W, minWidth: ACTIONS_W,
-                      ...edgeShadow("left", edge.right),
-                    }),
-                  }}
-                >
-                  {isSelect ? (
-                    <Checkbox
-                      size="small"
-                      checked={allChecked}
-                      indeterminate={someChecked}
-                      onChange={toggleAll}
-                      disabled={locked}
-                      sx={selectableCheckboxSx}
-                    />
-                  ) : h}
-                </TableCell>
-              );
-            })}
+            {columns.map((c) => (
+              <TableCell
+                key={c.id}
+                align={c.align || (c.id === "actions" ? "right" : "left")}
+                padding={c.id === "select" ? "checkbox" : "normal"}
+                sx={{
+                  typography: "s3", fontWeight: 600, color: "text.subtitle", whiteSpace: "nowrap",
+                  bgcolor: "background.paper", borderBottom: "1px solid", borderColor: "divider", py: 1,
+                  ...(c.id === "select" && { pl: 1.5 }),
+                  ...(c.id === "#" && { px: 1 }),
+                }}
+              >
+                {c.id === "select" ? (
+                  <Checkbox
+                    size="small" checked={allChecked} indeterminate={someChecked}
+                    onChange={toggleAll} disabled={locked} sx={selectableCheckboxSx}
+                  />
+                ) : c.tip ? (
+                  <Tooltip arrow title={c.tip}><span>{labelOf(c)}</span></Tooltip>
+                ) : labelOf(c)}
+              </TableCell>
+            ))}
           </TableRow>
         </TableHead>
 
@@ -324,29 +279,35 @@ export default function ScenarioTable({
           {sections.map((section) => (
             <Fragment key={section.id}>
               {section.label && (
-                <TableRow>
-                  <TableCell
-                    colSpan={columns.length}
-                    sx={{
-                      bgcolor: (t) => alpha(
-                        t.palette.text.primary,
-                        t.palette.mode === "dark" ? 0.06 : 0.04,
-                      ),
-                      borderBottom: "1px solid", borderColor: "divider",
-                      py: 1, px: 2,
-                    }}
-                  >
-                    {/* Pinned to the visible width, so the group's name and
-                        count stay in view while the columns scroll. */}
-                    <Stack
-                      direction="row" alignItems="center" spacing={1.25}
-                      sx={{ position: "sticky", left: 16, width: edge.width ? edge.width - 32 : "auto" }}
-                    >
-                      <Iconify icon="solar:alt-arrow-down-linear" width={11} sx={{ color: "text.subtitle" }} />
-                      <Typography sx={{ typography: "s2", fontWeight: 600, color: "text.primary", flex: 1, minWidth: 0, fontSize: 12.5 }}>
-                        {section.label}
-                      </Typography>
-                      <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
+                <TableRow sx={{ "&:hover .goal-act, & .goal-act:focus-within": { opacity: 1 } }}>
+                  <TableCell colSpan={columns.length} sx={{ borderBottom: "1px solid", borderColor: "divider", py: 1, px: 2 }}>
+                    <Stack direction="row" alignItems="center" spacing={1.25}>
+                      <Typography noWrap sx={{ typography: "s2", fontWeight: 600, flex: 1, minWidth: 0 }}>{section.label}</Typography>
+                      {/* A goal marked must-pass covers every scenario in it, and ones added later. */}
+                      {goalActions && goalKeyOf(section.rows[0]) && (() => {
+                        const key = goalKeyOf(section.rows[0]);
+                        const on = mustPassGoals.includes(key);
+                        return (
+                          <>
+                            {on && (
+                              <Tooltip arrow title="Every scenario in this goal is must-pass, and scenarios added to it join. An improvement that breaks one is rejected.">
+                                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0 }}>
+                                  <Iconify icon="solar:shield-check-bold" width={13} sx={{ color: "text.primary" }} />
+                                  <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}>Must-pass goal</Typography>
+                                </Stack>
+                              </Tooltip>
+                            )}
+                            {onStateAction && !locked && (
+                              <Box className="goal-act" sx={{ opacity: 0, transition: "opacity .12s ease", flexShrink: 0 }}>
+                                <TextAction onClick={() => onStateAction("goal-blocker", section.rows[0], !on)}>
+                                  {on ? "Remove goal must-pass" : "Mark goal must-pass"}
+                                </TextAction>
+                              </Box>
+                            )}
+                          </>
+                        );
+                      })()}
+                      <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
                         {section.rows.length}
                       </Typography>
                     </Stack>
@@ -358,193 +319,149 @@ export default function ScenarioTable({
                 counter += 1;
                 const idx = counter;
                 const p = row.persona;
-                const subTasks = row.subTasks?.length ? row.subTasks : subTasksFor(row, env);
-                const personaSubline = [
-                  p?.gender && p.gender.charAt(0).toUpperCase() + p.gender.slice(1),
-                  p?.ageGroup,
-                  !p?.gender && !p?.ageGroup && p?.role, /* fall back to role for requesters */
-                ].filter(Boolean).join(" · ");
-                const situationText = row.situation || row.task || "";
-                const idealOutcomeText = row.outcome || row.expected || "";
-
+                const archived = !!archivedOf(row);
+                const goals = (row.subTasks?.length ? row.subTasks : subTasksFor(row, env)) || [];
+                const headline = row.summary || row.title || row.name;
+                const adm = admissionOf(row, env);
+                const personaMeta = [p?.ageGroup, !p?.ageGroup && p?.role].filter(Boolean).join(" · ");
+                const open = onOpen ? () => onOpen(row) : undefined;
+                const stop = (e) => e.stopPropagation();
                 return (
-                  <TableRow key={row.id} hover>
-                    <TableCell padding="checkbox" sx={{ ...pin(0), pl: 1.5, verticalAlign: "middle" }}>
+                  <TableRow
+                    key={row.id}
+                    hover
+                    {...clickable(open, { role: "row" })}
+                    sx={{ ...focusRing,
+                      cursor: open ? "pointer" : "default",
+                      ...(selected.has(row.id) && { bgcolor: "action.selected" }),
+                      /* Archived rows stay listed, dimmed; the state and the actions keep full strength. */
+                      ...(archived && { "& .scn-dim": { opacity: 0.45 } }),
+                    }}
+                  >
+                    <TableCell padding="checkbox" sx={{ ...cellSx, pl: 1.5 }} onClick={stop}>
                       <Checkbox
-                        size="small"
-                        checked={selected.has(row.id)}
-                        onChange={() => toggle(row.id)}
-                        disabled={locked}
-                        sx={selectableCheckboxSx}
+                        size="small" checked={selected.has(row.id)} onChange={() => toggle(row.id)}
+                        disabled={locked} sx={selectableCheckboxSx}
                       />
                     </TableCell>
-                    <TableCell sx={{ ...pin(1), px: 1, typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums", verticalAlign: "middle" }}>
+                    <TableCell sx={{ ...cellSx, px: 1, typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
                       {idx}
                     </TableCell>
 
-                {/* SCENARIO — name (bold, truncated) + summary (subtle,
-                    truncated). Both wrapped in tooltips so long values
-                    are readable on hover. */}
-                <TableCell sx={{ ...pin(2), verticalAlign: "middle" }}>
-                  <Stack direction="row" alignItems="center" spacing={0.75}>
-                    <TruncTooltip title={row.name || row.title}>
-                      <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{row.name || row.title}</Typography>
-                    </TruncTooltip>
-                    {row.newTool && (
-                      <Tooltip
-                        arrow
-                        title={laterThanPinned(row, envVersion)
-                          ? `Added when environment ${row.addedInEnv} learned ${row.newTool}. It isn't part of environment ${envVersion}, so runs on ${envVersion} leave it out.`
-                          : `Added when environment ${row.addedInEnv} learned ${row.newTool}`}
-                      >
-                        <Box
-                          sx={{
-                            display: "inline-flex", alignItems: "center", flexShrink: 0,
-                            height: 16, px: 0.5, borderRadius: 0.5,
-                            border: "1px solid", borderColor: "divider", color: "text.secondary",
-                          }}
-                        >
-                          <Typography sx={{ typography: "s3", fontWeight: 700 }}>
-                            {laterThanPinned(row, envVersion) ? `Needs env ${row.addedInEnv}` : `New · env ${row.addedInEnv}`}
-                          </Typography>
-                        </Box>
-                      </Tooltip>
-                    )}
-                    {row.provedBroke && (!row.brokeAgainst || !envVersion || row.brokeAgainst === envVersion) && (
-                      <Tooltip arrow title="Broke when the env changed — the proof no longer holds.">
-                        <Box
-                          sx={{
-                            display: "inline-flex", alignItems: "center", gap: 0.375,
-                            height: 16, px: 0.5, borderRadius: 0.5,
-                            border: (t) => `1px solid ${alpha("#DC2626", 0.4)}`,
-                            color: "#DC2626",
-                            bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.14 : 0.08),
-                          }}
-                        >
-                          <Iconify icon="solar:danger-triangle-bold" width={10} />
-                          <Typography sx={{ typography: "s3", fontWeight: 700, letterSpacing: 0.3 }}>
-                            Broken
-                          </Typography>
-                        </Box>
-                      </Tooltip>
-                    )}
-                    <BlockerFlag row={row} onToggle={onToggleBlocker} locked={locked} />
-                    {/* PRD §9 AC-9.13 — admission status. Amber icon only,
-                        matching the existing red-triangle "critical" idiom
-                        so the row doesn't grow a text chip on every case.
-                        Tooltip surfaces the compiler's specific reason. */}
-                    {(() => {
-                      const adm = admissionOf(row);
-                      if (adm.admitted) return null;
-                      return (
-                        <Tooltip arrow title={`Quarantined — ${adm.reason}`}>
-                          <Box sx={{ display: "flex" }}>
-                            <Iconify icon="solar:shield-cross-bold" width={13} sx={{ color: "#CA8A04" }} />
-                          </Box>
+                    {/* SCENARIO — what it is, in words, and how many sub-goals
+                        grade it. The id-style name is on hover and inside. */}
+                    <TableCell className="scn-dim" sx={cellSx}>
+                      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+                        <Tooltip arrow enterDelay={400} title={row.name && row.name !== headline ? row.name : ""}>
+                          <Typography noWrap sx={{ typography: "s2", fontWeight: 500, minWidth: 40, flexShrink: 1 }}>{headline}</Typography>
                         </Tooltip>
-                      );
-                    })()}
-                    {row.twinSeedPrompt && (
-                      <Tooltip arrow title={`Twin seed override: "${row.twinSeedPrompt.slice(0, 140)}${row.twinSeedPrompt.length > 140 ? "…" : ""}"`}>
-                        <Box sx={{ display: "flex" }}>
-                          <Iconify icon="solar:server-square-linear" width={12} sx={{ color: "#7857FC" }} />
-                        </Box>
-                      </Tooltip>
+                        {row.newTool && (
+                          <Tooltip
+                            arrow
+                            title={laterThanPinned(row, envVersion)
+                              ? `Added when environment ${vl(row.addedInEnv)} learned ${row.newTool}. It isn't part of environment ${vl(envVersion)}, so runs on ${vl(envVersion)} leave it out.`
+                              : `Added when environment ${vl(row.addedInEnv)} learned ${row.newTool}`}
+                          >
+                            <Typography noWrap sx={{ typography: "s3", color: "text.secondary", flexShrink: 0, px: 0.5, border: "1px solid", borderColor: "divider", borderRadius: 0.5 }}>
+                              {laterThanPinned(row, envVersion) ? `Needs environment ${vl(row.addedInEnv)}` : "New"}
+                            </Typography>
+                          </Tooltip>
+                        )}
+                        {row.canary && <CanaryBadge />}
+                        <TierTag row={row} onAction={onStateAction} locked={locked} />
+                        {!adm.admitted && (
+                          <Tooltip arrow title={`Quarantined — ${adm.reason}`}>
+                            <Box sx={{ display: "flex", flexShrink: 0 }}>
+                              <Iconify icon="solar:shield-cross-bold" width={13} sx={{ color: FAIL }} />
+                            </Box>
+                          </Tooltip>
+                        )}
+                        {stateOf && (
+                          <Box onClick={stop} sx={{ display: "inline-flex", flexShrink: 0 }}>
+                            <StatusCell row={row} state={stateOf(row)} onAction={onStateAction} locked={locked} />
+                          </Box>
+                        )}
+                      </Stack>
+                    </TableCell>
+
+                    {/* PERSONA — who calls, in one line. */}
+                    <TableCell className="scn-dim" sx={cellSx}>
+                      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
+                        {p?.libraryId != null && (
+                          <Tooltip arrow title={p.edited ? "From the persona library, edited here" : "From the persona library"}>
+                            <Box sx={{ display: "flex", flexShrink: 0 }}>
+                              <Iconify icon="solar:users-group-rounded-linear" width={13} sx={{ color: "text.subtitle" }} />
+                            </Box>
+                          </Tooltip>
+                        )}
+                        <Typography noWrap sx={{ typography: "s2", color: "text.secondary", minWidth: 0 }}>
+                          {p?.name || "—"}
+                          {personaMeta && <Box component="span" sx={{ color: "text.subtitle" }}>{` · ${personaMeta}`}</Box>}
+                        </Typography>
+                      </Stack>
+                    </TableCell>
+
+                    {/* SUB-GOALS — met in the latest run, of all. */}
+                    <TableCell align="right" sx={cellSx}>
+                      <SubGoalsCell total={goals.length} latest={latestOf ? latestOf(row) : null} env={env} envState={envState} />
+                    </TableCell>
+
+                    {/* PRIORITY — plain text, changed in place. */}
+                    <TableCell sx={cellSx} onClick={stop}>
+                      <PriorityPicker
+                        row={row}
+                        locked={locked}
+                        onChange={onStateAction ? (p) => onStateAction("priority", row, p) : undefined}
+                      />
+                    </TableCell>
+
+                    {/* MUST-PASS — the triangle, toggled in place; hollow on hover. */}
+                    <TableCell align="center" sx={cellSx} onClick={stop}>
+                      <BlockerFlag
+                        row={row}
+                        size={14}
+                        locked={locked || !!row.archived}
+                        onToggle={onStateAction ? () => onStateAction("blocker", row, !row.critical) : undefined}
+                      />
+                    </TableCell>
+
+                    {/* LAST RUNS — how it's been doing (once there are runs). */}
+                    {runsShown > 0 && (
+                      <TableCell sx={cellSx}>
+                        <RunDots history={historyOf ? historyOf(row) : null} />
+                      </TableCell>
                     )}
-                  </Stack>
-                  <TruncTooltip title={row.summary || row.title}>
-                    <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{row.summary || row.title}</Typography>
-                  </TruncTooltip>
-                </TableCell>
 
-                {/* STATUS — one answer to "can I trust this row?", with the
-                    reason on hover. Same status the Needs attention chip
-                    counts. */}
-                <TableCell sx={{ verticalAlign: "middle", whiteSpace: "nowrap" }}>
-                  {statusOf && <StatusChip status={statusOf(row)} />}
-                </TableCell>
-
-                {/* PERSONA — name + gender/age line */}
-                <TableCell sx={{ maxWidth: 200, verticalAlign: "middle" }}>
-                  <TruncTooltip title={p?.name || ""}>
-                    <Typography noWrap sx={{ typography: "s2" }}>{p?.name}</Typography>
-                  </TruncTooltip>
-                  {personaSubline && (
-                    <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{personaSubline}</Typography>
-                  )}
-                </TableCell>
-
-                {/* SITUATION — clamped to 3 lines, full text on hover
-                    tooltip so a long paragraph is still readable
-                    without breaking the row height. */}
-                <TableCell sx={{ maxWidth: 320, verticalAlign: "middle" }}>
-                  <ClampCell text={situationText} />
-                </TableCell>
-
-                {/* SUB-TASKS — moved up to sit next to the persona /
-                    situation columns because it describes the *shape*
-                    of the task, not its result. Same 3-row cap with a
-                    hover popover for the full list. */}
-                <TableCell sx={{ maxWidth: 260, verticalAlign: "middle" }}>
-                  <SubTasksCell subTasks={subTasks} />
-                </TableCell>
-
-                {/* TOOLS IT NEEDS — the tools the world must answer for
-                    this scenario; amber when the pinned world can't. */}
-                <TableCell sx={{ maxWidth: 220, verticalAlign: "middle" }}>
-                  <ToolChips
-                    tools={toolsOf ? toolsOf(row) : (row.requiredTools || [])}
-                    answers={answers}
-                    agentCalls={agentCalls}
-                    agentLabel={agentLabel}
-                    envVersion={envVersion}
-                  />
-                </TableCell>
-
-                {/* IDEAL OUTCOME — clamped to 3 lines, tooltip on
-                    hover. Renamed from "Outcome" so it clearly
-                    describes the criterion, not what a specific run
-                    actually did. */}
-                <TableCell sx={{ maxWidth: 320, verticalAlign: "middle" }}>
-                  <ClampCell text={idealOutcomeText} />
-                </TableCell>
-
-                <TableCell
-                  align="right"
-                  sx={{
-                    whiteSpace: "nowrap", verticalAlign: "middle",
-                    position: "sticky", right: 0, zIndex: 1,
-                    width: ACTIONS_W, minWidth: ACTIONS_W,
-                    /*
-                      Sticky cells need an opaque background to hide the
-                      columns scrolling underneath. Layering the two on
-                      backgroundImage keeps the row-hover tint visually
-                      identical to the rest of the row: same
-                      action.hover overlay, same paper base — no more
-                      mismatched patch on hover.
-                    */
-                    bgcolor: "background.paper",
-                    ...edgeShadow("left", edge.right),
-                    ".MuiTableRow-hover:hover &": {
-                      backgroundImage: (t) => `linear-gradient(${t.palette.action.hover}, ${t.palette.action.hover})`,
-                    },
-                  }}
-                >
-                  <Tooltip arrow title={locked ? "Fork this environment to edit." : "Edit scenario"}>
-                    <span>
-                      <IconButton size="small" disabled={locked} onClick={() => onEdit(row)}>
-                        <Iconify icon="solar:pen-new-square-linear" width={15} sx={{ color: "text.subtitle" }} />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  <Tooltip arrow title={locked ? "Fork this environment to edit." : "Remove from this environment"}>
-                    <span>
-                      <IconButton size="small" disabled={locked} onClick={() => onRemove(row.id)}>
-                        <Iconify icon="solar:trash-bin-trash-linear" width={15} sx={{ color: "text.subtitle" }} />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
+                    {/* Edit · archive · delete, on hover. */}
+                    <TableCell align="right" sx={{ ...cellSx, whiteSpace: "nowrap", pr: 1 }} onClick={stop}>
+                      <Box sx={onHover}>
+                        <Tooltip arrow title={locked ? "Fork this environment to edit." : "Edit scenario"}>
+                          <span>
+                            <IconButton size="small" disabled={locked} onClick={() => onEdit(row)}>
+                              <Iconify icon="solar:pen-new-square-linear" width={15} sx={{ color: "text.subtitle" }} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        {archived ? (
+                          <Tooltip arrow title={locked ? "Read-only." : "Restore — run and count it again"}>
+                            <span>
+                              <IconButton size="small" disabled={locked} onClick={() => onStateAction?.("restore", row)} aria-label="Restore scenario">
+                                <Iconify icon="solar:restart-linear" width={15} sx={{ color: "text.subtitle" }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        ) : (
+                          <ArchiveControl disabled={locked} anchor={isAnchor(row)} onArchive={(note) => onStateAction?.("archive", row, note)} />
+                        )}
+                        <Tooltip arrow title={locked ? "Fork this environment to edit." : "Remove from this environment"}>
+                          <span>
+                            <IconButton size="small" disabled={locked} onClick={() => onRemove(row.id)}>
+                              <Iconify icon="solar:trash-bin-trash-linear" width={15} sx={{ color: "text.subtitle" }} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
                   </TableRow>
                 );
               })}
@@ -557,129 +474,18 @@ export default function ScenarioTable({
 }
 
 ScenarioTable.propTypes = {
+  goalActions: PropTypes.bool,
+  mustPassGoals: PropTypes.array,
   rows: PropTypes.array.isRequired,
+  rowHeight: PropTypes.string,
   groups: PropTypes.array,
   env: PropTypes.object,
+  envState: PropTypes.object,
   envVersion: PropTypes.string,
   onEdit: PropTypes.func,
   onRemove: PropTypes.func,
-  onToggleBlocker: PropTypes.func,
   onHideGroup: PropTypes.func,
   selectedIds: PropTypes.array,
   onSelectionChange: PropTypes.func,
   locked: PropTypes.bool,
 };
-
-/* Pinned-left columns: select, #, Scenario — widths and offsets. */
-const PIN_W = [48, 48, 300];
-const PIN_LEFT = PIN_W.map((_, i) => PIN_W.slice(0, i).reduce((a, w) => a + w, 0));
-const ACTIONS_W = 96;
-
-/* ── readability helpers ──────────────────────────────────────────────────── */
-
-/**
- * Attach a tooltip to a truncated line so hovering reveals the full
- * value. The tooltip only actually pops when the child overflows,
- * so short values don't get a noisy tooltip on every hover.
- *
- * Kept purposefully thin — the tooltip lives at the row level, not
- * per-Typography, so the same wrapper can gate both single-line
- * `noWrap` labels and multi-line clamped bodies.
- */
-function TruncTooltip({ title, children }) {
-  if (!title) return children;
-  return (
-    <Tooltip
-      arrow
-      enterDelay={300}
-      title={
-        <Box sx={{ typography: "s3", whiteSpace: "pre-wrap", wordBreak: "break-word", maxWidth: 460 }}>
-          {title}
-        </Box>
-      }
-    >
-      <Box sx={{ minWidth: 0 }}>
-        {children}
-      </Box>
-    </Tooltip>
-  );
-}
-TruncTooltip.propTypes = { title: PropTypes.node, children: PropTypes.node };
-
-/**
- * Multi-line text cell — clamped to 3 lines so the row stays a
- * predictable height, but full content is one hover away in a
- * pre-formatted tooltip. Empty values render as an em-dash so the
- * column doesn't visually collapse.
- */
-function ClampCell({ text }) {
-  const value = text || "—";
-  return (
-    <TruncTooltip title={text}>
-      <Typography sx={{
-        typography: "s2", color: "text.secondary", lineHeight: 1.45,
-        display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
-        overflow: "hidden", wordBreak: "break-word",
-      }}>
-        {value}
-      </Typography>
-    </TruncTooltip>
-  );
-}
-ClampCell.propTypes = { text: PropTypes.string };
-
-/**
- * Sub-tasks column body. Shows up to 3 sub-tasks inline; anything
- * past that is summarised as "+ N more". Hovering the row reveals
- * the full numbered list, so a big scenario's twelve sub-tasks stay
- * discoverable without turning every table row into a scroll well.
- */
-/*
-  SubTasksCell accepts both shapes callers actually pass:
-  - `[{ id, label }, ...]` — the canonical shape produced by
-    subTasksFor() and the template scenarios
-  - `["step one", "step two", ...]` — plain-string arrays produced
-    by the scratch derivation and older mocks
-  Coerces to a common `{ id, label }` shape up front so no caller
-  silently renders bare "1. 2. 3." numbers with the label missing.
-*/
-function normaliseSubTasks(subTasks) {
-  return (subTasks || []).map((st, i) => {
-    if (typeof st === "string") return { id: `st-${i}`, label: st };
-    if (!st) return null;
-    return { id: st.id || `st-${i}`, label: st.label || st.text || st.title || "" };
-  }).filter((st) => st && st.label);
-}
-
-function SubTasksCell({ subTasks }) {
-  const list = normaliseSubTasks(subTasks);
-  if (!list.length) {
-    return <Typography sx={{ typography: "s3", color: "text.subtitle" }}>—</Typography>;
-  }
-  const fullList = list.map((st, i) => `${i + 1}. ${st.label}`).join("\n");
-  return (
-    <TruncTooltip title={fullList}>
-      <Stack spacing={0.375}>
-        {list.slice(0, 3).map((st, i) => (
-          <Stack key={st.id} direction="row" spacing={0.75} alignItems="flex-start">
-            <Typography sx={{
-              typography: "s3", color: "text.subtitle",
-              fontVariantNumeric: "tabular-nums", flexShrink: 0, mt: "1px",
-            }}>
-              {i + 1}.
-            </Typography>
-            <Typography noWrap sx={{ typography: "s3", color: "text.secondary", minWidth: 0 }}>
-              {st.label}
-            </Typography>
-          </Stack>
-        ))}
-        {list.length > 3 && (
-          <Typography sx={{ typography: "s3", color: "text.subtitle", pl: 1.75 }}>
-            + {list.length - 3} more
-          </Typography>
-        )}
-      </Stack>
-    </TruncTooltip>
-  );
-}
-SubTasksCell.propTypes = { subTasks: PropTypes.array };

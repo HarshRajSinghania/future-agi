@@ -2,11 +2,12 @@ import PropTypes from "prop-types";
 import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { DrilldownContext } from "./drilldownContext";
 import { useTheme, alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, Table, TableHead, TableRow, TableCell, TableBody, Tooltip, Popover, Dialog, IconButton } from "@mui/material";
+import { Box, Stack, Typography, Tooltip, Popover, Dialog, IconButton } from "@mui/material";
+import FitDataTable from "../components/FitDataTable";
 import Iconify from "src/components/iconify";
 import ReactApexChart from "../components/SafeApexChart";
 import { attribute, isMeasured, DOMAINS } from "../_mock/failures";
-import { deriveUseCaseLabel, csatOf, latencyOf as agentLatencyOf } from "./TraceTable";
+import { deriveUseCaseLabel, csatOf, latencyOf as agentLatencyOf } from "./traceTableHelpers";
 import {
   OUTCOME_LABELS, attributionOf, endReasonOf, measuredOnly, outcomeOf, outcomeTally, passRateOf, passShareOf,
   samplesOf, sentimentOf,
@@ -14,9 +15,11 @@ import {
 import { attachPersonaDims } from "./personaDimensions";
 import { deriveToolCalls, isToolFailure } from "./toolCalls.js";
 import { costSplitOf } from "./costSplit";
+import { textTone } from "../components/textTone";
 import { voiceSegmentsOf } from "./voiceSegments";
 import { CustomWidgetBody } from "./layout/customWidgetRenderer";
-import { GoldenSetManager, DropoffFunnel, DivergenceTimeline, PitchBreakThemes, useGoldenSet } from "./goldenSet.jsx";
+import { GoldenSetManager, DropoffFunnel, DivergenceTimeline, PitchBreakThemes } from "./goldenSet.jsx";
+import { useGoldenSet } from "./goldenSetState";
 import { useRunLayout, readViewFromUrl, writeViewToUrl } from "./layout/useRunLayout";
 import { SECTIONS, getPanelMeta, panelSection, snapshotAsCustom } from "./layout/panelRegistry";
 import HiddenWidgetsPopover from "./layout/HiddenWidgetsPopover";
@@ -36,6 +39,7 @@ import {
   useSensor, useSensors,
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, rectSortingStrategy } from "@dnd-kit/sortable";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * Analytics — enterprise density. Prioritises numbers and small
@@ -574,12 +578,13 @@ function DashboardHeader({
               <Stack
                 key={f}
                 direction="row" alignItems="center" spacing={1}
-                onClick={() => toggleBreakdown(f)}
+                {...clickable(() => toggleBreakdown(f), { pressed: isActive })}
                 sx={{
                   px: 1.5, py: 0.875, cursor: "pointer",
                   color: isActive ? "text.primary" : "text.primary",
                   bgcolor: isActive ? "action.selected" : "transparent",
                   "&:hover": { bgcolor: "action.hover" },
+                  ...focusRing,
                 }}
               >
                 <Iconify
@@ -622,11 +627,12 @@ function FilterChip({ label, tone, onRemove }) {
         {label}
       </Typography>
       <Box
-        onClick={onRemove}
+        {...clickable(onRemove, { label: `Remove ${label}` })}
         sx={{
           width: 16, height: 16, borderRadius: 999, display: "grid", placeItems: "center", cursor: "pointer",
           color: "text.subtitle",
           "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+          ...focusRing,
         }}
       >
         <Iconify icon="eva:close-fill" width={11} />
@@ -744,7 +750,7 @@ function KpiTileGrid({ tasks, biz, trend }) {
       value: `${biz.resolutionRate}%`,
       deltaPct: deltaPct(biz.resolutionRate, trend?.prevPassRate),
       goodUp: true,
-      tone: biz.resolutionRate >= 80 ? GREEN : biz.resolutionRate >= 50 ? AMBER : RED },
+      tone: biz.resolutionRate >= 80 ? GREEN : biz.resolutionRate >= 50 ? "text.primary" : RED },
     { label: "Total runs",
       value: numFmt.format(biz.total),
       deltaPct: null },
@@ -752,7 +758,7 @@ function KpiTileGrid({ tasks, biz, trend }) {
       value: `${biz.escalationRate}%`,
       deltaPct: deltaPct(biz.escalationRate, trend?.prevEscalationRate),
       goodUp: false,
-      tone: biz.escalationRate <= 10 ? GREEN : biz.escalationRate <= 25 ? AMBER : RED },
+      tone: biz.escalationRate <= 10 ? GREEN : biz.escalationRate <= 25 ? "text.primary" : RED },
     { label: "Avg duration",
       value: `${biz.medHandleTimeS.toFixed(1)}s`,
       deltaPct: null },
@@ -768,11 +774,11 @@ function KpiTileGrid({ tasks, biz, trend }) {
       deltaPct: null },
     { label: "Latency p90",
       value: `${Math.round(p90Lat)}ms`,
-      tone: p90Lat < 1500 ? GREEN : p90Lat < 3000 ? AMBER : RED,
+      tone: p90Lat < 1500 ? GREEN : p90Lat < 3000 ? "text.primary" : RED,
       deltaPct: null },
     { label: "Compliance",
       value: `${biz.complianceRate}%`,
-      tone: biz.complianceRate >= 95 ? GREEN : biz.complianceRate >= 80 ? AMBER : RED,
+      tone: biz.complianceRate >= 95 ? GREEN : biz.complianceRate >= 80 ? "text.primary" : RED,
       deltaPct: null },
     { label: "Tokens",
       value: numFmt.format(totalTokens),
@@ -993,7 +999,7 @@ const OutcomeDonutChart = memo(function OutcomeDonutChart({ tasks }) {
       buckets={order.map((o, i) => ({ label: OUTCOME_LABELS[o], value: bucketSets[i].length }))}
       colors={[CHART_GREEN, "#F59E0B", CHART_RED, "#94A3B8"]}
       onSliceClick={onSliceClick}
-      info="Splits the run's scenarios four ways: passed on every attempt, flaky (passed on some attempts), failed on every attempt, or not measured because the environment, connection, simulated caller or grader broke first. A big grey wedge is an infrastructure problem, not an agent one; a big amber wedge means the agent is inconsistent on the same scenario."
+      info="Splits the run's scenarios four ways: passed on every attempt, flaky (passed on some attempts), failed on every attempt, or not counted — test invalid (the simulated caller, the starting state or a judge broke) or an error (our infrastructure or the connection). A big grey wedge is a test or infrastructure problem, not an agent one; a big amber wedge means the agent is inconsistent on the same scenario."
     />
   );
 });
@@ -1087,12 +1093,13 @@ const DonutBreakdown = memo(function DonutBreakdown({
               <Stack
                 key={b.label}
                 direction="row" alignItems="center" spacing={0.625}
-                onClick={drill || undefined}
+                {...clickable(drill || undefined)}
                 sx={{
                   minWidth: 0,
                   cursor: drill ? "pointer" : "default",
                   borderRadius: 0.5, px: drill ? 0.5 : 0, mx: drill ? -0.5 : 0,
                   "&:hover": drill ? { bgcolor: "action.hover" } : {},
+                  ...focusRing,
                 }}
               >
                 <Box sx={{ width: 7, height: 7, borderRadius: 0.75, bgcolor: colors[i], flexShrink: 0 }} />
@@ -1156,7 +1163,7 @@ const SuccessDonut = memo(function SuccessDonut({ tasks }) {
   return (
     <DonutBreakdown
       title="Call successful"
-      subtitle={`Calls across ${measured.length} measured scenarios${unmeasured ? ` · ${unmeasured} not measured` : ""}`}
+      subtitle={`Calls across ${measured.length} measured scenarios${unmeasured ? ` · ${unmeasured} not counted (test invalid or error)` : ""}`}
       buckets={buckets}
       colors={SUCCESS_COLORS}
       onSliceClick={onSliceClick}
@@ -2369,7 +2376,7 @@ function HorizontalBarChart({ rows, unit = "", max, emptyText, colorFn, height, 
             </Box>
             <Typography sx={{
               typography: "s2", fontSize: 13, fontWeight: 700,
-              color, fontVariantNumeric: "tabular-nums",
+              color: textTone(color), fontVariantNumeric: "tabular-nums",
               minWidth: 56, textAlign: "right", whiteSpace: "nowrap",
             }}>
               {fmt(r.value)}
@@ -2487,7 +2494,7 @@ function EvalGraderTable({ rows }) {
               }} />
             </Box>
             <Typography sx={{
-              fontSize: 13, fontWeight: 700, color, textAlign: "right",
+              fontSize: 13, fontWeight: 700, color: textTone(color), textAlign: "right",
               fontVariantNumeric: "tabular-nums", letterSpacing: -0.2,
             }}>
               {r.passRate}%
@@ -2564,7 +2571,7 @@ function RadialGauge({ label, value, meta }) {
         }}>
           <Typography sx={{
             typography: "s1", fontSize: 17, fontWeight: 700,
-            color, fontVariantNumeric: "tabular-nums", letterSpacing: -0.3,
+            color: textTone(color), fontVariantNumeric: "tabular-nums", letterSpacing: -0.3,
           }}>
             {value}%
           </Typography>
@@ -2770,7 +2777,7 @@ const ExpensiveTable = memo(function ExpensiveTable({ tasks }) {
       title="Most expensive tasks"
       subtitle="Ranked by cost — hover to see the task"
       exportRows={exportRows}
-      info="The eight scenarios that cost the most this run, counting every scenario that ran — money spent on a call is spent whether or not it produced a verdict. A handful of expensive scenarios usually dominate the total — a shorter prompt or fewer turns on these often saves more than optimising every scenario. Cross-check with tokens: high cost with high tokens is prompt or conversation bloat."
+      info="The eight scenarios that cost the most this run, counting every scenario that ran — money spent on a call is spent whether or not it produced a verdict. A handful of expensive scenarios usually dominate the total — a shorter prompt or fewer turns on these often saves more than tuning every scenario. Cross-check with tokens: high cost with high tokens is prompt or conversation bloat."
     >
       <RankedColumnChart
         rows={rows.map((t) => ({
@@ -3468,9 +3475,9 @@ function Panel({ title, subtitle, children, minHeight, action, exportRows, expor
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
             <Typography
-              onClick={onOpen || undefined}
-              role={onOpen ? "button" : undefined}
+              {...clickable(onOpen)}
               sx={{
+                ...focusRing,
                 typography: "s1", color: "text.primary", fontWeight: 700,
                 fontSize: 15, letterSpacing: -0.1, lineHeight: 1.3,
                 ...(onOpen && { cursor: "pointer", "&:hover": { color: "primary.main" } }),
@@ -3565,52 +3572,6 @@ function PanelChart({ title, subtitle, children, info }) {
   );
 }
 PanelChart.propTypes = { title: PropTypes.node, subtitle: PropTypes.node, children: PropTypes.node, info: PropTypes.node };
-
-/* Richer table styling — taller rows, larger typography, colored
-   hover with a subtle left accent that appears on hover, uppercase
-   spaced headers with a bolder foreground. */
-function DataTableShell({ children }) {
-  return (
-    <Table size="small" sx={{
-      "& th, & td": { borderColor: "divider", py: 1.25, px: 2.25 },
-      "& th": {
-        fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6,
-        color: "text.subtitle", bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.03 : 0.015),
-      },
-      "& td": { fontSize: 13, color: "text.primary" },
-      "& tbody tr": { transition: "background-color 120ms" },
-      "& tbody tr:hover td": { bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.04 : 0.02) },
-      "& tr:last-of-type td": { borderBottom: "none" },
-    }}>
-      {children}
-    </Table>
-  );
-}
-DataTableShell.propTypes = { children: PropTypes.node };
-
-function Th({ children, align = "left" }) {
-  return <TableCell align={align}>{children}</TableCell>;
-}
-Th.propTypes = { children: PropTypes.node, align: PropTypes.string };
-
-function Td({ children, align = "left", mono, noWrap, sx }) {
-  return (
-    <TableCell
-      align={align}
-      sx={{
-        fontVariantNumeric: mono ? "tabular-nums" : undefined,
-        whiteSpace: noWrap ? "nowrap" : undefined,
-        maxWidth: noWrap ? 280 : undefined,
-        overflow: noWrap ? "hidden" : undefined,
-        textOverflow: noWrap ? "ellipsis" : undefined,
-        ...sx,
-      }}
-    >
-      {children}
-    </TableCell>
-  );
-}
-Td.propTypes = { children: PropTypes.node, align: PropTypes.string, mono: PropTypes.bool, noWrap: PropTypes.bool, sx: PropTypes.object };
 
 /* ── regression banner ─────────────────────────────────────────────── */
 
@@ -3716,43 +3677,44 @@ TrendRow.propTypes = { runHistory: PropTypes.array, currentRunId: PropTypes.stri
    set Hamming / Cekura market as table stakes for voice QA. */
 function VoiceLatencyPanel({ voice }) {
   if (!voice) return null;
-  const row = (label, m, unit = "ms", warn = 2500) => (
-    <TableRow hover>
-      <TableCell><Typography sx={{ typography: "s2", fontWeight: 600 }}>{label}</Typography></TableCell>
-      <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums" }}>{Math.round(m.p50)}{unit}</TableCell>
-      <TableCell align="right" sx={{
-        fontVariantNumeric: "tabular-nums", fontWeight: 700,
-        color: m.p90 == null ? "text.disabled" : m.p90 > warn ? RED : m.p90 > warn * 0.7 ? AMBER : "text.primary",
-      }}>{m.p90 == null ? "—" : `${Math.round(m.p90)}${unit}`}</TableCell>
-      <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums", color: m.p99 == null ? "text.disabled" : m.p99 > warn ? RED : "text.subtitle" }}>{m.p99 == null ? "—" : `${Math.round(m.p99)}${unit}`}</TableCell>
-    </TableRow>
-  );
+  /* Over the SLO reads red; everything else stays plain (no amber text). */
+  const ms = (v, unit) => (v == null ? "—" : `${Math.round(v)}${unit}`);
+  const rows = [
+    { id: "ttfw", label: "Time to first word (TTFW)", m: voice.ttfw, warn: 1200 },
+    { id: "llm", label: "LLM response", m: voice.llm, warn: 2500 },
+    { id: "tts", label: "Text-to-speech", m: voice.tts, warn: 800 },
+    { id: "asr", label: "Speech recognition", m: voice.asr, warn: 500 },
+  ];
+  const cellNum = (sx) => ({ typography: "s2", fontVariantNumeric: "tabular-nums", ...sx });
+  const columns = [
+    { id: "label", header: "Segment", meta: { flex: 2 }, cell: ({ row: { original: r } }) => <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{r.label}</Typography> },
+    { id: "p50", header: "p50", meta: { flex: 1 }, cell: ({ row: { original: r } }) => <Typography sx={cellNum()}>{ms(r.m.p50, "ms")}</Typography> },
+    {
+      id: "p90", header: "p90", meta: { flex: 1 },
+      cell: ({ row: { original: r } }) => (
+        <Typography sx={cellNum({ fontWeight: 700, color: r.m.p90 == null ? "text.disabled" : r.m.p90 > r.warn ? RED : "text.primary" })}>{ms(r.m.p90, "ms")}</Typography>
+      ),
+    },
+    {
+      id: "p99", header: "p99", meta: { flex: 1 },
+      cell: ({ row: { original: r } }) => (
+        <Typography sx={cellNum({ color: r.m.p99 == null ? "text.disabled" : r.m.p99 > r.warn ? RED : "text.subtitle" })}>{ms(r.m.p99, "ms")}</Typography>
+      ),
+    },
+  ];
   return (
     <Panel
       title="Voice latency SLOs"
       subtitle="TTFW · LLM · TTS · ASR — the four segments that decide caller experience."
       info="Latency broken down by the four voice-pipeline segments callers actually feel: Time-to-First-Word, model thinking, text-to-speech, speech-to-text. Any red p90 means callers heard silence past your SLO — that's the one to fix first."
     >
-      <DataTableShell>
-        <TableHead>
-          <TableRow>
-            <TableCell>Segment</TableCell>
-            <TableCell align="right">p50</TableCell>
-            <TableCell align="right">p90</TableCell>
-            <TableCell align="right">p99</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {row("Time to first word (TTFW)", voice.ttfw, "ms", 1200)}
-          {row("LLM response",              voice.llm,  "ms", 2500)}
-          {row("Text-to-speech",            voice.tts,  "ms", 800)}
-          {row("Speech recognition",        voice.asr,  "ms", 500)}
-        </TableBody>
-      </DataTableShell>
+      <Box sx={{ px: 1 }}>
+        <FitDataTable columns={columns} data={rows} getRowId={(r) => r.id} />
+      </Box>
       <Stack direction="row" spacing={3} sx={{ px: 2, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
         <Box>
           <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 10.5, fontWeight: 600, textTransform: "uppercase" }}>ASR word-error rate</Typography>
-          <Typography sx={{ typography: "s1", fontWeight: 700, fontSize: 15, mt: 0.25, color: voice.werPct < 8 ? GREEN : voice.werPct < 15 ? AMBER : RED }}>
+          <Typography sx={{ typography: "s1", fontWeight: 700, fontSize: 15, mt: 0.25, color: voice.werPct < 8 ? GREEN : voice.werPct < 15 ? "text.primary" : RED }}>
             {voice.werPct.toFixed(1)}%
           </Typography>
         </Box>
@@ -3805,7 +3767,7 @@ function FailureClustersPanel({ tasks }) {
                 <Box sx={{
                   px: 0.75, py: 0.25, borderRadius: 0.5,
                   bgcolor: alpha(dom.color, theme.palette.mode === "dark" ? 0.18 : 0.12),
-                  color: dom.color, fontSize: 10.5, fontWeight: 700,
+                  color: textTone(dom.color), fontSize: 10.5, fontWeight: 700,
                   lineHeight: 1.4, whiteSpace: "nowrap",
                 }}>
                   {dom.short}

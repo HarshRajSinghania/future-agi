@@ -1,10 +1,12 @@
 import PropTypes from "prop-types";
 import { useMemo, useState } from "react";
-import { Box, Stack, Typography, Button, LinearProgress } from "@mui/material";
+import { Box, Stack, Typography, Button, LinearProgress, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { EvalPickerDrawer } from "src/sections/common/EvalPicker";
-import { simulationPreviewData, resolveEval } from "../../_mock/evals";
+import { simulationPreviewData, resolveEval, TOOL_CALL_JUDGE_ID, MAX_APPLIED_EVALS, EVAL_CAP_NOTE } from "../../_mock/evals";
 import { getAgentType } from "../../_mock/agentTypes";
+import { evalRailOf } from "../../_mock/metering";
+import { railInputOf } from "./evalRail";
 
 /**
  * Add evals — tick several, then map them one at a time.
@@ -15,7 +17,7 @@ import { getAgentType } from "../../_mock/agentTypes";
  * "Next" until the last eval, so a queue of evals is one trip through the
  * picker instead of one trip each.
  */
-export default function AddEvalsDrawer({ open, onClose, env, envState, existingIds, onAdd }) {
+export default function AddEvalsDrawer({ open, onClose, env, envState, existingIds, onAdd, slotsLeft = Infinity }) {
   const [checked, setChecked] = useState({});
   const [queue, setQueue] = useState([]);
   const [index, setIndex] = useState(0);
@@ -50,11 +52,22 @@ export default function AddEvalsDrawer({ open, onClose, env, envState, existingI
       return {
         id,
         name: ev?.instanceName || ev?.name || id,
-        meta: [ev?.category, ev?.type].filter(Boolean).join(" · "),
+        /* The rail beside the kind — free, or credits per call. */
+        meta: [ev?.category, ev?.type, ev && evalRailOf(ev).label].filter(Boolean).join(" · "),
       };
     });
   }, [envState, addedIds]);
   const selectedIds = useMemo(() => new Set(Object.keys(checked)), [checked]);
+  /* What the ticked evals cost per call, before they're added (AC-19.6). */
+  const selectedRail = useMemo(() => {
+    const rails = selected.map((e) => evalRailOf(railInputOf(e)));
+    const metered = rails.filter((r) => r.metered);
+    return {
+      free: rails.length - metered.length,
+      metered: metered.length,
+      credits: metered.reduce((a, r) => a + (r.credits || 0), 0),
+    };
+  }, [selected]);
 
   const reset = () => {
     setChecked({});
@@ -65,13 +78,17 @@ export default function AddEvalsDrawer({ open, onClose, env, envState, existingI
 
   const close = () => { reset(); onClose(); };
 
+  /* Up to 8 catalogue evaluations plus the tool-call judge: ticking stops
+     at the slots this environment has left. */
   const toggle = (evalItem) =>
     setChecked((c) => {
       const next = { ...c };
       if (next[evalItem.id]) delete next[evalItem.id];
+      else if (Object.values(next).filter((e) => e.id !== TOOL_CALL_JUDGE_ID).length >= slotsLeft && evalItem.id !== TOOL_CALL_JUDGE_ID) return c;
       else next[evalItem.id] = evalItem;
       return next;
     });
+  const full = Number.isFinite(slotsLeft) && selected.filter((e) => e.id !== TOOL_CALL_JUDGE_ID).length >= slotsLeft;
 
   const entry = (config) => ({
     id: config.templateId || config.id || `eval-${config.name}`,
@@ -149,6 +166,27 @@ export default function AddEvalsDrawer({ open, onClose, env, envState, existingI
       onToggleSelect={toggle}
       headerAction={
         !mapping && (
+          <Stack direction="row" alignItems="center" spacing={1.25}>
+          {Number.isFinite(slotsLeft) && (
+            <Tooltip arrow title={EVAL_CAP_NOTE}>
+              <Typography sx={{ typography: "s3", color: full ? "text.primary" : "text.subtitle", fontWeight: full ? 600 : 400, whiteSpace: "nowrap", cursor: "help", fontVariantNumeric: "tabular-nums" }}>
+                {full ? `No slots left · up to ${MAX_APPLIED_EVALS}` : `${slotsLeft - selected.filter((e) => e.id !== TOOL_CALL_JUDGE_ID).length} of ${MAX_APPLIED_EVALS} slots left`}
+              </Typography>
+            </Tooltip>
+          )}
+          {selected.length > 0 && (
+            <Tooltip
+              arrow
+              title="Managed LLM judges are metered in AI credits per call. Rule-based evals and ones judged by your own model key are free."
+            >
+              <Typography sx={{ typography: "s3", color: "text.subtitle", whiteSpace: "nowrap", cursor: "help", fontVariantNumeric: "tabular-nums" }}>
+                {[
+                  selectedRail.free > 0 && `${selectedRail.free} free`,
+                  selectedRail.metered > 0 && `${selectedRail.metered} at ${selectedRail.credits} credit${selectedRail.credits === 1 ? "" : "s"} / call`,
+                ].filter(Boolean).join(" · ")}
+              </Typography>
+            </Tooltip>
+          )}
           <Button
             variant="contained"
             // Deliberately not `color="primary"`: this sits in a row of black
@@ -163,6 +201,7 @@ export default function AddEvalsDrawer({ open, onClose, env, envState, existingI
           >
             Add Evaluations{selected.length ? ` (${selected.length})` : ""}
           </Button>
+          </Stack>
         )
       }
       progress={mapping ? <CompletionBar pct={pct} index={index} total={total} /> : null}
@@ -182,6 +221,7 @@ AddEvalsDrawer.propTypes = {
   envState: PropTypes.object,
   existingIds: PropTypes.oneOfType([PropTypes.array, PropTypes.object]),
   onAdd: PropTypes.func,
+  slotsLeft: PropTypes.number,
 };
 
 function CompletionBar({ pct, index, total }) {

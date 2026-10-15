@@ -4,15 +4,19 @@ import { Box, Stack, Typography, Button, IconButton, Tooltip, Switch } from "@mu
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { SectionCard, EmptyState } from "../components/primitives";
-import { getEval, EVAL_CATALOG } from "../_mock/evals";
-import { useAppliedEvals, EvalRow } from "./evals/appliedEvals";
+import { getEval, EVAL_CATALOG, EVAL_CAP_NOTE, MAX_APPLIED_EVALS, REQUIRED_EVAL_NOTE, TOOL_CALL_JUDGE_ID, cappedEvalCount } from "../_mock/evals";
+import { EvalRow } from "./evals/appliedEvals";
+import { useAppliedEvals } from "./evals/useAppliedEvals";
 import AddEvalsDrawer from "./evals/AddEvalsDrawer";
 import TwinEvalEditor from "./evals/TwinEvalEditor";
-import EditEvalDrawer, { canEditEval } from "./evals/EditEvalDrawer";
+import EditEvalDrawer from "./evals/EditEvalDrawer";
+import { canEditEval } from "./evals/canEditEval";
 import { worldToolsFor } from "../_mock/toolFit";
+import { runPlan } from "../_mock/proofs";
+import { evalCreditsPerRun, evalRailOf } from "../_mock/metering";
 
 /* The catalogue eval behind the "tool call evaluation" switch. */
-const TOOL_CALL_EVAL_ID = "tool_correctness";
+const TOOL_CALL_EVAL_ID = TOOL_CALL_JUDGE_ID;
 
 /**
  * Evals.
@@ -26,7 +30,7 @@ const TOOL_CALL_EVAL_ID = "tool_correctness";
  * matter for it, so the fastest correct set is one click, and the drawer is
  * there for everything else.
  */
-export default function EvalsStep({ env, envState, patch, onGo, locked = false, onFork }) {
+export default function EvalsStep({ env, envState, patch, onGo, locked = false, onFork, repeats = 3 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [twinEditorOpen, setTwinEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -35,10 +39,26 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
   // this is the backstop if it is ever rendered directly.
   const needsScenarios = (envState?.scenarios?.length || 0) === 0;
 
-  const { appliedEvals, appliedIds, add, remove, update } = useAppliedEvals(envState, patch);
+  const { appliedEvals, appliedIds, add, remove, update, setRequired, slotsLeft } = useAppliedEvals(envState, patch);
+  /* Up to 8 catalogue evaluations plus the tool-call judge. */
+  const atCap = slotsLeft <= 0;
+  const cappedCount = cappedEvalCount(envState?.evals || []);
+  const requiredCount = appliedEvals.filter((e) => e.required).length;
   const editing = appliedEvals.find((e) => e.id === editingId) || null;
 
   const hasTools = worldToolsFor(env, envState).length > 0;
+
+  /* What the evals cost per run (AC-16.4): managed judges meter AI credits
+     per call; rule-based and own-key evals are free. Counted over the
+     scenarios a run would actually take — the same plan the Run button
+     reads. */
+  const runnable = useMemo(
+    () => runPlan(env, envState).run.length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, envState.scenarios, envState.envVersions, envState.activeEnvVersion],
+  );
+  const creditsPerRun = evalCreditsPerRun({ evals: appliedEvals, scenarios: runnable, repeats });
+  const meteredCount = appliedEvals.filter((e) => evalRailOf(e).metered).length;
   const toolCallEval = getEval(TOOL_CALL_EVAL_ID);
   const toolCallEvalOn = appliedIds.has(TOOL_CALL_EVAL_ID);
 
@@ -77,79 +97,28 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
     "Add all" on — but nobody ever wanted the suggestions to *not* be
     scored, so the click was a formality. Preseed on empty and drop the
     Suggested card entirely; the user can still remove any of them from
-    Added or open the library for more. Ref-guarded so we don't loop
-    when the user deliberately clears everything.
+    Added or open the library for more. Once per environment
+    (`evalsSeeded`), so clearing them stays cleared — and the run says
+    it needs one.
     */
   const seededRef = useRef(false);
   useEffect(() => {
-    if (seededRef.current) return;
+    if (seededRef.current || envState?.evalsSeeded) return;
     if (needsScenarios) return;
     if (appliedEvals.length > 0) { seededRef.current = true; return; }
     if (suggested.length === 0) { seededRef.current = true; return; }
     seededRef.current = true;
     add(suggested);
+    patch({ evalsSeeded: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsScenarios, suggested.length, appliedEvals.length]);
 
 
   return (
     <Box sx={{ p: 2 }}>
-      <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "flex-end" }} spacing={2} sx={{ mb: 3 }}>
-        <Box flex={1}>
-          <Typography sx={{ typography: "m2", fontWeight: 600 }}>Evaluations</Typography>
-          <Typography sx={{ typography: "s1", color: "text.secondary", maxWidth: 720 }}>
-            These decide whether each task passed. Pick them from the library and map
-            their inputs onto what the run produces.
-          </Typography>
-        </Box>
-        {/*
-          Only show the header CTA once the "Added evaluations" list has
-          something in it. When it's empty, the empty-state card below
-          already renders a prominent Add evaluations button — two CTAs
-          for the same action read as noise.
-        */}
-        {appliedEvals.length > 0 && (
-          <Stack direction="row" spacing={1}>
-            {twinBacked && (
-              <Tooltip arrow title={locked ? "Fork this environment to author evals." : "Author a structured assertion against final clone state — deterministic, not a judge prompt."}>
-                <span>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    disabled={needsScenarios || locked}
-                    onClick={() => setTwinEditorOpen(true)}
-                    startIcon={<Iconify icon="solar:server-square-linear" width={14} />}
-                    sx={{
-                      typography: "s2", fontWeight: 700,
-                      color: "text.primary",
-                      borderColor: "divider",
-                      "&:hover": { borderColor: "text.disabled" },
-                    }}
-                  >
-                    Author clone eval
-                  </Button>
-                </span>
-              </Tooltip>
-            )}
-            <Tooltip arrow title={locked ? "Fork this environment to add evaluations." : needsScenarios ? "Add scenarios first" : ""}>
-              <span>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  size="small"
-                  disabled={needsScenarios || locked}
-                  onClick={() => setPickerOpen(true)}
-                  startIcon={<Iconify icon="solar:add-circle-linear" width={15} />}
-                  sx={{ typography: "s2", fontWeight: 700 }}
-                >
-                  Add evaluations
-                </Button>
-              </span>
-            </Tooltip>
-          </Stack>
-        )}
-      </Stack>
-
+      {/* No heading or description — the tab names the page and its hover
+          hint carries the description. Add evaluations sits on the card it
+          adds to. */}
       {/* Tool-call evaluation — carried over from the legacy run setup. It is
           the catalogue's tool-correctness eval, added to and removed from the
           applied list like any other, so the switch and the list below can
@@ -181,9 +150,54 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
       {/* ── what will actually score the run ── */}
       <SectionCard
         title={`Added evaluations (${appliedEvals.length})`}
+        /*
+          Only once the list has something in it. When it's empty, the
+          empty-state below already renders a prominent Add evaluations
+          button — two CTAs for the same action read as noise.
+        */
+        action={appliedEvals.length > 0 && (
+          <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+            {twinBacked && (
+              <Tooltip arrow title={locked ? "Fork this environment to author evals." : "Author a structured assertion against final clone state — deterministic, not a judge prompt."}>
+                <span>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    disabled={needsScenarios || locked}
+                    onClick={() => setTwinEditorOpen(true)}
+                    startIcon={<Iconify icon="solar:server-square-linear" width={14} />}
+                    sx={{
+                      typography: "s2", fontWeight: 700,
+                      color: "text.primary",
+                      borderColor: "divider",
+                      "&:hover": { borderColor: "text.disabled" },
+                    }}
+                  >
+                    Author clone eval
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
+            <Tooltip arrow title={locked ? "Fork this environment to add evaluations." : needsScenarios ? "Add scenarios first" : atCap ? EVAL_CAP_NOTE : ""}>
+              <span>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="small"
+                  disabled={needsScenarios || locked || atCap}
+                  onClick={() => setPickerOpen(true)}
+                  startIcon={<Iconify icon="solar:add-circle-linear" width={15} />}
+                  sx={{ typography: "s2", fontWeight: 700 }}
+                >
+                  Add evaluations
+                </Button>
+              </span>
+            </Tooltip>
+          </Stack>
+        )}
         subtitle={
           appliedEvals.length
-            ? "Every task is scored against these. Add more from the library any time."
+            ? `Every task is scored against these · ${cappedCount} of ${MAX_APPLIED_EVALS}${toolCallEvalOn ? " plus the tool-call judge" : ""}${requiredCount ? ` · ${requiredCount} required` : ""}. Sub-goals decide pass or fail; a required one also fails the conversation when it fails, the rest score it.`
             : undefined
         }
       >
@@ -194,7 +208,7 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
             body={
               needsScenarios
                 ? "An evaluation scores the tasks a run produces, so it needs scenarios to point at. Add some and this unlocks."
-                : "You can run without them — you'll get traces, but nothing will tell you whether the agent was right. Open the library to add some."
+                : "Optional — sub-goals decide pass or fail without them. Add evaluations to score each conversation, and mark one required to let it fail one. Open the library to add some."
             }
             action={
               <Stack direction="row" spacing={1}>
@@ -237,15 +251,36 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
                   /* No always-on evals. Every added row is editable and
                      removable — except on a locked template, where every
                      edit is gated behind a fork. */
-                  <Stack direction="row" spacing={0.25}>
+                  <Stack direction="row" alignItems="center" spacing={0.25}>
+                    {/* Required — a failing score fails the conversation. Stored
+                        on the applied eval, so runs and an improvement's goal
+                        picker read it from envState.evals. */}
+                    <Tooltip arrow title={locked ? "Fork this environment to edit." : `Required — ${REQUIRED_EVAL_NOTE}`}>
+                      <Stack
+                        component="label"
+                        direction="row" alignItems="center" spacing={0.25}
+                        sx={{ mr: 0.75, cursor: locked ? "default" : "pointer" }}
+                      >
+                        <Switch
+                          size="small"
+                          checked={!!e.required}
+                          disabled={locked}
+                          onChange={(ev) => setRequired(e.id, ev.target.checked)}
+                          inputProps={{ "aria-label": `Required: ${e.name}` }}
+                        />
+                        <Typography sx={{ typography: "s3", fontWeight: 600, color: e.required ? "text.primary" : "text.subtitle" }}>
+                          Required
+                        </Typography>
+                      </Stack>
+                    </Tooltip>
                     <Tooltip
                       arrow
-                      title={locked ? "Fork this environment to edit."
-                        : canEditEval(e) ? "Edit" : "Clone-state evals are authored assertions — remove and re-author to change one."}
+                      title={canEditEval(e) ? "View mapping" : "An authored assertion — it has no mapping to view."}
                     >
                       <span>
-                        <IconButton size="small" disabled={locked || !canEditEval(e)} onClick={() => setEditingId(e.id)} aria-label={`Edit ${e.name}`}>
-                          <Iconify icon="solar:pen-linear" width={16} sx={{ color: "text.subtitle" }} />
+                        {/* Viewing is never gated: a mapping is read-only, and removing it is the only change. */}
+                        <IconButton size="small" disabled={!canEditEval(e)} onClick={() => setEditingId(e.id)} aria-label={`View mapping for ${e.name}`}>
+                          <Iconify icon="solar:eye-linear" width={16} sx={{ color: "text.subtitle" }} />
                         </IconButton>
                       </span>
                     </Tooltip>
@@ -264,6 +299,25 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
         )}
       </SectionCard>
 
+      {atCap && !locked && (
+        <Typography sx={{ typography: "s2", color: "text.secondary", mt: 1.25, px: 0.5 }}>
+          {EVAL_CAP_NOTE}
+        </Typography>
+      )}
+
+      {appliedEvals.length > 0 && (
+        <Typography sx={{ typography: "s2", color: "text.secondary", mt: 1.25, px: 0.5, fontVariantNumeric: "tabular-nums" }}>
+          {meteredCount > 0
+            ? `This environment's evals cost about ${creditsPerRun.toLocaleString()} credits per run (${runnable} scenario${runnable === 1 ? "" : "s"} × ${repeats} repeat${repeats === 1 ? "" : "s"}).`
+            : "This environment's evals are free — each one is rule-based or judged by your own model key."}
+          {meteredCount > 0 && meteredCount < appliedEvals.length && (
+            <Box component="span" sx={{ color: "text.subtitle" }}>
+              {` ${appliedEvals.length - meteredCount} of ${appliedEvals.length} are free.`}
+            </Box>
+          )}
+        </Typography>
+      )}
+
       {/* Select many, map them one at a time. */}
       <AddEvalsDrawer
         open={pickerOpen}
@@ -272,6 +326,7 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
         envState={envState}
         existingIds={appliedIds}
         onAdd={add}
+        slotsLeft={slotsLeft}
       />
 
       {editing && (
@@ -279,6 +334,7 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
           item={editing}
           env={env}
           envState={envState}
+          locked={locked}
           onClose={() => setEditingId(null)}
           onSave={(changes) => update(editing.id, changes)}
         />
@@ -304,4 +360,5 @@ EvalsStep.propTypes = {
   onGo: PropTypes.func,
   locked: PropTypes.bool,
   onFork: PropTypes.func,
+  repeats: PropTypes.number,
 };

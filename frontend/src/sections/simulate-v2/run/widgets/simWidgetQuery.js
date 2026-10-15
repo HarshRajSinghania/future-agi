@@ -16,7 +16,7 @@
  *     breakdowns: [{ id, name }],
  *   }
  */
-import { csatOf, latencyOf, deriveUseCaseLabel } from "../TraceTable";
+import { csatOf, latencyOf, deriveUseCaseLabel } from "../traceTableHelpers";
 
 const fmtMs = (v) => (v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`);
 import { deriveToolCalls, isToolFailure } from "../toolCalls";
@@ -59,7 +59,7 @@ export function simRunsWithTasks(env, envState) {
     return {
       ...full,
       kind: "trial",
-      agentVersion: `${full.agentVersion || "trial"} · ${full.selfImprovementName ? `${full.selfImprovementName} ` : ""}T${full.trialN ?? ""}`.trim(),
+      agentVersion: `${full.agentVersion || "change"} · ${full.selfImprovementName ? `${full.selfImprovementName} · ` : ""}Run ${full.trialN ?? ""}`.trim(),
       tasks: (full.tasks || []).map((task) => ({ ...task, __trialCopy: true })),
     };
   });
@@ -238,7 +238,7 @@ export const SIM_ATTRIBUTES = [
   { id: "turn_bucket", name: "Turn count bucket", category: "conversation", get: (r) => groupKey(r, "turn_bucket") },
   { id: "csat_score", name: "CSAT score", category: "conversation", numeric: true, get: (r) => (isMeasured(r) ? String(csatOf(r)) : "—"), categories: () => Array.from({ length: 11 }, (_, i) => String(i)) },
   { id: "agent_version", name: "Agent version", category: "run", get: (r) => (r.__agentVersion ? `agent ${r.__agentVersion}` : "—") },
-  { id: "run_kind", name: "Run type", category: "run", get: (r) => (r.__trialCopy ? "Improvement trial" : "Run") },
+  { id: "run_kind", name: "Run type", category: "run", get: (r) => (r.__trialCopy ? "Improvement run" : "Run") },
   { id: "tool_name", name: "Tool name", category: "tools", grain: "tool", get: (r) => r.toolName || "—" },
   { id: "tool_status", name: "Tool status", category: "tools", grain: "tool", get: (r) => r.toolStatus || "—" },
 ];

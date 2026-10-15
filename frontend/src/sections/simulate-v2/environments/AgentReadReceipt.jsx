@@ -5,6 +5,7 @@ import { alpha } from "@mui/material/styles";
 import { Box, Grid, Stack, Typography, Button, IconButton, Tooltip, TextField, Divider, Link } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { OriginChip } from "../components/primitives";
+import { clickable, focusRing } from "../components/clickable";
 
 /*
   Reader can fail three ways. Each has its own affordance in this
@@ -344,7 +345,7 @@ function StatChip({ label, value, tone = "neutral" }) {
   return (
     <Stack direction="row" alignItems="center" spacing={0.875}>
       <Box sx={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, bgcolor: color || "text.disabled" }} />
-      <Typography sx={{ typography: "s2", fontWeight: 700, color: color || "text.primary", fontVariantNumeric: "tabular-nums" }}>
+      <Typography sx={{ typography: "s2", fontWeight: 700, color: tone === "red" ? color : "text.primary", fontVariantNumeric: "tabular-nums" }}>
         {value}
       </Typography>
       <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{label}</Typography>
@@ -675,7 +676,7 @@ function AskUserQuestionCard({
           sx={{
             px: 0.75, py: 0.125, borderRadius: 999, flexShrink: 0,
             bgcolor: (t) => alpha("#B45309", t.palette.mode === "dark" ? 0.28 : 0.16),
-            color: "#B45309",
+            color: "text.secondary",
             typography: "s3", fontWeight: 700,
             fontVariantNumeric: "tabular-nums",
           }}
@@ -741,7 +742,7 @@ function AskUserQuestionCard({
           }}
         >
           <Iconify icon="solar:info-circle-linear" width={14} />
-          <Typography sx={{ typography: "s3", fontWeight: 600 }}>
+          <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}>
             Skipped — the affected fact will carry an INFERRED marker.
           </Typography>
         </Stack>
@@ -826,8 +827,8 @@ AskUserQuestionCard.propTypes = {
 function AskOptionRow({ label, description, selected, index, onSelect, bottomChildren }) {
   return (
     <Box
-      onClick={onSelect}
-      sx={{
+      {...clickable(onSelect, { role: "radio", checked: selected })}
+      sx={{ ...focusRing,
         p: 1.25, borderRadius: 1.25, cursor: "pointer",
         bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.05 : 0.03),
         "&:hover": {
@@ -918,8 +919,8 @@ function QuestionStepper({ questions, answers, activeIdx, setActiveIdx, onAnswer
             <Stack
               key={qq.id}
               direction="row" alignItems="center" spacing={0.5}
-              onClick={() => setActiveIdx(i)}
-              sx={{ cursor: "pointer" }}
+              {...clickable(() => setActiveIdx(i), { label: `Question ${i + 1}`, pressed: active })}
+              sx={{ ...focusRing, cursor: "pointer" }}
             >
               <Box
                 sx={{
@@ -997,7 +998,7 @@ function QuestionStepper({ questions, answers, activeIdx, setActiveIdx, onAnswer
             }}
           >
             <Iconify icon="solar:info-circle-linear" width={14} />
-            <Typography sx={{ typography: "s3", fontWeight: 600 }}>
+            <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}>
               Skipped — the affected fact will carry an INFERRED marker in the built world.
             </Typography>
           </Stack>

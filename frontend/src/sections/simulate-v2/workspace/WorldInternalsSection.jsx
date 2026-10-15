@@ -1,24 +1,35 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, Collapse, Chip, IconButton, Tooltip, Menu, MenuItem } from "@mui/material";
+import { Box, Stack, Typography, Collapse, IconButton, Tooltip, Menu, MenuItem, Button, InputBase } from "@mui/material";
 import { useSnackbar } from "notistack";
 import Iconify from "src/components/iconify";
 import { SectionCard } from "../components/primitives";
-import { schemaFor, toolImplFor, checkImplFor, classifyToolEffect } from "../_mock/envInternals";
+import { schemaFor, toolImplFor } from "../_mock/envInternals";
+import { PROOF_CHECKS } from "../_mock/proofs";
+import {
+  FAULT_PRESETS, allToolsFaultPatch, downgradeTierPatch, faultLine, needsSafeTarget, safeTargetPatch, tierOf,
+  toolEnvPatch, toolEnvSummaryWords, toolSettingOf, allowLivePatch, liveAdvisoryOf,
+} from "../_mock/toolEnv";
+import { TierDial, FaultsControl, SafeTargetPrompt, LiveAdvisory } from "./ToolDial";
+import { offLimitsOf, offLimitsKindOf, OFF_LIMITS_KINDS } from "../_mock/cheatControls";
+import { toolArgsOf } from "../_mock/rlContract";
+import ToolArgsGrid from "./ToolArgsGrid";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
- * "World" internals on the Contract tab.
+ * World internals on the World tab.
  *
- * Three sections: DB schema, tool implementations, check implementations.
- * Rows are compact by default — click one open to inspect columns or read
- * the handler code. This keeps Contract as the single home for "what this
- * env is made of" instead of hiding the concrete code behind a second tab.
+ * Three sections: DB schema, the world's tools (each with its fidelity dial
+ * and fault profile; open one for its arguments and code), and the checks that prove
+ * a scenario can be staged. Rows are compact by default — click one open to
+ * inspect columns or read the code. Graders aren't here: sub-goals decide
+ * pass or fail, and the evaluations that score on top live on the
+ * Evaluations tab.
  */
-export default function WorldInternalsSection({ env, envState, patch }) {
+export default function WorldInternalsSection({ env, envState, patch, onGo, locked = false }) {
   const schema = schemaFor(env);
   const tools = env?.tools || [];
-  const evals = envState?.evals || env?.evalPreset || [];
 
   const totalRows = schema.reduce((a, t) => a + (t.rows || 0), 0);
 
@@ -28,9 +39,9 @@ export default function WorldInternalsSection({ env, envState, patch }) {
         <SchemaCard schema={schema} totalRows={totalRows} />
       )}
       {tools.length > 0 && (
-        <ToolImplsCard tools={tools} envState={envState} patch={patch} />
+        <ToolImplsCard env={env} tools={tools} envState={envState} patch={locked ? null : patch} />
       )}
-      {evals.length > 0 && <CheckImplsCard evals={evals} />}
+      <ProofChecksCard onGo={onGo} />
     </Stack>
   );
 }
@@ -38,6 +49,8 @@ WorldInternalsSection.propTypes = {
   env: PropTypes.object.isRequired,
   envState: PropTypes.object,
   patch: PropTypes.func,
+  onGo: PropTypes.func,
+  locked: PropTypes.bool,
 };
 
 /* ── DB schema ────────────────────────────────────────────────────────── */
@@ -63,8 +76,8 @@ function SchemaCard({ schema, totalRows }) {
                 direction="row"
                 alignItems="center"
                 spacing={1.5}
-                onClick={() => setOpenTable(open ? null : t.name)}
-                sx={{ px: 2.5, py: 1.375, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                {...clickable(() => setOpenTable(open ? null : t.name), { expanded: open })}
+                sx={{ ...focusRing, px: 2.5, py: 1.375, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
               >
                 <Iconify
                   icon={open ? "solar:alt-arrow-down-linear" : "solar:alt-arrow-right-linear"}
@@ -142,39 +155,88 @@ SchemaColumnRow.propTypes = { col: PropTypes.object };
 
 /* ── tool implementations ─────────────────────────────────────────────── */
 
-function ToolImplsCard({ tools, envState, patch }) {
+/*
+  The world's tool handlers, each with its fidelity dial (PRD v6 Story 5):
+  how the tool answers in a run, and what goes wrong with it on purpose. A
+  change to either is a world edit — the next run is on a new minor version.
+*/
+function ToolImplsCard({ env, tools, envState, patch }) {
   const [openTool, setOpenTool] = useState(null);
-  const overrides = envState?.toolResolutions || {};
-  const setOverride = (name, kind) => {
-    if (!patch) return;
-    patch({ toolResolutions: { ...overrides, [name]: kind } });
+  const [allAnchor, setAllAnchor] = useState(null);
+  const summary = toolEnvSummaryWords({ tools }, envState);
+
+  const setTier = (setting, tier) => {
+    if (!patch || setting.tier === tier) return;
+    patch(toolEnvPatch(envState, setting.name, { tier, ...(tier !== "live" && { safeTarget: null }) }, `${setting.name} set to ${tierOf(tier).word}`));
   };
+  /* Allow Live for one read-only tool and switch it there — one patch, so
+     the permission and the tier land together. A world edit, like any tier. */
+  const allowLive = (setting) => {
+    if (!patch) return;
+    const allowed = allowLivePatch(envState, setting.name, true).toolEnv;
+    patch(toolEnvPatch({ ...envState, toolEnv: allowed }, setting.name, { tier: "live" }, `${setting.name} set to ${tierOf("live").word}`));
+  };
+  const setFaults = (setting, faults, word) => {
+    if (!patch) return;
+    patch(toolEnvPatch(envState, setting.name, { faults }, `${setting.name} faults set to ${word}`));
+  };
+  const applyAll = (presetId) => {
+    setAllAnchor(null);
+    if (patch) patch(allToolsFaultPatch({ ...env, tools }, envState, presetId));
+  };
+
   return (
     <SectionCard
-      title="Tool implementations"
-      subtitle="The handler code each tool call runs against this environment"
-      action={
-        <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-          {tools.length} tools
-        </Typography>
-      }
+      title={`Tools · ${tools.length}`}
+      subtitle={(
+        <>
+          <Box component="span" sx={{ color: "text.primary", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{summary}</Box>
+          {" — how each tool answers during a run. A change is a world edit, so the next run is on a new minor version."}
+        </>
+      )}
+      action={patch && (
+        <>
+          <Button
+            size="small"
+            onClick={(e) => setAllAnchor(e.currentTarget)}
+            startIcon={<Iconify icon="solar:bolt-linear" width={14} />}
+            endIcon={<Iconify icon="solar:alt-arrow-down-linear" width={12} />}
+            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0, whiteSpace: "nowrap" }}
+          >
+            Faults for all tools
+          </Button>
+          <Menu
+            anchorEl={allAnchor}
+            open={!!allAnchor}
+            onClose={() => setAllAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+            slotProps={{ paper: { sx: { minWidth: 260, mt: 0.5 } } }}
+          >
+            {Object.entries(FAULT_PRESETS).map(([id, p]) => (
+              <MenuItem key={id} onClick={() => applyAll(id)} sx={{ display: "block", py: 1 }}>
+                <Typography sx={{ typography: "s2", fontWeight: 600 }}>{p.label}</Typography>
+                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{faultLine(p.faults)}</Typography>
+              </MenuItem>
+            ))}
+          </Menu>
+        </>
+      )}
     >
       <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
         {tools.map((tool) => {
           const open = openTool === tool.name;
           const impl = toolImplFor(tool);
-          const inferred = classifyToolEffect(tool);
-          const overridden = overrides[tool.name];
-          const effect = overridden || inferred.kind;
-          const isInferred = !overridden;
+          const setting = toolSettingOf(tool, envState);
+          const unsafe = needsSafeTarget(setting);
           return (
             <Box key={tool.name}>
               <Stack
                 direction="row"
                 alignItems="center"
                 spacing={1.5}
-                onClick={() => setOpenTool(open ? null : tool.name)}
-                sx={{ px: 2.5, py: 1.375, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                {...clickable(() => setOpenTool(open ? null : tool.name), { expanded: open })}
+                sx={{ ...focusRing, px: 2.5, py: 1.125, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
               >
                 <Iconify
                   icon={open ? "solar:alt-arrow-down-linear" : "solar:alt-arrow-right-linear"}
@@ -183,185 +245,220 @@ function ToolImplsCard({ tools, envState, patch }) {
                 />
                 <Iconify icon="solar:code-linear" width={15} sx={{ color: "#7857FC", flexShrink: 0 }} />
                 <Typography
-                  sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", minWidth: 220 }}
+                  noWrap
+                  sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", width: 220, flexShrink: 0 }}
                 >
                   {tool.name}
                 </Typography>
                 <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>
-                  {tool.desc}
+                  {setting.safeTarget && setting.tier === "live" ? `Live at ${setting.safeTarget}` : tool.desc}
                 </Typography>
-                <EffectPicker
-                  effect={effect}
-                  isInferred={isInferred}
-                  onPick={(next) => setOverride(tool.name, next)}
+                <TierDial
+                  setting={setting}
+                  onChange={patch ? (tier) => setTier(setting, tier) : null}
+                  onAllowLive={patch ? () => allowLive(setting) : null}
                 />
-                <Chip
-                  size="small"
-                  label={impl.file.split("/").pop()}
-                  sx={{
-                    height: 18,
-                    borderRadius: 0.5,
-                    color: "text.subtitle",
-                    border: "1px solid",
-                    borderColor: "divider",
-                    bgcolor: "transparent",
-                    "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" },
-                  }}
+                <FaultsControl
+                  setting={setting}
+                  onApply={patch ? (faults, word) => setFaults(setting, faults, word) : null}
                 />
               </Stack>
-              <Collapse in={open}>
+              {liveAdvisoryOf(setting) && (
+                <Box sx={{ px: 2.5, pb: 1.25, pl: 7.25 }}>
+                  <LiveAdvisory setting={setting} onSwitch={patch ? (tier) => patch(downgradeTierPatch(envState, setting.name, tier)) : null} />
+                </Box>
+              )}
+              {unsafe && (
+                <Box sx={{ px: 2.5, pb: 1.25, pl: 7.25 }}>
+                  <SafeTargetPrompt
+                    setting={setting}
+                    onConfirm={patch ? (url) => patch(safeTargetPatch(envState, setting.name, url)) : null}
+                    onDowngrade={patch ? (tier) => patch(downgradeTierPatch(envState, setting.name, tier)) : null}
+                  />
+                </Box>
+              )}
+              <Collapse in={open} unmountOnExit>
+                <ToolArgs tool={tool} envState={envState} />
                 <CodeBlock file={impl.file} code={impl.code} />
               </Collapse>
             </Box>
           );
         })}
       </Stack>
+      <OffLimits envState={envState} patch={patch} />
     </SectionCard>
   );
 }
-ToolImplsCard.propTypes = { tools: PropTypes.array, envState: PropTypes.object, patch: PropTypes.func };
+ToolImplsCard.propTypes = { env: PropTypes.object, tools: PropTypes.array, envState: PropTypes.object, patch: PropTypes.func };
 
-/**
- * Read/write effect chip with a small override menu.
- *
- * The verb heuristic picks a default (`inferred` tag), a stored
- * override wins. Clicking the chip opens a menu with the two choices
- * so a reader can correct the reader without leaving the row.
- */
-function EffectPicker({ effect, isInferred, onPick }) {
-  const [anchor, setAnchor] = useState(null);
-  const isWrite = effect === "write";
-  const tint = isWrite ? "#CA8A04" : "#16A34A";
-  const label = isWrite ? "writes" : "read-only";
+/* A tool's arguments, read-only — the limits among them are edited on the Contract tab. */
+function ToolArgs({ tool, envState }) {
+  const args = toolArgsOf(tool, envState);
   return (
-    <>
-      <Chip
-        size="small"
-        onClick={(e) => { e.stopPropagation(); setAnchor(e.currentTarget); }}
-        icon={
-          <Iconify
-            icon={isWrite ? "solar:pen-linear" : "solar:eye-linear"}
-            width={11}
-            sx={{ ml: "6px !important", color: `${tint} !important` }}
-          />
-        }
-        label={isInferred ? `${label} · inferred` : label}
-        sx={{
-          height: 20, borderRadius: 0.75, cursor: "pointer",
-          color: tint,
-          bgcolor: (t) => alpha(tint, t.palette.mode === "dark" ? 0.14 : 0.08),
-          border: "1px solid", borderColor: (t) => alpha(tint, t.palette.mode === "dark" ? 0.35 : 0.3),
-          "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 700 },
-        }}
-      />
-      <Menu
-        anchorEl={anchor}
-        open={!!anchor}
-        onClose={() => setAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{ paper: { sx: { minWidth: 220, mt: 0.5 } } }}
-      >
-        <EffectMenuItem
-          selected={!isWrite}
-          icon="solar:eye-linear"
-          label="Read-only"
-          hint="scenarios call it directly"
-          onClick={() => { onPick("read"); setAnchor(null); }}
-        />
-        <EffectMenuItem
-          selected={isWrite}
-          icon="solar:pen-linear"
-          label="Writes data"
-          hint="writes hit the sandbox, never production"
-          onClick={() => { onPick("write"); setAnchor(null); }}
-        />
-      </Menu>
-    </>
+    <Box sx={{ borderTop: "1px solid", borderColor: "divider", px: 2.5, pl: 7.25, py: 1.25 }}>
+      <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle", mb: 0.5 }}>Arguments</Typography>
+      {args.length === 0
+        ? <Typography sx={{ typography: "s3", color: "text.disabled" }}>None</Typography>
+        : <ToolArgsGrid args={args} />}
+    </Box>
   );
 }
-EffectPicker.propTypes = {
-  effect: PropTypes.string, isInferred: PropTypes.bool, onPick: PropTypes.func,
-};
+ToolArgs.propTypes = { tool: PropTypes.object.isRequired, envState: PropTypes.object };
 
-function EffectMenuItem({ selected, icon, label, hint, onClick }) {
+/* ── off-limits tools and paths (PRD v7 AC-12.24) ─────────────────────── */
+
+/*
+  What a run may never call: admin overrides, debug and test hooks, seed or
+  reset endpoints. The tool gateway logs any call to one, and the run scores
+  it fail · cheat. Editing the list is an environment edit.
+*/
+function OffLimits({ envState, patch }) {
+  const list = offLimitsOf(envState);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [why, setWhy] = useState("");
+  const write = (next) => patch && patch({ offLimits: next });
+  const add = () => {
+    const n = name.trim();
+    if (!n || list.some((o) => o.name === n)) return;
+    write([...list, { name: n, why: why.trim() || `${OFF_LIMITS_KINDS.find((k) => k.id === offLimitsKindOf(n)).label}.` }]);
+    setName(""); setWhy(""); setAdding(false);
+  };
+  const field = {
+    px: 1, py: 0.25, borderRadius: 0.75, border: "1px solid", borderColor: "divider", typography: "s2", bgcolor: "background.paper",
+  };
   return (
-    <MenuItem onClick={onClick} sx={{ alignItems: "flex-start", gap: 1.25, py: 1 }}>
-      <Iconify
-        icon={selected ? "solar:check-circle-bold" : icon}
-        width={16}
-        sx={{ color: selected ? "primary.main" : "text.subtitle", mt: "2px", flexShrink: 0 }}
-      />
-      <Box minWidth={0}>
-        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{label}</Typography>
-        <Typography sx={{ typography: "s3", color: "text.subtitle", whiteSpace: "normal" }}>{hint}</Typography>
-      </Box>
-    </MenuItem>
+    <Box sx={{ borderTop: "1px solid", borderColor: "divider" }}>
+      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, pt: 1.5, pb: 0.75 }}>
+        <Iconify icon="solar:forbidden-circle-linear" width={15} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+        <Box flex={1} minWidth={0}>
+          <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Off-limits · ${list.length}`}</Typography>
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+            Tools and paths no run may call — admin overrides, debug or test hooks, seed or reset endpoints. Any call is logged and scored fail · cheat.
+          </Typography>
+        </Box>
+        {patch && !adding && (
+          <Button
+            size="small"
+            onClick={() => setAdding(true)}
+            startIcon={<Iconify icon="solar:add-circle-linear" width={14} />}
+            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0 }}
+          >
+            Add
+          </Button>
+        )}
+      </Stack>
+      <Stack sx={{ pb: 1 }}>
+        {list.length === 0 && !adding && (
+          <Typography sx={{ px: 2.5, pl: 6.75, py: 0.75, typography: "s3", color: "text.subtitle" }}>
+            None declared — a run can&apos;t tell a shortcut from a legitimate call.
+          </Typography>
+        )}
+        {list.map((o) => (
+          <Stack key={o.name} direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, pl: 6.75, py: 0.5, "&:hover .ol-x": { opacity: 1 } }}>
+            <Typography noWrap sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", width: 220, flexShrink: 0 }}>
+              {o.name}
+            </Typography>
+            <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>{o.why}</Typography>
+            {patch && (
+              <Tooltip arrow title="Remove — calls to it would no longer count as a cheat">
+                <IconButton size="small" className="ol-x" onClick={() => write(list.filter((x) => x.name !== o.name))} sx={{ opacity: 0, transition: "opacity .12s ease" }}>
+                  <Iconify icon="solar:close-circle-linear" width={14} sx={{ color: "text.subtitle" }} />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Stack>
+        ))}
+        {adding && (
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, pl: 6.75, py: 0.75 }}>
+            <InputBase
+              autoFocus value={name} onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }}
+              placeholder="admin_force_booking or /admin/*"
+              sx={{ ...field, width: 220, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}
+            />
+            <InputBase
+              value={why} onChange={(e) => setWhy(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }}
+              placeholder="Why it's off-limits (optional)"
+              sx={{ ...field, flex: 1 }}
+            />
+            <Button size="small" onClick={() => setAdding(false)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
+            <Button size="small" variant="outlined" disabled={!name.trim()} onClick={add} sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
+              Add
+            </Button>
+          </Stack>
+        )}
+      </Stack>
+    </Box>
   );
 }
-EffectMenuItem.propTypes = {
-  selected: PropTypes.bool, icon: PropTypes.string, label: PropTypes.string,
-  hint: PropTypes.string, onClick: PropTypes.func,
-};
+OffLimits.propTypes = { envState: PropTypes.object, patch: PropTypes.func };
 
-/* ── check implementations ────────────────────────────────────────────── */
+/* ── scenario checks ──────────────────────────────────────────────────── */
 
-function CheckImplsCard({ evals }) {
+/* What proves a scenario before it runs. Graders are a link, not a copy —
+   one home for them, one versioning rule. */
+function ProofChecksCard({ onGo }) {
   const [openCheck, setOpenCheck] = useState(null);
+  /* The same eight checks in every environment — folded to one line until asked for. */
+  const [shown, setShown] = useState(false);
+  if (!shown) {
+    return (
+      <Stack
+        direction="row" alignItems="center" spacing={1}
+        {...clickable(() => setShown(true), { expanded: false })}
+        sx={{ ...focusRing, px: 2, py: 1.25, borderRadius: 1, border: "1px solid", borderColor: "divider", cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+      >
+        <Iconify icon="solar:shield-check-linear" width={15} sx={{ color: "text.subtitle" }} />
+        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Scenario checks · ${PROOF_CHECKS.length}`}</Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>What proves each scenario before it runs</Typography>
+        <Iconify icon="solar:alt-arrow-down-linear" width={14} sx={{ color: "text.subtitle" }} />
+      </Stack>
+    );
+  }
   return (
     <SectionCard
-      title="Check implementations"
-      subtitle="The grader code that decides pass or fail on every scenario"
-      action={
-        <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-          {evals.length} checks
+      title="Scenario checks"
+      subtitle="What proves each scenario before it runs — pass or fail on a run is decided by evaluations"
+      action={onGo && (
+        <Typography
+          {...clickable(() => onGo("evals"), { role: "link" })}
+          sx={{ ...focusRing, typography: "s3", color: "primary.main", fontWeight: 700, cursor: "pointer" }}
+        >
+          Evaluations
         </Typography>
-      }
+      )}
     >
       <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-        {evals.map((evalId) => {
-          const id = typeof evalId === "string" ? evalId : evalId.id;
-          const open = openCheck === id;
-          const impl = checkImplFor(id);
+        {PROOF_CHECKS.map((check) => {
+          const open = openCheck === check.id;
           return (
-            <Box key={id}>
+            <Box key={check.id}>
               <Stack
                 direction="row"
                 alignItems="center"
                 spacing={1.5}
-                onClick={() => setOpenCheck(open ? null : id)}
-                sx={{ px: 2.5, py: 1.375, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                {...clickable(() => setOpenCheck(open ? null : check.id), { expanded: open })}
+                sx={{ ...focusRing, px: 2.5, py: 1.375, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
               >
                 <Iconify
                   icon={open ? "solar:alt-arrow-down-linear" : "solar:alt-arrow-right-linear"}
                   width={13}
                   sx={{ color: "text.subtitle", flexShrink: 0 }}
                 />
-                <Iconify icon="solar:shield-check-linear" width={15} sx={{ color: "#16A34A", flexShrink: 0 }} />
+                <Iconify icon="solar:shield-check-linear" width={15} sx={{ color: "text.subtitle", flexShrink: 0 }} />
                 <Typography
                   sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", minWidth: 220 }}
                 >
-                  {id}
+                  {check.name}
                 </Typography>
                 <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>
-                  {impl.desc}
+                  {check.desc}
                 </Typography>
-                <Chip
-                  size="small"
-                  label={impl.file.split("/").pop()}
-                  sx={{
-                    height: 18,
-                    borderRadius: 0.5,
-                    color: "text.subtitle",
-                    border: "1px solid",
-                    borderColor: "divider",
-                    bgcolor: "transparent",
-                    "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" },
-                  }}
-                />
               </Stack>
               <Collapse in={open}>
-                <CodeBlock file={impl.file} code={impl.code} />
+                <CodeBlock file={check.file} code={check.code} />
               </Collapse>
             </Box>
           );
@@ -370,7 +467,7 @@ function CheckImplsCard({ evals }) {
     </SectionCard>
   );
 }
-CheckImplsCard.propTypes = { evals: PropTypes.array };
+ProofChecksCard.propTypes = { onGo: PropTypes.func };
 
 /* ── shared code viewer ───────────────────────────────────────────────── */
 

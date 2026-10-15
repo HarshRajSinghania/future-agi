@@ -1,6 +1,5 @@
 import PropTypes from "prop-types";
 import { useMemo, useRef, useState } from "react";
-import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, ButtonBase, IconButton } from "@mui/material";
 import Iconify from "src/components/iconify";
 import WidgetRenderer from "src/components/imagine/WidgetRenderer";
@@ -103,7 +102,7 @@ export default function ImaginePane({ tasks, env }) {
           <Box
             sx={{
               width: 22, height: 22, borderRadius: 0.75, display: "grid", placeItems: "center",
-              bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.16 : 0.1), color: "#7857FC",
+              bgcolor: "background.neutral", color: "text.secondary",
             }}
           >
             <Iconify icon="solar:magic-stick-3-bold" width={13} />
@@ -178,7 +177,7 @@ function EmptyCanvas({ onPick }) {
       <Box
         sx={{
           width: 48, height: 48, borderRadius: 1.5, display: "grid", placeItems: "center",
-          bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.16 : 0.08), color: "#7857FC",
+          bgcolor: "background.neutral", color: "text.secondary",
         }}
       >
         <Iconify icon="solar:magic-stick-3-linear" width={24} />
@@ -228,7 +227,7 @@ function ChatBubble({ message }) {
         <Box
           sx={{
             width: 20, height: 20, borderRadius: 0.75, display: "grid", placeItems: "center", flexShrink: 0, mt: 0.25,
-            bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.16 : 0.1), color: "#7857FC",
+            bgcolor: "background.neutral", color: "text.secondary",
           }}
         >
           <Iconify icon="solar:magic-stick-3-bold" width={12} />

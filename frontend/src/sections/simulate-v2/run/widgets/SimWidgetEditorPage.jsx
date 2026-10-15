@@ -57,6 +57,7 @@ import {
   topSeriesKeys,
   MAX_DEFAULT_SERIES,
 } from "./simWidgetQuery";
+import { clickable, focusRing } from "../../components/clickable";
 
 /**
  * Run-analytics widget editor — the Observe dashboards widget editor, on
@@ -88,8 +89,8 @@ function SectionHeader({ title, required, onClick, disabled, tip }) {
     <Tooltip title={tip} placement="left" arrow>
       <Stack
         direction="row" justifyContent="space-between" alignItems="center"
-        onClick={disabled ? undefined : onClick}
-        sx={{ ...SECTION_HOVER_SX, ...(disabled && { cursor: "default" }) }}
+        {...clickable(disabled ? undefined : onClick, { disabled })}
+        sx={{ ...SECTION_HOVER_SX, ...(disabled && { cursor: "default" }), ...focusRing }}
       >
         <Typography className="section-title" variant="body2" fontWeight="fontWeightSemiBold" sx={{ transition: "color 0.15s" }}>
           {title}
@@ -423,8 +424,8 @@ export default function SimWidgetEditorPage() {
           />
         ) : (
           <Typography
-            onClick={() => setEditingName(true)}
-            sx={{ fontSize: "14px", fontWeight: 500, cursor: "pointer", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", "&:hover": { color: "primary.main" } }}
+            {...clickable(() => setEditingName(true))}
+            sx={{ fontSize: "14px", fontWeight: 500, cursor: "pointer", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", "&:hover": { color: "primary.main" }, ...focusRing }}
           >
             {chartName || "Untitled widget"}
           </Typography>
@@ -435,9 +436,9 @@ export default function SimWidgetEditorPage() {
             <TruncatedTooltipText text={trimmedDescription}>
               {(measureRef) => (
                 <Stack
-                  direction="row" alignItems="center" gap={0.5} role="button" tabIndex={0}
-                  onClick={() => setDescOpen(true)}
-                  sx={{ minWidth: 0, maxWidth: 260, px: 0.75, py: 0.25, borderRadius: 1, color: "text.secondary", cursor: "pointer", "&:hover": { bgcolor: "action.hover", color: "text.primary" } }}
+                  direction="row" alignItems="center" gap={0.5} 
+                  {...clickable(() => setDescOpen(true))}
+                  sx={{ minWidth: 0, maxWidth: 260, px: 0.75, py: 0.25, borderRadius: 1, color: "text.secondary", cursor: "pointer", "&:hover": { bgcolor: "action.hover", color: "text.primary" }, ...focusRing }}
                 >
                   <Iconify icon="mdi:text-box-outline" width={14} sx={{ flexShrink: 0 }} />
                   <Typography ref={measureRef} noWrap sx={{ fontSize: "13px", minWidth: 0 }}>{trimmedDescription}</Typography>
@@ -701,8 +702,8 @@ export default function SimWidgetEditorPage() {
                         <Iconify icon={METRIC_TYPE_ICONS[m.type] || "mdi:cog-outline"} width={16} sx={{ color: "text.secondary" }} />
                         <Typography
                           variant="body2" noWrap title={m.name}
-                          sx={{ flex: 1, cursor: "pointer", maxWidth: 160, "&:hover": { color: "primary.main" } }}
-                          onClick={(e) => openPicker(e, "metric", i)}
+                          sx={{ flex: 1, cursor: "pointer", maxWidth: 160, "&:hover": { color: "primary.main" }, ...focusRing }}
+                          {...clickable((e) => openPicker(e, "metric", i))}
                         >
                           {m.name}
                         </Typography>
@@ -777,8 +778,8 @@ export default function SimWidgetEditorPage() {
                     <Stack direction="row" alignItems="center" gap={1}>
                       <Iconify icon={METRIC_TYPE_ICONS.custom_attribute} width={16} sx={{ color: "text.secondary" }} />
                       <Typography
-                        variant="body2" sx={{ flex: 1, cursor: "pointer", "&:hover": { color: "primary.main" } }}
-                        onClick={(e) => openPicker(e, "breakdown", i)}
+                        variant="body2" sx={{ flex: 1, cursor: "pointer", "&:hover": { color: "primary.main" }, ...focusRing }}
+                        {...clickable((e) => openPicker(e, "breakdown", i))}
                       >
                         {b.name}
                       </Typography>
@@ -851,8 +852,8 @@ function FilterRow({ filter, compact, onPickAttr, onRemove, onOperator, onPickVa
         <Iconify icon={compact ? "mdi:filter-outline" : METRIC_TYPE_ICONS.custom_attribute} width={compact ? 14 : 16} sx={{ color: compact ? "primary.main" : "text.secondary" }} />
         <Typography
           variant={compact ? "caption" : "body2"}
-          sx={{ flex: 1, fontWeight: compact ? 500 : undefined, cursor: "pointer", "&:hover": { color: "primary.main" } }}
-          onClick={onPickAttr}
+          sx={{ flex: 1, fontWeight: compact ? 500 : undefined, cursor: "pointer", "&:hover": { color: "primary.main" }, ...focusRing }}
+          {...clickable(onPickAttr)}
         >
           {filter.name || "Select attribute"}
         </Typography>
@@ -871,12 +872,13 @@ function FilterRow({ filter, compact, onPickAttr, onRemove, onOperator, onPickVa
         </FormControl>
         <Typography
           variant={compact ? "caption" : "body2"}
-          onClick={onPickValues}
+          {...clickable(onPickValues)}
           sx={{
             flex: 1, cursor: "pointer", color: filter.value?.length ? "text.primary" : "text.disabled",
             borderBottom: `1px solid ${theme.palette.divider}`, pb: 0.25,
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
             "&:hover": { borderColor: "primary.main" },
+            ...focusRing,
           }}
         >
           {valueLabel(filter.value)}
@@ -962,9 +964,13 @@ function SeriesTable({ series, buckets, visible, setVisible, search, setSearch, 
               const agg = s.total;
               return (
                 <tr key={s.key} style={{ borderBottom: `1px solid ${theme.palette.divider}` }}>
-                  <td style={{ padding: "8px 12px", position: "sticky", left: 0, background: theme.palette.background.paper, zIndex: 1, cursor: "pointer" }} onClick={() => toggle(s)}>
+                  <td style={{ padding: "8px 12px", position: "sticky", left: 0, background: theme.palette.background.paper, zIndex: 1, cursor: "pointer" }} onClick={(e) => { if (!(e.target instanceof HTMLInputElement)) toggle(s); }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <Checkbox size="small" checked={isOn(s)} tabIndex={-1} sx={{ p: 0, color, "&.Mui-checked": { color } }} />
+                      {/* The cell toggles by mouse; the checkbox is the keyboard stop. */}
+                      <Checkbox
+                        size="small" checked={isOn(s)} onChange={() => toggle(s)} inputProps={{ "aria-label": `Show ${s.name}` }}
+                        sx={{ p: 0, color, "&.Mui-checked": { color } }}
+                      />
                       <span style={{ color: theme.palette.text.primary, fontWeight: 500, fontSize: "13px" }}>{s.name}</span>
                     </span>
                   </td>

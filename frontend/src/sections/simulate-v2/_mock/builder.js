@@ -11,6 +11,7 @@
  */
 
 import { getAgentType, agentTypesForSurface } from "./agentTypes";
+import { argsSignatureLine } from "./rlContract";
 
 /**
  * The providers come off the voice_platform agent type rather than a second
@@ -326,7 +327,13 @@ const STAGES = {
       tool("extract_tools", toolsOfSource(source).length
         ? `${toolsOfSource(source).length} tools${source?.tools ? "" : " · 9 with required arguments"}`
         : "no tools yet — the world will answer whatever the first agent you connect calls"),
-      json("issue_refund", "order_id: str · amount: float · caller_confirmed: bool (must be true)"),
+      /* One signature, read the way the Contract tab lists it — names, types, permitted values. */
+      (() => {
+        const sample = toolsOfSource(source).find((t) => t.name === "issue_refund") || toolsOfSource(source).find((t) => t.args?.length) || toolsOfSource(source)[0];
+        return sample
+          ? json(sample.name, argsSignatureLine(sample) || "no arguments")
+          : json("issue_refund", "order_id: str · amount: float · caller_confirmed: bool (must be true)");
+      })(),
       think("Separating rules the code enforces from rules only the prompt states — the second kind is where agents drift."),
       tool("extract_rules", `${RULES.length} hard rules · 2 enforced in code, 2 prompt-only, 1 found in prose`),
       file("contract.json", "tools, permitted values, hard rules, the real data"),
@@ -451,6 +458,8 @@ const REACH_BY_MODALITY = {
   coding: { agentType: "mcp_agent", surface: "chat" },
 };
 
+const agentLabelOf = (source) => String(source?.agentName || source?.name || "").trim();
+
 /**
  * What the builder hands to the workspace when the user accepts it.
  *
@@ -460,8 +469,10 @@ const REACH_BY_MODALITY = {
  */
 export const derivedEnvironment = (source, { id } = {}) => ({
   id: id || "env-returns-line",
-  ...(REACH_BY_MODALITY[detectedStack(source).modality] || REACH_BY_MODALITY.voice),
-  name: "Returns & refunds line",
+  ...(REACH_BY_MODALITY[source?.channel] || REACH_BY_MODALITY[detectedStack(source).modality] || REACH_BY_MODALITY.voice),
+  /* Named by whoever started the build (the agent page asks); otherwise after
+     the agent it tests. The demo name only when nothing is known. */
+  name: source?.envName || (agentLabelOf(source) ? `${agentLabelOf(source)} environment` : "Returns & refunds line"),
   domain: "support",
   tagline: "Read from your agent",
   description:

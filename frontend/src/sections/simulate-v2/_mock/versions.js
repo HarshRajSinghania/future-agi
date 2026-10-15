@@ -84,14 +84,57 @@ export const seededEnvHistory = (env, scenarioCount) => {
  * that passes. A rules change does neither — it changes how a run is judged,
  * not whether it can be staged.
  */
+/* `contract` is the tools — the id stays because stored versions carry it. */
 export const ENV_CHANGES = [
-  { id: "seed", label: "Reseeded the world", invalidates: true, blurb: "New or regenerated data — the state a scenario presumes may be gone." },
-  { id: "checks", label: "Rewrote the checks", invalidates: true, blurb: "A check proved to fail on an empty run may now pass." },
+  { id: "seed", label: "Seed data changed", invalidates: true, blurb: "New or regenerated data — the state a scenario presumes may be gone." },
+  { id: "checks", label: "Scenario checks changed", invalidates: true, blurb: "A scenario's proof checks were rewritten — one proved to fail on an empty run may now pass." },
   { id: "contract", label: "Tools changed", invalidates: true, blurb: "The reference solution may no longer run." },
+  /* What a tool does inside the world — reads or writes, sandbox or stub. Its
+     interface is unchanged, so it's a world edit (a minor version), not a
+     contract change. */
+  { id: "toolbehaviour", label: "Tool behaviour changed", invalidates: true, blurb: "What a tool reads or writes changed — the reference solution may play out differently." },
   { id: "rules", label: "Rules changed", invalidates: false, blurb: "Graded differently; every scenario can still be staged." },
-  { id: "scoring", label: "Graders changed", invalidates: false, blurb: "Evaluations or thresholds changed — runs before and after were graded differently." },
+  { id: "scoring", label: "Evaluations changed", invalidates: false, blurb: "Evaluations or thresholds changed — runs before and after were graded differently." },
   { id: "actors", label: "Actors changed", invalidates: false, blurb: "Who else acts in the world changed — the episodes play out differently." },
 ];
+
+/** What a change id reads as — never the raw id ("contract" means tools). */
+export const envChangeLabel = (id) => ENV_CHANGES.find((c) => c.id === id)?.label || id;
+
+/* ── edits since the pinned version ──────────────────────────────────────── */
+
+/**
+ * Edits to the world since the pinned version.
+ *
+ * A version that no run has used yet is still being set up, so an edit just
+ * lands on it. Once a run has pinned it, an edit is a change to a world
+ * someone's result depends on — it's listed here until it's saved as the
+ * next version.
+ */
+export const pendingEnvChanges = (envState) => envState?.unsavedEnvChanges || [];
+
+const pinnedByRun = (envState) => {
+  const label = currentEnvVersion(null, envState)?.label;
+  return (envState?.runs || []).some((r) => !r.envVersion || r.envVersion === label);
+};
+
+/** Patch fragment that records one edit — `{}` while no run pins the version. */
+export const envChangePatch = (envState, kind, detail) => (pinnedByRun(envState)
+  ? { unsavedEnvChanges: [...pendingEnvChanges(envState), { kind, detail, at: new Date().toISOString() }] }
+  : {});
+
+/** Save the pending edits as the next version, which runs then use. */
+export const saveEnvChangesPatch = (env, envState) => {
+  const pending = pendingEnvChanges(envState);
+  const list = envState?.envVersions?.length
+    ? envState.envVersions
+    : [...environmentVersions(env, envState)].reverse();
+  const minted = nextEnvVersion(env, envState, {
+    changed: [...new Set(pending.map((c) => c.kind))],
+    note: pending.map((c) => c.detail).filter(Boolean).slice(0, 3).join("; ") || "World changed.",
+  });
+  return { envVersions: [...list, minted], activeEnvVersion: minted.label, unsavedEnvChanges: [] };
+};
 
 /** The next environment version, given what already exists. */
 export const nextEnvVersion = (env, envState, { changed = [], note, now, from } = {}) => {
@@ -120,9 +163,11 @@ export const nextEnvVersion = (env, envState, { changed = [], note, now, from } 
 /* ── agent versions ──────────────────────────────────────────────────────── */
 
 /**
- * Versions of the thing under test. These are the customer's, not ours — we
- * drive whichever one they point us at and never host it (an explicit
- * non-goal), so a version here is a label plus how to reach it.
+ * Versions of the thing under test. These are the customer's, not ours — they
+ * point us at the agent as it runs in production and the platform makes the
+ * copy a simulation drives (a sandbox build, a labelled provider clone, an
+ * exported definition — see replication.js), so a version here is a label
+ * plus how to reach it.
  *
  * A version is minted when the agent changes, and a run pins whichever one was
  * current when it started. It is emphatically *not* derived from the run count:
@@ -134,7 +179,7 @@ export const nextEnvVersion = (env, envState, { changed = [], note, now, from } 
 const firstAgentVersion = () => ({
   id: "agent-v1",
   label: "v1",
-  note: "First version connected to this environment.",
+  note: "First version connected.",
   reach: "endpoint",
   createdAt: new Date().toISOString(),
 });
@@ -142,15 +187,19 @@ const firstAgentVersion = () => ({
 /** The number in a version label — what phrasing and pinning key off. */
 export const versionNumber = (label) => parseInt(String(label || "").replace(/\D/g, ""), 10) || 1;
 
-/** Every agent version this environment knows about, oldest first. */
+/** Every agent version this environment knows about, oldest first. No agent,
+    no versions — never an invented v1 for a run to pin. */
 export const agentVersions = (envState) => {
   const stored = envState?.agentVersions;
-  return stored?.length ? stored : [firstAgentVersion()];
+  if (stored?.length) return stored;
+  return envState?.agent ? [firstAgentVersion()] : [];
 };
 
-/** The one the next run will use — the active pin if set, else the newest. */
+/** The one the next run will use — the active pin if set, else the newest.
+    Undefined when there's no agent. */
 export const currentAgentVersion = (envState) => {
   const list = agentVersions(envState);
+  if (!list.length) return undefined;
   const activeLabel = envState?.activeAgentVersion;
   if (activeLabel) return list.find((v) => v.label === activeLabel) || list[list.length - 1];
   return list[list.length - 1];

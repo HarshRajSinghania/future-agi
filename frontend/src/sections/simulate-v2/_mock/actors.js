@@ -19,6 +19,8 @@
  * here is being trained. The RL interface never uses the bare word.)
  */
 
+import { envChangePatch } from "./versions";
+
 const iso = (d) => new Date(Date.now() - d * 86400000).toISOString();
 
 /** How an actor gets into the episode. */
@@ -166,6 +168,60 @@ export const castFor = (env) => {
  */
 export const actorsOf = (env, envState) => envState?.actors || castFor(env);
 
-export const getActor = (id) => ACTOR_LIBRARY.find((a) => a.id === id);
+/* ── edits, per environment (AC-4.7, TC-4.4) ─────────────────────────────
+ *
+ * Editing an actor in an environment's cast changes how its episodes play
+ * out *there* — the library actor stays as it is for every other
+ * environment. The edit is stored on envState.actorEdits = { [actorId]:
+ * { ...fields, editedAt } }, layered over the library wherever the cast is
+ * read: the panel, the contract and the run. It lives on the environment, not
+ * on a version, so it carries into every version saved after it.
+ */
+export const ACTOR_EDIT_FIELDS = ["name", "goal", "blurb", "tests", "pressure", "entry", "traits", "modalities"];
+
+export const actorEditsOf = (envState) => envState?.actorEdits || {};
+
+/**
+ * One actor. With `envState`, as this environment has it — the library
+ * actor with the environment's edits on top, marked `edited`.
+ */
+export const getActor = (id, envState) => {
+  const base = ACTOR_LIBRARY.find((a) => a.id === id);
+  if (!base) return undefined;
+  const edit = envState?.actorEdits?.[id];
+  if (!edit) return base;
+  const fields = Object.fromEntries(ACTOR_EDIT_FIELDS.filter((k) => edit[k] !== undefined).map((k) => [k, edit[k]]));
+  return { ...base, ...fields, edited: true, editedAt: edit.editedAt || null, library: base };
+};
+
+/** The cast as actor records, edits applied. */
+export const castOf = (env, envState) => actorsOf(env, envState).map((id) => getActor(id, envState)).filter(Boolean);
+
+/** Only the fields that differ from the library — an edit back to the original is no edit. */
+const changedFields = (base, fields) => Object.fromEntries(ACTOR_EDIT_FIELDS
+  .filter((k) => fields[k] !== undefined && JSON.stringify(fields[k]) !== JSON.stringify(base[k]))
+  .map((k) => [k, fields[k]]));
+
+/**
+ * Save an edit to an actor in this environment. Recorded as an actors change
+ * (a minor environment version) once a run has pinned the current one.
+ */
+export const actorEditPatch = (envState, id, fields) => {
+  const base = ACTOR_LIBRARY.find((a) => a.id === id);
+  if (!base) return {};
+  const diff = changedFields(base, fields);
+  const rest = { ...actorEditsOf(envState) };
+  if (Object.keys(diff).length) rest[id] = { ...diff, editedAt: new Date().toISOString() };
+  else delete rest[id];
+  return { actorEdits: rest, ...envChangePatch(envState, "actors", `Edited ${fields.name || base.name}`) };
+};
+
+/** Put an actor back to the library's version in this environment. */
+export const resetActorPatch = (envState, id) => {
+  const base = ACTOR_LIBRARY.find((a) => a.id === id);
+  const rest = { ...actorEditsOf(envState) };
+  delete rest[id];
+  return { actorEdits: rest, ...envChangePatch(envState, "actors", `Reset ${base?.name || "an actor"} to the library version`) };
+};
 export const getPressure = (id) => PRESSURE_KINDS.find((p) => p.id === id) || PRESSURE_KINDS[0];
 export const getEntry = (id) => ENTRY_KINDS.find((e) => e.id === id) || ENTRY_KINDS[0];

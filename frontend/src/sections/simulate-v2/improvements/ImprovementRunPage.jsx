@@ -1,0 +1,170 @@
+import { useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
+import { Box, Button, Typography } from "@mui/material";
+import Iconify from "src/components/iconify";
+import { paths } from "src/routes/paths";
+import { useEnvState, useSimStore } from "../store";
+import OptimizationRunView from "../run/fixmyagent/OptimizationRunView";
+import { shippedCandidate } from "../run/fixmyagent/tradeoffs";
+import { improvementRunName } from "../_mock/optimizer";
+import { OPT_STATUS } from "../_mock/optimizationRuns";
+import { baseRunOf } from "../_mock/improvementStart";
+import { nextAgentVersion, currentEnvVersion } from "../_mock/versions";
+import { protoRunId } from "../_mock/executionAdapter";
+import SideDrawer from "../components/SideDrawer";
+import ImprovementRunsView from "./ImprovementRunsView";
+import ImprovementDecision from "./ImprovementDecision";
+
+/**
+ * One improvement, on its own page — `simulate/improvements/:envId/:optId`,
+ * level 2 of Improvements. Once its search has tried runs, the page lists
+ * them (ImprovementRunsView) and the search itself opens beside them; while
+ * it's still searching, or when it stopped before trying any, the page is
+ * the search.
+ *
+ * An improvement belongs to its environment, not to a run, so one started
+ * without a run (a goal, a schedule) reopens here rather than on the
+ * environment's runs list. The same view as the drawer over a run, with the
+ * same hand-off: landing a change saves a version, re-running starts a run.
+ *
+ * Opened from an Error Feed issue (Fix, View fix, the status chip), its back
+ * goes to that issue — the fix is part of working the issue.
+ */
+export default function ImprovementRunPage() {
+  const { envId, optId } = useParams();
+  const navigate = useNavigate();
+  const { state } = useSimStore();
+  const env = (state.myEnvironments || []).find((e) => e.id === envId) || null;
+  const { envState, patch, addAgentVersion } = useEnvState(envId);
+  const record = (envState?.optimizations || []).find((o) => o.id === optId) || null;
+  const location = useLocation();
+  const fromIssue = location.state?.fromIssue || null;
+  const from = location.state?.back || null;
+  /* The drawer beside the runs: the short decision first; the full record on request. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [fullRecord, setFullRecord] = useState(false);
+  /* Back goes to the issue it fixes, else the list it was opened from. */
+  const back = () => {
+    if (fromIssue) navigate(paths.dashboard.errorFeed.detail(fromIssue));
+    else if (from?.to) navigate(from.to);
+    else if (location.key !== "default") navigate(-1);
+    else navigate(paths.dashboard.simulate.improvements);
+  };
+  const backLabel = fromIssue || from?.label || "Improvements";
+  /* The view closes itself after it navigates somewhere (a trial's run, the
+     issue, the scenarios) — only a close that stays here goes back. */
+  const here = typeof window !== "undefined" ? window.location.pathname : null;
+  const close = () => { if (typeof window === "undefined" || window.location.pathname === here) back(); };
+
+  if (!env || !record) {
+    return (
+      <Box sx={{ p: 4, textAlign: "center" }}>
+        <Iconify icon="solar:question-circle-linear" width={32} sx={{ color: "text.subtitle" }} />
+        <Typography sx={{ typography: "s1", color: "text.secondary", mt: 1 }}>
+          {env ? "Improvement not found — it may have been deleted." : "Environment not found."}
+        </Typography>
+        <Button size="small" onClick={back} startIcon={<Iconify icon="solar:arrow-left-linear" width={14} />} sx={{ mt: 2, typography: "s2" }}>
+          Back to Improvements
+        </Button>
+      </Box>
+    );
+  }
+
+  const tasks = baseRunOf(env, envState)?.tasks || [];
+  const allScenarioIds = (envState?.scenarios || []).map((sc) => sc.id);
+  const sourceRun = (envState?.runs || []).find((r) => r.id === record.fromRunId) || null;
+  const provenance = { fromRunId: record.fromRunId || null, basedOnVersion: sourceRun?.agentVersion || record.baseAgentVersion || null };
+  const landed = envState?.handoffLandings?.[record.id] || null;
+
+  /* The same landing the drawer does: save the version once, with the
+     held-back projection beside it. */
+  const land = (info = {}) => {
+    const changes = shippedCandidate(record)?.proposals || record.result?.winner?.proposals || [];
+    const version = info.version || {
+      ...nextAgentVersion(envState, { note: info.note, applied: changes, fromRunId: record.fromRunId || null, basedOnVersion: provenance.basedOnVersion }),
+      origin: info.origin,
+    };
+    if (!info.version) addAgentVersion?.(version);
+    patch({
+      omegaExpectation: {
+        key: record.id,
+        version: version.label,
+        fromRun: record.fromRunId || null,
+        projected: shippedCandidate(record)?.held ?? record.result?.heldScore,
+        projectedOn: "held-back scenarios",
+        envVersion: currentEnvVersion(env, envState)?.label || null,
+        scenarios: allScenarioIds,
+        addresses: [...new Set(changes.flatMap((c) => c.addresses || []))],
+        at: new Date().toISOString(),
+      },
+      handoffLandings: { ...(envState?.handoffLandings || {}), [record.id]: version.label },
+    });
+  };
+  const newRun = () => navigate(paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36))));
+  const runWinner = (candidate = null) => {
+    const id = protoRunId(env.id, Date.now().toString(36));
+    /* Which run it verified — a winner someone chose is checked before review. */
+    patch({ optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id ? { ...o, verifyRunIds: [...(o.verifyRunIds || []), id], verifiedTrial: o.preferredTrial || o.result?.winner?.n } : o)) });
+    const url = paths.dashboard.simulate.simulationRun(env.id, id);
+    navigate(candidate ? `${url}?candidate=${encodeURIComponent(candidate)}` : url);
+  };
+  const finish = () => patch({
+    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id && o.status === OPT_STATUS.RUNNING
+      ? { ...o, status: OPT_STATUS.COMPLETED, completedAt: new Date().toISOString() }
+      : o)),
+  });
+
+  const search = (inDrawer) => (
+      <OptimizationRunView
+        /* In the drawer beside the runs list: the decision, not the runs
+           and growth chart the page already shows. */
+        decisionOnly={inDrawer}
+        record={record}
+        name={improvementRunName(envState, record)}
+        env={env}
+        envState={envState}
+        patch={patch}
+        tasks={tasks}
+        onRunWinner={runWinner}
+        handoff={{
+          key: record.id,
+          landedVersion: landed,
+          provenance,
+          onLand: land,
+          onRerun: newRun,
+        }}
+        onBack={inDrawer ? () => setFullRecord(false) : back}
+        backLabel={inDrawer ? undefined : fromIssue}
+        onClose={inDrawer ? () => setSearchOpen(false) : close}
+        onDone={finish}
+      />
+  );
+
+  /* Runs to list once the search has tried some and finished. */
+  const hasRuns = (record.result?.trials || []).length > 0 && record.status !== OPT_STATUS.RUNNING;
+  if (hasRuns) {
+    return (
+      <Box sx={{ height: "100%", minHeight: 0, bgcolor: "background.paper" }}>
+        <Helmet><title>{`${improvementRunName(envState, record)} · Improvements`}</title></Helmet>
+        <ImprovementRunsView
+          env={env} envState={envState} record={record} patch={patch}
+          onBack={back} backLabel={backLabel} onOpenSearch={() => { setFullRecord(false); setSearchOpen(true); }}
+          onVerify={() => runWinner()}
+        />
+        <SideDrawer open={searchOpen} onClose={() => setSearchOpen(false)} width={fullRecord ? 1080 : 560}>
+          {searchOpen && (fullRecord
+            ? search(true)
+            : <ImprovementDecision record={record} envState={envState} onClose={() => setSearchOpen(false)} onFullRecord={() => setFullRecord(true)} />)}
+        </SideDrawer>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", bgcolor: "background.paper" }}>
+      <Helmet><title>Improvement · Future AGI</title></Helmet>
+      {search(false)}
+    </Box>
+  );
+}

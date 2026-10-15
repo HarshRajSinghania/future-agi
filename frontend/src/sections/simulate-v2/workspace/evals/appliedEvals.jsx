@@ -1,72 +1,14 @@
 import PropTypes from "prop-types";
-import { useMemo } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography } from "@mui/material";
+import { Box, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { resolveEval } from "../../_mock/evals";
+import { REQUIRED_EVAL_NOTE } from "../../_mock/evals";
+import { evalRailOf } from "../../_mock/metering";
 
-/**
- * Applied evals — shared between the Evals step and the Overview card.
- *
- * Both surfaces add, list and remove the same evals, so the reading, the
- * add/remove rules and the row markup live here once. Without this the two
- * would drift the moment either changed.
- */
-export function useAppliedEvals(envState, patch) {
-  const applied = envState.evals;
-
-  const appliedEvals = useMemo(
-    () => applied.map(resolveEval).filter(Boolean),
-    [applied],
-  );
-
-  const appliedIds = useMemo(
-    () => new Set(appliedEvals.map((e) => e.id)),
-    [appliedEvals],
-  );
-
-  const add = (entries) => {
-    const fresh = entries.filter((e) => !appliedIds.has(e.id));
-    if (fresh.length) patch({ evals: [...applied, ...fresh] });
-  };
-
-  const remove = (id) =>
-    patch({ evals: applied.filter((e) => (typeof e === "string" ? e : e.id) !== id) });
-
-  /* Edit in place — keeps the eval's slot in the list. Bare-id records are
-     promoted to objects so the edited mapping / threshold survive. */
-  const update = (id, changes) =>
-    patch({
-      evals: applied.map((e) => {
-        const entryId = typeof e === "string" ? e : e.id;
-        if (entryId !== id) return e;
-        return { ...(typeof e === "string" ? { id: e } : e), ...changes };
-      }),
-    });
-
-  /**
-   * The picker returns a configured eval — template, judge model and the
-   * variable→column mapping. Only what this prototype needs is kept, in the
-   * same shape as a catalogue eval so both render through one row.
-   */
-  const onEvalAdded = (config) => {
-    const id = config.templateId || config.id || `eval-${config.name}`;
-    const mapping = config.mapping || {};
-    /* Mapping is rendered as chips on the row now — don't duplicate it in
-       the blurb. Blurb stays for the qualitative description. */
-    add([{
-      id,
-      name: config.name || config.evalTemplate?.name || "Eval",
-      blurb: config.evalTemplate?.description || "Added from the eval library",
-      mapping,
-      model: config.model,
-      custom: true,
-    }]);
-  };
-
-  return { applied, appliedEvals, appliedIds, add, remove, update, onEvalAdded };
-}
-
+/*
+  Applied evals — the row markup shared between the Evals step and the
+  Overview card. The reading and add/remove rules live in useAppliedEvals.js.
+*/
 export function EvalRow({ item, action, dense }) {
   /* Mapping chips — the variables the eval needs, each pointing at the
      column of the run that fills them. Preset evals arrive with defaults
@@ -94,6 +36,19 @@ export function EvalRow({ item, action, dense }) {
               · {item.category}
             </Typography>
           )}
+          {/* Required — a failing score fails the conversation. */}
+          {item.required && (
+            <Tooltip arrow title={REQUIRED_EVAL_NOTE}>
+              <Box
+                sx={{
+                  display: "inline-flex", alignItems: "center", flexShrink: 0, height: 18, px: 0.625,
+                  borderRadius: 0.5, border: "1px solid", borderColor: "text.disabled",
+                }}
+              >
+                <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.primary" }}>Required</Typography>
+              </Box>
+            </Tooltip>
+          )}
         </Stack>
         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{item.blurb}</Typography>
         {mappingEntries.length > 0 && !dense && (
@@ -104,6 +59,9 @@ export function EvalRow({ item, action, dense }) {
           </Stack>
         )}
       </Box>
+      {/* The billing rail it runs on — free, or credits per call — with the
+          why on hover (AC-19.6). */}
+      {!dense && <EvalRail item={item} />}
       {item.threshold != null && !dense && (
         <Typography
           sx={{
@@ -119,6 +77,28 @@ export function EvalRow({ item, action, dense }) {
     </Stack>
   );
 }
+
+/* Free, or "2 credits / call" — quiet, with the reason on hover. */
+export function EvalRail({ item, sx }) {
+  const rail = evalRailOf(item);
+  return (
+    <Tooltip arrow title={rail.why}>
+      <Typography
+        sx={{
+          typography: "s3", flexShrink: 0, whiteSpace: "nowrap", mt: 0.375, cursor: "help",
+          color: rail.metered ? "text.secondary" : "text.subtitle",
+          fontWeight: rail.metered ? 600 : 400,
+          fontVariantNumeric: "tabular-nums",
+          borderBottom: "1px dotted", borderColor: "text.disabled",
+          ...sx,
+        }}
+      >
+        {rail.label}
+      </Typography>
+    </Tooltip>
+  );
+}
+EvalRail.propTypes = { item: PropTypes.object, sx: PropTypes.object };
 
 /* One variable → column chip. Small pill so a row can carry three or four
    without dominating the layout. */

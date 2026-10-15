@@ -16,6 +16,9 @@
  * 3. Never mutates. Always returns a new object.
  */
 
+import { paths } from "src/routes/paths";
+import { improvementUrl } from "../improvements/improvementNav";
+
 const CURRENT_USER = {
   kind: "user",
   id: "u_vel",
@@ -62,14 +65,35 @@ export const SOURCES = {
     /* PRD §6.1.2 form: filled amber square — "you started this". */
     formKind: "user",
   },
-  "builder-chat": {
-    id: "builder-chat",
-    label: "Added via builder chat",
+  /* Written by the builder chat from what someone asked for. */
+  chat: {
+    id: "chat",
+    label: "From chat",
     short: "Chat",
     icon: "solar:chat-round-line-linear",
     actor: ASSISTANT_ACTOR,
     /* PRD §6.1.2 form: green filled mark — "the assistant did this". */
     formKind: "assistant",
+  },
+  /* The id chat batches carried before "chat" — same source, same badge. */
+  "builder-chat": {
+    id: "builder-chat",
+    label: "From chat",
+    short: "Chat",
+    icon: "solar:chat-round-line-linear",
+    actor: ASSISTANT_ACTOR,
+    formKind: "assistant",
+  },
+  /* Written by Add scenarios → Generate. Not "derived": derived is what the
+     environment wrote when it was built, and a later generation is an
+     addition someone asked for. */
+  generated: {
+    id: "generated",
+    label: "Generated",
+    short: "Generated",
+    icon: "solar:magic-stick-3-linear",
+    actor: CURRENT_USER,
+    formKind: "user",
   },
   "dataset-import": {
     id: "dataset-import",
@@ -89,6 +113,15 @@ export const SOURCES = {
     actor: SYSTEM_ACTOR,
     formKind: "auto",
   },
+  /* Written for a persona picked from the workspace persona library. */
+  "persona-library": {
+    id: "persona-library",
+    label: "From persona library",
+    short: "Library",
+    icon: "solar:users-group-rounded-linear",
+    actor: CURRENT_USER,
+    formKind: "user",
+  },
   production: {
     id: "production",
     label: "From production trace",
@@ -96,6 +129,35 @@ export const SOURCES = {
     icon: "solar:server-linear",
     actor: SYSTEM_ACTOR,
     formKind: "auto",
+  },
+  /* Built from an Error Feed issue's traces when someone pressed Fix. */
+  "error-feed": {
+    id: "error-feed",
+    label: "From Error Feed",
+    short: "Error Feed",
+    icon: "solar:bug-linear",
+    actor: CURRENT_USER,
+    formKind: "user",
+  },
+  /* Written by an improvement to reproduce what it was fixing, then added
+     to the environment by a person (RSI PRD). */
+  improvement: {
+    id: "improvement",
+    label: "From an improvement",
+    short: "Improvement",
+    icon: "solar:magic-stick-3-linear",
+    actor: CURRENT_USER,
+    formKind: "user",
+  },
+  /* A variation of a scenario that failed (or came out flaky) in one of this
+     environment's runs, written to reproduce that failure. */
+  "failing-case": {
+    id: "failing-case",
+    label: "From a failing case",
+    short: "Failing case",
+    icon: "solar:play-circle-linear",
+    actor: CURRENT_USER,
+    formKind: "user",
   },
 };
 
@@ -139,7 +201,9 @@ export function ensureProvenance(scenario) {
      few smaller batches were added later — by you and by teammates, days
      apart. A batch is one addition, not a kind of scenario. Deterministic
      per id-hash so the split is stable across renders. */
-  const slot = hashInt(scenario?.id || "") % 100;
+  /* By goal, not by row: a goal's scenarios were written together, so they
+     arrive in one batch rather than scattered one per batch. */
+  const slot = hashInt(scenario?.useCase || scenario?.id || "") % 100;
   const lane = BACKFILL_LANES.find((l) => slot < l.upTo) || BACKFILL_LANES[0];
   const at = new Date(Date.now() - lane.hoursAgo * 3600 * 1000);
   at.setMinutes(0, 0, 0);
@@ -234,4 +298,111 @@ export function relativeTime(iso) {
   if (d < 30) return `${d}d ago`;
   const mo = Math.round(d / 30);
   return `${mo}mo ago`;
+}
+
+/**
+ * Where a scenario came from, as something to click: the Error Feed issue it
+ * was built from, the run whose failure it reproduces, or the chat that wrote
+ * it. Sources with nowhere to go back to (generated, derived, a dataset, a
+ * script) return `to: null` and keep only the tooltip.
+ *
+ *   { source, label, ref, title, detail, to, chat }
+ *     ref    — the short id the badge shows ("ISS-4501", "Run 3", "Chat")
+ *     title  — first tooltip line ("From Error Feed · ISS-4501 — <title>")
+ *     detail — second tooltip line (who, when, and anything specific)
+ *     to     — a route, or null
+ *     chat   — true when the way back is the builder chat, not a route
+ *     observe — for a scenario built from production: { line, to } — the
+ *              original conversation stays in Observe, and `to` opens its trace
+ *
+ * `ctx` ({ envId, envState }) lets an improvement-made scenario link to the
+ * improvement that wrote it.
+ */
+export function sourceLinkOf(scenario, ctx = {}) {
+  const s = ensureProvenance(scenario);
+  const src = sourceOf(s.source);
+  const by = s.addedBy?.kind === "user" ? s.addedBy.name : src.short;
+  const when = relativeTime(s.addedAt);
+  const base = { source: src, label: src.label, ref: null, to: null, chat: false };
+
+  const issue = s.errorFeedIssue;
+  if (issue?.id) {
+    const traces = issue.traceIds?.length ? `Built from traces ${issue.traceIds.join(", ")}` : null;
+    return {
+      ...base,
+      source: SOURCES["error-feed"],
+      label: SOURCES["error-feed"].label,
+      ref: issue.id,
+      title: `From Error Feed · ${issue.id}${issue.title ? ` — ${issue.title}` : ""}`,
+      detail: [traces, `${by} · ${when}`].filter(Boolean).join(" · "),
+      to: paths.dashboard.errorFeed.detail(issue.id),
+      /* The scenario keeps the problem; the conversation itself stays where it was recorded. */
+      observe: {
+        line: "The original conversation stays in Observe.",
+        to: `${paths.dashboard.errorFeed.detail(issue.id)}?tab=traces${issue.traceIds?.[0] ? `&trace=${issue.traceIds[0]}` : ""}`,
+      },
+    };
+  }
+  const fc = s.failingCase;
+  if (fc?.runId && fc?.envId) {
+    const how = fc.verdict === "flaky"
+      ? `came out flaky${fc.passes != null ? ` (${fc.passes} of ${fc.repeats} passed)` : ""}`
+      : "failed";
+    return {
+      ...base,
+      source: SOURCES["failing-case"],
+      label: SOURCES["failing-case"].label,
+      ref: `Run ${fc.runOrdinal}`,
+      title: `From a failing case · Run ${fc.runOrdinal} — ${fc.taskName} ${how}${fc.evalName ? ` on ${fc.evalName}` : ""}`,
+      detail: `Agent ${fc.agentVersion || "—"} · ${by} · ${when}`,
+      to: paths.dashboard.simulate.simulationRun(fc.envId, fc.runId),
+    };
+  }
+  /* A production conversation replayed word for word (Phase 2). */
+  const replay = s.productionReplay;
+  if (replay?.conversationId) {
+    return {
+      ...base,
+      source: SOURCES.production,
+      label: SOURCES.production.label,
+      ref: "Replay",
+      title: `From production · ${replay.channel || "conversation"} replayed word for word`,
+      detail: [`${replay.turns?.length || 0} caller turns`, `${by} · ${when}`].join(" · "),
+      observe: { line: "The original conversation stays in Observe.", to: `${paths.dashboard.observe}?trace=${replay.conversationId}` },
+    };
+  }
+  if (s.fromImprovement?.id && !s.failingCase) {
+    /* Links to the improvement that wrote it — its run. */
+    const record = (ctx.envState?.optimizations || []).find((o) => o.id === s.fromImprovement.id);
+    const envId = ctx.envId || ctx.env?.id || s.env || null;
+    return {
+      ...base,
+      source: SOURCES.improvement,
+      label: SOURCES.improvement.label,
+      ref: s.fromImprovement.id,
+      title: `From an improvement · ${s.fromImprovement.name || s.fromImprovement.id}`,
+      detail: `${by} · ${when}`,
+      to: record && envId ? improvementUrl(envId, record, ctx.envState) : null,
+    };
+  }
+  if (s.source === "chat" || s.source === "builder-chat") {
+    return {
+      ...base,
+      ref: "Chat",
+      title: s.chatAsk ? `From chat · “${s.chatAsk}”` : "From chat",
+      detail: `${by} · ${when}`,
+      chat: true,
+    };
+  }
+  /* Built from a production trace or cluster — the conversations stay in Observe. */
+  if (src.id === "production") {
+    const trace = s.productionCluster?.traceIds?.[0] || s.traceId || null;
+    return {
+      ...base,
+      title: src.label,
+      detail: `${by} · ${when}`,
+      observe: { line: "The original conversation stays in Observe.", to: `${paths.dashboard.observe}${trace ? `?trace=${trace}` : ""}` },
+    };
+  }
+  return { ...base, title: src.label, detail: `${by} · ${when}` };
 }

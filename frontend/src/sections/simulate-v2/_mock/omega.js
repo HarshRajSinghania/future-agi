@@ -246,7 +246,7 @@ const graderTrust = ({ tasks, measured }) => {
 
 const difficulty = ({ measured }) => {
   if (!measured.length) return null;
-  const bucket = (t) => (t.critical ? "Release blockers" : "Routine tasks");
+  const bucket = (t) => (t.critical ? "Must-pass scenarios" : "Routine tasks");
   const groups = new Map();
   measured.forEach((t) => {
     const k = bucket(t);
@@ -261,7 +261,7 @@ const difficulty = ({ measured }) => {
     value: `${Math.round((g.passed / g.total) * 100)}%`,
     note: `${g.passed} of ${g.total}`,
   }));
-  const blockers = groups.get("Release blockers");
+  const blockers = groups.get("Must-pass scenarios");
 
   const weak = blockers && blockers.passed / blockers.total < 0.6;
   return {

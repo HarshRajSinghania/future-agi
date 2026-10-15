@@ -34,6 +34,9 @@ import {
   STREAM_STATUS,
   STREAM_TICK_MS,
 } from "../constants";
+import { useAgentImprovementFlag } from "src/sections/simulate-v2/_mock/featureFlags";
+import { textTone } from "src/sections/simulate-v2/components/textTone";
+import { clickable, focusRing } from "src/sections/simulate-v2/components/clickable";
 
 // Run-sequence definitions + makeStepMessage / buildSynthesis live in
 // `../useAnalyzeRunner` now — that hook owns the actual streaming so
@@ -597,8 +600,9 @@ function StepCard({ step }) {
       <Stack
         direction="row"
         gap={1.25}
-        onClick={hasDetails ? () => setExpanded((v) => !v) : undefined}
+        {...clickable(hasDetails ? () => setExpanded((v) => !v) : undefined, { expanded })}
         sx={{
+          ...focusRing,
           px: 1.5,
           py: 1.25,
           cursor: hasDetails ? "pointer" : "default",
@@ -757,8 +761,8 @@ function ReasoningBlock({ text }) {
           direction="row"
           alignItems="center"
           gap={0.75}
-          onClick={() => setOpen((v) => !v)}
-          sx={{ cursor: "pointer", userSelect: "none" }}
+          {...clickable(() => setOpen((v) => !v), { expanded: open })}
+          sx={{ cursor: "pointer", userSelect: "none", ...focusRing }}
         >
           <Typography
             fontSize="9.5px"
@@ -857,7 +861,7 @@ function SynthesisCard({ synthesis }) {
               ml: "auto",
               textTransform: "uppercase",
               letterSpacing: "0.06em",
-              color: CONF_META[synthesis.confidence].color,
+              color: textTone(CONF_META[synthesis.confidence].color),
               px: 0.75,
               py: 0.25,
               borderRadius: "3px",
@@ -897,7 +901,7 @@ function SynthesisCard({ synthesis }) {
               bgcolor: alpha("#5ACE6D", isDark ? 0.14 : 0.12),
             }}
           >
-            Fix
+            Suggested fix
           </Typography>
           <Box sx={{ flex: 1 }}>
             <AnalyzeMarkdown
@@ -910,9 +914,37 @@ function SynthesisCard({ synthesis }) {
           </Box>
         </Stack>
       )}
+      {/* A written fix isn't a proven one — hand it to Fix, which tests it in
+          simulation and ships it as a draft. */}
+      {headDone && synthesis.fix && !fix.isStreaming && (
+        <ProveFixCard />
+      )}
     </Box>
   );
 }
+function ProveFixCard() {
+  const setFixSheetOpen = useErrorFeedStore((s) => s.setFixSheetOpen);
+  /* Agent improvement is a design partner preview — no Fix when it's off. */
+  const improving = useAgentImprovementFlag();
+  if (!improving) return null;
+  return (
+    <Box sx={{ mt: 1.5, p: 1.25, borderRadius: "6px", border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}>
+      <Stack direction="row" alignItems="center" gap={1.25}>
+        <Iconify icon="mdi:wrench-outline" width={18} sx={{ color: "text.secondary", flexShrink: 0 }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography fontSize="12.5px" fontWeight={600}>Prove it before it ships</Typography>
+          <Typography fontSize="11.5px" color="text.secondary">
+            Fixing tests a change in simulation on this issue&apos;s own traces, checks nothing else broke, and hands it over as a draft.
+          </Typography>
+        </Box>
+        <Button size="small" variant="outlined" onClick={() => setFixSheetOpen(true)} sx={{ height: 28, fontSize: "12px", textTransform: "none", borderColor: "divider", color: "text.primary", flexShrink: 0 }}>
+          Fix
+        </Button>
+      </Stack>
+    </Box>
+  );
+}
+
 SynthesisCard.propTypes = {
   synthesis: PropTypes.object.isRequired,
 };
@@ -1529,7 +1561,7 @@ export default function AnalyzeTab({ error }) {
           color="text.primary"
           noWrap
         >
-          {error?.error?.name ?? "Cluster"}
+          {error?.error?.name ?? "Issue"}
         </Typography>
         <Typography fontSize="11.5px" color="text.disabled">
           · {error?.trace_count?.toLocaleString() ?? "—"} traces
@@ -1540,7 +1572,7 @@ export default function AnalyzeTab({ error }) {
           </Typography>
         )}
         <Box sx={{ flex: 1 }} />
-        <Tooltip title="Re-run with current cluster state (1 credit)" arrow>
+        <Tooltip title="Find root cause again with the current traces (1 credit)" arrow>
           <span>
             <Button
               size="small"
@@ -1607,14 +1639,14 @@ export default function AnalyzeTab({ error }) {
                 />
               </Box>
               <Typography fontSize="14px" fontWeight={600} color="text.primary">
-                No analysis yet
+                No root cause yet
               </Typography>
               <Typography
                 fontSize="12px"
                 color="text.secondary"
                 sx={{ lineHeight: 1.55 }}
               >
-                Kick off a cluster-level analysis. Sub-agents will sample
+                Find the root cause of this issue. Sub-agents will sample
                 representative calls, compare against a passing baseline, and
                 synthesise the result here.
               </Typography>
@@ -1638,7 +1670,7 @@ export default function AnalyzeTab({ error }) {
                   boxShadow: "none",
                 }}
               >
-                Analyze this cluster
+                Find root cause
               </Button>
             </Stack>
           ) : messages.length === 0 && isStreaming ? (
@@ -1727,7 +1759,7 @@ export default function AnalyzeTab({ error }) {
           color="text.disabled"
           sx={{ textAlign: "center", flexShrink: 0, py: 0.5 }}
         >
-          Showing the last analysis · Re-run to watch the full investigation and
+          Showing the last root cause · Re-run to watch the full investigation and
           ask follow-ups
         </Typography>
       ) : null}

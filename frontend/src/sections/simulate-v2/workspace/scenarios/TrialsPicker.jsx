@@ -5,6 +5,7 @@ import {
   Box, Stack, Typography, Button, Tooltip, Popover, TextField,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { clickable, focusRing } from "../../components/clickable";
 
 /*
   Reliability dial (PRD §10.2 AC-10.7) — pick how many times each
@@ -13,7 +14,8 @@ import Iconify from "src/components/iconify";
   middle ground. Custom covers anything else in 1–20.
 */
 const TRIAL_PRESETS = [1, 3, 5, 8];
-const DEFAULT_TRIALS_LABEL = 1;
+/* The header's default — three is the fewest where a scenario can be flaky. */
+const DEFAULT_TRIALS_LABEL = 3;
 
 /**
  * Compact popover-based trials picker.
@@ -25,10 +27,11 @@ const DEFAULT_TRIALS_LABEL = 1;
  * Props:
  *   trials         current k
  *   onChange(k)    called with the new k
- *   scenarioCount  used to render the "N × k = M runs" header inside the popover
+ *   scenarioCount  scenarios the run will actually run — for "N × k = M conversations"
+ *   unit           what one scenario × repeat is: "conversation" (default) or "call"
  *   size           "sm" (default) or "xs" for even more compact
  */
-export default function TrialsPicker({ trials, onChange, scenarioCount = 0, size = "sm" }) {
+export default function TrialsPicker({ trials, onChange, scenarioCount = 0, unit = "conversation", size = "sm" }) {
   const [anchor, setAnchor] = useState(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customValue, setCustomValue] = useState(String(trials || 1));
@@ -51,7 +54,7 @@ export default function TrialsPicker({ trials, onChange, scenarioCount = 0, size
 
   return (
     <>
-      <Tooltip arrow title="How many times to repeat each scenario (PRD §10.2 AC-10.7 Reliability)">
+      <Tooltip arrow title="How many times to repeat each scenario">
         <Button
           size="small"
           variant="outlined"
@@ -88,7 +91,7 @@ export default function TrialsPicker({ trials, onChange, scenarioCount = 0, size
           </Typography>
           {scenarioCount > 0 && (
             <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 11.5, mt: 0.25 }}>
-              {scenarioCount} {scenarioCount === 1 ? "scenario" : "scenarios"} × {k} {k === 1 ? "repeat" : "repeats"} = {totalRuns} runs
+              {scenarioCount} {scenarioCount === 1 ? "scenario" : "scenarios"} × {k} {k === 1 ? "repeat" : "repeats"} = {totalRuns} {unit}{totalRuns === 1 ? "" : "s"}
             </Typography>
           )}
         </Box>
@@ -97,8 +100,8 @@ export default function TrialsPicker({ trials, onChange, scenarioCount = 0, size
           return (
             <Box
               key={v}
-              onClick={() => apply(v)}
-              sx={{
+              {...clickable(() => apply(v), { role: "radio", checked: active })}
+              sx={{ ...focusRing,
                 display: "flex", alignItems: "center", gap: 1,
                 px: 1.5, py: 0.875, borderRadius: 0.75, cursor: "pointer",
                 bgcolor: active ? "action.hover" : "transparent",
@@ -126,8 +129,8 @@ export default function TrialsPicker({ trials, onChange, scenarioCount = 0, size
         <Box sx={{ borderTop: "1px solid", borderColor: "divider", mt: 0.5, pt: 0.5 }}>
           {!customOpen ? (
             <Box
-              onClick={() => setCustomOpen(true)}
-              sx={{
+              {...clickable(() => setCustomOpen(true))}
+              sx={{ ...focusRing,
                 display: "flex", alignItems: "center", gap: 1,
                 px: 1.5, py: 0.875, borderRadius: 0.75, cursor: "pointer",
                 "&:hover": { bgcolor: "action.hover" },
@@ -177,5 +180,6 @@ TrialsPicker.propTypes = {
   trials: PropTypes.number,
   onChange: PropTypes.func,
   scenarioCount: PropTypes.number,
+  unit: PropTypes.string,
   size: PropTypes.oneOf(["sm", "xs"]),
 };

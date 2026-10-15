@@ -1,12 +1,14 @@
 import PropTypes from "prop-types";
-import { useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
-  Box, Stack, Typography, TextField, InputAdornment, IconButton,
+  Box, Stack, Typography, TextField, IconButton,
   Switch, Button,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { FIELD } from "../../_mock/agentTypes";
+import { defaultRefFor } from "../../_mock/secretRefs";
+import SecretRefField from "../../agents/connect/SecretRefField";
+import { clickable, focusRing } from "../../components/clickable";
 
 /**
  * Renders one field from an agent type's schema.
@@ -20,7 +22,6 @@ export default function DynamicField({ field, value, onChange, values }) {
      -> assistant/agent/pathway mapping on voice_platform. */
   const resolved = field.labelFrom ? field.labelFrom.map[values?.[field.labelFrom.key]] : null;
   field = resolved ? { ...field, ...resolved } : field;
-  const [reveal, setReveal] = useState(false);
 
   // Conditional visibility (e.g. hide the token field when auth is "none").
   if (field.dependsOn) {
@@ -90,8 +91,8 @@ export default function DynamicField({ field, value, onChange, values }) {
               return (
                 <Box
                   key={o.value}
-                  onClick={() => onChange(o.value)}
-                  sx={{
+                  {...clickable(() => onChange(o.value), { role: "radio", checked: selected })}
+                  sx={{ ...focusRing,
                     flex: 1, p: 1.5, borderRadius: 1, cursor: "pointer",
                     border: "1px solid",
                     /*
@@ -153,31 +154,16 @@ export default function DynamicField({ field, value, onChange, values }) {
       );
 
     case FIELD.SECRET:
+      /* By reference (AC-6.12): a path in the secret manager, never the
+         value. A pasted key is refused in the field and never stored. */
       return (
         <Box>
           {label}
-          <TextField
-            fullWidth size="small"
-            type={reveal ? "text" : "password"}
-            value={value ?? ""}
-            placeholder={field.placeholder}
-            onChange={(e) => onChange(e.target.value)}
-            InputProps={{
-              endAdornment: (
-                <InputAdornment position="end">
-                  <IconButton size="small" onClick={() => setReveal((r) => !r)}>
-                    <Iconify
-                      icon={reveal ? "solar:eye-closed-bold" : "solar:eye-bold"}
-                      width={15}
-                      sx={{ color: "text.subtitle" }}
-                    />
-                  </IconButton>
-                </InputAdornment>
-              ),
-            }}
-            sx={{ "& .MuiInputBase-root": { typography: "s2" } }}
+          <SecretRefField
+            value={typeof value === "string" ? value : ""}
+            placeholder={defaultRefFor(field.key.replace(/([a-z])([A-Z])/g, "$1_$2"))}
+            onChange={onChange}
           />
-          {help}
         </Box>
       );
 

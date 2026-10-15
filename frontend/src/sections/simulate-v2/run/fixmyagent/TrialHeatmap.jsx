@@ -74,7 +74,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
     let best = null;
     trials.forEach((a, i) => {
       trials.slice(i + 1).forEach((b) => {
-        if (a.brokeBlocker || b.brokeBlocker) return;
+        if (a.brokeBlocker || b.brokeBlocker || a.cheats || b.cheats) return;
         const fa = fixesOf(a);
         const fb = fixesOf(b);
         const union = new Set([...fa, ...fb]).size;
@@ -92,7 +92,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
     <Box sx={{ p: 2.5 }}>
       <Stack direction="row" alignItems="flex-start" spacing={2} sx={{ mb: 2 }} flexWrap="wrap" rowGap={1}>
         <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 260 }}>
-          Every training scenario against every trial. A row that stays grey is a scenario no candidate could
+          Every training scenario against every run. A row that stays grey is a scenario no run could
           fix — a different kind of change, not a better prompt.
         </Typography>
         <Stack direction="row" spacing={1.25} flexWrap="wrap" rowGap={0.5} sx={{ flexShrink: 0 }}>
@@ -126,10 +126,10 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
               return (
                 <Tooltip
                   key={t.n} arrow
-                  title={`Trial ${t.n} — ${t.score}% · ${t.tried}${t.brokeBlocker ? " · rejected, broke a blocker" : ""}`}
+                  title={`Run ${t.n} — ${t.score}% · ${t.tried}${t.cheats ? " · rejected, cheated" : t.brokeBlocker ? " · rejected, a must-pass failure repeated" : ""}`}
                 >
                   <Box sx={{ width: COL, flexShrink: 0, textAlign: "center", cursor: "default" }}>
-                    {t.brokeBlocker && (
+                    {(t.brokeBlocker || t.cheats) && (
                       <Iconify icon="solar:danger-triangle-bold" width={9} sx={{ color: "#DC2626", display: "block", mx: "auto" }} />
                     )}
                     <Typography
@@ -169,7 +169,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
                     sx={{ width: NAME_W, flexShrink: 0, pr: 1.5, minWidth: 0 }}
                   >
                     {s.critical && (
-                      <Tooltip arrow title="Release blocker — a regression here stops a release">
+                      <Tooltip arrow title="Critical scenario — a run that regresses here is rejected">
                         <Box
                           sx={{ width: 5, height: 5, borderRadius: "50%", bgcolor: "#DC2626", flexShrink: 0 }}
                         />
@@ -195,7 +195,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
                     const win = winner && t.n === winner.n;
                     return (
                       <Box key={t.n} sx={{ width: COL, flexShrink: 0, px: "3px" }}>
-                        <Tooltip arrow title={`Trial ${t.n} · ${s.title} — ${tone.label}`}>
+                        <Tooltip arrow title={`Run ${t.n} · ${s.title} — ${tone.label}`}>
                           <Box
                             sx={{
                               height: 24, borderRadius: "4px", cursor: "default",
@@ -230,7 +230,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
                         <Typography
                           sx={{
                             typography: "s3", fontVariantNumeric: "tabular-nums", flexShrink: 0,
-                            color: stubborn ? "#CA8A04" : "text.secondary",
+                            color: stubborn ? "text.primary" : "text.secondary",
                             fontWeight: stubborn ? 700 : 500,
                           }}
                         >
@@ -238,14 +238,14 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
                         </Typography>
                       </>
                     ) : (
-                      <Tooltip arrow title="This scenario already passed — the only thing a candidate can do here is break it">
+                      <Tooltip arrow title="This scenario already passed — the only thing a run can do here is break it">
                         <Typography sx={{ typography: "s3", color: "text.disabled", flex: 1 }}>
                           already passing
                         </Typography>
                       </Tooltip>
                     )}
                     {s.broke > 0 && (
-                      <Tooltip arrow title={`${s.broke} ${s.broke === 1 ? "candidate" : "candidates"} broke this scenario`}>
+                      <Tooltip arrow title={`${s.broke} ${s.broke === 1 ? "run" : "runs"} broke this scenario`}>
                         <Typography sx={{ typography: "s3", color: "#DC2626", fontWeight: 700, flexShrink: 0 }}>
                           −{s.broke}
                         </Typography>
@@ -266,19 +266,19 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
             <Box component="span" sx={{ fontWeight: 700 }}>
               {rows.filter((s) => s.wasFailing && s.fixed === 0).length}{" "}
               {rows.filter((s) => s.wasFailing && s.fixed === 0).length === 1 ? "failing scenario was" : "failing scenarios were"}{" "}
-              never fixed by any candidate.
+              never fixed by any run.
             </Box>{" "}
             No wording gets there — these need a tool, a memory or an architecture change, which is what the
             hand-off changes are for.
           </Note>
         )}
         {pair && (
-          <Note tone="#7857FC" icon="solar:layers-minimalistic-bold">
+          <Note icon="solar:layers-minimalistic-bold">
             <Box component="span" sx={{ fontWeight: 700 }}>
-              Trials {pair.a.n} and {pair.b.n} fix different scenarios.
+              Runs {pair.a.n} and {pair.b.n} fix different scenarios.
             </Box>{" "}
-            Together they cover {pair.union} where the better of them alone covers {pair.alone} — worth running a
-            candidate that carries both changes.
+            Together they cover {pair.union} where the better of them alone covers {pair.alone} — worth trying a
+            run that carries both changes.
           </Note>
         )}
       </Stack>
@@ -294,11 +294,12 @@ function Note({ tone, icon, children }) {
       direction="row" alignItems="flex-start" spacing={1.25}
       sx={{
         px: 1.75, py: 1.25, borderRadius: 1, border: "1px solid",
-        borderColor: alpha(tone, 0.3),
-        bgcolor: (t) => alpha(tone, t.palette.mode === "dark" ? 0.08 : 0.04),
+        /* No tone: a neutral note — nothing to warn about, just worth reading. */
+        borderColor: tone ? alpha(tone, 0.3) : "divider",
+        bgcolor: tone ? (t) => alpha(tone, t.palette.mode === "dark" ? 0.08 : 0.04) : "background.neutral",
       }}
     >
-      <Iconify icon={icon} width={15} sx={{ color: tone, flexShrink: 0, mt: "2px" }} />
+      <Iconify icon={icon} width={15} sx={{ color: tone || "text.secondary", flexShrink: 0, mt: "2px" }} />
       <Typography sx={{ typography: "s2", color: "text.secondary" }}>{children}</Typography>
     </Stack>
   );

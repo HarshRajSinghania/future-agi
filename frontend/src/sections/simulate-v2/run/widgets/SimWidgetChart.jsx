@@ -13,6 +13,7 @@ import {
 } from "src/sections/dashboards/widgetUtils";
 import { buildSeriesColorMap, getSeriesColor } from "src/sections/dashboards/widgetEditorParts";
 import { COST_STAGES } from "../costSplit";
+import { textTone } from "../../components/textTone";
 
 /**
  * Draws a run-analytics widget's query result with the same chart types,
@@ -132,7 +133,7 @@ export default function SimWidgetChart({
           const v = s.total ?? getSeriesScalar(s.data, s.aggregation);
           return (
             <Box key={s.key} sx={{ textAlign: "center", minWidth: 120 }}>
-              <Typography sx={{ fontSize: compact ? 30 : 44, fontWeight: 700, lineHeight: 1.1, color: colorFor(s.name) }}>
+              <Typography sx={{ fontSize: compact ? 30 : 44, fontWeight: 700, lineHeight: 1.1, color: textTone(colorFor(s.name)) }}>
                 {v == null ? "—" : formatValueWithConfig(v, fmtFor(leftY, s.unit))}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>

@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
 import {
@@ -9,28 +9,27 @@ import {
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import { SectionCard } from "../components/primitives";
-import { useSimStore } from "../store";
+import { useSimStore, useConnectedAgents } from "../store";
+import { agentSourceOf, sourceFromAgentRecord, agentRecordFromSource, PROVIDER_LABELS } from "../_mock/agentRegistry";
+import AgentStateTags from "../agents/AgentStateTags";
+import { ConnectModeContext, RuntimeContext, AgentNameContext, PrefillContext } from "./connectMode";
+import LocalSteps from "./LocalSteps";
+import ChipCard from "./ChipCard";
+import EnvironmentsLanding from "./EnvironmentsLanding";
+import PrebuiltWorldsView from "./PrebuiltWorldsView";
+import SetupDrawer from "./SetupDrawer";
+import GithubRepoPicker from "../integrations/GithubRepoPicker";
+import { repoUrlOf, installedRepos } from "../_mock/integrations";
 import DescribeFlowStep from "./intake/DescribeFlowStep";
 import MyEnvironmentsTable from "./MyEnvironmentsTable";
-import { countries } from "src/assets/data/countries";
-import vapiLogo from "./platform-logos/vapi.svg?raw";
-import retellLogo from "./platform-logos/retell.svg?raw";
-import blandLogo from "./platform-logos/bland.svg?raw";
-import elevenlabsLogo from "./platform-logos/elevenlabs.svg?raw";
-import livekitLogo from "./platform-logos/livekit.svg?raw";
-
-/* Official brand marks for the hosted voice platforms, inlined so they inherit
-   `currentColor` (theme-aware). Each vendor's own published logo, used to
-   identify its integration — the same way the app labels its other service
-   integrations. `wordmark` logos already contain the brand name (so the chip
-   drops its text label); `mark` logos are a symbol only (chip keeps the name). */
-const PLATFORM_LOGOS = {
-  vapi: { svg: vapiLogo, type: "wordmark", maxWidth: 46 },
-  retell: { svg: retellLogo, type: "wordmark", maxWidth: 54 },
-  bland: { svg: blandLogo, type: "mark" },
-  elevenlabs: { svg: elevenlabsLogo, type: "mark" },
-  livekit: { svg: livekitLogo, type: "mark" },
-};
+import PersonaLibraryTab from "./personas/PersonaLibraryTab";
+import { PLATFORM_LOGOS, AGENT_TYPES, HOSTED_PLATFORMS_BY_TYPE, firstLive, isLivePlatform, COUNTRY_OPTIONS, COUNTRY_BY_ISO, LATER_PLATFORMS, PLATFORM_KEY_SCOPE } from "./connectOptions";
+import { CloneScopeChoice, EndpointConsent, HintLine, HowWeCopyIt, RunLocationChoice } from "../agents/connect/replicationBits";
+import { canCloneProvider, keyLacksCreateScope, webhookUrlFor } from "../_mock/replication";
+import { isSecretRef, keyRefOf } from "../_mock/secretRefs";
+import SecretRefField from "../agents/connect/SecretRefField";
+import { CLOSED_PLATFORMS, CLOSED_PLATFORM_NOTE, PLATFORM_TESTING } from "../_mock/rsiModel";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * Variation B entry point.
@@ -49,12 +48,72 @@ export default function StartEnvironment({ entry = false }) {
   const navigate = useNavigate();
   const { state } = useSimStore();
   const [choice, setChoice] = useState(null);
+  /* What the landing screen already knew when a setup opened — and where
+     the pick was made, so the panel opens right under it. */
+  const [picked, setPicked] = useState(null);
+  /* What the Build tab shows: the landing or every prebuilt world.
+     Deep-linkable via ?view= (an old ?view=journey lands on the landing). */
+  const [view, setViewState] = useState(() => {
+    const v = new URLSearchParams(window.location.search).get("view");
+    return v === "worlds" ? v : "landing";
+  });
+  const examplesRef = useRef(null);
+  const buildScrollRef = useRef(null);
+  const setView = (v) => {
+    setViewState(v);
+    setPicked(null);
+    setChoice(null);
+    const url = new URL(window.location.href);
+    if (v === "landing") url.searchParams.delete("view"); else url.searchParams.set("view", v);
+    window.history.replaceState(window.history.state, "", url);
+    buildScrollRef.current?.scrollTo?.({ top: 0 });
+  };
   /* Entry-page tab. "build" shows the picker; "my" shows the table of
-     already-created envs. Non-entry callers (e.g. New environment on a
-     dedicated page) do not surface the tabs. */
-  const [tab, setTab] = useState("build");
+     already-created envs; "personas" the workspace persona library, usable
+     in any environment. Non-entry callers (e.g. New environment on a
+     dedicated page) do not surface the tabs. Deep-linkable via ?tab=. */
+  const [tab, setTabState] = useState(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return ["build", "my", "personas"].includes(t) ? t : "build";
+  });
+  const setTab = (t) => {
+    setTabState(t);
+    const url = new URL(window.location.href);
+    if (t === "build") url.searchParams.delete("tab"); else url.searchParams.set("tab", t);
+    window.history.replaceState(window.history.state, "", url);
+  };
   const panelRef = useRef(null);
   const pickerRef = useRef(null);
+
+  const pickFromLanding = (id, prefill = null, from = "directory", itemId = null, meta = null) => {
+    setChoice(id);
+    setPicked({ choice: id, prefill, from, itemId, meta, at: Date.now() });
+    /* Landing picks open in a drawer — nothing to scroll to. */
+  };
+  /* Back from Agents → New agent (`?agent=<id>`): the agent was connected to
+     build an environment, so the build starts straight away — the version in
+     production and the default scenario count. More scenarios can be added on
+     the environment; no second "pick the agent" step. */
+  const { agents: knownAgents } = useConnectedAgents();
+  /* Also set by the landing's own connect drawer, once its agent is saved. */
+  const [pendingAgent, setPendingAgent] = useState(() => new URLSearchParams(window.location.search).get("agent"));
+  useEffect(() => {
+    const id = pendingAgent;
+    if (!id || !entry) return;
+    const a = knownAgents.find((x) => x.id === id);
+    if (!a) return;
+    setPendingAgent(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("agent");
+    window.history.replaceState(null, "", url.toString());
+    const built = {
+      ...sourceFromAgentRecord(a),
+      scenarioCount: scenarioCountOf(DEFAULT_SCENARIOS),
+      connectedAgent: a,
+      agentVersion: a.production || a.latest,
+    };
+    navigate(paths.dashboard.simulate.environmentBuild, { state: { presetSource: { ...built, envName: envNameFor(built) } } });
+  }, [pendingAgent, knownAgents, entry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pick = (id) => {
     setChoice(id);
@@ -65,7 +124,13 @@ export default function StartEnvironment({ entry = false }) {
     }, 60);
   };
 
-  const bringYourAgent = OPTIONS.filter((o) => o.group === "bring");
+  const { agents: connectedAgents } = useConnectedAgents();
+  /* Agents already connected (on the Agents page or by another environment)
+     can be reused as-is — no credentials to re-enter. */
+  const bringYourAgent = BRING_ORDER.map((id) => OPTIONS.find((o) => o.id === id))
+    .filter((o) => o && (o.id !== "connected" || connectedAgents.length > 0))
+    .map((o) => (o.id === "connected" ? { ...o, preview: connectedAgents.slice(0, 3).map((a) => a.name) } : o));
+  const bringYourWorld = WORLD_ORDER.map((id) => OPTIONS.find((o) => o.id === id)).filter(Boolean);
 
   /* When entry=true, the outer box becomes a full-height flex column so
      the My Environments tab's table + pagination follow the Datasets
@@ -99,16 +164,17 @@ export default function StartEnvironment({ entry = false }) {
             </Typography>
             <Typography sx={{ typography: "s1", color: "text.secondary" }}>
               {entry
-                ? "An environment is the world your agent runs in — seeded state, tools, and rules. Pick how you want to bring your agent in and we take care of the rest."
+                ? "Build a simulated world for your agent, then run callers against it and read the failures."
                 : "Every environment needs a world to simulate in. Start by telling us where the agent lives — or start blank if you don't have one yet."}
             </Typography>
           </Box>
         </Stack>
         <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
-          {entry && tab === "my" ? (
-            /* From the list, the way to a new environment is one click —
-               not a trip back to the other tab. (Start from scratch opened
-               a panel on the Build tab, so here it did nothing visible.) */
+          {entry && (tab === "my" || tab === "personas") ? (
+            /* From the list or the persona library, the way to a new
+               environment is one click — not a trip back to the other tab.
+               (Start from scratch opened a panel on the Build tab, so here it
+               did nothing visible.) */
             <Button
               size="small"
               variant="contained"
@@ -119,6 +185,10 @@ export default function StartEnvironment({ entry = false }) {
             >
               Build environment
             </Button>
+          ) : entry ? (
+            /* The Build tab is the way in — no second, guided route to the same
+               place. A build left midway shows in My environments, not here. */
+            null
           ) : (
             <Button
               size="small"
@@ -147,14 +217,59 @@ export default function StartEnvironment({ entry = false }) {
               "& .MuiTabs-indicator": { backgroundColor: "text.primary", height: 2 },
             }}
           >
-            <Tab value="build" disableRipple label="Build environment" sx={TAB_SX} />
-            <Tab value="my" disableRipple label="My Environments" sx={TAB_SX} />
+            <Tab
+              value="build"
+              disableRipple
+              label="Build environment"
+              /* Clicking it from the worlds list or the journey goes back to the start. */
+              onClick={() => { if (tab === "build" && view !== "landing") setView("landing"); }}
+              sx={TAB_SX}
+            />
+            <Tab
+              value="my"
+              disableRipple
+              label={(
+                <Stack direction="row" alignItems="center" spacing={0.75} component="span">
+                  <span>My environments</span>
+                  <Box component="span" sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+                    {(state?.myEnvironments || []).length}
+                  </Box>
+                </Stack>
+              )}
+              sx={TAB_SX}
+            />
+            <Tab value="personas" disableRipple label="Personas" sx={TAB_SX} />
           </Tabs>
         </Box>
       )}
 
-      {(!entry || tab === "build") && (
-        <Box sx={entry ? { flex: 1, minHeight: 0, overflow: "auto", p: 2 } : {}}>
+      {entry && tab === "build" && (
+        <Box ref={buildScrollRef} sx={{ flex: 1, minHeight: 0, overflow: "auto", px: 2, pt: 2.5 }}>
+          {view === "worlds" && <PrebuiltWorldsView onBack={() => setView("landing")} />}
+          {view === "landing" && (
+            <EnvironmentsLanding
+              onPick={pickFromLanding}
+              onAgentConnected={setPendingAgent}
+              onBrowseWorlds={() => setView("worlds")}
+              examplesRef={examplesRef}
+              picked={picked}
+            />
+          )}
+          <SetupDrawer
+            open={!!picked}
+            onClose={() => { setPicked(null); setChoice(null); }}
+            meta={picked?.meta}
+            subtitle={picked ? (OPTIONS.find((o) => o.id === picked.choice)?.setupSubtitle || OPTIONS.find((o) => o.id === picked.choice)?.blurb) : null}
+          >
+            {picked && (
+              <FlowPanel key={`${picked.choice}-${picked.at}`} choice={picked.choice} prefill={picked.prefill} bare />
+            )}
+          </SetupDrawer>
+        </Box>
+      )}
+
+      {!entry && (
+        <Box>
           <Stack ref={pickerRef} spacing={2.5}>
             <Box
               sx={{
@@ -186,7 +301,35 @@ export default function StartEnvironment({ entry = false }) {
                   gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", md: "repeat(3, 1fr)" },
                 }}
               >
-                {bringYourAgent.filter((o) => o.id !== "templates").map((opt) => (
+                {bringYourAgent.map((opt) => (
+                  <OptionCard
+                    key={opt.id}
+                    option={opt}
+                    selected={choice === opt.id}
+                    onClick={() => pick(opt.id)}
+                  />
+                ))}
+              </Box>
+            </Box>
+            {/* Not agents: an MCP server is the world's tools, a local runtime is
+                where the world runs. Built with no agent — connect one after. */}
+            <Box>
+              <Stack direction="row" alignItems="baseline" spacing={1.5} sx={{ mb: 1.5 }}>
+                <Typography sx={{ typography: "s2", fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase" }}>
+                  Or bring your world
+                </Typography>
+                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                  Tools or a runtime you already have — connect the agent afterwards.
+                </Typography>
+              </Stack>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 1.25,
+                  gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", md: "repeat(3, 1fr)" },
+                }}
+              >
+                {bringYourWorld.map((opt) => (
                   <OptionCard
                     key={opt.id}
                     option={opt}
@@ -205,6 +348,8 @@ export default function StartEnvironment({ entry = false }) {
           )}
         </Box>
       )}
+
+      {entry && tab === "personas" && <PersonaLibraryTab />}
 
       {entry && tab === "my" && (
         /* Datasets-page pattern — flex column that fills the remaining
@@ -225,6 +370,7 @@ export default function StartEnvironment({ entry = false }) {
           }}
         >
           <MyEnvironmentsTable
+            withToolbar
             envs={state?.myEnvironments || []}
             onOpen={(env) =>
               navigate(paths.dashboard.simulate.environmentDetail(env.id))
@@ -240,7 +386,9 @@ const TAB_SX = {
   minHeight: 38,
   minWidth: 0,
   px: 0.75,
-  mr: 0,
+  /* The theme puts 40px after every tab but the last, on a selector that
+     outranks a plain `mr` — match it to bring the three closer together. */
+  "&:not(:last-of-type)": { mr: 2.5 },
   typography: "s1",
   fontWeight: 700,
   textTransform: "none",
@@ -257,11 +405,9 @@ const HERO_CLONES = ["Slack", "Notion", "Gmail", "Salesforce", "Linear"];
 function HeroCard({ icon, title, tag, description, chips, moreLabel, selected, onClick }) {
   return (
     <Stack
-      onClick={onClick}
-      role="button"
-      aria-pressed={selected}
+      {...clickable(onClick, { pressed: selected })}
       spacing={1.75}
-      sx={{
+      sx={{ ...focusRing,
         position: "relative",
         p: 2.5,
         borderRadius: 1.5,
@@ -383,14 +529,12 @@ function ClonesHeroCard({ onClick }) {
 }
 ClonesHeroCard.propTypes = { onClick: PropTypes.func };
 
-function OptionCard({ option, selected, onClick }) {
+export function OptionCard({ option, selected, onClick }) {
   return (
     <Stack
-      onClick={onClick}
-      role="button"
-      aria-pressed={selected}
+      {...clickable(onClick, { pressed: selected })}
       spacing={1.5}
-      sx={{
+      sx={{ ...focusRing,
         position: "relative",
         p: 2,
         borderRadius: 1.5,
@@ -471,18 +615,139 @@ OptionCard.propTypes = {
   onClick: PropTypes.func,
 };
 
-/* ── flow panel router ─────────────────────────────────────────────────── */
+const CONNECT_AGENT_OPTIONS = ["hosted", "running", "phone", "source", "upload"];
+/* The environment picker's order — the same agent options, in the same order. */
+const BRING_ORDER = ["connected", ...CONNECT_AGENT_OPTIONS];
+/* Not agents — listed apart, and built with no agent attached. */
+const WORLD_ORDER = ["mcp", "local"];
 
-function FlowPanel({ choice }) {
-  const opt = OPTIONS.find((o) => o.id === choice);
-  const Body = PANELS[choice] || PanelNotImplemented;
+/* The second half of an agent: a repository or bundle says what the agent
+   is; this says where it runs. */
+function ConnectExtras({ choice }) {
+  const connect = useContext(ConnectModeContext);
+  if (!connect) return null;
+  if (choice === "source" || choice === "upload") {
+    return <WhereItRuns choice={choice} runtime={connect.runtime} setRuntime={connect.setRuntime} />;
+  }
+  return null;
+}
+ConnectExtras.propTypes = { choice: PropTypes.string };
+
+/* An endpoint or a hosted agent says where it runs; a linked repository lets
+   us read what it is. Same field, same words, wherever it's offered. */
+function LinkedRepoField({ value, onChange }) {
   return (
-    <SectionCard title={opt.title} subtitle={opt.setupSubtitle || opt.blurb}>
-      <Body />
-    </SectionCard>
+    <Field
+      label="Linked repository (optional)" mono
+      placeholder="https://github.com/your-org/your-agent"
+      value={value}
+      onChange={onChange}
+      helper="Lets Sync see prompt and tool changes."
+    />
   );
 }
-FlowPanel.propTypes = { choice: PropTypes.string };
+LinkedRepoField.propTypes = { value: PropTypes.string, onChange: PropTypes.func };
+
+/* How an agent read from code is copied and where it runs (Story 6): built
+   from the code in our hosted sandbox, or run locally through the SDK — then
+   the address serve() answers on, optional until the first run. */
+function WhereItRuns({ choice, runtime, setRuntime }) {
+  const location = runtime.location || "sdk";
+  const agent = { sourceKind: choice === "source" ? "repo" : "upload", values: { runLocation: location } };
+  return (
+    <Stack spacing={1.25}>
+      <HowWeCopyIt agent={agent} />
+      <Box sx={{ px: 1.75, py: 1.5, borderRadius: 1, border: "1px solid", borderColor: "divider" }}>
+        <Typography sx={{ typography: "s2", fontWeight: 700, mb: 1 }}>Where it runs</Typography>
+        <RunLocationChoice
+          agent={agent}
+          value={location}
+          onChange={(loc) => setRuntime((r) => ({ ...r, location: loc }))}
+          dense
+        />
+        {location === "sdk" ? (
+          <Stack spacing={1.25} sx={{ mt: 1.5 }}>
+            <Field
+              label="Where the SDK serves it (optional for now)" mono
+              placeholder="https://api.yourapp.com/agent/step"
+              value={runtime.endpoint}
+              onChange={(v) => setRuntime((r) => ({ ...r, endpoint: v }))}
+              helper={<HintLine hint="Local works — it dials out. Leave it empty and add it before the first run.">The address serve() answers on.</HintLine>}
+            />
+            <SecretRefField
+              label="Auth token (optional)"
+              placeholder="vault://acme/sim/agent_endpoint_token"
+              value={runtime.tokenRef || ""}
+              onChange={(v) => setRuntime((r) => ({ ...r, tokenRef: v }))}
+            />
+          </Stack>
+        ) : (
+          <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 1.25 }}>
+            {choice === "source"
+              ? "Built from the branch above each run · nothing to deploy"
+              : "Built from the uploaded bundle each run · nothing to deploy"}
+          </Typography>
+        )}
+      </Box>
+    </Stack>
+  );
+}
+WhereItRuns.propTypes = { choice: PropTypes.string, runtime: PropTypes.object, setRuntime: PropTypes.func };
+
+/* ── flow panel router ─────────────────────────────────────────────────── */
+
+export function FlowPanel({ choice, prefill = null, bare = false }) {
+  const connect = useContext(ConnectModeContext);
+  const opt = OPTIONS.find((o) => o.id === choice);
+  const Body = PANELS[choice] || PanelNotImplemented;
+  /* Building an environment from code asks where the agent runs too. */
+  const [runtime, setRuntime] = useState({ endpoint: "", tokenRef: "" });
+  const runtimeCtx = useMemo(
+    () => (!connect && (choice === "source" || choice === "upload") ? { choice, runtime, setRuntime } : null),
+    [connect, choice, runtime],
+  );
+  /* Named the same way in both modes. A connected agent already has a name;
+     an MCP server or a local runtime isn't an agent. */
+  const [ownName, setOwnName] = useState("");
+  const naming = useMemo(
+    () => (connect ? { name: connect.name, setName: connect.setName } : { name: ownName, setName: setOwnName }),
+    [connect, ownName],
+  );
+  const asksName = CONNECT_AGENT_OPTIONS.includes(choice);
+  return (
+    <Shell bare={bare} title={opt.title} subtitle={opt.setupSubtitle || opt.blurb}>
+      {asksName && (
+        <Box sx={{ px: 2.5, pt: 2.5 }}>
+          <Field
+            label="Agent name"
+            placeholder="Optional — e.g. Returns line agent"
+            value={naming.name}
+            onChange={naming.setName}
+          />
+        </Box>
+      )}
+      <AgentNameContext.Provider value={asksName ? naming : null}>
+        <PrefillContext.Provider value={prefill}>
+        {connect ? (
+          <ConnectModeContext.Provider value={{ ...connect, extra: <ConnectExtras choice={choice} /> }}>
+            <Body />
+          </ConnectModeContext.Provider>
+        ) : (
+          <RuntimeContext.Provider value={runtimeCtx}>
+            <Body />
+          </RuntimeContext.Provider>
+        )}
+        </PrefillContext.Provider>
+      </AgentNameContext.Provider>
+    </Shell>
+  );
+}
+/* In a drawer the panel needs no card of its own — the drawer is the frame. */
+function Shell({ bare, title, subtitle, children }) {
+  return bare ? <Box>{children}</Box> : <SectionCard title={title} subtitle={subtitle}>{children}</SectionCard>;
+}
+Shell.propTypes = { bare: PropTypes.bool, title: PropTypes.node, subtitle: PropTypes.node, children: PropTypes.node };
+FlowPanel.propTypes = { choice: PropTypes.string, prefill: PropTypes.object, bare: PropTypes.bool };
 
 /* ── build handler shared across panels ──────────────────────────────── */
 
@@ -497,38 +762,205 @@ FlowPanel.propTypes = { choice: PropTypes.string };
 */
 function useBuildEnvironment() {
   const navigate = useNavigate();
+  const connect = useContext(ConnectModeContext);
+  const rt = useContext(RuntimeContext);
+  const naming = useContext(AgentNameContext);
   return (source) => {
-    navigate(paths.dashboard.simulate.environmentBuild, { state: { presetSource: source } });
+    if (connect) {
+      connect.onConnect(source);
+      return;
+    }
+    const runLocation = rt ? rt.runtime.location || "sdk" : null;
+    const endpoint = runLocation === "sdk" ? rt.runtime.endpoint.trim() : "";
+    /* Only a reference travels; a half-typed one is dropped, never sent. */
+    const tokenRef = rt && isSecretRef(rt.runtime?.tokenRef) ? rt.runtime.tokenRef.trim() : "";
+    const typedName = naming?.name.trim();
+    const built = {
+      ...source,
+      ...(runLocation && { runLocation }),
+      ...(endpoint && { runtime: { endpoint, ...(tokenRef && { tokenRef }) } }),
+      ...(typedName && { name: typedName }),
+    };
+    navigate(paths.dashboard.simulate.environmentBuild, { state: { presetSource: { ...built, envName: envNameFor(built) } } });
   };
+}
+
+/* A new environment is named after the agent it tests — or, with no agent,
+   after the world it was built from. Renamed in place on the build screen. */
+function envNameFor(source) {
+  if (source.kind === "mcp") {
+    let host = source.value.split(/\s+/)[0];
+    try { host = new URL(source.value).hostname; } catch { /* a stdio command */ }
+    return `${host} environment`;
+  }
+  if (source.kind === "local") return "Local environment";
+  const agent = source.name || source.agentName || source.connectedAgent?.name
+    || (source.kind === "platform" ? (source.agentMode === "prompt" ? "Prompt agent" : `${PROVIDER_LABELS[source.provider] || "Hosted"} agent`)
+      : source.kind === "upload" ? (source.entry || source.files?.[0]?.name || "Uploaded agent")
+        : agentRecordFromSource(source).name);
+  return `${agent} environment`;
 }
 
 /* ── panels ────────────────────────────────────────────────────────────── */
 
+function PanelConnectedAgent() {
+  const build = useBuildEnvironment();
+  const prefill = useContext(PrefillContext);
+  /* A template's stand-in isn't anyone's agent to build for. */
+  const { agents: all } = useConnectedAgents();
+  const agents = all.filter((a) => !a.placeholder);
+  const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
+  const [agentId, setAgentId] = useState(() => (prefill?.agentId && agents.some((a) => a.id === prefill.agentId) ? prefill.agentId : agents[0]?.id || null));
+  const agent = agents.find((a) => a.id === agentId);
+  const [version, setVersion] = useState(null);
+  /* The version in production by default — not a draft nobody released. */
+  const chosenVersion = version && agent?.versions.some((v) => v.label === version) ? version : agent?.production || agent?.latest;
+  return (
+    /* Wide (the guided setup): agents on the left in their own scroll,
+       version, scenarios and Build on the right. Narrow (a drawer): stacked. */
+    <Box sx={{ p: 2.5, containerType: "inline-size" }}>
+      <Box
+        sx={{
+          display: "grid", gap: 2.5, gridTemplateColumns: "minmax(0, 1fr)",
+          "@container (min-width: 760px)": {
+            gridTemplateColumns: "minmax(0, 1fr) 300px", alignItems: "start",
+            "& .continue-row": { mx: 0, px: 0, pt: 0, borderTop: "none", position: "static", flexWrap: "wrap", rowGap: 0.75 },
+            "& .continue-row > .MuiButton-root": { flex: 1, ml: "0 !important" },
+            /* The row's empty spacer (no hint to show) takes no room here. */
+            "& .continue-row > .MuiBox-root:empty": { display: "none" },
+          },
+        }}
+      >
+        <Box minWidth={0}>
+          <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>{`Agent · ${agents.length}`}</Typography>
+          <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, maxHeight: 340, overflowY: "auto", p: 0.75 }}>
+            <Stack spacing={0.5}>
+              {agents.map((a) => {
+                const src = agentSourceOf(a);
+                const on = a.id === agentId;
+                return (
+                  <Stack
+                    key={a.id}
+                    direction="row" alignItems="center" spacing={1.25}
+                    {...clickable(() => { setAgentId(a.id); setVersion(null); }, { role: "radio", checked: on })}
+                    sx={{ ...focusRing,
+                      px: 1.25, py: 1, borderRadius: 0.75, cursor: "pointer", border: "1px solid",
+                      borderColor: on ? "text.primary" : "transparent",
+                      bgcolor: (th) => (on ? alpha(th.palette.text.primary, th.palette.mode === "dark" ? 0.06 : 0.03) : "transparent"),
+                      "&:hover": { bgcolor: (th) => alpha(th.palette.text.primary, th.palette.mode === "dark" ? 0.05 : 0.025) },
+                    }}
+                  >
+                    <Iconify icon={src.icon} width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
+                    <Box flex={1} minWidth={0}>
+                      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+                        <Typography noWrap sx={{ typography: "s2", fontWeight: 600, minWidth: 0 }}>{a.name}</Typography>
+                        <AgentStateTags agent={a} />
+                      </Stack>
+                      <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
+                        {`${src.label} · ${a.versions.length} version${a.versions.length === 1 ? "" : "s"} · ${a.usedIn.length ? `used in ${a.usedIn.length} environment${a.usedIn.length === 1 ? "" : "s"}` : "not in an environment yet"}`}
+                      </Typography>
+                    </Box>
+                    {on && <Iconify icon="solar:check-circle-bold" width={16} sx={{ color: "text.primary" }} />}
+                  </Stack>
+                );
+              })}
+            </Stack>
+          </Box>
+        </Box>
+
+        <Stack spacing={1.75} minWidth={0}>
+          {agent && (
+            <Box>
+              <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>Version to test</Typography>
+              <Select
+                size="small" fullWidth value={chosenVersion}
+                onChange={(e) => setVersion(e.target.value)}
+                sx={{ typography: "s2" }}
+              >
+                {[...agent.versions].reverse().map((v) => (
+                  <MenuItem key={v.label} value={v.label} sx={{ typography: "s2" }}>
+                    {`${v.label}${v.pendingDraft ? " · draft" : v.label === agent.production ? " · in production" : ""}`}
+                  </MenuItem>
+                ))}
+              </Select>
+            </Box>
+          )}
+          <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
+          <ContinueRow
+            disabled={!agent}
+            hint="Pick an agent"
+            onClick={() => build({
+              ...sourceFromAgentRecord(agent),
+              scenarioCount: scenarioCountOf(scenarioCount),
+              connectedAgent: agent,
+              agentVersion: chosenVersion,
+            })}
+          />
+        </Stack>
+      </Box>
+    </Box>
+  );
+}
+
 function PanelSourceRepo() {
   const build = useBuildEnvironment();
+  const connect = useContext(ConnectModeContext);
+  const naming = useContext(AgentNameContext);
+  const preset = connect?.preset;
+  /* A repository pasted on the landing screen: picked straight from the
+     GitHub App when it can see it, otherwise typed in by hand. */
+  const pasted = useContext(PrefillContext)?.repo || null;
+  const pastedVisible = !!pasted && installedRepos().some((r) => r.name.toLowerCase() === pasted.toLowerCase());
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
   const [provider, setProvider] = useState("github");
-  const [repo, setRepo] = useState("");
+  /* From GitHub (pick a repository, we find the agents) or typed by hand. */
+  const [mode, setMode] = useState(pasted && !pastedVisible ? "manual" : "github");
+  const [ghRepo, setGhRepo] = useState(preset?.repo || (pastedVisible ? pasted : ""));
+  const [ghAgent, setGhAgent] = useState(preset?.agent || null);
+  const [repo, setRepo] = useState(pasted && !pastedVisible ? pasted : "");
   const [branch, setBranch] = useState("main");
-  const [entry, setEntry] = useState("");
-  const [envText, setEnvText] = useState("");
-  const [egress, setEgress] = useState("");
-  const canGo = !!repo.trim();
+  const [entry, setEntry] = useState(preset?.agent?.entry || "");
+  useEffect(() => {
+    if (preset?.agent && naming && !naming.name) naming.setName(preset.agent.name);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const viaGithub = mode === "github";
+  const canGo = viaGithub ? !!(ghRepo && ghAgent) : !!repo.trim();
+  const pick = ({ repo: r, agent }) => {
+    setGhRepo(r);
+    setGhAgent(agent);
+    setEntry(agent?.entry || "");
+    if (agent && naming) naming.setName(agent.name);
+  };
   return (
     <Stack spacing={1.75} sx={{ p: 2.5 }}>
-      <ProviderRow
-        options={REPO_PROVIDERS}
-        value={provider}
-        onChange={setProvider}
-      />
-      <Field
-        label="Repository"
-        required
-        placeholder="owner/repo"
-        value={repo} onChange={setRepo}
-        mono
-        helper="We read the code so scenarios stay in sync with your actual tools."
-      />
+      {viaGithub ? (
+        <GithubRepoPicker
+          repo={ghRepo} agentId={ghAgent?.id}
+          onPick={pick}
+          onManual={(prefill) => { setMode("manual"); if (prefill?.repo) setRepo(prefill.repo); }}
+        />
+      ) : (
+        <>
+          <ProviderRow
+            options={REPO_PROVIDERS}
+            value={provider}
+            onChange={setProvider}
+          />
+          <Field
+            label="Repository"
+            required
+            placeholder="owner/repo"
+            value={repo} onChange={setRepo}
+            mono
+            helper="We read it so scenarios track your real tools."
+          />
+          <Typography {...clickable(() => setMode("github"))}
+            sx={{ ...focusRing, typography: "s3", color: "text.subtitle", cursor: "pointer", mt: -1, width: "fit-content", "&:hover": { color: "text.primary", textDecoration: "underline" } }}
+          >
+            Pick from GitHub instead
+          </Typography>
+        </>
+      )}
       <Stack direction="row" spacing={1.5}>
         <Field
           label="Branch or tag"
@@ -544,135 +976,184 @@ function PanelSourceRepo() {
           fullWidth
         />
       </Stack>
-      <EnvironmentValues envText={envText} onEnvText={setEnvText} egress={egress} onEgress={setEgress} />
       <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
       <ContinueRow
         disabled={!canGo}
-        hint="Add a repository"
+        hint={viaGithub ? (ghRepo ? "Choose the agent" : "Choose a repository") : "Add a repository"}
         onClick={() => build({
           kind: "repo",
           scenarioCount: scenarioCountOf(scenarioCount),
-          provider,
-          value: repo.trim(),
+          provider: viaGithub ? "github" : provider,
+          value: viaGithub ? repoUrlOf(ghRepo) : repo.trim(),
+          ...(viaGithub && { githubApp: true, agentName: ghAgent?.name, framework: ghAgent?.framework }),
           ref: branch.trim() || "main",
           entry: entry.trim(),
-          envText: envText.trim() || null,
-          egress: egress.trim() || null,
         })}
       />
     </Stack>
   );
 }
 
+/* Where an endpoint's reply sits in its response — a JSON path. */
+const REPLY_PATH = /^\$(\.[A-Za-z_][\w-]*|\[\d+\])+$/;
+const ENDPOINT_URL = { http: /^https?:\/\/\S+$/i, websocket: /^wss?:\/\/\S+$/i };
+
+/*
+  An agent endpoint (Phase 2): we can only call it, over HTTP or a
+  WebSocket, so it needs where the reply sits in its response next to the
+  URL and the token reference. It can't be copied — simulations drive the
+  real agent once someone says so.
+*/
 function PanelRunningAgent() {
+  const prefill = useContext(PrefillContext);
   const build = useBuildEnvironment();
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
-  const [endpoint, setEndpoint] = useState("");
-  const [token, setToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
-  /* Type-aware advanced fields — hidden by default because the endpoint
-     alone is enough for most agents. Voice callers need call direction,
-     chat callers may want a system-prompt override, others rarely need
-     anything type-specific here. */
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [endpoint, setEndpoint] = useState(prefill?.endpoint || "");
+  const [transport, setTransport] = useState(prefill?.transport || "http");
+  /* Where the agent's reply text sits in what the endpoint sends back. */
+  const [replyPath, setReplyPath] = useState("");
+  /* The endpoint's auth token, by reference (AC-6.12). */
+  const [tokenRef, setTokenRef] = useState("");
+  /* Agent type up front, the same chips as Hosted platform. Voice asks for
+     call direction; chat may override the system prompt — tucked away, since
+     the endpoint alone is enough for most agents. */
   const [agentType, setAgentType] = useState("chat");
   const [callDirection, setCallDirection] = useState("inbound");
+  const [showPrompt, setShowPrompt] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [linkedRepo, setLinkedRepo] = useState("");
+  /* An endpoint can't be watched from outside — the team adds tracing.
+     Asking here means the agent page shows how straight away. */
+  const [watchProduction, setWatchProduction] = useState(true);
+  /* An endpoint can't be copied, so simulations drive the real agent — not
+     until someone says so (AC-1.12). { acknowledgedAt, webhookAt } */
+  const [consent, setConsent] = useState(null);
+  const pseudo = { sourceKind: "endpoint", key: `endpoint:${endpoint.trim().toLowerCase()}`, values: { endpoint: endpoint.trim(), endpointConsent: consent } };
 
-  const canGo = !!endpoint.trim();
+  const tokenOk = !tokenRef.trim() || isSecretRef(tokenRef);
+  const urlOk = ENDPOINT_URL[transport].test(endpoint.trim());
+  const pathOk = REPLY_PATH.test(replyPath.trim());
+  const canGo = urlOk && pathOk && !!consent?.acknowledgedAt && tokenOk;
   return (
     <Stack spacing={1.75} sx={{ p: 2.5 }}>
-      <Field
-        label="Agent SDK endpoint"
-        required
-        placeholder="https://api.yourapp.com/agent/step"
-        value={endpoint} onChange={setEndpoint}
-        mono
-        helper="Every simulated turn POSTs here. Your agent runs where it already runs; we drive the world."
-      />
+      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>We can only call it, so improvements end in a suggested fix.</Typography>
       <Box>
-        <Button
-          size="small"
-          onClick={() => setShowToken((o) => !o)}
-          startIcon={<Iconify icon={showToken ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"} width={12} />}
-          sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", px: 0.5 }}
-        >
-          {showToken ? "Hide auth token" : "Auth token (optional)"}
-        </Button>
-        {showToken && (
-          <Box sx={{ mt: 1 }}>
-            <Field
-              label=""
-              placeholder="Bearer …"
-              value={token} onChange={setToken}
-              type="password"
-              mono
+        <Label>Agent type</Label>
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
+          {AGENT_TYPES.map((t) => (
+            <ChipCard
+              key={t.id}
+              icon={t.icon}
+              label={t.label}
+              comingSoon={t.comingSoon}
+              on={agentType === t.id}
+              onClick={() => setAgentType(t.id)}
             />
-          </Box>
-        )}
+          ))}
+        </Box>
       </Box>
       <Box>
-        <Button
-          size="small"
-          onClick={() => setShowAdvanced((o) => !o)}
-          startIcon={<Iconify icon={showAdvanced ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"} width={12} />}
-          sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", px: 0.5 }}
-        >
-          {showAdvanced ? "Hide agent-type settings" : "Fine-tune for your agent type"}
-        </Button>
-        {showAdvanced && (
-          <Stack spacing={1.5} sx={{ mt: 1.25 }}>
-            <Box>
-              <Label>Agent type</Label>
-              <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", sm: `repeat(${AGENT_TYPES.length}, 1fr)` }, mt: 0.75 }}>
-                {AGENT_TYPES.map((t) => (
-                  <ChipCard
-                    key={t.id}
-                    icon={t.icon}
-                    label={t.label}
-                    on={agentType === t.id}
-                    onClick={() => setAgentType(t.id)}
-                  />
-                ))}
-              </Box>
-            </Box>
-            {agentType === "voice" && (
-              <Box>
-                <Label>Call direction</Label>
-                <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr", mt: 0.75 }}>
-                  <ChipCard label="Inbound — we call your agent" on={callDirection === "inbound"} onClick={() => setCallDirection("inbound")} />
-                  <ChipCard label="Outbound — your agent dials us" on={callDirection === "outbound"} onClick={() => setCallDirection("outbound")} />
-                </Box>
-              </Box>
-            )}
-            {agentType === "chat" && (
+        <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>Speaks</Typography>
+        <SegmentedToggle
+          value={transport}
+          onChange={setTransport}
+          options={[{ value: "http", label: "HTTP" }, { value: "websocket", label: "WebSocket" }]}
+        />
+      </Box>
+      <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ md: "flex-start" }}>
+        <Box sx={{ flex: 1.4, minWidth: 0 }}>
+          <Field
+            label={transport === "websocket" ? "WebSocket URL" : "Endpoint URL"}
+            required
+            placeholder={transport === "websocket" ? "wss://api.yourapp.com/agent/stream" : "https://api.yourapp.com/agent/step"}
+            value={endpoint} onChange={setEndpoint}
+            mono
+            helper={endpoint.trim() && !urlOk
+              ? (transport === "websocket" ? "A WebSocket URL starts with wss:// or ws://" : "An HTTP endpoint starts with https:// or http://")
+              : transport === "websocket"
+                ? "One socket per conversation; each turn is sent on it."
+                : "Every simulated turn POSTs here."}
+          />
+        </Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Field
+            label="Where the reply sits"
+            required
+            placeholder="$.output.text"
+            value={replyPath} onChange={setReplyPath}
+            mono
+            helper={replyPath.trim() && !pathOk ? "A JSON path, like $.output.text or $.messages[0].content" : "The JSON path to the agent's reply."}
+          />
+        </Box>
+      </Stack>
+      <SecretRefField
+        label="Auth token (optional)"
+        placeholder="vault://acme/sim/agent_endpoint_token"
+        value={tokenRef} onChange={setTokenRef}
+      />
+      {agentType === "voice" && (
+        <Box>
+          <Label>Call direction</Label>
+          <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr", mt: 0.75 }}>
+            <ChipCard label="Inbound — we call your agent" on={callDirection === "inbound"} onClick={() => setCallDirection("inbound")} />
+            <ChipCard label="Outbound — your agent dials us" on={callDirection === "outbound"} onClick={() => setCallDirection("outbound")} />
+          </Box>
+        </Box>
+      )}
+      {agentType === "chat" && (
+        <Box>
+          <Button
+            size="small"
+            onClick={() => setShowPrompt((o) => !o)}
+            startIcon={<Iconify icon={showPrompt ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"} width={12} />}
+            sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", px: 0.5 }}
+          >
+            {showPrompt ? "Hide system prompt override" : "System prompt override (optional)"}
+          </Button>
+          {showPrompt && (
+            <Box sx={{ mt: 1 }}>
               <Field
-                label="System prompt override (optional)"
+                label=""
                 placeholder="Leave blank to use whatever your endpoint already does."
                 value={systemPrompt} onChange={setSystemPrompt}
                 multiline
               />
-            )}
-            {(agentType === "computer" || agentType === "code" || agentType === "robotics") && (
-              <Typography sx={{ typography: "s3", color: "text.subtitle", px: 0.5 }}>
-                Nothing extra to configure — the endpoint response tells us everything we need.
-              </Typography>
-            )}
-          </Stack>
-        )}
-      </Box>
+            </Box>
+          )}
+        </Box>
+      )}
+      <LinkedRepoField value={linkedRepo} onChange={setLinkedRepo} />
+      <ToggleRow
+        checked={watchProduction}
+        onChange={setWatchProduction}
+        title="Watch production traffic"
+        body="We'll show you how to send traces."
+        hint="A short snippet, or a pull request if the repo is in the GitHub app."
+      />
+      {endpoint.trim() && (
+        <>
+          <HowWeCopyIt agent={pseudo} />
+          <EndpointConsent value={consent} onChange={setConsent} webhookUrl={webhookUrlFor(pseudo)} />
+        </>
+      )}
       <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
       <ContinueRow
         disabled={!canGo}
-        hint="Add an endpoint"
+        hint={!endpoint.trim() ? "Add the endpoint" : !urlOk ? `Use a ${transport === "websocket" ? "wss://" : "https://"} address`
+          : !pathOk ? "Say where the reply sits" : !tokenOk ? "Use a reference for the auth token" : "Acknowledge that simulations drive the real agent"}
         onClick={() => build({
           kind: "endpoint",
           scenarioCount: scenarioCountOf(scenarioCount),
           value: endpoint.trim(),
-          token: token.trim() || null,
+          transport,
+          replyPath: replyPath.trim(),
+          ...(tokenRef.trim() && tokenOk && { tokenRef: tokenRef.trim() }),
           agentType,
           ...(agentType === "voice" ? { callDirection } : {}),
           ...(agentType === "chat" ? { systemPrompt: systemPrompt.trim() || null } : {}),
+          ...(linkedRepo.trim() && { linkedRepo: linkedRepo.trim() }),
+          observability: watchProduction,
+          endpointConsent: consent,
         })}
       />
     </Stack>
@@ -681,20 +1162,18 @@ function PanelRunningAgent() {
 
 function PanelHostedPlatform() {
   const build = useBuildEnvironment();
+  const prefill = useContext(PrefillContext);
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
   /* Type gate first — the platform roster only makes sense once we know
      what kind of agent is being connected. Default to voice because
      that's what the codebase actually integrates with today. */
-  const [agentType, setAgentType] = useState("voice");
+  const [agentType, setAgentType] = useState(prefill?.agentType || "voice");
   const platforms = HOSTED_PLATFORMS_BY_TYPE[agentType] || [];
-  const [platform, setPlatform] = useState(platforms[0]?.id || "");
-  const [id, setId] = useState("");
-  const [key, setKey] = useState("");
-  /* Optional link to the repo backing the hosted agent — lets the
-     builder read tool definitions and prompts to seed matching
-     scenarios. Not required to build the env, but improves the
-     derivation when supplied. */
-  const [repoUrl, setRepoUrl] = useState("");
+  const [platform, setPlatform] = useState(prefill?.platform || firstLive(platforms)?.id || "");
+  const [id, setId] = useState(prefill?.agentId || "");
+  /* The provider key by reference (AC-6.12) — a path in the secret manager. */
+  const [keyRef, setKeyRef] = useState("");
+  const [linkedRepo, setLinkedRepo] = useState("");
   /* Voice contact details — how the test call actually reaches the
      agent. `simMode` = web (WebRTC, no telephony provider) or phone
      (PSTN, needs a country code + number). `inboundCalls` mirrors the
@@ -706,9 +1185,12 @@ function PanelHostedPlatform() {
   const [contactNumber, setContactNumber] = useState("");
   const [inboundCalls, setInboundCalls] = useState(true);
   const [agentSpeaksFirst, setAgentSpeaksFirst] = useState(false);
-  /* Others-only: builders describe their agent by pasting a system
-     prompt. The scenario generator seeds from it and the LLM runs
-     against the prompt directly — no external endpoint to invoke. */
+  /* Watch the agent's real calls too — on by default, since the provider
+     key is already here and production is what tells you whether the
+     simulations were the right ones. */
+  const [watchProduction, setWatchProduction] = useState(true);
+  /* Others-only: a pasted system prompt. We run it against the LLM
+     directly — no platform, no endpoint — and seed scenarios from it. */
   const [otherPrompt, setOtherPrompt] = useState("");
 
   /* When agent type flips, the current platform selection is likely
@@ -716,23 +1198,32 @@ function PanelHostedPlatform() {
      credentials so we do not carry an OpenAI key into a Retell form. */
   const pickAgentType = (nextType) => {
     setAgentType(nextType);
-    const first = (HOSTED_PLATFORMS_BY_TYPE[nextType] || [])[0];
-    setPlatform(first?.id || "");
+    setPlatform(firstLive(HOSTED_PLATFORMS_BY_TYPE[nextType] || [])?.id || "");
     setId("");
-    setKey("");
-    setRepoUrl("");
+    setKeyRef("");
+    setLinkedRepo("");
     setOtherPrompt("");
   };
 
-  const chosen = platforms.find((p) => p.id === platform) || platforms[0];
+  const chosen = platforms.find((p) => p.id === platform && isLivePlatform(p)) || firstLive(platforms);
   const isOther = !!chosen?.isOther;
-  /* Others has no WebRTC path, so the contact number is required in
-     that branch regardless of simMode. Non-Others voice envs only
-     require it when the user picked Phone mode. */
-  const phoneRequired = agentType === "voice" && (isOther || simMode === "phone");
+  /* A phone number only when the test call goes over the phone. */
+  const phoneRequired = agentType === "voice" && simMode === "phone";
   const phoneOk = !phoneRequired || !!contactNumber.trim();
-  const credsOk = isOther ? !!otherPrompt.trim() : (!!id.trim() && !!key.trim());
-  const canGo = !!chosen && credsOk && phoneOk;
+  /* What's recorded is a reference — the one typed, or (demo) the platform's slot. */
+  const savedRef = keyRefOf(keyRef, chosen ? `vault://acme/sim/${chosen.id}_api_key` : "");
+  const refOk = !!savedRef;
+  const credsOk = isOther ? !!otherPrompt.trim() : (!!id.trim() && refOk);
+  /* A Vapi or Bland key without create scope can't make the clone. */
+  const [scopeChoice, setScopeChoice] = useState(null);
+  const lacksScope = !isOther && !!chosen && refOk && canCloneProvider(chosen.id) && keyLacksCreateScope(keyRef);
+  /* ElevenLabs branches need versioning switched on — by the user, once. */
+  const [versioningOn, setVersioningOn] = useState(false);
+  const versioningOk = !PLATFORM_TESTING[chosen?.id]?.needsVersioning || versioningOn;
+  const canGo = !!chosen && credsOk && phoneOk && versioningOk && (!lacksScope || scopeChoice === "mocked");
+  const pseudo = isOther
+    ? { sourceKind: "prompt", definition: { kind: "prompt" }, values: { provider: "other" } }
+    : { sourceKind: "platform", values: { provider: chosen?.id, agentId: id.trim(), ...(lacksScope && scopeChoice === "mocked" && { replicationMode: "exported_mocked" }) } };
 
   return (
     <Stack spacing={1.75} sx={{ p: 2.5 }}>
@@ -755,7 +1246,7 @@ function PanelHostedPlatform() {
         <Label>Platform</Label>
         {platforms.length === 0 ? (
           <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 1 }}>
-            No hosted platforms for this agent type yet. Try Source repository instead.
+            None for this agent type yet — try Source repository.
           </Typography>
         ) : (
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
@@ -768,7 +1259,8 @@ function PanelHostedPlatform() {
                 logo={p.isOther ? undefined : <PlatformLogo id={p.id} name={p.name} brand={p.brand} />}
                 /* Wordmark logos already spell the name — don't repeat it. */
                 label={PLATFORM_LOGOS[p.id]?.type === "wordmark" ? null : p.name}
-                on={platform === p.id}
+                comingSoon={p.comingSoon}
+                on={chosen?.id === p.id}
                 onClick={() => setPlatform(p.id)}
               />
             ))}
@@ -784,7 +1276,7 @@ function PanelHostedPlatform() {
               placeholder="You are a friendly returns agent for Acme…"
               value={otherPrompt} onChange={setOtherPrompt}
               multiline
-              helper="We seed matching scenarios from the prompt and run it against the LLM directly — no external endpoint or API key needed."
+              helper={<HintLine hint="We run the prompt against the LLM directly and seed matching scenarios from it.">No endpoint or API key needed.</HintLine>}
             />
           ) : (
             <>
@@ -794,16 +1286,24 @@ function PanelHostedPlatform() {
                 placeholder={chosen.idPlaceholder}
                 value={id} onChange={setId}
                 mono
+                helper={chosen.idNote ? <NoteLine text={chosen.idNote} /> : null}
               />
-              <Field
+              <SecretRefField
                 label={chosen.keyLabel || "API key"}
                 required
-                placeholder="sk-…"
-                value={key} onChange={setKey}
-                type="password"
-                mono
-                helper="Stored encrypted; used only to invoke the agent on your behalf."
+                placeholder={`vault://acme/sim/${chosen.id}_api_key`}
+                value={keyRef} onChange={(v) => { setKeyRef(v); setScopeChoice(null); }}
+                helper={<PlatformKeyScope prototypeHint={canCloneProvider(chosen.id)} />}
               />
+              {lacksScope && (
+                <CloneScopeChoice
+                  providerName={chosen.name}
+                  choice={scopeChoice}
+                  onReissue={() => { setKeyRef(""); setScopeChoice(null); }}
+                  onMocked={() => setScopeChoice("mocked")}
+                />
+              )}
+              <PlatformTestingStep provider={chosen.id} versioningOn={versioningOn} onVersioningOn={setVersioningOn} />
             </>
           )}
           {agentType === "voice" && (
@@ -813,26 +1313,38 @@ function PanelHostedPlatform() {
               contactNumber={contactNumber} onContactNumber={setContactNumber}
               inboundCalls={inboundCalls} onInboundCalls={setInboundCalls}
               agentSpeaksFirst={agentSpeaksFirst} onAgentSpeaksFirst={setAgentSpeaksFirst}
-              phoneOnly={isOther}
             />
           )}
-          <Field
-            label="GitHub repo"
-            placeholder="https://github.com/your-org/your-agent"
-            value={repoUrl} onChange={setRepoUrl}
-            mono
-            helper="Optional. Lets us read the agent's tools + prompts to seed matching scenarios."
-          />
+          {/* A pasted prompt has no production to watch, and is its own
+              instructions — only a hosted agent links a repository. */}
+          {!isOther && <LinkedRepoField value={linkedRepo} onChange={setLinkedRepo} />}
+          {!isOther && (
+            <ToggleRow
+              checked={watchProduction}
+              onChange={setWatchProduction}
+              title="Watch production calls"
+              body="Brings its real calls into Observe and Error Feed."
+            />
+          )}
         </>
+      )}
+      {chosen && credsOk && (
+        <HowWeCopyIt
+          agent={pseudo}
+          aside={null}
+        />
       )}
       <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
       <ContinueRow
         disabled={!canGo}
         hint={
-          !chosen ? "Pick a supported path above"
+          !chosen ? (agentType === "chat" ? "Chat platforms are coming soon — use Agent endpoint for now" : "Pick a supported path above")
+          : lacksScope && credsOk ? "Choose how to go on without create scope"
+          : !versioningOk ? "Switch versioning on for the agent first"
           : !phoneOk ? "Add a contact number for telephony simulation"
           : isOther ? "Paste the agent's system prompt"
-          : "Fill both fields"
+          : !id.trim() ? "Add the agent ID"
+          : "Add the key's reference"
         }
         onClick={() => build({
           kind: "platform",
@@ -841,25 +1353,159 @@ function PanelHostedPlatform() {
           provider: chosen?.id,
           ...(isOther
             ? { agentMode: "prompt", prompt: otherPrompt.trim() }
-            : { agentId: id.trim(), apiKey: key.trim() }
+            : { agentId: id.trim(), apiKeyRef: savedRef, observability: watchProduction, ...(lacksScope && scopeChoice === "mocked" && { replicationMode: "exported_mocked" }), ...(versioningOn && PLATFORM_TESTING[chosen?.id]?.needsVersioning && { versioningOnAt: new Date().toISOString() }) }
           ),
-          ...(repoUrl.trim() ? { repoUrl: repoUrl.trim() } : {}),
-          ...(agentType === "voice" ? (() => {
-            const contactMode = isOther ? "phone" : simMode;
-            return {
-              callDirection: inboundCalls ? "inbound" : "outbound",
-              contact: {
-                mode: contactMode,
-                inboundCalls,
-                agentSpeaksFirst,
-                ...(contactMode === "phone" ? {
-                  countryIso,
-                  countryCode: COUNTRY_BY_ISO[countryIso]?.dial || "",
-                  number: contactNumber.trim(),
-                } : {}),
-              },
-            };
-          })() : {}),
+          ...(!isOther && linkedRepo.trim() && { linkedRepo: linkedRepo.trim() }),
+          ...(agentType === "voice" ? {
+            callDirection: inboundCalls ? "inbound" : "outbound",
+            contact: {
+              mode: simMode,
+              inboundCalls,
+              agentSpeaksFirst,
+              ...(simMode === "phone" ? {
+                countryIso,
+                countryCode: COUNTRY_BY_ISO[countryIso]?.dial || "",
+                number: contactNumber.trim(),
+              } : {}),
+            },
+          } : {}),
+        })}
+      />
+    </Stack>
+  );
+}
+
+/*
+  What testing on this platform needs from the user, said where the platform
+  is picked (PRD Phase 1 and 2): Retell's live numbers are pinned before
+  drafts; ElevenLabs needs versioning switched on — which can't be undone,
+  so the user does it; Bland tests its new agent model by branch.
+*/
+export function PlatformTestingStep({ provider, versioningOn, onVersioningOn }) {
+  const t = PLATFORM_TESTING[provider];
+  if (!t) return null;
+  /* One line — how it's tested and how it ships; the why sits on hover. */
+  const detail = (
+    <Box sx={{ typography: "s3" }}>
+      {t.note}
+      {t.needsPinnedNumbers && <Box sx={{ mt: 0.5 }}>After connecting, the Connections tab asks you to pin your live numbers.</Box>}
+      <Box sx={{ mt: 0.5, opacity: 0.8 }}>{t.released}</Box>
+    </Box>
+  );
+  return (
+    <Box sx={{ px: 1.75, py: 1, borderRadius: 1, border: "1px solid", borderColor: "divider" }}>
+      <Stack direction="row" alignItems="center" spacing={0.75}>
+        <Typography sx={{ typography: "s2", fontWeight: 700 }}>{`Tested on ${t.brief}`}</Typography>
+        <Typography sx={{ typography: "s2", color: "text.secondary" }}>{`· ships as ${t.ships.charAt(0).toLowerCase()}${t.ships.slice(1)}`}</Typography>
+        <Box flex={1} />
+        <Tooltip arrow title={detail}>
+          <Box component="span" sx={{ display: "inline-flex", color: "text.disabled", cursor: "help" }}>
+            <Iconify icon="solar:info-circle-linear" width={14} />
+          </Box>
+        </Tooltip>
+      </Stack>
+      {t.needsVersioning && (
+        <Stack
+          direction="row" alignItems="flex-start" spacing={1} role="checkbox" aria-checked={!!versioningOn} tabIndex={0}
+          onClick={() => onVersioningOn?.(!versioningOn)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onVersioningOn?.(!versioningOn); } }}
+          sx={{ mt: 1, cursor: "pointer", width: "fit-content" }}
+        >
+          <Iconify icon={versioningOn ? "solar:check-square-bold" : "solar:square-linear"} width={16} sx={{ color: versioningOn ? "text.primary" : "text.disabled", mt: 0.125, flexShrink: 0 }} />
+          <Box>
+            <Typography sx={{ typography: "s2", fontWeight: 600 }}>I&apos;ve switched versioning on for this agent</Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Agent → Settings → Versioning. It can&apos;t be undone.</Typography>
+          </Box>
+        </Stack>
+      )}
+    </Box>
+  );
+}
+PlatformTestingStep.propTypes = { provider: PropTypes.string, versioningOn: PropTypes.bool, onVersioningOn: PropTypes.func };
+
+/*
+  A phone number (Phase 2): we dial it, with the pasted instructions as the
+  reference for what the agent should do. We can only call it, so it's test
+  only — an improvement ends with a suggested fix. Closed platforms (Sierra,
+  Decagon, Intercom Fin, Zendesk) come in this way, or by their chat endpoint.
+*/
+function PanelPhoneNumber() {
+  const prefill = useContext(PrefillContext);
+  const build = useBuildEnvironment();
+  const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
+  const [countryIso, setCountryIso] = useState("US");
+  const [number, setNumber] = useState(prefill?.number || "");
+  const [instructions, setInstructions] = useState("");
+  const [closed, setClosed] = useState(null);
+  const dial = COUNTRY_BY_ISO[countryIso]?.dial || "+1";
+  const digits = number.replace(/[^\d]/g, "");
+  const pseudo = { sourceKind: "endpoint", values: { phoneNumber: number.trim(), countryCode: dial }, definition: instructions.trim() ? { kind: "prompt" } : { kind: "none" } };
+  const canGo = digits.length >= 6 && !!instructions.trim();
+  return (
+    <Stack spacing={1.75} sx={{ p: 2.5 }}>
+      <Typography component="div" sx={{ typography: "s3", color: "text.subtitle" }}>
+        <HintLine hint="We can only call it, so we can't change it ourselves.">Test only — improvements end in a suggested fix.</HintLine>
+      </Typography>
+      <Box>
+        <Label>Phone number</Label>
+        <Stack direction="row" spacing={1} sx={{ mt: 0.75 }}>
+          <Select
+            size="small" value={countryIso} onChange={(e) => setCountryIso(e.target.value)}
+            renderValue={(iso) => `${COUNTRY_BY_ISO[iso]?.flag || ""} ${COUNTRY_BY_ISO[iso]?.dial || ""}`}
+            sx={{ width: 110, typography: "s2" }}
+            MenuProps={{ PaperProps: { sx: { maxHeight: 320 } } }}
+          >
+            {COUNTRY_OPTIONS.map((c) => (
+              <MenuItem key={c.iso} value={c.iso} sx={{ typography: "s2", gap: 1 }}>
+                <Box component="span">{c.flag}</Box>
+                <Box component="span" sx={{ flex: 1 }}>{c.name}</Box>
+                <Box component="span" sx={{ color: "text.subtitle" }}>{c.dial}</Box>
+              </MenuItem>
+            ))}
+          </Select>
+          <TextField
+            size="small" fullWidth value={number} onChange={(e) => setNumber(e.target.value)}
+            placeholder="415 555 0142"
+            InputProps={{ sx: { typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" } }}
+          />
+        </Stack>
+      </Box>
+      <Field
+        label="Its instructions"
+        required
+        multiline minRows={4}
+        placeholder="Paste the agent's system prompt or the script it follows."
+        value={instructions} onChange={setInstructions}
+        helper={(
+          <HintLine hint="We don't change the agent. A suggested fix is written against these, and a re-run on the same environment version proves it once you've applied it.">
+            Scenarios and the suggested fix are written against these.
+          </HintLine>
+        )}
+      />
+      <Box>
+        <Label><HintLine hint={CLOSED_PLATFORM_NOTE}>On a closed platform? (optional)</HintLine></Label>
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
+          {CLOSED_PLATFORMS.map((c) => (
+            <ChipCard key={c.id} label={c.label} on={closed === c.id} onClick={() => setClosed(closed === c.id ? null : c.id)} />
+          ))}
+        </Box>
+      </Box>
+      {canGo && <HowWeCopyIt agent={pseudo} />}
+      <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
+      <ContinueRow
+        disabled={!canGo}
+        hint={digits.length < 6 ? "Add the number to call" : "Paste its instructions"}
+        onClick={() => build({
+          kind: "endpoint",
+          phone: true,
+          scenarioCount: scenarioCountOf(scenarioCount),
+          agentType: "voice",
+          value: `tel:${dial}${digits}`,
+          phoneNumber: number.trim(),
+          countryCode: dial,
+          systemPrompt: instructions.trim(),
+          callDirection: "inbound",
+          ...(closed && { closedPlatform: closed }),
         })}
       />
     </Stack>
@@ -867,12 +1513,15 @@ function PanelHostedPlatform() {
 }
 
 function PanelMcpServer() {
+  const prefill = useContext(PrefillContext);
   const build = useBuildEnvironment();
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
-  const [transport, setTransport] = useState("http");
-  const [target, setTarget] = useState("");
-  const [header, setHeader] = useState("");
-  const canGo = !!target.trim();
+  const [transport, setTransport] = useState(prefill?.transport || "http");
+  const [target, setTarget] = useState(prefill?.target || "");
+  /* A token for an HTTP server, by reference (AC-6.12). */
+  const [tokenRef, setTokenRef] = useState("");
+  const tokenOk = !tokenRef.trim() || isSecretRef(tokenRef);
+  const canGo = !!target.trim() && tokenOk;
   return (
     <Stack spacing={1.75} sx={{ p: 2.5 }}>
       <ProviderRow
@@ -886,26 +1535,25 @@ function PanelMcpServer() {
         placeholder={transport === "stdio" ? "uvx my-mcp-server --flag" : "https://mcp.yourapp.com/sse"}
         value={target} onChange={setTarget}
         mono
-        helper="We list the tools the server exposes and derive the environment from them."
+        helper={<HintLine hint="We list the tools the server exposes and derive the environment from them.">Its tools become the environment&apos;s actions.</HintLine>}
       />
       {transport !== "stdio" && (
-        <Field
-          label="Extra header (optional)"
-          placeholder="Authorization: Bearer …"
-          value={header} onChange={setHeader}
-          mono
+        <SecretRefField
+          label="Auth token (optional)"
+          placeholder="vault://acme/sim/mcp_server_token"
+          value={tokenRef} onChange={setTokenRef}
         />
       )}
       <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
       <ContinueRow
         disabled={!canGo}
-        hint="Add the server"
+        hint={!target.trim() ? "Add the server" : "Use a reference for the auth token"}
         onClick={() => build({
           kind: "mcp",
           scenarioCount: scenarioCountOf(scenarioCount),
           transport,
           value: target.trim(),
-          header: header.trim() || null,
+          ...(transport !== "stdio" && tokenRef.trim() && { tokenRef: tokenRef.trim() }),
         })}
       />
     </Stack>
@@ -917,8 +1565,6 @@ function PanelCodeUpload() {
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
   const [files, setFiles] = useState([]);
   const [entry, setEntry] = useState("");
-  const [envText, setEnvText] = useState("");
-  const [egress, setEgress] = useState("");
   const canGo = files.length > 0;
 
   const onDrop = (list) => {
@@ -945,8 +1591,8 @@ function PanelCodeUpload() {
         <Typography sx={{ typography: "s1", fontWeight: 600, mt: 1 }}>
           Drop code files or a zipped project
         </Typography>
-        <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-          .py .ts .js .zip · up to 25 MB. The builder reads the code to derive tools, rules, and scenarios.
+        <Typography component="div" sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+          <HintLine hint="The builder reads the code to derive tools, rules, and scenarios.">.py .ts .js .zip · up to 200 MB</HintLine>
         </Typography>
         <Button
           component="label"
@@ -998,7 +1644,6 @@ function PanelCodeUpload() {
           helper="Which file defines the agent's step function?"
         />
       )}
-      <EnvironmentValues envText={envText} onEnvText={setEnvText} egress={egress} onEgress={setEgress} />
       <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
       <ContinueRow
         disabled={!canGo}
@@ -1008,8 +1653,6 @@ function PanelCodeUpload() {
           scenarioCount: scenarioCountOf(scenarioCount),
           entry: entry.trim(),
           files: files.map((f) => ({ name: f.name, size: f.size })),
-          envText: envText.trim() || null,
-          egress: egress.trim() || null,
         })}
       />
     </Stack>
@@ -1017,10 +1660,11 @@ function PanelCodeUpload() {
 }
 
 function PanelScratch() {
+  const prefill = useContext(PrefillContext);
   const navigate = useNavigate();
   const { dispatch } = useSimStore();
   const [name, setName] = useState("");
-  const [flowText, setFlowText] = useState("");
+  const [flowText, setFlowText] = useState(prefill?.flowText || "");
   const [attachments, setAttachments] = useState([]);
   /* Name is optional — the intake describes the flow well enough on its
      own, so if the user skips the name field we derive a reasonable one
@@ -1040,8 +1684,8 @@ function PanelScratch() {
        review layout has real material to show — the user described
        what the agent does; we materialise that into rules, scenarios,
        and suggested evals. Tools stay empty because we intentionally
-       have no agent connected yet; the Agents tab will show its
-       empty state + "add agent version" affordance. */
+       have no agent connected yet; Overview shows its
+       empty state and the way to connect one. */
     const derivedRules = deriveScratchRules(flowText);
     const derivedScenarios = deriveScratchScenarios(flowText, finalName);
     const derivedEvals = deriveScratchEvals(flowText);
@@ -1054,7 +1698,7 @@ function PanelScratch() {
       tagline: attachments.length
         ? `Scratch-built · ${attachments.length} reference file${attachments.length === 1 ? "" : "s"}`
         : "Scratch-built",
-      description: flowText.trim() || "A scratch-built environment. Connect an agent from the Agents tab to run simulations.",
+      description: flowText.trim() || "A scratch-built environment. Connect an agent from Overview to run simulations.",
       difficulty: "Balanced",
       popularity: 1,
       builtFrom: {
@@ -1104,19 +1748,21 @@ function PanelScratch() {
 
   return (
     <Stack spacing={2} sx={{ p: 2.5 }}>
-      <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-        {"No agent yet — that's fine. Describe what the agent will do; we set up the world, personas, and evals from that. Wire the agent when it's ready."}
+      <Typography component="div" sx={{ typography: "s2", color: "text.subtitle" }}>
+        <HintLine hint="We set up the world, personas and evals from your description. Connect the agent from Overview when it's ready — runs start once it is.">
+          No agent yet? Fine — connect it later.
+        </HintLine>
       </Typography>
       <Field
-        label="Environment name (optional)"
-        placeholder="e.g. Support desk sandbox — leave blank and we'll name it from your description"
+        label={<HintLine hint="Leave it blank and we'll name it from your description.">Environment name (optional)</HintLine>}
+        placeholder="e.g. Support desk sandbox"
         value={name} onChange={setName}
       />
       <DescribeFlowStep
         step={0} total={1}
-        prompt="Describe your flow — or drop something the builder can learn from"
-        description="Type how the agent handles a typical case (trigger, tools, hand-offs, definition of done) — or attach real material (CSVs, SOPs, call recordings, sample transcripts). Either works. Both is better."
-        placeholder="e.g. A customer emails us with a refund request. The agent reads the email, looks up the order in Salesforce, checks the refund policy, drafts a reply, and posts it to Slack for approval before sending. If the order is over $500 it escalates to a human."
+        prompt="Describe the flow, or drop files to learn from"
+        description="Trigger, tools, hand-offs — or attach SOPs, CSVs or calls."
+        placeholder="e.g. A customer emails a refund request. The agent looks up the order, checks the policy and drafts a reply. Over $500 it escalates to a human."
         chips={[
           "The agent gets triggered when…",
           "It reaches for these tools…",
@@ -1139,69 +1785,54 @@ function PanelScratch() {
   );
 }
 
+/*
+  Your own machine: the environment is built in the terminal, so the setup is
+  the steps to run there — no Build button. It shows up in My environments
+  once the CLI connects.
+*/
 function PanelBuildLocally() {
-  const build = useBuildEnvironment();
   const [os, setOs] = useState("mac");
-  const cmd = os === "windows"
-    ? "iwr https://cli.futureagi.com/install.ps1 -useb | iex\nfagi env init"
-    : "curl -fsSL https://cli.futureagi.com/install.sh | sh\nfagi env init";
+  const install = os === "windows"
+    ? "iwr https://cli.futureagi.com/install.ps1 -useb | iex"
+    : "curl -fsSL https://cli.futureagi.com/install.sh | sh";
+  const steps = [
+    {
+      title: "Install the CLI",
+      body: "One command — it adds fai to your path.",
+      extra: <Box sx={{ mb: 1 }}><ProviderRow options={OS_OPTIONS} value={os} onChange={setOs} /></Box>,
+      cmd: install,
+    },
+    {
+      title: "Initialize",
+      body: "Scaffold an environment next to your agent's code.",
+      cmd: "fai env init my-environment",
+    },
+    {
+      title: "Run a simulation",
+      body: "Runs on your machine — your code never leaves.",
+      hint: "The CLI opens a secure tunnel back to us, so results still show up in this workspace.",
+      cmd: "fai sim run --env my-environment",
+    },
+    {
+      title: "Deploy",
+      body: "Publish when you're ready.",
+      hint: "Runs then execute on our infrastructure and traces land back in the dashboard.",
+      cmd: "fai env deploy my-environment",
+    },
+  ];
   return (
-    <Stack spacing={1.75} sx={{ p: 2.5 }}>
-      <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-        Run the environment on your own machine — your code never leaves. The CLI opens a secure tunnel back to us so simulations still show up in the dashboard.
-      </Typography>
-      <ProviderRow options={OS_OPTIONS} value={os} onChange={setOs} />
-      <Box>
-        <Label>Run this in your terminal</Label>
-        <Box
-          sx={{
-            mt: 0.75, p: 1.5, borderRadius: 1,
-            bgcolor: (th) => th.palette.mode === "dark" ? alpha(th.palette.text.primary, 0.06) : alpha(th.palette.text.primary, 0.04),
-            border: "1px solid", borderColor: "divider",
-            fontFamily: "ui-monospace, Menlo, monospace",
-            typography: "s2",
-            whiteSpace: "pre",
-            position: "relative",
-          }}
-        >
-          {cmd}
-          <IconButton
-            size="small"
-            onClick={() => navigator.clipboard?.writeText(cmd)}
-            sx={{ position: "absolute", top: 6, right: 6 }}
-          >
-            <Iconify icon="solar:copy-linear" width={13} />
-          </IconButton>
-        </Box>
+    <Box>
+      <Box sx={{ p: 2.5 }}>
+        <LocalSteps steps={steps} />
       </Box>
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{
-          p: 1.25, borderRadius: 1,
-          border: "1px solid", borderColor: "divider",
-          bgcolor: (th) => alpha(th.palette.text.primary, 0.02),
-        }}
-      >
-        <Box
-          sx={{
-            width: 8, height: 8, borderRadius: "50%",
-            bgcolor: (th) => alpha(th.palette.text.primary, 0.3),
-          }}
-        />
-        <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1 }}>
-          Waiting for a local runtime to connect…
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+        <Box sx={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, bgcolor: (th) => alpha(th.palette.text.primary, 0.3) }} />
+        <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>
+          Waiting for your machine — it appears in My environments once the CLI connects.
         </Typography>
-        <Button size="small" variant="text" sx={{ typography: "s3", fontWeight: 700 }}>
-          Docs
-        </Button>
+        <Button size="small" sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>Docs</Button>
       </Stack>
-      <ContinueRow
-        hint="Runs on your machine — CLI streams simulations back."
-        onClick={() => build({ kind: "local", os })}
-      />
-    </Stack>
+    </Box>
   );
 }
 
@@ -1217,93 +1848,7 @@ function PanelNotImplemented() {
 
 /* ── shared bits ───────────────────────────────────────────────────────── */
 
-/*
-  Environment values — the credentials + egress config the sandbox
-  needs at runtime. Only shown on flows where their code actually
-  runs in our sandbox (source repo, code upload, template cloud
-  sandbox). Values live in local component state only; the
-  reassurance line spells that out so users don't wonder where their
-  keys land.
-*/
-function EnvironmentValues({ envText, onEnvText, egress, onEgress }) {
-  const [open, setOpen] = useState(false);
-  const fileRef = useRef(null);
-
-  const onFile = (file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const content = String(reader.result || "");
-      onEnvText((prev) => (prev ? `${prev}\n${content}` : content));
-    };
-    reader.readAsText(file);
-  };
-
-  return (
-    <Box>
-      <Button
-        size="small"
-        onClick={() => setOpen((o) => !o)}
-        startIcon={<Iconify icon={open ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"} width={12} />}
-        sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", px: 0.5 }}
-      >
-        {open ? "Hide environment values" : "Environment values (optional)"}
-      </Button>
-      {open && (
-        <Stack spacing={1.5} sx={{ mt: 1.25 }}>
-          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            Credentials the sandbox needs to run your code. Values stay in this browser session, are sent only for preflight and run execution, and are never written to jobs, logs, or artifacts.
-          </Typography>
-          <Box>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
-              <Label>Paste .env contents</Label>
-              <Button
-                size="small"
-                onClick={() => fileRef.current?.click()}
-                startIcon={<Iconify icon="solar:upload-linear" width={12} />}
-                sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", px: 0.5 }}
-              >
-                Upload credential file
-              </Button>
-              <input
-                ref={fileRef}
-                type="file"
-                hidden
-                accept=".env,.txt,application/json"
-                onChange={(e) => onFile(e.target.files?.[0])}
-              />
-            </Stack>
-            <TextField
-              fullWidth
-              multiline
-              minRows={3}
-              value={envText}
-              onChange={(e) => onEnvText(e.target.value)}
-              placeholder={"OPENAI_API_KEY=…\nDATABASE_URL=…"}
-              sx={{ "& .MuiInputBase-input": { typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" } }}
-            />
-          </Box>
-          <Field
-            label="Additional egress domains"
-            placeholder="api.example.com, turn.example.com"
-            value={egress}
-            onChange={onEgress}
-            mono
-            helper="Comma or newline-separated public hostnames for hardcoded APIs / TURN endpoints. Everything else is firewalled at the sandbox."
-          />
-        </Stack>
-      )}
-    </Box>
-  );
-}
-EnvironmentValues.propTypes = {
-  envText: PropTypes.string,
-  onEnvText: PropTypes.func,
-  egress: PropTypes.string,
-  onEgress: PropTypes.func,
-};
-
-function Label({ children }) {
+export function Label({ children }) {
   return (
     <Typography sx={{ typography: "s3", fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: "text.subtitle" }}>
       {children}
@@ -1312,7 +1857,7 @@ function Label({ children }) {
 }
 Label.propTypes = { children: PropTypes.node };
 
-function Field({ label, required, value, onChange, placeholder, helper, mono, type, multiline, fullWidth }) {
+export function Field({ label, required, value, onChange, placeholder, helper, mono, type, multiline, minRows, fullWidth }) {
   return (
     <Box sx={{ flex: fullWidth ? 1 : undefined }}>
       {label && (
@@ -1328,7 +1873,7 @@ function Field({ label, required, value, onChange, placeholder, helper, mono, ty
         placeholder={placeholder}
         type={type}
         multiline={multiline}
-        minRows={multiline ? 2 : undefined}
+        minRows={multiline ? minRows || 2 : undefined}
         sx={{
           "& .MuiInputBase-input": {
             typography: "s2",
@@ -1349,7 +1894,7 @@ Field.propTypes = {
   value: PropTypes.string, onChange: PropTypes.func,
   placeholder: PropTypes.string, helper: PropTypes.node,
   mono: PropTypes.bool, type: PropTypes.string,
-  multiline: PropTypes.bool, fullWidth: PropTypes.bool,
+  multiline: PropTypes.bool, minRows: PropTypes.number, fullWidth: PropTypes.bool,
 };
 
 /* Contact Information — how test calls actually reach the agent.
@@ -1362,54 +1907,45 @@ Field.propTypes = {
      • Agent speaks first toggle row.
    No section header — reads as a run of stacked cards, matching the
    rest of the form. */
-function ContactInformation({
+export function ContactInformation({
   mode, onMode,
   countryIso, onCountryIso,
   contactNumber, onContactNumber,
   inboundCalls, onInboundCalls,
   agentSpeaksFirst, onAgentSpeaksFirst,
-  phoneOnly = false,
 }) {
-  /* Others agents have no in-browser WebRTC target to fall back on
-     (there's no live agent to connect to), so the mode picker
-     collapses to phone-only and we skip the header card entirely —
-     the user just types the number to dial. */
-  const effectiveMode = phoneOnly ? "phone" : mode;
-  const header = effectiveMode === "phone"
-    ? { title: "Telephony simulation (PSTN)", body: "A real phone call is placed over PSTN — requires a configured telephony provider." }
-    : { title: "Web simulation (WebRTC)", body: "No phone call is placed and no telephony provider is needed." };
+  const header = mode === "phone"
+    ? { title: "Telephony simulation (PSTN)", body: "Places a real call — needs a telephony provider." }
+    : { title: "Web simulation (WebRTC)", body: "No phone call or telephony provider needed." };
   const selected = COUNTRY_BY_ISO[countryIso] || COUNTRY_BY_ISO.US;
 
   return (
     <Stack spacing={1}>
-      {/* mode header card + segmented toggle — hidden when the caller
-          forces phone-only (Others has no WebRTC path). */}
-      {!phoneOnly && (
-        <Stack
-          direction="row" alignItems="center" spacing={1.5}
-          sx={{
-            px: 1.75, py: 1.25, borderRadius: 1,
-            border: "1px solid", borderColor: "divider",
-          }}
-        >
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography sx={{ typography: "s2", fontWeight: 700 }}>{header.title}</Typography>
-            <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-              {header.body}
-            </Typography>
-          </Box>
-          <SegmentedToggle
-            value={mode} onChange={onMode}
-            options={[
-              { value: "web",   label: "Web" },
-              { value: "phone", label: "Phone" },
-            ]}
-          />
-        </Stack>
-      )}
+      {/* mode header card + segmented toggle */}
+      <Stack
+        direction="row" alignItems="center" spacing={1.5}
+        sx={{
+          px: 1.75, py: 1.25, borderRadius: 1,
+          border: "1px solid", borderColor: "divider",
+        }}
+      >
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography sx={{ typography: "s2", fontWeight: 700 }}>{header.title}</Typography>
+          <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+            {header.body}
+          </Typography>
+        </Box>
+        <SegmentedToggle
+          value={mode} onChange={onMode}
+          options={[
+            { value: "web",   label: "Web" },
+            { value: "phone", label: "Phone" },
+          ]}
+        />
+      </Stack>
 
-      {/* phone fields — always visible when phoneOnly, otherwise gated on mode */}
-      {effectiveMode === "phone" && (
+      {/* phone fields — only for a call over the phone */}
+      {mode === "phone" && (
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
           <Box sx={{ width: { xs: "100%", sm: 180 } }}>
             <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>Country Code</Typography>
@@ -1468,7 +2004,7 @@ function ContactInformation({
 
       {/* Inbound Calls only belongs to the Phone mode — a WebRTC
           simulation has no phone number for anyone to dial in on. */}
-      {effectiveMode === "phone" && (
+      {mode === "phone" && (
         <ToggleRow
           checked={inboundCalls}
           onChange={onInboundCalls}
@@ -1481,7 +2017,7 @@ function ContactInformation({
         checked={agentSpeaksFirst}
         onChange={onAgentSpeaksFirst}
         title="Agent speaks first"
-        body="Turn on if your agent greets first. The simulator waits for it before replying."
+        body="The simulator waits for its greeting."
       />
     </Stack>
   );
@@ -1497,13 +2033,12 @@ ContactInformation.propTypes = {
   onInboundCalls: PropTypes.func,
   agentSpeaksFirst: PropTypes.bool,
   onAgentSpeaksFirst: PropTypes.func,
-  phoneOnly: PropTypes.bool,
 };
 
 /* Two-value segmented control — active pill uses the same tinted
    selected surface as the ChipCard elsewhere so it doesn't feel like
    a foreign primitive. */
-function SegmentedToggle({ value, onChange, options }) {
+export function SegmentedToggle({ value, onChange, options }) {
   return (
     <Stack
       direction="row"
@@ -1547,7 +2082,7 @@ SegmentedToggle.propTypes = {
   options: PropTypes.arrayOf(PropTypes.shape({ value: PropTypes.string, label: PropTypes.node })),
 };
 
-function ToggleRow({ checked, onChange, title, body }) {
+export function ToggleRow({ checked, onChange, title, body, hint }) {
   return (
     <Stack
       direction="row" alignItems="center" spacing={1.5}
@@ -1558,8 +2093,8 @@ function ToggleRow({ checked, onChange, title, body }) {
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography sx={{ typography: "s2", fontWeight: 700 }}>{title}</Typography>
-        <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-          {body}
+        <Typography component="div" sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+          {hint ? <HintLine hint={hint}>{body}</HintLine> : body}
         </Typography>
       </Box>
       <Switch
@@ -1573,6 +2108,8 @@ function ToggleRow({ checked, onChange, title, body }) {
 ToggleRow.propTypes = {
   checked: PropTypes.bool, onChange: PropTypes.func,
   title: PropTypes.node, body: PropTypes.node,
+  /* The rest of the body's sentence, behind an ⓘ. */
+  hint: PropTypes.node,
 };
 
 /* How many scenarios the build generates — 10 unless changed; clearing the
@@ -1581,7 +2118,10 @@ const MAX_SCENARIOS = 500;
 const DEFAULT_SCENARIOS = "10";
 
 function ScenarioCountRow({ value, onChange }) {
+  const connect = useContext(ConnectModeContext);
   const n = Number(value) || 0;
+  /* Connecting an agent generates nothing — scenarios belong to an environment. */
+  if (connect) return null;
   const onInput = (raw) => {
     const digits = raw.replace(/\D/g, "").replace(/^0+/, "").slice(0, 3);
     onChange(digits && Number(digits) > MAX_SCENARIOS ? String(MAX_SCENARIOS) : digits);
@@ -1611,9 +2151,7 @@ function ScenarioCountRow({ value, onChange }) {
         sx={{ width: 150, flexShrink: 0, "& .MuiInputBase-input": { typography: "s2", fontVariantNumeric: "tabular-nums" } }}
       />
         <Typography sx={{ typography: "s3", color: "text.subtitle", minWidth: 0 }}>
-          {n
-            ? `We'll generate ${n} scenario${n === 1 ? "" : "s"}. Set any number up to ${MAX_SCENARIOS}, or clear it to generate as many as your agent needs.`
-            : `We'll generate as many as your agent's tools, rules and edge cases call for. Enter a number (up to ${MAX_SCENARIOS}) to cap it.`}
+          {n ? `Up to ${MAX_SCENARIOS}. Clear it for no cap.` : `No cap — as many as the agent needs.`}
         </Typography>
       </Stack>
     </Box>
@@ -1622,34 +2160,6 @@ function ScenarioCountRow({ value, onChange }) {
 ScenarioCountRow.propTypes = { value: PropTypes.string, onChange: PropTypes.func };
 
 const scenarioCountOf = (value) => (Number(value) > 0 ? Number(value) : null);
-
-/* Full country list from src/assets/data/countries. Ordering surfaces
-   the `suggested` markets first (US, GB, IN, AU, DE, FR, …), then the
-   rest alphabetised, so the picker opens on the countries the voice
-   pilots actually land in without hiding the long tail. */
-const flagOf = (iso) =>
-  iso && iso.length === 2
-    ? String.fromCodePoint(...iso.toUpperCase().split("").map((c) => 0x1F1E6 + c.charCodeAt(0) - 65))
-    : "";
-
-const COUNTRY_OPTIONS = (() => {
-  const filled = countries.filter((c) => c.code && c.phone);
-  /* `phone` in the seed uses "1-268" for territories that share a
-     dial prefix — we keep just the leading trunk so the picker never
-     shows a hyphenated code the user cannot type. */
-  const cleaned = filled.map((c) => ({
-    iso: c.code,
-    name: c.label,
-    dial: `+${String(c.phone).split("-")[0]}`,
-    suggested: !!c.suggested,
-    flag: flagOf(c.code),
-  }));
-  const suggested = cleaned.filter((c) => c.suggested);
-  const rest = cleaned.filter((c) => !c.suggested).sort((a, b) => a.name.localeCompare(b.name));
-  return [...suggested, ...rest];
-})();
-
-const COUNTRY_BY_ISO = Object.fromEntries(COUNTRY_OPTIONS.map((c) => [c.iso, c]));
 
 function ProviderRow({ options, value, onChange }) {
   return (
@@ -1661,6 +2171,8 @@ function ProviderRow({ options, value, onChange }) {
           label={o.name}
           on={value === o.id}
           onClick={() => onChange(o.id)}
+          tag={o.tag}
+          disabled={o.disabled}
         />
       ))}
     </Stack>
@@ -1668,38 +2180,49 @@ function ProviderRow({ options, value, onChange }) {
 }
 ProviderRow.propTypes = { options: PropTypes.array, value: PropTypes.string, onChange: PropTypes.func };
 
-function ChipCard({ icon, logo, label, on, onClick, comingSoon }) {
-  const chip = (
-    <Stack
-      direction="row" alignItems="center" spacing={0.75}
-      onClick={comingSoon ? undefined : onClick}
-      sx={{
-        px: 1.25, py: 0.75, borderRadius: 1,
-        cursor: comingSoon ? "default" : "pointer",
-        opacity: comingSoon ? 0.6 : 1,
-        border: "1px solid",
-        borderColor: (th) => on
-          ? (th.palette.mode === "dark" ? alpha(th.palette.text.primary, 0.4) : th.palette.primary.main)
-          : th.palette.divider,
-        bgcolor: (th) => on
-          ? (th.palette.mode === "dark" ? alpha(th.palette.text.primary, 0.06) : alpha(th.palette.primary.main, 0.05))
-          : "background.paper",
-      }}
-    >
-      {logo || (icon && <Iconify icon={icon} width={13} sx={{ color: on ? "primary.main" : "text.subtitle" }} />)}
-      {label != null && <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{label}</Typography>}
+
+/* Platforms we'll connect later — inert chips, one row, under the live ones. */
+export function LaterPlatformsRow() {
+  return (
+    <Stack direction="row" alignItems="center" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mt: 0.75 }}>
+      {LATER_PLATFORMS.map((p) => (
+        <ChipCard key={p.id} icon={p.icon} label={p.name} tag="Coming soon" disabled />
+      ))}
     </Stack>
   );
-  if (comingSoon) {
-    return (
-      <Tooltip title="Coming soon" arrow placement="top">
-        <Box sx={{ display: "inline-flex" }}>{chip}</Box>
-      </Tooltip>
-    );
-  }
-  return chip;
 }
-ChipCard.propTypes = { icon: PropTypes.string, logo: PropTypes.node, label: PropTypes.node, on: PropTypes.bool, onClick: PropTypes.func, comingSoon: PropTypes.bool };
+
+/* A platform note cut to its first sentence — the rest behind an ⓘ. */
+export function NoteLine({ text }) {
+  const cut = String(text || "").indexOf(". ");
+  if (cut < 0) return text;
+  return <HintLine hint={text.slice(cut + 2)}>{text.slice(0, cut + 1)}</HintLine>;
+}
+NoteLine.propTypes = { text: PropTypes.string };
+
+/* A platform key's helper line: where it lives and what it may do, in one
+   short line — the full sentence on hover. Pass it as the key field's helper. */
+export function PlatformKeyScope({ prototypeHint = false }) {
+  return (
+    <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+      <span>Secret-manager path · read and test access only</span>
+      <Tooltip
+        arrow
+        title={(
+          <Box sx={{ typography: "s3" }}>
+            The key itself never leaves your secret manager. {PLATFORM_KEY_SCOPE}
+            {prototypeHint && <Box sx={{ mt: 0.5, opacity: 0.8 }}>Prototype: a path containing “readonly” acts like a key without create scope.</Box>}
+          </Box>
+        )}
+      >
+        <Box component="span" sx={{ display: "inline-flex", color: "text.disabled", cursor: "help" }}>
+          <Iconify icon="solar:info-circle-linear" width={13} />
+        </Box>
+      </Tooltip>
+    </Box>
+  );
+}
+PlatformKeyScope.propTypes = { prototypeHint: PropTypes.bool };
 
 /**
  * A platform's brand mark.
@@ -1709,7 +2232,7 @@ ChipCard.propTypes = { icon: PropTypes.string, logo: PropTypes.node, label: Prop
  * providers — fall back to a brand-coloured monogram tile so the picker still
  * reads as branded.
  */
-function PlatformLogo({ id, name, brand }) {
+export function PlatformLogo({ id, name, brand }) {
   const spec = PLATFORM_LOGOS[id];
   if (spec) {
     const isMark = spec.type === "mark";
@@ -1750,31 +2273,40 @@ function PlatformLogo({ id, name, brand }) {
 PlatformLogo.propTypes = { id: PropTypes.string, name: PropTypes.string, brand: PropTypes.string };
 
 function ContinueRow({ disabled, hint, label = "Build environment", onClick }) {
+  const connect = useContext(ConnectModeContext);
+  const rt = useContext(RuntimeContext);
+  const blocked = disabled || !!connect?.blocked;
+  const shownHint = disabled ? hint : connect?.blocked ? "Add the endpoint the agent runs at" : hint;
   return (
+    <>
+    {connect?.extra}
+    {!connect && rt && <WhereItRuns choice={rt.choice} runtime={rt.runtime} setRuntime={rt.setRuntime} />}
     <Stack
       direction="row"
       alignItems="center"
       justifyContent="space-between"
       spacing={2}
+      className="continue-row"
       sx={{ pt: 1.25, borderTop: "1px solid", borderColor: "divider", mx: -2.5, px: 2.5, pb: 0 }}
     >
-      {disabled && hint ? (
+      {blocked && shownHint ? (
         <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          {hint}
+          {shownHint}
         </Typography>
       ) : <Box />}
       <Button
         variant="contained"
         color="primary"
-        disabled={disabled}
+        disabled={blocked}
         onClick={onClick}
-        startIcon={<Iconify icon="solar:magic-stick-3-linear" width={14} />}
+        startIcon={<Iconify icon={connect ? "solar:link-circle-linear" : "solar:magic-stick-3-linear"} width={14} />}
         endIcon={<Iconify icon="solar:alt-arrow-right-linear" width={14} />}
         sx={{ typography: "s1", fontWeight: 700, px: 2, flexShrink: 0 }}
       >
-        {label}
+        {connect ? (connect.submitLabel || "Connect agent") : label}
       </Button>
     </Stack>
+    </>
   );
 }
 ContinueRow.propTypes = { disabled: PropTypes.bool, hint: PropTypes.node, label: PropTypes.node, onClick: PropTypes.func };
@@ -1791,12 +2323,20 @@ const OPTIONS = [
     setupSubtitle: "Prebuilt environments you can adapt in minutes — pick one, then wire your agent.",
   },
   {
+    id: "connected",
+    group: "bring",
+    title: "Connected agent",
+    icon: "solar:link-circle-linear",
+    blurb: "Reuse an agent you've already connected — from the Agents page or another environment. Same agent, same version history; nothing to re-enter.",
+    setupSubtitle: "Pick an agent and the version this environment should test.",
+  },
+  {
     id: "source",
     group: "bring",
     title: "Source repository",
     icon: "solar:code-linear",
     blurb: "Read the code straight from a git host. Scenarios and tools stay in sync with the real code as it changes — no manual updates when your agent evolves.",
-    preview: ["GitHub", "GitLab", "Bitbucket"],
+    preview: ["GitHub", "GitLab · Coming soon", "Bitbucket · Coming soon"],
     setupSubtitle: "We read the code so scenarios stay in sync with your actual tools.",
   },
   {
@@ -1804,7 +2344,7 @@ const OPTIONS = [
     group: "bring",
     title: "Hosted platform",
     icon: "solar:cloud-linear",
-    blurb: "Connect an agent living on a managed voice or chat platform by its ID. We handle the auth and route every simulated turn through the platform's own API.",
+    blurb: "Connect an agent living on a managed voice platform by its ID. We handle the auth and route every simulated turn through the platform's own API.",
     preview: ["Vapi", "Retell", "Bland", "ElevenLabs", "LiveKit"],
     setupSubtitle: "Point at an agent living on a managed platform.",
   },
@@ -1835,6 +2375,28 @@ const OPTIONS = [
     preview: ["macOS", "Linux", "Windows"],
     setupSubtitle: "The CLI runs on your machine and streams simulations back over a secure tunnel.",
   },
+  /* An agent reached only by its endpoint — on the Agents page and
+     when building an environment alike. */
+  {
+    id: "running",
+    group: "bring",
+    title: "Agent endpoint",
+    icon: "solar:global-linear",
+    blurb: "Only a URL to point at? We call it on every simulated turn — it can't be copied, so simulations drive the real agent once you say so. Link its repository too and we can read what it's made of.",
+    preview: ["HTTP", "WebSocket"],
+    setupSubtitle: "Point us at the endpoint your agent answers on.",
+  },
+  /* A number we can only call (Phase 2) — test only, ends in a suggested fix.
+     Closed platforms come in this way too. */
+  {
+    id: "phone",
+    group: "bring",
+    title: "Phone number",
+    icon: "solar:phone-linear",
+    blurb: "Only a number to call? Paste its instructions and we test it by phone. We can't change it ourselves, so improvements end in a suggested fix you apply.",
+    preview: ["Test only", "Sierra", "Decagon"],
+    setupSubtitle: "The number we dial, and the instructions it follows.",
+  },
   /* Not in the picker grid — reached via the "Start from scratch" button in
      the page header. Kept in OPTIONS so FlowPanel can look up its title +
      subtitle when triggered. */
@@ -1849,8 +2411,10 @@ const OPTIONS = [
 ];
 
 const PANELS = {
+  connected: PanelConnectedAgent,
   source: PanelSourceRepo,
   running: PanelRunningAgent,
+  phone: PanelPhoneNumber,
   hosted: PanelHostedPlatform,
   mcp: PanelMcpServer,
   upload: PanelCodeUpload,
@@ -1860,58 +2424,9 @@ const PANELS = {
 
 const REPO_PROVIDERS = [
   { id: "github", name: "GitHub", icon: "eva:github-fill" },
-  { id: "gitlab", name: "GitLab", icon: "logos:gitlab" },
-  { id: "bitbucket", name: "Bitbucket", icon: "logos:bitbucket" },
+  { id: "gitlab", name: "GitLab", icon: "logos:gitlab", tag: "Coming soon", disabled: true },
+  { id: "bitbucket", name: "Bitbucket", icon: "logos:bitbucket", tag: "Coming soon", disabled: true },
 ];
-
-/* Hosted-platform providers grouped by agent type — the platform roster
-   only makes sense once we know what kind of agent is being connected.
-   Voice mirrors the `voice_platform` provider list in _mock/agentTypes.js;
-   the other types round out the pattern with the platforms teams
-   actually reach for in each space. Adding a provider here (or a whole
-   new agent type) is the extension point when the product grows. */
-const AGENT_TYPES = [
-  { id: "voice", label: "Voice", icon: "solar:phone-calling-rounded-linear" },
-  { id: "chat", label: "Chat", icon: "solar:chat-round-linear" },
-  { id: "computer", label: "Computer use", icon: "solar:monitor-linear", comingSoon: true },
-  { id: "code", label: "Code", icon: "solar:code-square-linear", comingSoon: true },
-  { id: "robotics", label: "Robotics", icon: "solar:cpu-bolt-linear", comingSoon: true },
-];
-
-const HOSTED_PLATFORMS_BY_TYPE = {
-  voice: [
-    { id: "vapi", name: "Vapi", icon: "solar:phone-calling-rounded-linear", brand: "#12A594", idLabel: "Assistant ID", idPlaceholder: "asst_9f2c…", keyLabel: "Vapi API key" },
-    { id: "retell", name: "Retell AI", icon: "solar:microphone-3-linear", brand: "#635BFF", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", keyLabel: "Retell API key" },
-    { id: "bland", name: "Bland.ai", icon: "solar:phone-linear", brand: "#F26D5B", idLabel: "Pathway ID", idPlaceholder: "pathway_9f2c…", keyLabel: "Bland API key" },
-    { id: "elevenlabs", name: "ElevenLabs", icon: "solar:soundwave-linear", brand: "#111111", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", keyLabel: "ElevenLabs API key" },
-    { id: "livekit", name: "LiveKit", icon: "solar:server-minimalistic-linear", brand: "#1FD5F9", idLabel: "Agent name", idPlaceholder: "returns-line-agent", keyLabel: "LiveKit API key" },
-    /* Bring-your-own — no fixed platform contract. The panel switches
-       to a mode picker so builders can either paste API creds against
-       a custom endpoint, or describe the agent via a system prompt
-       (agent-less; the scenario generator seeds from the prompt). */
-    { id: "other", name: "Others", icon: "solar:menu-dots-linear", idLabel: "Endpoint URL", idPlaceholder: "https://your-agent.example.com", keyLabel: "API key", isOther: true },
-  ],
-  chat: [
-    { id: "openai_assistants", name: "OpenAI Assistants", icon: "solar:magic-stick-3-linear", idLabel: "Assistant ID", idPlaceholder: "asst_9f2c…", keyLabel: "OpenAI API key" },
-    { id: "langgraph", name: "LangGraph Cloud", icon: "solar:diagram-up-linear", idLabel: "Deployment URL", idPlaceholder: "https://…", keyLabel: "LangSmith API key" },
-    { id: "crewai", name: "CrewAI", icon: "solar:users-group-rounded-linear", idLabel: "Crew ID", idPlaceholder: "crew_9f2c…", keyLabel: "CrewAI API key" },
-    { id: "claude_agents", name: "Claude Agents", icon: "solar:atom-linear", idLabel: "Agent name", idPlaceholder: "support-agent", keyLabel: "Anthropic API key" },
-  ],
-  computer: [
-    { id: "browserbase", name: "Browserbase", icon: "solar:global-linear", idLabel: "Session template ID", idPlaceholder: "sess_9f2c…", keyLabel: "Browserbase API key" },
-    { id: "anthropic_cu", name: "Anthropic Computer Use", icon: "solar:monitor-linear", idLabel: "Agent name", idPlaceholder: "returns-agent", keyLabel: "Anthropic API key" },
-    { id: "skyvern", name: "Skyvern", icon: "solar:mouse-linear", idLabel: "Task template ID", idPlaceholder: "tmpl_9f2c…", keyLabel: "Skyvern API key" },
-  ],
-  code: [
-    { id: "devin", name: "Devin", icon: "solar:code-linear", idLabel: "Agent slug", idPlaceholder: "acme/refactor-bot", keyLabel: "Cognition API key" },
-    { id: "replit_agent", name: "Replit Agent", icon: "solar:code-square-linear", idLabel: "Repl URL", idPlaceholder: "https://replit.com/@…", keyLabel: "Replit API key" },
-    { id: "cursor_bg", name: "Cursor background agent", icon: "solar:cursor-linear", idLabel: "Agent ID", idPlaceholder: "cursor_9f2c…", keyLabel: "Cursor API key" },
-  ],
-  robotics: [
-    { id: "gr00t", name: "NVIDIA GR00T Cloud", icon: "solar:cpu-bolt-linear", idLabel: "Policy ID", idPlaceholder: "policy_9f2c…", keyLabel: "NVIDIA API key" },
-    { id: "physical_intelligence", name: "Physical Intelligence π₀", icon: "solar:reorder-linear", idLabel: "Model name", idPlaceholder: "pi0-generalist", keyLabel: "PI API key" },
-  ],
-};
 
 const MCP_TRANSPORTS = [
   { id: "http", name: "HTTP", icon: "solar:global-linear" },
@@ -2146,26 +2661,26 @@ function deriveScratchEvals(flowText) {
   Cheap keyword-based namer for the scratch flow. Same shape as
   ScratchEnvironment's deriveName in the other variation: scan the
   intake for common domain terms and produce a short, human name.
-  Falls back to a generic "Scratch env" so we never mint a blank one.
+  Falls back to a generic "Scratch environment" so we never mint a blank one.
 */
 function deriveScratchName(flowText, attachments) {
   const t = String(flowText || "").toLowerCase();
   const has = (...needles) => needles.some((n) => t.includes(n));
 
-  if (has("refund", "return")) return "Refunds & returns env";
-  if (has("support", "ticket", "helpdesk", "help desk")) return "Support agent env";
-  if (has("github", " pr ", "pull request", "merge request", "gitlab", "bitbucket")) return "Repo triage env";
-  if (has("linear", "jira", "issue")) return "Issue triage env";
-  if (has("slack", "discord")) return "Chat ops env";
-  if (has("gmail", "email", "inbox")) return "Inbox agent env";
-  if (has("schedule", "meeting", "calendar")) return "Scheduling agent env";
-  if (has("code", "diff", "review")) return "Code review env";
-  if (has("draft", "report", "write", "summar")) return "Doc drafting env";
-  if (has("sync", "migrat")) return "Data sync env";
-  if (has("call", "voice", "phone", "sip", "telephony")) return "Voice agent env";
+  if (has("refund", "return")) return "Refunds & returns environment";
+  if (has("support", "ticket", "helpdesk", "help desk")) return "Support agent environment";
+  if (has("github", " pr ", "pull request", "merge request", "gitlab", "bitbucket")) return "Repo triage environment";
+  if (has("linear", "jira", "issue")) return "Issue triage environment";
+  if (has("slack", "discord")) return "Chat ops environment";
+  if (has("gmail", "email", "inbox")) return "Inbox agent environment";
+  if (has("schedule", "meeting", "calendar")) return "Scheduling agent environment";
+  if (has("code", "diff", "review")) return "Code review environment";
+  if (has("draft", "report", "write", "summar")) return "Doc drafting environment";
+  if (has("sync", "migrat")) return "Data sync environment";
+  if (has("call", "voice", "phone", "sip", "telephony")) return "Voice agent environment";
 
-  if (attachments?.length) return `Scratch env · ${attachments.length} file${attachments.length === 1 ? "" : "s"}`;
-  return "Scratch env";
+  if (attachments?.length) return `Scratch environment · ${attachments.length} file${attachments.length === 1 ? "" : "s"}`;
+  return "Scratch environment";
 }
 
 function formatSize(bytes) {
@@ -2176,3 +2691,5 @@ function formatSize(bytes) {
   while (n >= 1024 && u < units.length - 1) { n /= 1024; u += 1; }
   return `${n.toFixed(n >= 10 || u === 0 ? 0 : 1)} ${units[u]}`;
 }
+
+export { ChipCard };

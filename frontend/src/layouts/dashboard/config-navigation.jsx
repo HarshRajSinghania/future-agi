@@ -13,6 +13,8 @@ import { Events, PropertyName, trackEvent } from "src/utils/Mixpanel";
 import { useAuthContext } from "src/auth/hooks";
 import { useWorkspace } from "src/contexts/WorkspaceContext";
 import { useDeploymentMode } from "src/hooks/useDeploymentMode";
+/* Agent improvement is a design partner preview behind a workspace flag. */
+import { useAgentImprovementFlag } from "src/sections/simulate-v2/_mock/featureFlags";
 import {
   ROLES,
   showRoleSpecific,
@@ -70,6 +72,7 @@ export function useNavData() {
   const effectiveWsRole = currentWorkspaceRole || userDefaultWsRole;
   const isAdmin =
     userOrgRole === "Admin" || effectiveWsRole === "workspace_admin";
+  const improving = useAgentImprovementFlag();
   const data = useMemo(() => {
     const buildItems = [
       {
@@ -219,14 +222,15 @@ export function useNavData() {
             path: paths.dashboard.simulate.environments,
             icon: ICONS.simulatorAgent,
           },
-          {
-            /* Improvements — workspace-wide runs surface. Each row is
-               one source (an env or a dataset); clicking drills into
-               that source's runs summary. */
+          /* Improvements — workspace-wide runs surface. Each row is
+             one source (an env or a dataset); clicking drills into
+             that source's runs summary. A design partner preview:
+             hidden when the workspace's agentImprovement flag is off. */
+          ...(improving ? [{
             title: "Improvements",
             path: paths.dashboard.simulate.improvements,
             icon: ICONS.improvements,
-          },
+          }] : []),
           // {
           //   title: "Agent Definition",
           //   path: paths.dashboard.simulate.agentDefinition,
@@ -292,7 +296,7 @@ export function useNavData() {
     });
 
     return sections;
-  }, [isOwner, isAdmin]);
+  }, [isOwner, isAdmin, improving]);
   return data;
 }
 

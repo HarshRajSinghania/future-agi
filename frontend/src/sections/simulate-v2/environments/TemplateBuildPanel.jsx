@@ -14,8 +14,10 @@ import { seedScenariosForClone, resolveSeedPromptToJson } from "../_mock/twins";
 import { MODALITY_FOR } from "../_mock/fidelity";
 import { runtimeTypeFor } from "../_mock/builder";
 import { useSimStore } from "../store";
-import { SectionCard, CopyField } from "../components/primitives";
+import { SectionCard } from "../components/primitives";
 import TwinProvisioningModal from "./TwinProvisioningModal";
+import { HintLine } from "../agents/connect/replicationBits";
+import LocalSteps from "./LocalSteps";
 
 /**
  * Build a prebuilt template — the "where to build it" panel.
@@ -23,9 +25,9 @@ import TwinProvisioningModal from "./TwinProvisioningModal";
  * A template is a world that already exists (seeded state, tools, rules,
  * scenarios and a baseline agent), so there's no agent to connect and nothing
  * to derive. The only decision is where to build it: here (cloud sandbox) or
- * locally (CLI scaffold). The template's own agent is seeded so the environment
- * is complete the moment it's built; the user swaps in their own agent version
- * afterwards, from the environment's Agents panel.
+ * locally (CLI scaffold). The template's own agent is seeded as a placeholder so
+ * the environment can run the moment it's built; the copy is the user's own,
+ * and connecting their agent (Overview) is its one open gap.
  *
  * Rendered both as the standalone Use-template page and inline as the detail
  * pane of the templates browser, so it takes a base `template` and mints its
@@ -108,10 +110,8 @@ export default function TemplateBuildPanel({ template, showName = false }) {
            user a click and, more importantly, keeps the "Add evaluations
            to run" gap from firing on Overview the moment the env opens. */
         evals: (env.evalPreset || []).map((id) => id),
-        /* Sticker: this env came straight from a template. Locks agent- and
-           env-version editing until the user forks it into a personal copy —
-           templates are meant to be run as-shipped, not modified in place. */
-        seededFromTemplate: true,
+        /* No lock: this is the user's own copy, editable like any other. The
+           baseline agent (`seeded`) is what marks it as not yet theirs. */
       },
     });
 
@@ -189,13 +189,15 @@ export default function TemplateBuildPanel({ template, showName = false }) {
           >
             <Stack sx={{ p: 2.5 }} spacing={1.75}>
               {[
-                { icon: "solar:box-minimalistic-linear", text: "The seeded world, tools and hard rules come up exactly as designed." },
-                { icon: "solar:user-speak-rounded-linear", text: "The template's baseline agent is wired in, so you can run it right away." },
-                { icon: "solar:magic-stick-3-linear", text: "Add your own agent version afterwards from the environment's Agents tab." },
+                { icon: "solar:box-minimalistic-linear", text: "Seeded world, tools and hard rules, exactly as designed." },
+                { icon: "solar:user-speak-rounded-linear", text: "A baseline agent stands in, so you can run it now." },
+                { icon: "solar:magic-stick-3-linear", text: "Connect yours from Overview.", hint: "The copy is yours to edit." },
               ].map((row) => (
                 <Stack key={row.text} direction="row" spacing={1.25} alignItems="flex-start">
                   <Iconify icon={row.icon} width={16} sx={{ color: "text.subtitle", flexShrink: 0, mt: "1px" }} />
-                  <Typography sx={{ typography: "s2", color: "text.secondary" }}>{row.text}</Typography>
+                  <Typography component="div" sx={{ typography: "s2", color: "text.secondary" }}>
+                    {row.hint ? <HintLine hint={row.hint}>{row.text}</HintLine> : row.text}
+                  </Typography>
                 </Stack>
               ))}
             </Stack>
@@ -211,14 +213,14 @@ export default function TemplateBuildPanel({ template, showName = false }) {
             </Stack>
           </SectionCard>
 
-          <SectionCard title="What this template gives you" subtitle="Already built — you are not deriving it">
+          <SectionCard title="What this template gives you">
             <Stack sx={{ px: 2.5, py: 2 }} spacing={1.25}>
               <Line label="World" value={`${(env.seed?.tables || []).reduce((a, t) => a + t.rows, 0).toLocaleString()} seeded rows`} />
               <Line label="Tools" value={`${env.tools?.length || 0} the world answers`} />
-              <Line label="Hard rules" value={`${env.rules?.length || 0} graded on every run`} />
+              <Line label="Rules" value={`${env.rules?.length || 0} graded on every run`} />
               <Line label="Scenarios" value={`${scenarios.length} ready to run`} />
               <Line label="Evals" value={`${evalCount} suggested`} />
-              <Line label="Agent" value="Seeded baseline — swap in yours after" />
+              <Line label="Agent" value="Template baseline · placeholder" />
             </Stack>
           </SectionCard>
 
@@ -231,9 +233,10 @@ export default function TemplateBuildPanel({ template, showName = false }) {
           >
             <Stack direction="row" spacing={1.25} alignItems="flex-start">
               <Iconify icon="solar:shield-keyhole-linear" width={16} sx={{ color: "#16A34A", flexShrink: 0, mt: "1px" }} />
-              <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-                <Box component="span" sx={{ fontWeight: 700, color: "text.primary" }}>Nothing touches production.</Box>{" "}
-                Seeded data and test credentials in an isolated sandbox — your deployed systems are never called.
+              <Typography component="div" sx={{ typography: "s2", fontWeight: 700, color: "text.primary" }}>
+                <HintLine hint="Seeded data and test credentials in an isolated sandbox — your deployed systems are never called.">
+                  Nothing touches production.
+                </HintLine>
               </Typography>
             </Stack>
           </Box>
@@ -262,54 +265,31 @@ function LocalScaffoldCard({ env }) {
     {
       n: 1,
       title: "Initialize",
-      body: "Scaffold the environment, its scenario packs and the seeded agent into your repo.",
+      body: "Scaffold it and its seeded agent into your repo.",
       cmd: `fai env init ${slug} --template ${env.id}`,
     },
     {
       n: 2,
       title: "Run a simulation",
-      body: "Run the core pack locally against the seeded agent — nothing leaves your laptop.",
+      body: "Run the core pack locally — nothing leaves your laptop.",
       cmd: `fai sim run --env ${slug} --pack core`,
     },
     {
       n: 3,
       title: "Deploy",
-      body: "Publish when you're ready. Runs execute on our infrastructure and traces land back in the dashboard.",
+      body: "Publish when you're ready.",
+      hint: "Runs execute on our infrastructure and traces land back in the dashboard.",
       cmd: `fai env deploy ${slug}`,
     },
   ];
   return (
     <SectionCard
       title="Develop locally"
-      subtitle="Scaffold this template into your own repo and iterate from your terminal."
+      subtitle="Iterate on this template from your terminal."
     >
-      <Stack sx={{ p: 2.5 }} spacing={0}>
-        {steps.map((s, i) => (
-          <Stack key={s.n} direction="row" spacing={1.75}>
-            <Stack alignItems="center" sx={{ flexShrink: 0 }}>
-              <Box
-                sx={{
-                  width: 24, height: 24, borderRadius: "50%", display: "grid", placeItems: "center",
-                  border: "1px solid", borderColor: "divider",
-                  typography: "s3", fontWeight: 700, color: "text.secondary",
-                }}
-              >
-                {s.n}
-              </Box>
-              {i < steps.length - 1 && (
-                <Box sx={{ flex: 1, width: "1px", bgcolor: "divider", my: 0.75, minHeight: 24 }} />
-              )}
-            </Stack>
-            <Box sx={{ flex: 1, minWidth: 0, pb: i < steps.length - 1 ? 2.25 : 0 }}>
-              <Typography sx={{ typography: "s2", fontWeight: 700 }}>{s.title}</Typography>
-              <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1 }}>
-                {s.body}
-              </Typography>
-              <CopyField value={s.cmd} wrap />
-            </Box>
-          </Stack>
-        ))}
-      </Stack>
+      <Box sx={{ p: 2.5 }}>
+        <LocalSteps steps={steps} />
+      </Box>
       <Divider />
       <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, py: 1.75 }}>
         <Iconify icon="solar:book-linear" width={14} sx={{ color: "text.subtitle" }} />

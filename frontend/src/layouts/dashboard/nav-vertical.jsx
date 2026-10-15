@@ -57,12 +57,16 @@ export default function NavVertical({ openNav, onCloseNav }) {
     }
   }, [onCloseNav, openNav, pathname]);
 
-  // Sync settings sidebar visibility with URL on page reload
+  // Sync settings sidebar visibility with the URL — on reload, and when a
+  // settings page links out to the app (e.g. GitHub → Agents → New agent),
+  // so the app's own sidebar comes back instead of the settings one.
   useEffect(() => {
     if (pathname.includes("/settings/")) {
       setSettingOpen(true);
+    } else if (settingOpen) {
+      setSettingOpen(false);
     }
-  }, [pathname, setSettingOpen]);
+  }, [pathname, setSettingOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-open gateway panel when on gateway routes, close when leaving
   useEffect(() => {

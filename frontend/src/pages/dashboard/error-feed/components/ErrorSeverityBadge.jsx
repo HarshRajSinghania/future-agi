@@ -14,15 +14,16 @@ const SEVERITY_CONFIG = {
     label: "High",
     dotColor: "#E9690C",
     darkDotColor: "#F49A54",
-    textColor: "#E9690C",
-    darkTextColor: "#F49A54",
+    // Orange / yellow stay on the dot; the word reads neutral.
+    textColor: "text.primary",
+    darkTextColor: "text.primary",
   },
   medium: {
     label: "Medium",
     dotColor: "#B8AC47",
     darkDotColor: "#F5E65F",
-    textColor: "#8C7A00",
-    darkTextColor: "#F5E65F",
+    textColor: "text.primary",
+    darkTextColor: "text.primary",
   },
   low: {
     label: "Low",

@@ -1,12 +1,20 @@
 import PropTypes from "prop-types";
-import { Box, Stack, Typography } from "@mui/material";
+import { useState } from "react";
+import { Box, ButtonBase, Stack, Typography } from "@mui/material";
+import Iconify from "src/components/iconify";
 import { SectionCard } from "../components/primitives";
 import { agentVersions, currentAgentVersion } from "../_mock/versions";
 import { toolCallers, toolFit, toolSince } from "../_mock/toolFit";
 import CapabilityGraph from "./CapabilityGraph";
+import { focusRing } from "../components/clickable";
 import { TwinSandboxSection } from "./OverviewPanel";
 import WorldInternalsSection from "./WorldInternalsSection";
 import ToolFitBanner from "./ToolFitBanner";
+import ConnectOnlyWorld, { EnvironmentKindNote } from "./ConnectOnlyWorld";
+import { isConnectOnly } from "../_mock/envModel";
+import { envLabelOf } from "../_mock/envVersionKinds";
+import { firstSnapshotOfWorld } from "../_mock/envSnapshot";
+import BuildStreamNote from "../environments/BuildStreamNote";
 
 /**
  * The world — the data and tool answers a run executes against.
@@ -16,9 +24,23 @@ import ToolFitBanner from "./ToolFitBanner";
  * is also the part that grows: it was first built to answer the tools of the
  * agent version the environment was made from, and it learns a new tool each
  * time a later version brings one.
+ *
+ * The world is data and tools (V7a): the tool handlers belong to it, so a
+ * change to how a tool behaves is a new environment version. A world read
+ * from a repository says which folders it came from, so a commit there reads
+ * as the world change it is. A connect-only environment has no world at all —
+ * it says so instead of showing empty tables.
  */
 
-const COLS = "minmax(160px, 1.1fr) minmax(0, 2fr) 96px minmax(120px, 1fr)";
+/* Where a repo-built world lives in its repository. */
+const repoOriginOf = (env, envState) => {
+  const src = env?.builtFrom;
+  if (src?.kind !== "repo" || !src.value) return null;
+  const repo = String(src.value).replace(/^https?:\/\/(www\.)?github\.com\//, "").replace(/\.git$/, "").replace(/\/$/, "");
+  const ref = src.ref || envState?.agent?.definition?.ref || "main";
+  return { repo, ref };
+};
+
 
 function VersionTag({ label, dim }) {
   return (
@@ -36,98 +58,191 @@ function VersionTag({ label, dim }) {
 }
 VersionTag.propTypes = { label: PropTypes.string, dim: PropTypes.bool };
 
-export default function WorldPanel({ env, envState, patch, onGo }) {
+export default function WorldPanel({ env, envState, patch, onGo, locked = false, buildProgress = null, buildDone = null }) {
+  /* On the build screen: the world fills in as it's built — each tool's row
+     once its handler is written, the rest once the world is done. */
+  const inBuild = Array.isArray(buildDone) && !buildDone.includes("build");
+  const [graphOpen, setGraphOpen] = useState(false);
+  const read = !!buildDone?.includes("understand");
   const fit = toolFit(env, envState);
   const since = toolSince(env, envState);
   const callers = toolCallers(env, envState);
   const activeAgent = currentAgentVersion(envState)?.label;
   const versionsCount = agentVersions(envState).length;
 
-  const rows = [
+  const origin = repoOriginOf(env, envState);
+
+  if (isConnectOnly(env)) {
+    return (
+      <Box sx={{ p: 2 }}>
+        {/* No heading — the tab names the page; its description is the tab's hover hint. */}
+        <EnvironmentKindNote env={env} envState={envState} sx={{ mb: 2 }} />
+        <ConnectOnlyWorld env={env} sx={{ mb: 2 }} />
+        {(env.tools?.length || 0) > 0 && (
+          <Box sx={{ mb: 2 }}>
+            <CapabilityGraph env={env} envState={envState} onGo={onGo} />
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
+  const allRows = [
     ...fit.world.map((t) => ({ tool: t, answered: true })),
     ...fit.missing.map((t) => ({ tool: t, answered: false })),
   ];
+  const handlers = buildProgress?.handlers || 0;
+  const rows = inBuild ? allRows.slice(0, handlers) : allRows;
+  /* Since / Called by only earn columns once they differ row to row — with
+     one environment version and one agent version every row said the same. */
+  const sinceOf = (t) => since[t.name] || fit.envVersion;
+  const callerKey = (t) => (callers[t.name] || []).join(",");
+  const showSince = new Set(allRows.filter((r) => r.answered).map((r) => sinceOf(r.tool))).size > 1 || allRows.some((r) => !r.answered);
+  const showCallers = versionsCount > 1 && new Set(allRows.map((r) => callerKey(r.tool))).size > 1;
+  const cols = ["minmax(160px, 1.1fr)", "minmax(0, 2fr)", showSince && "124px", showCallers && "minmax(120px, 1fr)"].filter(Boolean).join(" ");
+
+  if (inBuild && !read) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <BuildStreamNote waiting label="The world is built once the agent has been read — its tools first" />
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ p: 2 }}>
-      <Box sx={{ mb: 2 }}>
-        <Typography sx={{ typography: "m2", fontWeight: 600 }}>World</Typography>
-        <Typography sx={{ typography: "s2", color: "text.secondary", maxWidth: 780 }}>
-          What your agent talks to during a run — the data, and an answer for every tool call. It was built
-          from your first agent version, and it learns a new tool whenever a later version brings one.
-        </Typography>
-      </Box>
-
-      <ToolFitBanner env={env} envState={envState} patch={patch} sx={{ mb: 2 }} />
-
-      <SectionCard
-        title={`Tools this world can answer · environment ${fit.envVersion}`}
-        subtitle={
-          fit.fits
-            ? `Agent ${activeAgent} calls ${fit.calls.length} tools — the world answers every one.`
-            : `Agent ${activeAgent} calls ${fit.missing.length === 1 ? "one tool" : `${fit.missing.length} tools`} the world can't answer yet.`
-        }
-        sx={{ mb: 2 }}
-      >
-        <Box
-          sx={{
-            display: "grid", gridTemplateColumns: COLS, columnGap: 2, px: 2.5, py: 1,
-            borderBottom: "1px solid", borderColor: "divider",
-          }}
-        >
-          {["Tool", "What it does", "Since", versionsCount > 1 ? "Called by" : "Called by agent"].map((h) => (
-            <Typography key={h} sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle" }}>{h}</Typography>
-          ))}
+      {/* No heading — the tab names the page; its description is the tab's
+          hover hint. Where the world lives in the repo is content, so it stays. */}
+      {origin && (
+        <Box sx={{ mb: 2 }}>
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Iconify icon="solar:folder-with-files-linear" width={13} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+              <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace", color: "text.secondary" }}>tools-api/</Box>
+              {" and "}
+              <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace", color: "text.secondary" }}>db/</Box>
+              {" in "}
+              <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace", color: "text.secondary" }}>{`${origin.repo} @ ${origin.ref}`}</Box>
+              {" — a commit touching these is a world change"}
+            </Typography>
+          </Stack>
         </Box>
-        <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-          {rows.map(({ tool, answered }) => (
-            <Box
-              key={tool.name}
-              sx={{
-                display: "grid", gridTemplateColumns: COLS, columnGap: 2, alignItems: "center",
-                px: 2.5, py: 1.125,
-                ...(!answered && { bgcolor: "action.hover" }),
-              }}
-            >
-              <Typography noWrap sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
-                {tool.name}
-              </Typography>
-              <Typography noWrap sx={{ typography: "s2", color: "text.secondary" }}>{tool.desc}</Typography>
-              <Box>
-                {answered
-                  ? <VersionTag label={`env ${since[tool.name] || fit.envVersion}`} />
-                  : <Typography sx={{ typography: "s3", fontWeight: 700 }}>Not yet</Typography>}
-              </Box>
-              <Stack direction="row" spacing={0.5} flexWrap="wrap" rowGap={0.5}>
-                {(callers[tool.name] || []).map((v) => <VersionTag key={v} label={v} />)}
-                {!(callers[tool.name] || []).length && (
-                  <Typography sx={{ typography: "s3", color: "text.disabled" }}>No version calls it</Typography>
-                )}
-              </Stack>
-            </Box>
-          ))}
-        </Stack>
-      </SectionCard>
+      )}
 
-      {envState?.twinBacking && (
+      {inBuild && (handlers < allRows.length
+        ? <BuildStreamNote label="Writing a handler for each tool" count={handlers} total={allRows.length} />
+        : <BuildStreamNote label="Seeding the world" count={buildProgress?.stores || 0} total={env.seed?.tables?.length || 0} />)}
+
+      {/* Sealed or Live — how much a pass in this world proves. */}
+      <EnvironmentKindNote env={env} envState={envState} sx={{ mb: 2 }} />
+
+      {!inBuild && <ToolFitBanner env={env} envState={envState} patch={patch} sx={{ mb: 2 }} locked={locked} />}
+
+      {/* While it builds, tools appear here as their handlers are written;
+          after, the handlers list below carries them — with tier and faults —
+          so the same twelve rows aren't listed twice. */}
+      {inBuild ? (
+      <SectionCard
+          title={`Tools · ${allRows.length}`}
+          subtitle={
+            !activeAgent
+              ? "No agent connected yet — the tools the world was built to answer."
+              : fit.fits
+                ? `Agent ${activeAgent} calls ${fit.calls.length} tools — the world answers every one.`
+                : `Agent ${activeAgent} calls ${fit.missing.length === 1 ? "one tool" : `${fit.missing.length} tools`} the world can't answer yet.`
+          }
+          sx={{ mb: 2 }}
+        >
+          <Box
+            sx={{
+              display: "grid", gridTemplateColumns: cols, columnGap: 2, px: 2.5, py: 1,
+              borderBottom: "1px solid", borderColor: "divider",
+            }}
+          >
+            {["Tool", "What it does", showSince && "Since", showCallers && "Called by"].filter(Boolean).map((h) => (
+              <Typography key={h} sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle" }}>{h}</Typography>
+            ))}
+          </Box>
+          <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+            {rows.map(({ tool, answered }) => (
+              <Box
+                key={tool.name}
+                sx={{
+                  display: "grid", gridTemplateColumns: cols, columnGap: 2, alignItems: "center",
+                  px: 2.5, py: 1.125,
+                  ...(!answered && { bgcolor: "action.hover" }),
+                }}
+              >
+                <Typography noWrap sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                  {tool.name}
+                </Typography>
+                <Typography noWrap sx={{ typography: "s2", color: "text.secondary" }}>{tool.desc}</Typography>
+                {showSince && <Box>
+                  {answered
+                    ? <VersionTag label={`environment ${firstSnapshotOfWorld(env, envState, since[tool.name] || fit.envVersion)?.label || envLabelOf(env, envState, since[tool.name] || fit.envVersion)}`} />
+                    : <Typography sx={{ typography: "s3", fontWeight: 700 }}>Not yet</Typography>}
+                </Box>}
+                {showCallers && <Stack direction="row" spacing={0.5} flexWrap="wrap" rowGap={0.5}>
+                  {(callers[tool.name] || []).map((v) => <VersionTag key={v} label={v} />)}
+                  {!(callers[tool.name] || []).length && (
+                    <Typography sx={{ typography: "s3", color: "text.disabled" }}>No version calls it</Typography>
+                  )}
+                </Stack>}
+              </Box>
+            ))}
+          </Stack>
+        </SectionCard>
+      ) : (!activeAgent || fit.fits) && (
+        /* When tools don't fit, the banner above already says so — once. */
+        <Typography sx={{ typography: "s2", color: "text.secondary", px: 0.5, mb: 2 }}>
+          {!activeAgent
+            ? `No agent connected yet — the world answers the ${allRows.length} tools it was built for.`
+            : `Agent ${activeAgent} calls ${fit.calls.length} tools — the world answers every one.`}
+        </Typography>
+      )}
+
+      {/* The graph and the world's internals land once the world is built. */}
+      {!inBuild && envState?.twinBacking && (
         <Box sx={{ mb: 2 }}>
           <TwinSandboxSection env={env} envState={envState} />
         </Box>
       )}
-      {!envState?.twinBacking && (envState?.agent || (env.tools?.length || 0) > 0) && (
+      {/* The graph is one more view of the same tools — folded until asked for. */}
+      {!inBuild && !envState?.twinBacking && (envState?.agent || (env.tools?.length || 0) > 0) && (
         <Box sx={{ mb: 2 }}>
-          <CapabilityGraph env={env} envState={envState} onGo={onGo} />
+          {graphOpen ? (
+            <>
+              <CapabilityGraph env={env} envState={envState} onGo={onGo} />
+              <ButtonBase onClick={() => setGraphOpen(false)} aria-expanded sx={{ ...focusRing, mt: 0.75, px: 0.5, typography: "s3", fontWeight: 600, color: "text.secondary", borderRadius: 0.5, "&:hover": { color: "text.primary" } }}>
+                Hide capability graph
+              </ButtonBase>
+            </>
+          ) : (
+            <ButtonBase
+              onClick={() => setGraphOpen(true)}
+              aria-expanded={false}
+              sx={{ ...focusRing, width: "100%", justifyContent: "flex-start", gap: 1, px: 2, py: 1.25, borderRadius: 1, border: "1px solid", borderColor: "divider", "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <Iconify icon="solar:graph-new-linear" width={15} sx={{ color: "text.subtitle" }} />
+              <Typography sx={{ typography: "s2", fontWeight: 600 }}>Capability graph</Typography>
+              <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, textAlign: "left" }}>Tools, flows, personas and guardrails as one picture</Typography>
+              <Iconify icon="solar:alt-arrow-down-linear" width={14} sx={{ color: "text.subtitle" }} />
+            </ButtonBase>
+          )}
         </Box>
       )}
 
-      <WorldInternalsSection env={env} envState={envState} patch={patch} />
+      {!inBuild && <WorldInternalsSection env={env} envState={envState} patch={patch} onGo={onGo} locked={locked} />}
     </Box>
   );
 }
 
 WorldPanel.propTypes = {
+  buildProgress: PropTypes.object,
+  buildDone: PropTypes.array,
   env: PropTypes.object.isRequired,
   envState: PropTypes.object.isRequired,
   patch: PropTypes.func,
   onGo: PropTypes.func,
+  locked: PropTypes.bool,
 };

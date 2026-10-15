@@ -25,7 +25,7 @@ export const SHADOW_GUARANTEES = [
     id: "credentials",
     label: "Test credentials only",
     icon: "solar:key-linear",
-    note: "Secrets you supply in \"Needs your input\" are held for the length of a run and are never written into a scenario, a trace or an exportable file. We will not accept a production key.",
+    note: "Secrets you supply in \"Needs input\" are held for the length of a run and are never written into a scenario, a trace or an exportable file. We will not accept a production key.",
   },
   {
     id: "stubs",

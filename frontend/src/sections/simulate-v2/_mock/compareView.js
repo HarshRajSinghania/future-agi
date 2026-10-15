@@ -14,6 +14,22 @@
  */
 
 import { FAILURE_MODES, modeOf } from "./coverage";
+import { PAIR_CLASSES, PAIR_ORDER } from "./pairs";
+
+/* ── pair class + flip (PRD v7 §4.10.7) ──────────────────────────────────── */
+
+/*
+  Rows carry `pair` once CompareRuns has read them (pairs.withPairs): the
+  pair class against the baseline and the flip (passed → failed …). Movement
+  is read in that vocabulary — "Exact · passed → failed" — never as a bare
+  fixed / regressed, which says nothing about whether the pair compared.
+*/
+const inDelta = (row) => !row.pair || PAIR_CLASSES[row.pair.cls]?.inDelta;
+const flipKind = (row) => row.pair?.flip?.kind || (row.broke ? "regressed" : row.fixed ? "improved" : row.changed ? "moved" : "same");
+/** AC-14.6: an exact pair that passed on the baseline and fails now. */
+export const isExactRegression = (row) => row.pair?.cls === "exact" && row.pair.flip?.kind === "regressed";
+
+const FLIP_LABEL = { regressed: "Passed → failed", improved: "Failed → passed", moved: "Moved otherwise", same: "Unchanged" };
 
 /* ── filtering ───────────────────────────────────────────────────────────── */
 
@@ -28,7 +44,8 @@ import { FAILURE_MODES, modeOf } from "./coverage";
  * different things.
  */
 export const filterFields = (evals = []) => [
-  { value: "movement", label: "What moved", type: "enum", choices: ["Fixed", "Broke", "Changed", "Flaky", "Unchanged"] },
+  { value: "movement", label: "What moved", type: "enum", choices: ["Passed → failed", "Failed → passed", "Moved otherwise", "Flaky", "Unchanged"] },
+  { value: "pair", label: "Pair class", type: "enum", choices: PAIR_ORDER.map((k) => PAIR_CLASSES[k].label) },
   /* "Not run" is a verdict here. A scenario one run never covered is a real
      state of the table, and leaving it out of the choices makes those rows
      unreachable by filter. */
@@ -37,7 +54,7 @@ export const filterFields = (evals = []) => [
   /* Attribution as a filter: "show me only what the agent actually did". */
   { value: "blame", label: "Failure attributed to", type: "enum", choices: ["Agent", "Environment", "Transport", "Simulator", "Grading"] },
   { value: "mode", label: "Failure mode", type: "enum", choices: FAILURE_MODES.map((m) => m.label) },
-  { value: "critical", label: "Release blocker", type: "enum", choices: ["Yes", "No"] },
+  { value: "critical", label: "Must-pass", type: "enum", choices: ["Yes", "No"] },
   { value: "saidNotDone", label: "Said, not done", type: "enum", choices: ["Yes", "No"] },
   ...(evals.length
     ? [{ value: "grader", label: "Grader below threshold", type: "enum", choices: evals.map((e) => e.name) }]
@@ -102,13 +119,9 @@ const rowMatchesToken = (row, token, evals) => {
 
   switch (field) {
     case "movement":
-      return enumResult([
-        row.fixed && "Fixed",
-        row.broke && "Broke",
-        row.flaky && "Flaky",
-        row.changed && "Changed",
-        !row.changed && "Unchanged",
-      ].filter(Boolean));
+      return enumResult([FLIP_LABEL[flipKind(row)], row.flaky && "Flaky"].filter(Boolean));
+    case "pair":
+      return enumResult(row.pair ? PAIR_CLASSES[row.pair.cls]?.label : null);
     case "baseline":
       return enumResult(verdictLabel(base?.status));
     case "candidate":
@@ -153,8 +166,19 @@ export const SORTS = [
   { id: "costliest", label: "Most tokens first" },
 ];
 
-const worst = (row) => (row.broke ? 0 : row.changed ? 1 : 2);
-const best = (row) => (row.fixed ? 0 : row.changed ? 1 : 2);
+/* Regressions first: exact passed → failed, then the other comparable
+   regressions, then whatever else moved; pairs outside the delta last. */
+const worst = (row) => {
+  if (!inDelta(row)) return 4;
+  const k = flipKind(row);
+  if (k === "regressed") return isExactRegression(row) || !row.pair ? 0 : 1;
+  return k === "moved" ? 2 : 3;
+};
+const best = (row) => {
+  if (!inDelta(row)) return 4;
+  const k = flipKind(row);
+  return k === "improved" ? 0 : k === "moved" ? 2 : 3;
+};
 const lastDuration = (row) => row.cells[row.cells.length - 1]?.durationMs || 0;
 const lastTokens = (row) => row.cells[row.cells.length - 1]?.tokens || 0;
 
@@ -266,17 +290,18 @@ export const GROUPINGS = [
   /* Same set the single-run traces table offers, so a user who groups
      by Goal there and jumps to compare finds the same buckets here. */
   { id: "useCase", label: "Goal" },
+  { id: "subGoal", label: "Sub-goal" },
   { id: "pattern", label: "Failure pattern" },
   { id: "status", label: "Status" },
-  { id: "movement", label: "What moved" },
-  { id: "critical", label: "Release blockers" },
+  { id: "movement", label: "What moved · pair class" },
+  { id: "critical", label: "Must-pass" },
 ];
 
 /** Quick row filters — the one-click version of the filter panel. */
 export const QUICK_FILTERS = [
-  { id: "regressions", label: "Regressions", icon: "solar:arrow-down-linear" },
-  { id: "improvements", label: "Improvements", icon: "solar:arrow-up-linear" },
-  { id: "critical", label: "Release blockers", icon: "solar:danger-triangle-linear" },
+  { id: "regressions", label: "Passed → failed", icon: "solar:arrow-down-linear" },
+  { id: "improvements", label: "Failed → passed", icon: "solar:arrow-up-linear" },
+  { id: "critical", label: "Must-pass", icon: "solar:danger-triangle-linear" },
   { id: "saidNotDone", label: "Said, not done", icon: "solar:eye-closed-linear" },
   /* Not a regression and not a pass — scenarios whose own samples disagreed.
      They belong to whoever wrote the scenario, not to whoever changed the
@@ -309,13 +334,13 @@ export const defaultView = () => ({
 export const applyQuick = (rows, quick) => {
   if (!quick.length) return rows;
   return rows.filter((row) => quick.some((q) => {
-    if (q === "regressions") return row.broke;
-    if (q === "improvements") return row.fixed;
+    if (q === "regressions") return inDelta(row) && flipKind(row) === "regressed";
+    if (q === "improvements") return inDelta(row) && flipKind(row) === "improved";
     if (q === "critical") return row.critical;
     if (q === "saidNotDone") return row.cells.some((c) => c.task?.callLog?.unsupportedClaim);
     if (q === "flaky") return row.flaky;
     if (q === "unmeasured") return row.unmeasured;
-    if (q === "unchanged") return !row.changed;
+    if (q === "unchanged") return flipKind(row) === "same";
     return true;
   }));
 };
@@ -412,21 +437,11 @@ export const groupRows = (rows, group) => {
     return orderGroups(byLabel, GROUP_ORDER.status).map(([label, rs]) => ({ id: label, label, rows: rs }));
   }
 
-  if (group === "movement") {
-    const buckets = [
-      { id: "broke", label: "Broke", rows: rows.filter((r) => r.broke) },
-      { id: "fixed", label: "Fixed", rows: rows.filter((r) => r.fixed) },
-      { id: "unmeasured", label: "Not measured — nothing to attribute to the agent", rows: rows.filter((r) => r.unmeasured) },
-      { id: "flaky", label: "Flaky — the scenario disagreed with itself", rows: rows.filter((r) => r.flaky && !r.broke && !r.fixed && !r.unmeasured) },
-      { id: "changed", label: "Changed otherwise", rows: rows.filter((r) => r.changed && !r.broke && !r.fixed && !r.flaky && !r.unmeasured) },
-      { id: "same", label: "Unchanged", rows: rows.filter((r) => !r.changed && !r.unmeasured) },
-    ];
-    return buckets.filter((b) => b.rows.length);
-  }
+  if (group === "movement") return pairGroups(rows);
 
   if (group === "critical") {
     return [
-      { id: "critical", label: "Release blockers", rows: rows.filter((r) => r.critical) },
+      { id: "critical", label: "Must-pass", rows: rows.filter((r) => r.critical) },
       { id: "rest", label: "Everything else", rows: rows.filter((r) => !r.critical) },
     ].filter((b) => b.rows.length);
   }
@@ -434,6 +449,68 @@ export const groupRows = (rows, group) => {
   return FAILURE_MODES
     .map((m) => ({ id: m.id, label: m.label, rows: rows.filter((r) => modeOf(r) === m.id) }))
     .filter((b) => b.rows.length);
+};
+
+/* ── bands by pair class (AC-14.6, 14.10) ─────────────────────────────────── */
+
+/* What each band outside the delta says, and what can turn it into pairs. */
+export const OUTSIDE_BANDS = {
+  changed: { label: "Changed", note: "Side by side, outside the delta — a bridge run makes them exact", offer: "bridge" },
+  new: { label: "New", note: "In the newer run only — outside the delta until backfilled", offer: "backfill" },
+  "not-applicable": { label: "Not applicable", note: "Doesn't apply to one of the agent versions — counted separately" },
+  archived: { label: "Archived", note: "Archived by hand — outside the delta" },
+  removed: { label: "Removed", note: "Only in the older run" },
+};
+
+const FLIP_ORDER = ["regressed", "improved", "moved", "same"];
+const FLIP_WORDS = { regressed: "passed → failed", improved: "failed → passed", moved: "moved otherwise", same: "unchanged" };
+
+/**
+ * "What moved", in pair classes: the comparable classes split by flip,
+ * regressions first; then each class outside the delta in its own band.
+ */
+export const pairGroups = (rows) => {
+  const inside = ["exact", "regraded", "rechecked"];
+  const groups = [];
+  FLIP_ORDER.forEach((flip) => inside.forEach((cls) => {
+    const members = rows.filter((r) => (r.pair?.cls || "exact") === cls && flipKind(r) === flip);
+    if (members.length) {
+      groups.push({
+        id: `${cls}-${flip}`, label: `${PAIR_CLASSES[cls].label} · ${FLIP_WORDS[flip]}`, rows: members,
+        ...(cls === "exact" && flip === "regressed" && { note: "Regressions — passed on the baseline, fail now", tone: "bad" }),
+      });
+    }
+  }));
+  return [...groups, ...outsideGroups(rows)];
+};
+
+const outsideGroups = (rows) => Object.keys(OUTSIDE_BANDS)
+  .map((cls) => ({ id: `band-${cls}`, cls, ...OUTSIDE_BANDS[cls], rows: rows.filter((r) => r.pair?.cls === cls) }))
+  .filter((b) => b.rows.length);
+
+/**
+ * The bands the table draws. Any grouping keeps three rules: exact
+ * regressions on top (when sorted regressions-first), the comparable rows
+ * grouped as asked, and every class outside the delta in its own band below.
+ * `groupFn` groups the comparable rows (useCase, sub-goal, …).
+ */
+export const bandRows = (rows, { group, regressionsFirst, groupFn }) => {
+  if (!rows.some((r) => r.pair)) return groupFn(rows);
+  if (group === "movement") return pairGroups(rows);
+  /* Exact pairs lead (sorted first); a re-graded or rechecked regression
+     follows them, badged by its own class. */
+  const top = regressionsFirst ? rows.filter((r) => inDelta(r) && flipKind(r) === "regressed") : [];
+  const inside = rows.filter((r) => inDelta(r) && !top.includes(r));
+  const outside = outsideGroups(rows);
+  let grouped = inside.length ? groupFn(inside) : [];
+  if (grouped.length === 1 && !grouped[0].label && (top.length || outside.length)) {
+    grouped = [{ ...grouped[0], label: "In the delta" }];
+  }
+  return [
+    ...(top.length ? [{ id: "band-regressions", label: "Regressions", note: "Passed on the baseline, fail now — exact pairs first", tone: "bad", rows: top }] : []),
+    ...grouped,
+    ...outside,
+  ];
 };
 
 /* ── summary view ────────────────────────────────────────────────────────── */

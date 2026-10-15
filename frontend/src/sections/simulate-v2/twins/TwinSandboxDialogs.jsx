@@ -56,7 +56,7 @@ export function OpenApiDialog({ open, onClose, twin, endpoint }) {
               <Typography sx={{
                 px: 0.75, py: 0.25, borderRadius: 0.5,
                 fontSize: 10, fontWeight: 700, minWidth: 44, textAlign: "center", flexShrink: 0,
-                color: methodColor(e.method).fg,
+                color: methodColor(e.method).text || methodColor(e.method).fg,
                 bgcolor: (t) => alpha(methodColor(e.method).fg, t.palette.mode === "dark" ? 0.16 : 0.09),
               }}>
                 {e.method}
@@ -154,7 +154,7 @@ function methodColor(m) {
   return ({
     GET: { fg: "#0EA5E9" },
     POST: { fg: "#16A34A" },
-    PUT: { fg: "#F59E0B" },
+    PUT: { fg: "#F59E0B", text: "text.secondary" },
     PATCH: { fg: "#7857FC" },
     DELETE: { fg: "#DC2626" },
   })[m] || { fg: "#6B7280" };

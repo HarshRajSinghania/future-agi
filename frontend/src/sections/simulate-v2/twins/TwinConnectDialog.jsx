@@ -99,7 +99,7 @@ export default function TwinConnectDialog({ open, onClose, twin, endpoint, sessi
                 Wire-compatible with the real {twin.name} SDK
               </Typography>
               <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-                Requests hit our sandbox, not production. State is scoped to this session ID — reset the env or start a new run and the session rotates automatically.
+                Requests hit our sandbox, not production. State is scoped to this session ID — reset the environment or start a new run and the session rotates automatically.
               </Typography>
             </Box>
           </Stack>

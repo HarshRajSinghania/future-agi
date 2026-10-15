@@ -2,13 +2,17 @@ import PropTypes from "prop-types";
 import { useMemo, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
-  Box, Stack, Typography, Button, IconButton, Slider, Tooltip, Collapse,
+  Box, Stack, Typography, Button, IconButton, Slider, Tooltip,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { clickable, focusRing } from "../components/clickable";
 import SideDrawer from "../components/SideDrawer";
+import { runIdentityOf } from "../_mock/runIdentity";
+import { envLabelOf } from "../_mock/envVersionKinds";
 import {
-  allMetrics, WEIGHT_PRESETS, presetWeights, defaultWeights, rankRuns, winningMargins, releaseGate, comparableRuns,
+  allMetrics, WEIGHT_PRESETS, presetWeights, defaultWeights, rankRuns, winningMargins, comparableRuns,
 } from "../_mock/winner";
+import { causeCountsLine, runRollupOf } from "../_mock/runRollup";
 
 /**
  * What "winning" means, before anything is declared the winner.
@@ -19,9 +23,11 @@ import {
  * updates as the sliders move.
  */
 export default function WinnerDrawer({
-  open, onClose, summaries, evals, initial, onApply, baseline, scenarioCount,
+  open, onClose, summaries, evals, initial, onApply, scenarioCount, env, envState, metricIds, nameOf, showSummary = true,
 }) {
-  const metrics = useMemo(() => allMetrics(evals), [evals]);
+  /* `metricIds` keeps only the metrics these runs carry — an improvement's
+     runs have no mean return to weigh. */
+  const metrics = useMemo(() => allMetrics(evals).filter((m) => !metricIds || metricIds.includes(m.id)), [evals, metricIds]);
   const [weights, setWeights] = useState(() => initial || defaultWeights(metrics));
   const [preset, setPreset] = useState(initial ? null : "balanced");
 
@@ -33,9 +39,10 @@ export default function WinnerDrawer({
   );
   const winner = ranked[0];
   const margins = useMemo(() => winningMargins(ranked), [ranked]);
-  const gate = useMemo(
-    () => releaseGate(winner?.run, { baseline, scenarioCount }),
-    [winner, baseline, scenarioCount],
+  /* The winner's run summary — a report beside the ranking, not a gate. */
+  const summary = useMemo(
+    () => (winner ? runRollupOf(winner.run, { env, envState, scenarioCount }) : null),
+    [winner, env, envState, scenarioCount],
   );
 
   const set = (id, value) => {
@@ -50,8 +57,8 @@ export default function WinnerDrawer({
   /* One-line field summary, with the left-out detail behind a tooltip so the
      header stays short. */
   const fieldChips = [
-    field.envVersion && `env ${field.envVersion}`,
-    field.repeats && `${field.repeats} trial${field.repeats === 1 ? "" : "s"}`,
+    field.envVersion && `environment ${envLabelOf(env, envState, field.envVersion)}`,
+    field.repeats && `${field.repeats} repeat${field.repeats === 1 ? "" : "s"}`,
     `${field.runs.length} run${field.runs.length === 1 ? "" : "s"} ranked`,
   ].filter(Boolean);
 
@@ -73,7 +80,7 @@ export default function WinnerDrawer({
               {field.excluded > 0 && (
                 <Tooltip
                   arrow
-                  title={`${field.excluded} left out — a different environment, a partial re-run, a different trial count, or tools the world couldn't answer.`}
+                  title={`${field.excluded} left out — a different environment, a partial re-run, a different repeat count, or tools the world couldn't answer.`}
                 >
                   <Stack direction="row" alignItems="center" spacing={0.25} sx={{ color: "text.subtitle", cursor: "help" }}>
                     <Typography sx={{ typography: "s3", color: "text.subtitle" }}>· {field.excluded} left out</Typography>
@@ -96,9 +103,9 @@ export default function WinnerDrawer({
               return (
                 <Tooltip key={p.id} arrow title={p.blurb || ""}>
                   <Box
-                    role="button"
-                    onClick={() => apply(p)}
+                    {...clickable(() => apply(p), { pressed: on })}
                     sx={{
+                      ...focusRing,
                       display: "inline-flex", alignItems: "center", gap: 0.75, cursor: "pointer",
                       height: 30, px: 1.25, borderRadius: 1,
                       border: "1px solid",
@@ -133,7 +140,7 @@ export default function WinnerDrawer({
           </Box>
         </Box>
 
-        {/* ── footer: winner + gate + actions ── */}
+        {/* ── footer: winner + its run summary + actions ── */}
         <Box sx={{ borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}>
           {winner && (
             <Stack
@@ -150,7 +157,7 @@ export default function WinnerDrawer({
               </Box>
               <Box flex={1} minWidth={0}>
                 <Typography noWrap sx={{ typography: "s2", fontWeight: 700 }}>
-                  Run {winner.run.ordinal} · agent {winner.run.agentVersion}
+                  {nameOf ? nameOf(winner.run) : winner.run.kind === "trial" ? `Run ${winner.run.trialN}` : `Run ${winner.run.ordinal}`} · {runIdentityOf(winner.run, envState, env).label}
                 </Typography>
                 <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
                   {margins.length
@@ -169,7 +176,7 @@ export default function WinnerDrawer({
             </Stack>
           )}
 
-          {gate && <GateVerdict gate={gate} />}
+          {showSummary && summary && <WinnerSummary summary={summary} />}
 
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ px: 2.5, py: 1.75 }}>
             <Button
@@ -178,16 +185,15 @@ export default function WinnerDrawer({
             >
               Cancel
             </Button>
-            {/* Only one primary decision on this drawer. Marking a version as
-                released is a separate act — done from the winner's row in the
-                Runs list, where the reader has just been. */}
+            {/* Only one decision on this drawer: which run fits your weights
+                best. Whether to ship that agent is yours, outside the harness. */}
             <Button
               variant="contained" color="primary" size="small"
               disabled={!winner}
               onClick={() => onApply({ runId: winner.run.id, weights, score: winner.score })}
               sx={{ typography: "s2", fontWeight: 700 }}
             >
-              {gate?.status === "blocked" ? "Choose anyway" : "Choose winner"}
+              Choose winner
             </Button>
           </Stack>
         </Box>
@@ -203,8 +209,15 @@ WinnerDrawer.propTypes = {
   evals: PropTypes.array,
   initial: PropTypes.object,
   onApply: PropTypes.func,
-  baseline: PropTypes.object,
+  /* Metric ids to weigh (default: all). */
+  metricIds: PropTypes.arrayOf(PropTypes.string),
+  /* How a run is named on the winner card. */
+  nameOf: PropTypes.func,
+  /* The winner's scenario report — off where the runs carry no scenarios. */
+  showSummary: PropTypes.bool,
   scenarioCount: PropTypes.number,
+  env: PropTypes.object,
+  envState: PropTypes.object,
 };
 
 /* ── metrics ─────────────────────────────────────────────────────────────── */
@@ -287,73 +300,31 @@ function WeightRow({ metric, value, onChange }) {
 }
 WeightRow.propTypes = { metric: PropTypes.object, value: PropTypes.number, onChange: PropTypes.func };
 
-/* ── gate verdict ────────────────────────────────────────────────────────── */
-
-const GATE_TONE = {
-  clear: { color: "#16A34A", icon: "solar:shield-check-bold", label: "Clears the release gate" },
-  warn: { color: "#B98A3C", icon: "solar:shield-warning-bold", label: "Clears with things to accept" },
-  blocked: { color: "#C2603F", icon: "solar:shield-cross-bold", label: "Does not clear the release gate" },
-};
+/* ── the winner's run summary ───────────────────────────────────────────── */
 
 /**
- * The gate. One line and up to two failing reasons; anything else opens on
- * demand. "Blocked with no reason attached is a wall", but that reason is one
- * sentence — not five checks with their budgets restated.
+ * What the winning run said, as a report: pass^1 / pass^k and the fails by
+ * cause. Winning is a preference applied; this is the evidence beside it.
+ * Nothing here blocks or ships anything.
  */
-function GateVerdict({ gate }) {
-  const tone = GATE_TONE[gate.status];
-  const [expanded, setExpanded] = useState(false);
-  const notable = [...gate.blocked, ...gate.warnings];
-  const primary = notable.slice(0, 2);
-  const rest = [...notable.slice(2), ...gate.checks.filter((c) => c.ok)];
-
+function WinnerSummary({ summary }) {
+  const causes = causeCountsLine(summary);
   return (
-    <Box sx={{ px: 2.5, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Iconify icon={tone.icon} width={15} sx={{ color: tone.color, flexShrink: 0 }} />
-        <Typography sx={{ typography: "s2", fontWeight: 700, color: tone.color, flex: 1, minWidth: 0 }} noWrap>
-          {tone.label}
-        </Typography>
-        {rest.length > 0 && (
-          <Box
-            role="button"
-            onClick={() => setExpanded((o) => !o)}
-            sx={{ typography: "s3", color: "text.subtitle", cursor: "pointer", "&:hover": { color: "text.primary" } }}
-          >
-            {expanded ? "Hide" : `Show ${rest.length} more`}
+    <Box sx={{ px: 2.5, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
+      <Typography sx={{ typography: "s2", fontWeight: 600, color: summary.belowBar ? "#DC2626" : "text.primary", fontVariantNumeric: "tabular-nums" }}>
+        {summary.line}
+        {!summary.lowVolume && summary.scored > 0 && (
+          <Box component="span" sx={{ typography: "s3", fontWeight: 400, color: "text.subtitle" }}>
+            {` · your bar ${Math.round(summary.bar.pass1 * 100)}%`}
           </Box>
         )}
-      </Stack>
-
-      {primary.length > 0 && (
-        <Stack spacing={0.5} sx={{ mt: 0.875 }}>
-          {primary.map((c) => <CheckLine key={c.id} check={c} />)}
-        </Stack>
+      </Typography>
+      {(causes || summary.caveat) && (
+        <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+          {[causes, summary.unreliable ? "unreliable — too many test invalid · simulator" : null, summary.caveat].filter(Boolean).join(" · ")}
+        </Typography>
       )}
-
-      <Collapse in={expanded} unmountOnExit>
-        <Stack spacing={0.5} sx={{ mt: primary.length ? 0.5 : 0.875 }}>
-          {rest.map((c) => <CheckLine key={c.id} check={c} />)}
-        </Stack>
-      </Collapse>
     </Box>
   );
 }
-GateVerdict.propTypes = { gate: PropTypes.object };
-
-function CheckLine({ check }) {
-  return (
-    <Stack direction="row" alignItems="flex-start" spacing={0.875}>
-      <Iconify
-        icon={check.ok ? "solar:check-circle-bold" : check.hard ? "solar:close-circle-bold" : "solar:info-circle-bold"}
-        width={13}
-        sx={{ mt: "2px", flexShrink: 0, color: check.ok ? "#5AA47B" : check.hard ? "#C2603F" : "#B98A3C" }}
-      />
-      <Typography sx={{ typography: "s3", color: "text.secondary", lineHeight: 1.5 }}>
-        <Box component="span" sx={{ fontWeight: 600, color: "text.primary" }}>{check.label}</Box>
-        {" — "}{check.detail}
-      </Typography>
-    </Stack>
-  );
-}
-CheckLine.propTypes = { check: PropTypes.object };
+WinnerSummary.propTypes = { summary: PropTypes.object };

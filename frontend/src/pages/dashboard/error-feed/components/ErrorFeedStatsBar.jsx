@@ -9,7 +9,7 @@ import {
   Skeleton,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { useErrorFeedStats } from "src/api/errorFeed/error-feed";
+import { useErrorFeedStats } from "src/api/errorFeed/mockAdapter";
 import { useErrorFeedApiParams } from "../store";
 import PropTypes from "prop-types";
 

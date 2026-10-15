@@ -9,6 +9,7 @@ import Iconify from "src/components/iconify";
 import SvgColor from "src/components/svg-color";
 import { formatFileSize } from "src/utils/utils";
 import VoiceInput from "../../assistant/VoiceInput";
+import { clickable, focusRing } from "../../components/clickable";
 
 /*
   Merged describe-your-flow step for the scratch intake. One card,
@@ -110,8 +111,8 @@ export default function DescribeFlowStep({
         <Box
           sx={{
             px: 0.75, py: 0.125, borderRadius: 999, flexShrink: 0,
-            bgcolor: (t) => alpha("#B45309", t.palette.mode === "dark" ? 0.28 : 0.16),
-            color: "#B45309",
+            bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.1 : 0.06),
+            color: "text.secondary",
             typography: "s3", fontWeight: 700,
             fontVariantNumeric: "tabular-nums",
           }}
@@ -315,8 +316,8 @@ export default function DescribeFlowStep({
             {chips.map((c) => (
               <Box
                 key={c}
-                onClick={() => onChange(value ? `${value.trim()} ${c}` : c)}
-                sx={{
+                {...clickable(() => onChange(value ? `${value.trim()} ${c}` : c))}
+                sx={{ ...focusRing,
                   px: 1, py: 0.375, borderRadius: 0.875,
                   border: "1px solid", borderColor: "divider",
                   bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.04 : 0.02),

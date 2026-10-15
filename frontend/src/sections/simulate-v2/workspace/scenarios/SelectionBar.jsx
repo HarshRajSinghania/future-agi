@@ -1,110 +1,146 @@
 import PropTypes from "prop-types";
+import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, Button } from "@mui/material";
+import { Box, Stack, Typography, Button, IconButton, Menu, MenuItem, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
+import TrialsPicker from "./TrialsPicker";
+import { PRIORITIES } from "../../_mock/scenarioPriority";
 
 /**
  * Bulk-action bar for the scenario table.
  *
- * Sits IN-PLACE of the search / group-by / filter toolbar when one
- * or more rows are checked. Reuses the search toolbar's exact
- * frame — same background, padding, height and button styling —
- * so the row does not visually jump when selection toggles; only
- * the contents swap.
+ * Takes the toolbar's place in the SAME row when one or more rows are
+ * checked — same height, same edges (no extra inset), same 30px buttons — so
+ * the table never jumps when selection toggles; only the contents swap.
  *
  * Hierarchy (left → right):
- *   ✓  2 selected · Clear ..............  [Edit]  [Delete]
- *   context                                secondary  destructive
+ *   ✓  N scenarios selected ×  ....  [Priority] [Must-pass] [edit] [delete] | Repeats [Run (N)]
+ *   context                          marks on the set     edit · delete    the run
  *
- * Run + Repeats stay anchored to the workspace header (top-right).
+ * Run + Repeats stay anchored to the workspace header (top-right); its Run
+ * button already reads "Run simulation (N)" while rows are checked.
  */
-export default function SelectionBar({ count, onEdit, onDelete, onClear }) {
+const ICON_BTN_SX = { minWidth: 0, width: 30, px: 0 };
+const BTN_SX = {
+  typography: "s2", fontWeight: 700, textTransform: "none", height: 30, flexShrink: 0, whiteSpace: "nowrap",
+  color: "text.primary", borderColor: "divider",
+};
+
+export default function SelectionBar({ count, onEdit, onDelete, onClear, onMustPass, onPriority, allMustPass = false, run = null }) {
+  const [priorityEl, setPriorityEl] = useState(null);
   return (
-    <Stack
-      direction="row"
-      alignItems="center"
-      spacing={1}
-      sx={{ px: 2.5, py: 1.25, minHeight: 52 }}
-    >
-      {/* Context — count on the left, Clear as its own chip button
-          on the right of the pair so people notice it. Text-forward
-          "Clear selection" with a leading × icon reads as an action,
-          not a passive label. */}
+    <Stack direction="row" alignItems="center" spacing={1} sx={{ minHeight: 30 }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ flexShrink: 0 }}>
         <Box sx={{
           width: 18, height: 18, borderRadius: 0.5,
           display: "flex", alignItems: "center", justifyContent: "center",
           bgcolor: "primary.main",
-          color: (t) => t.palette.mode === "dark" ? "background.default" : "background.paper",
+          color: (t) => (t.palette.mode === "dark" ? "background.default" : "background.paper"),
         }}>
           <Iconify icon="eva:checkmark-fill" width={13} />
         </Box>
         <Typography sx={{
-          typography: "s2", fontWeight: 700, fontSize: 13,
+          typography: "s2", fontWeight: 700,
           color: "text.primary", whiteSpace: "nowrap",
           fontVariantNumeric: "tabular-nums",
         }}>
-          {count} selected
+          {`${count} scenario${count === 1 ? "" : "s"} selected`}
         </Typography>
-        <Button
-          size="small"
-          onClick={onClear}
-          startIcon={<Iconify icon="eva:close-fill" width={13} />}
-          sx={{
-            typography: "s2", fontWeight: 600, fontSize: 12.5,
-            textTransform: "none",
-            color: "text.primary",
-            border: "1px solid",
-            borderColor: "divider",
-            bgcolor: "background.paper",
-            px: 1.25, py: 0.25, minWidth: 0,
-            ml: 0.5,
-            "& .MuiButton-startIcon": { mr: 0.5 },
-            "&:hover": {
-              borderColor: (t) => alpha(t.palette.text.primary, 0.4),
-              bgcolor: "action.hover",
-            },
-          }}
-        >
-          Clear selection
-        </Button>
+        <Tooltip arrow title="Clear selection">
+          <IconButton size="small" aria-label="Clear selection" onClick={onClear} sx={{ p: 0.375 }}>
+            <Iconify icon="eva:close-fill" width={16} sx={{ color: "text.subtitle" }} />
+          </IconButton>
+        </Tooltip>
       </Stack>
 
       <Box sx={{ flex: 1 }} />
 
-      {/* Actions — match the search-row button styling exactly so
-          the two states of this row read as siblings. */}
-      {onEdit && (
+      {/* Priority for every selected scenario; must-pass ones stay high. */}
+      {onPriority && (
+        <>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={(e) => setPriorityEl(e.currentTarget)}
+            endIcon={<Iconify icon="solar:alt-arrow-down-linear" width={13} />}
+            sx={BTN_SX}
+          >
+            Priority
+          </Button>
+          <Menu anchorEl={priorityEl} open={!!priorityEl} onClose={() => setPriorityEl(null)} slotProps={{ paper: { sx: { minWidth: 160 } } }}>
+            {PRIORITIES.map((p) => (
+              <MenuItem key={p.id} onClick={() => { setPriorityEl(null); onPriority(p.id); }} sx={{ typography: "s2" }}>
+                {p.label}
+              </MenuItem>
+            ))}
+          </Menu>
+        </>
+      )}
+      {/* Must-pass: every selected scenario becomes a release blocker —
+          or, when they all already are, stops being one. */}
+      {onMustPass && (
         <Button
           size="small"
           variant="outlined"
-          onClick={onEdit}
-          startIcon={<Iconify icon="solar:chat-round-line-linear" width={14} />}
-          sx={{
-            typography: "s2", fontWeight: 700, textTransform: "none",
-            color: "text.primary", borderColor: "divider",
-          }}
+          onClick={onMustPass}
+          startIcon={<Iconify icon={allMustPass ? "solar:shield-check-bold" : "solar:shield-check-linear"} width={14} />}
+          sx={BTN_SX}
         >
-          Edit
+          {allMustPass ? "Remove must-pass" : "Must-pass"}
         </Button>
       )}
-      <Button
-        size="small"
-        variant="outlined"
-        onClick={onDelete}
-        startIcon={<Iconify icon="solar:trash-bin-trash-linear" width={14} />}
-        sx={{
-          typography: "s2", fontWeight: 700, textTransform: "none",
-          color: "error.main",
-          borderColor: (t) => alpha(t.palette.error.main, 0.4),
-          "&:hover": {
-            borderColor: "error.main",
-            bgcolor: (t) => alpha(t.palette.error.main, t.palette.mode === "dark" ? 0.1 : 0.05),
-          },
-        }}
-      >
-        Delete
-      </Button>
+      {/* Edit and Delete as icons — the bar keeps room for the run. */}
+      {onEdit && (
+        <Tooltip arrow title={`Edit ${count === 1 ? "it" : `these ${count}`} in chat`}>
+          <Button size="small" variant="outlined" onClick={onEdit} aria-label="Edit in chat" sx={{ ...BTN_SX, ...ICON_BTN_SX }}>
+            <Iconify icon="solar:pen-new-square-linear" width={15} />
+          </Button>
+        </Tooltip>
+      )}
+      <Tooltip arrow title={`Delete ${count === 1 ? "this scenario" : `${count} scenarios`}`}>
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={onDelete}
+          aria-label="Delete selected scenarios"
+          sx={{
+            ...BTN_SX,
+            ...ICON_BTN_SX,
+            color: "error.main",
+            borderColor: (t) => alpha(t.palette.error.main, 0.4),
+            "&:hover": {
+              borderColor: "error.main",
+              bgcolor: (t) => alpha(t.palette.error.main, t.palette.mode === "dark" ? 0.1 : 0.05),
+            },
+          }}
+        >
+          <Iconify icon="solar:trash-bin-trash-linear" width={15} />
+        </Button>
+      </Tooltip>
+
+      {/* Running the selection lives here while rows are checked — the
+          header's own run controls step aside, so there's one Run. */}
+      {run && (
+        <>
+          <Box sx={{ width: "1px", alignSelf: "stretch", my: 0.5, mx: 0.5, bgcolor: "divider", flexShrink: 0 }} />
+          <TrialsPicker trials={run.repeats} onChange={run.onRepeats} scenarioCount={count} unit={run.unit || "conversation"} />
+          <Tooltip arrow title={run.disabledReason || ""} disableHoverListener={!run.disabledReason}>
+            <span>
+              <Button
+                size="small"
+                variant="contained"
+                color="primary"
+                disabled={!!run.disabledReason}
+                onClick={run.onRun}
+                startIcon={<Iconify icon="solar:play-bold" width={14} />}
+                sx={{ typography: "s2", fontWeight: 700, whiteSpace: "nowrap" }}
+              >
+                {`Run simulation (${count})`}
+              </Button>
+            </span>
+          </Tooltip>
+        </>
+      )}
     </Stack>
   );
 }
@@ -113,4 +149,14 @@ SelectionBar.propTypes = {
   onEdit: PropTypes.func,
   onDelete: PropTypes.func.isRequired,
   onClear: PropTypes.func.isRequired,
+  onMustPass: PropTypes.func,
+  onPriority: PropTypes.func,
+  allMustPass: PropTypes.bool,
+  run: PropTypes.shape({
+    repeats: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    onRepeats: PropTypes.func,
+    onRun: PropTypes.func,
+    disabledReason: PropTypes.node,
+    unit: PropTypes.string,
+  }),
 };

@@ -3,7 +3,7 @@
  *
  * Deliberately not react-query / not the API layer: this whole section is a
  * frontend prototype for stakeholder review, so the "backend" is this reducer
- * plus localStorage. Swapping it for real endpoints later means replacing this
+ * plus browser storage (IndexedDB — see _mock/storeStorage.js). Swapping it for real endpoints later means replacing this
  * one file's actions, not the screens.
  */
 import PropTypes from "prop-types";
@@ -16,18 +16,22 @@ import {
   useCallback,
 } from "react";
 import { seededState } from "./_mock/seedState";
+import { runReadiness } from "./_mock/setupGaps";
 import { getEnvironment } from "./_mock/environments";
 import { generatedPool } from "./_mock/scenarios";
-import { agentVersions } from "./_mock/versions";
-
+import { agentVersions, currentAgentVersion, versionNumber } from "./_mock/versions";
 /* Which agent this is, across environments: where it lives. Two
    environments connected to the same repo, endpoint or hosted assistant are
    testing one agent. */
-const agentKeyOf = (agent) => {
-  const v = agent?.values || {};
-  const where = v.agentId || v.repoUrl || v.endpoint || v.sdkEndpoint || v.mcpUrl || agent?.location || null;
-  return where ? `${v.provider || agent?.sourceKind || "agent"}:${String(where).toLowerCase()}` : null;
-};
+import { envAgentKey, connectedAgentsFrom, repairAgentRecord } from "./_mock/agentRegistry";
+/* Secrets are held as secret-manager references, never values (AC-6.12). */
+import { scrubAgentSecrets } from "./_mock/secretRefs";
+/* Topping a stored copy up with what the seed gained since it was saved. */
+import { SEED_VERSION, topUpSeed, scrubEnvState, scrubPatch, withRsiSeed } from "./_mock/seedTopUp";
+import { readStored, writeStored, updateStored } from "./_mock/storeStorage";
+/* A search that played out while nobody watched has finished. */
+import { settleImprovements } from "./_mock/optimizationRuns";
+import { uniqueEnvName } from "./_mock/envNames";
 
 /*
   Versioned: the seeded first-run environments only reach anyone whose browser
@@ -83,13 +87,38 @@ const emptyEnvState = () => ({
     the env-level default (follow-up work).
   */
   twinBacking: null,
+  /* PRD v7 — the scenario set's own version log ([{ label, at, summary,
+     largestBump }], _mock/suiteLog.js), the logged anchor-core decisions
+     (_mock/tiers.js) and the tools and paths a run may never call
+     ([{ name, why }], _mock/cheatControls.js). */
+  suiteVersions: [],
+  anchorLog: [],
+  offLimits: [],
 });
 
 const initialState = {
   myEnvironments: [], // environments the user created / adopted
   byEnv: {}, // envId -> emptyEnvState()
+  /* Agents connected from the Agents page — not yet (or not only) tied to an
+     environment. Environment agents join them in connectedAgentsFrom(). */
+  connectedAgents: [],
+  /* Error Feed project → the agent whose traffic lands in it, for projects
+     the feed couldn't match to an agent on its own. Linking one issue links
+     every issue from that project, today's and future ones. */
+  projectLinks: {},
+  /* Agent key → what improvements may change and must not move. */
+  agentLimits: {},
+  /* Workspace feature flags. Unset reads as the default (see _mock/featureFlags). */
+  flags: {},
   activeRun: null,
+  /* Workspace-level settings a workspace admin owns (RSI PRD). Today one:
+     whether scenarios may be built from production — the Error Feed and
+     production conversations replayed word for word. */
+  workspaceSettings: { productionScenarios: true },
 };
+
+/* The signed-in user's workspace role — mock: the current user is an admin. */
+const WORKSPACE_ROLE = "admin";
 
 /*
   A first visit lands on an empty "My environments", which hides the workspace,
@@ -97,35 +126,60 @@ const initialState = {
   like work already in progress — and only when nothing is stored, so it never
   overwrites what someone actually did.
 */
-const firstRunState = () => ({ ...initialState, ...seededState(), seedVersion: SEED_VERSION });
+const firstRunState = () => ({ ...initialState, ...withRsiSeed(seededState()), seedVersion: SEED_VERSION });
 
-/*
-  Bumped whenever the seed gains an environment.
+/* ── agent versions: one way in ──────────────────────────────────────────────
+   A version belongs to the agent. Every environment testing that agent, and
+   its Agents-page entry, hold the same list — so a version is minted in one
+   place, numbered past every label known anywhere, and never dropped when an
+   environment goes away or moves to another agent. */
 
-  Bumping the storage key instead would work, and would also throw away every
-  run the person looking at this has made since — which is the state that makes
-  the prototype worth showing. So a stored state is topped up rather than
-  replaced: environments it has never seen are added, environments it already
-  has are left exactly as they are, and an environment someone deliberately
-  removed stays removed because the marker moves on regardless.
-*/
-const SEED_VERSION = 3;
+const unionVersions = (a = [], b = []) => {
+  const byLabel = new Map(a.map((v) => [v.label, v]));
+  b.forEach((v) => { if (!byLabel.has(v.label)) byLabel.set(v.label, v); });
+  return [...byLabel.values()].sort((x, y) => versionNumber(x.label) - versionNumber(y.label));
+};
 
-const topUpSeed = (stored) => {
-  if ((stored.seedVersion || 0) >= SEED_VERSION) return { ...stored, seedVersion: SEED_VERSION };
-  const seed = seededState();
-  const have = new Set((stored.myEnvironments || []).map((e) => e.id));
-  const missing = seed.myEnvironments.filter((e) => !have.has(e.id));
-  if (!missing.length) return { ...stored, seedVersion: SEED_VERSION };
+const knownVersions = (state, key) => [
+  ...Object.entries(state.byEnv || {}).filter(([id, es]) => envAgentKey(es?.agent, id) === key).flatMap(([, es]) => agentVersions(es)),
+  ...(state.connectedAgents || []).filter((a) => a.key === key).flatMap((a) => a.versions || []),
+];
 
-  const byEnv = { ...stored.byEnv };
-  missing.forEach((e) => { byEnv[e.id] = seed.byEnv[e.id]; });
-  return {
-    ...stored,
-    seedVersion: SEED_VERSION,
-    myEnvironments: [...(stored.myEnvironments || []), ...missing],
-    byEnv,
+const mintVersion = (state, key, version, activateEnvId) => {
+  const known = knownVersions(state, key);
+  /* A label already taken — another environment or the Agents page got there
+     first — takes the next free number instead of being silently dropped. */
+  const v = known.some((k) => k.label === version.label)
+    ? (() => { const n = Math.max(0, ...known.map((k) => versionNumber(k.label))) + 1; return { ...version, id: `agent-v${n}`, label: `v${n}` }; })()
+    : version;
+  const byEnv = { ...state.byEnv };
+  Object.entries(state.byEnv).forEach(([id, es]) => {
+    if (envAgentKey(es?.agent, id) !== key) return;
+    byEnv[id] = {
+      ...es,
+      agentVersions: unionVersions(agentVersions(es), [v]),
+      /* Only the environment it was minted in switches; the rest stay pinned
+         to what they ran so a new version never switches anyone silently. */
+      activeAgentVersion: id === activateEnvId ? v.label : es.activeAgentVersion || currentAgentVersion(es)?.label,
+    };
+  });
+  const connectedAgents = (state.connectedAgents || []).map((a) => (a.key === key ? { ...a, versions: unionVersions(a.versions, [v]) } : a));
+  return { ...state, byEnv, connectedAgents };
+};
+
+/* Keep an agent — and every version it had — on the Agents page. Fields one
+   copy is missing (an assistant ID, a definition) are filled from the other. */
+const keepInRegistry = (connectedAgents, key, agent, versions, extra = {}) => {
+  const i = connectedAgents.findIndex((a) => a.key === key);
+  if (i < 0) return [{ ...agent, key, versions, ...extra }, ...connectedAgents];
+  const existing = connectedAgents[i];
+  const merged = {
+    ...existing,
+    values: { ...(agent?.values || {}), ...(existing.values || {}) },
+    definition: existing.definition || agent?.definition,
+    versions: unionVersions(existing.versions, versions),
   };
+  return connectedAgents.map((a, j) => (j === i ? merged : a));
 };
 
 function reducer(state, action) {
@@ -215,7 +269,16 @@ function reducer(state, action) {
          seed). Screens that would otherwise render "Environment not found"
          while myEnvironments is still the empty initialState wait on this,
          so a custom-built env deep-link doesn't 404 for a frame on load. */
-      return { ...state, ...payload, myEnvironments: envs, byEnv: nextByEnv, hydrated: true };
+      /* Agents that lost their assistant ID to an older version-save get it
+         back, wherever a copy is stored — keyed the same way in each copy so
+         the registry and the environment still agree on who it is. */
+      Object.keys(nextByEnv).forEach((id) => {
+        /* An improvement whose search finished while nobody watched is done. */
+        const es = settleImprovements(scrubEnvState(nextByEnv[id]));
+        nextByEnv[id] = es?.agent ? { ...es, agent: repairAgentRecord(es.agent, `env:${id}`) } : es;
+      });
+      const connectedAgents = (payload.connectedAgents || state.connectedAgents || []).map((a) => repairAgentRecord(scrubAgentSecrets(a)));
+      return { ...state, ...payload, myEnvironments: envs, byEnv: nextByEnv, connectedAgents, hydrated: true };
     }
 
     case "adoptEnvironment": {
@@ -230,10 +293,13 @@ function reducer(state, action) {
       */
       const existing = state.byEnv[env.id];
       const seededEnvState = existing || { ...emptyEnvState() };
+      /* A name already taken gets the next number, so a second build of the
+         same agent isn't indistinguishable from the first. */
+      const name = uniqueEnvName(env.name, state.myEnvironments, env.id);
       return {
         ...state,
         myEnvironments: [
-          { ...env, adoptedAt: action.now, custom: !!env.custom },
+          { ...env, ...(name && { name }), adoptedAt: action.now, custom: !!env.custom },
           ...state.myEnvironments,
         ],
         byEnv: { ...state.byEnv, [env.id]: seededEnvState },
@@ -257,11 +323,30 @@ function reducer(state, action) {
 
     case "removeEnvironment": {
       const byEnv = { ...state.byEnv };
+      const es = byEnv[action.envId];
       delete byEnv[action.envId];
+      /*
+        Versions belong to the agent, not to the environment that tested it.
+        Deleting an environment must not delete an agent's history: if no
+        other environment (and no Agents-page entry) holds this agent, keep
+        it on the Agents page with every version it had.
+      */
+      let connectedAgents = state.connectedAgents || [];
+      const key = envAgentKey(es?.agent, action.envId);
+      if (key) {
+        const env = state.myEnvironments.find((e) => e.id === action.envId);
+        connectedAgents = keepInRegistry(connectedAgents, key, es.agent, agentVersions(es), {
+          name: es.agent.name || `${env?.name || "Environment"} agent`, origin: "environment", firstEnvName: env?.name,
+        });
+        /* The agent remembers it was tested there — "Not tested yet" would be false. */
+        const gone = { envId: action.envId, envName: env?.name || "An environment", removedAt: new Date().toISOString(), runs: (es?.runs || []).length };
+        connectedAgents = connectedAgents.map((a) => (a.key === key ? { ...a, deletedIn: [...(a.deletedIn || []), gone] } : a));
+      }
       return {
         ...state,
         myEnvironments: state.myEnvironments.filter((e) => e.id !== action.envId),
         byEnv,
+        connectedAgents,
       };
     }
 
@@ -269,7 +354,7 @@ function reducer(state, action) {
       const prev = state.byEnv[action.envId] || emptyEnvState();
       return {
         ...state,
-        byEnv: { ...state.byEnv, [action.envId]: { ...prev, ...action.patch } },
+        byEnv: { ...state.byEnv, [action.envId]: { ...prev, ...scrubPatch(action.patch) } },
       };
     }
 
@@ -286,9 +371,12 @@ function reducer(state, action) {
       const prev = state.byEnv[action.envId] || emptyEnvState();
       const runs = prev.runs || [];
       const idx = runs.findIndex((r) => r.id === action.run.id);
+      /* A run records which agent it tested, not just the version label —
+         after the environment changes agent, "v3" means a different thing. */
+      const stamped = action.run.agentKey ? action.run : { ...action.run, agentKey: envAgentKey(prev.agent, action.envId) };
       const nextRuns = idx >= 0
-        ? runs.map((r, i) => (i === idx ? { ...r, ...action.run } : r))
-        : [action.run, ...runs];
+        ? runs.map((r, i) => (i === idx ? { ...r, ...stamped } : r))
+        : [stamped, ...runs];
       return {
         ...state,
         byEnv: {
@@ -302,7 +390,7 @@ function reducer(state, action) {
        so minting is the only thing that moves the pairing forward. */
     case "addAgentVersion": {
       const prev = state.byEnv[action.envId] || emptyEnvState();
-      /* Start from the list every reader sees — including the implicit v1 —
+      /* Start from the list every reader sees —
          or the first new version would replace v1 instead of following it. */
       const list = agentVersions(prev);
       const byEnv = {
@@ -316,16 +404,175 @@ function reducer(state, action) {
         exists (it doesn't switch to it — each environment chooses what it
         runs), so "v2" means the same thing everywhere.
       */
-      const key = agentKeyOf(prev.agent);
-      if (key) {
-        Object.entries(state.byEnv).forEach(([id, es]) => {
-          if (id === action.envId || agentKeyOf(es?.agent) !== key) return;
-          const theirs = agentVersions(es);
-          if (theirs.some((v) => v.label === action.version.label)) return;
-          byEnv[id] = { ...es, agentVersions: [...theirs, action.version] };
+      const key = envAgentKey(prev.agent, action.envId);
+      /* With an agent attached, it's the same mint as everywhere else. */
+      if (key) return mintVersion(state, key, action.version, action.envId);
+      return { ...state, byEnv };
+    }
+
+    /*
+      The environment starts testing a different agent. Not a version — a
+      different agent, with its own history. The world, scenarios and
+      evaluations stay; past runs keep the agent they actually tested; the
+      previous agent stays on the Agents page with every version it had.
+    */
+    case "changeEnvAgent": {
+      const { envId, versions, activeLabel } = action;
+      const agent = scrubAgentSecrets(action.agent);
+      const prev = state.byEnv[envId] || emptyEnvState();
+      const env = state.myEnvironments.find((e) => e.id === envId);
+      const oldKey = envAgentKey(prev.agent, envId);
+      const oldName = prev.agent?.name || `${env?.name || "Environment"} agent`;
+      let connectedAgents = state.connectedAgents || [];
+      if (oldKey && prev.agent) {
+        connectedAgents = keepInRegistry(connectedAgents, oldKey, prev.agent, agentVersions(prev), {
+          name: oldName, origin: "environment", firstEnvName: env?.name,
         });
       }
-      return { ...state, byEnv };
+      const runs = (prev.runs || []).map((r) => (r.agentKey ? r : { ...r, agentKey: oldKey }))
+        .map((r) => (r.agentKey === oldKey ? { ...r, agentName: r.agentName || oldName } : r));
+      return {
+        ...state,
+        connectedAgents,
+        byEnv: {
+          ...state.byEnv,
+          [envId]: {
+            ...prev,
+            agent,
+            agentVersions: versions,
+            activeAgentVersion: activeLabel || versions[versions.length - 1]?.label || null,
+            runs,
+            previousAgents: [
+              ...(prev.previousAgents || []),
+              ...(prev.agent ? [{ key: oldKey, name: oldName, replacedAt: new Date().toISOString() }] : []),
+            ],
+          },
+        },
+      };
+    }
+
+    /* An agent connected from the Agents page. Re-connecting the same source
+       is a no-op — it is already in the list. */
+    case "connectAgent": {
+      const list = state.connectedAgents || [];
+      const incoming = scrubAgentSecrets(action.agent);
+      const i = list.findIndex((a) => a.key === incoming.key);
+      if (i < 0) return { ...state, connectedAgents: [incoming, ...list] };
+      /* Connecting the same agent again fills in what it was missing — an
+         endpoint, a name, a linked repository, contact settings. Never a
+         version: it's the same agent. Filled-in values win over blanks only. */
+      const prev = list[i];
+      const next = incoming;
+      const filled = Object.fromEntries(Object.entries(next.values || {}).filter(([, val]) => val !== undefined && val !== ""));
+      const merged = {
+        ...prev,
+        name: prev.name || next.name,
+        values: { ...(prev.values || {}), ...filled },
+        definition: prev.definition?.repoUrl || !next.definition?.repoUrl ? prev.definition : { ...(prev.definition || {}), ...next.definition },
+      };
+      return { ...state, connectedAgents: list.map((a, j) => (j === i ? merged : a)) };
+    }
+
+    case "setAgentLimits": {
+      return { ...state, agentLimits: { ...(state.agentLimits || {}), [action.agentKey]: action.limits } };
+    }
+
+    /* Say which agent an Error Feed project's traffic comes from, so Fix
+       can find it for every issue in that project. */
+    /* An Observe project's agent. agentKey null unlinks it. */
+    case "linkProjectAgent": {
+      if (!action.agentKey) {
+        const { [action.project]: _gone, ...rest } = state.projectLinks || {};
+        return { ...state, projectLinks: rest };
+      }
+      return { ...state, projectLinks: { ...(state.projectLinks || {}), [action.project]: action.agentKey } };
+    }
+
+    /* Disconnect an agent. Only offered when no environment tests it; its
+       runs stay with the environments that ran them. */
+    case "removeAgent": {
+      return { ...state, connectedAgents: (state.connectedAgents || []).filter((a) => a.key !== action.key) };
+    }
+
+    /*
+      Where an agent runs (its endpoint) changed. Not a new version — versions
+      track what the agent does, not where it lives — so it updates the agent
+      everywhere it's recorded: the registry and every environment testing it.
+    */
+    /* Fill in connection details an agent is missing (an assistant ID). Like
+       the runtime, not a version — same agent, same history. */
+    case "setAgentValues": {
+      const { key } = action;
+      const patch = scrubAgentSecrets({ values: action.patch }).values;
+      const withValues = (a) => ({ ...a, key, values: { ...(a.values || {}), ...patch } });
+      const connectedAgents = (state.connectedAgents || []).map((a) => (a.key === key ? withValues(a) : a));
+      const byEnv = Object.fromEntries(Object.entries(state.byEnv || {}).map(([envId, es]) => (
+        es?.agent && envAgentKey(es.agent, envId) === key ? [envId, { ...es, agent: withValues(es.agent) }] : [envId, es]
+      )));
+      return { ...state, connectedAgents, byEnv };
+    }
+
+    case "setAgentRuntime": {
+      const { key, endpoint } = action;
+      /* Freeze the key first — for an agent identified by how it's reached,
+         a new endpoint would otherwise read as a different agent. */
+      const withEndpoint = (a) => ({ ...a, key, values: { ...(a.values || {}), endpoint } });
+      const connectedAgents = (state.connectedAgents || []).map((a) => (a.key === key ? withEndpoint(a) : a));
+      const byEnv = Object.fromEntries(Object.entries(state.byEnv || {}).map(([envId, es]) => (
+        es?.agent && envAgentKey(es.agent, envId) === key ? [envId, { ...es, agent: withEndpoint(es.agent) }] : [envId, es]
+      )));
+      return { ...state, connectedAgents, byEnv };
+    }
+
+    /*
+      A version recorded on the agent itself (a Sync, or a version added from
+      the Agents page). Every environment testing the agent learns it exists;
+      only `activateEnvId`, if given, switches to it — the rest keep running
+      what they ran, so their results stay attributable.
+    */
+    case "recordAgentVersion": {
+      const { key, version, activateEnvId } = action;
+      const next = mintVersion(state, key, version, activateEnvId);
+      if (!version?.outsideChange) return next;
+      /* The waiting outside edit is now a version — it isn't found again. */
+      const byEnv = { ...next.byEnv };
+      Object.keys(byEnv).forEach((id) => {
+        const a = byEnv[id]?.agent;
+        if (a?.values?.pendingOutsideChange && (a.key === key || envAgentKey(a, id) === key)) {
+          const { pendingOutsideChange, ...values } = a.values;
+          byEnv[id] = { ...byEnv[id], agent: { ...a, values } };
+        }
+      });
+      return { ...next, byEnv };
+    }
+
+    /*
+      An existing version changes state — a Draft recorded when a proposal was
+      made (a draft PR, a platform draft, a patch exported) becomes the version
+      that landed. Updated in place by label everywhere the agent is recorded,
+      never re-minted, so landing a draft can't create a second version.
+      `activateEnvId`, if given, switches that environment to it.
+    */
+    case "updateAgentVersion": {
+      const { key, label, patch: vPatch, activateEnvId } = action;
+      if (!key || !label) return state;
+      const apply = (list) => (list || []).map((v) => (v.label === label ? { ...v, ...vPatch } : v));
+      const byEnv = { ...state.byEnv };
+      Object.entries(state.byEnv).forEach(([id, es]) => {
+        if (envAgentKey(es?.agent, id) !== key) return;
+        byEnv[id] = {
+          ...es,
+          agentVersions: apply(agentVersions(es)),
+          ...(id === activateEnvId && { activeAgentVersion: label }),
+        };
+      });
+      const connectedAgents = (state.connectedAgents || []).map((a) => (a.key === key ? { ...a, versions: apply(a.versions) } : a));
+      return { ...state, byEnv, connectedAgents };
+    }
+
+    /* Workspace feature flags — `agentImprovement` (design partner preview). */
+    case "setFlag": {
+      return { ...state, flags: { ...(state.flags || {}), [action.flag]: action.on } };
     }
 
     case "release": {
@@ -339,6 +586,11 @@ function reducer(state, action) {
       };
     }
 
+    /* A workspace admin's setting — applies to every environment. */
+    case "setWorkspaceSetting": {
+      return { ...state, workspaceSettings: { ...(state.workspaceSettings || {}), [action.key]: action.value } };
+    }
+
     case "reset":
       return initialState;
 
@@ -349,23 +601,38 @@ function reducer(state, action) {
 
 const SimStoreContext = createContext(null);
 
+/*
+  One store per page, however many providers wrap it. The Simulate area
+  shares a layout-level provider, and some pages (Improvements) wrap their own
+  too. Two live stores meant a run started from the inner one never reached
+  the outer one the run page reads — and each persisted its own copy over the
+  other's. A provider inside another now just uses the outer one.
+*/
 export function SimStoreProvider({ children }) {
+  const outer = useContext(SimStoreContext);
+  if (outer) return children;
+  return <SimStoreRoot>{children}</SimStoreRoot>;
+}
+SimStoreProvider.propTypes = { children: PropTypes.node };
+
+function SimStoreRoot({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
   // Hydrate once on mount. The `hydrated: true` marker the reducer stamps is
   // what gates persistence below — set on committed state, so it can't race.
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      dispatch({
-        type: "hydrate",
-        payload: raw ? topUpSeed(JSON.parse(raw)) : firstRunState(),
-      });
-    } catch {
-      /* a corrupt prototype cache should never block the screen — fall back
-         to the seed so the app still renders rather than staying blank */
-      dispatch({ type: "hydrate", payload: firstRunState() });
-    }
+    readStored(STORAGE_KEY).then((raw) => {
+      try {
+        dispatch({
+          type: "hydrate",
+          payload: raw ? topUpSeed(JSON.parse(raw)) : firstRunState(),
+        });
+      } catch {
+        /* a corrupt prototype cache should never block the screen — fall back
+           to the seed so the app still renders rather than staying blank */
+        dispatch({ type: "hydrate", payload: firstRunState() });
+      }
+    });
   }, []);
 
   /*
@@ -388,20 +655,30 @@ export function SimStoreProvider({ children }) {
   */
   useEffect(() => {
     if (!state.hydrated) return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      /* quota / private mode / corrupt cache — the prototype still works in-memory */
-    }
+    /* storeStorage falls back quietly — the prototype still works in-memory */
+    writeStored(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
 
-  const value = useMemo(() => ({ state, dispatch }), [state]);
+  /*
+    Dispatch and save in the same breath. Each page area mounts its own
+    provider and they share state only through storage — a change made right
+    before navigating to another area (Start fix on the Error Feed, New
+    improvement) would otherwise be lost when this provider unmounts before
+    its persist effect runs. Applies the same reducer to what's stored.
+  */
+  const commit = useCallback((action) => {
+    dispatch(action);
+    /* in-memory only if this fails — the dispatch above still applies here */
+    updateStored(STORAGE_KEY, (saved) => reducer(saved, action));
+  }, []);
+
+  const value = useMemo(() => ({ state, dispatch, commit }), [state, commit]);
   return (
     <SimStoreContext.Provider value={value}>{children}</SimStoreContext.Provider>
   );
 }
 
-SimStoreProvider.propTypes = { children: PropTypes.node };
+SimStoreRoot.propTypes = { children: PropTypes.node };
 
 export function useSimStore() {
   const ctx = useContext(SimStoreContext);
@@ -409,10 +686,20 @@ export function useSimStore() {
   return ctx;
 }
 
+/** The store when there is one — null outside a provider, for components also used elsewhere. */
+export function useOptionalSimStore() {
+  return useContext(SimStoreContext);
+}
+
 /** Convenience hook for one environment's slice of flow state. */
+/* One empty state for every environment the store hasn't loaded yet. A fresh
+   one per render gave the run player new scenario and eval arrays each time,
+   and it reset itself in a loop until IndexedDB answered. */
+const EMPTY_ENV_STATE = emptyEnvState();
+
 export function useEnvState(envId) {
   const { state, dispatch } = useSimStore();
-  const envState = state.byEnv[envId] || emptyEnvState();
+  const envState = state.byEnv[envId] || EMPTY_ENV_STATE;
 
   const patch = useCallback(
     (p) => dispatch({ type: "patchEnvState", envId, patch: p }),
@@ -436,8 +723,8 @@ export function useEnvState(envId) {
 
   /**
    * Setup progress drives the rail on the workspace and gates the Run button.
-   * Evals are optional — a run with no evals still produces traces, it just
-   * cannot tell you whether the agent was right.
+   * Evaluations are optional (PRD v7) — sub-goals decide pass or fail, so a
+   * run doesn't need one; they score on top.
    */
   const steps = useMemo(
     () => [
@@ -449,20 +736,58 @@ export function useEnvState(envId) {
     [envState],
   );
 
-  /*
-    Env-level readiness. The build view has its own stricter check
-    that also requires at least one evaluation — that's the gate
-    users must pass BEFORE the env reaches the workspace. Once an env
-    exists here, it has already been configured, so leaving evals
-    out of this check keeps the workspace chip green even when
-    seeded state carries an empty evals array. Removing all evals
-    post-creation still surfaces on the Evaluations tab's own gap
-    badge, so the signal isn't lost.
-  */
-  const canRun = !!envState.agent && envState.scenarios.length > 0;
+  /* Env-level readiness — the same check every way to start a run uses. */
+  const canRun = runReadiness(envState).ready;
   const nextStep = steps.find((s) => !s.done && !s.optional) || steps[3];
 
   return { envState, patch, recordRun, addAgentVersion, release, steps, canRun, nextStep };
+}
+
+/**
+ * Workspace settings a workspace admin owns, and whether the signed-in user
+ * may change them. Outside a store it reads the defaults, read-only.
+ */
+export function useWorkspaceSettings() {
+  const store = useContext(SimStoreContext);
+  const settings = store?.state?.workspaceSettings || initialState.workspaceSettings;
+  const dispatch = store?.dispatch;
+  const isAdmin = WORKSPACE_ROLE === "admin";
+  const set = useCallback(
+    (key, value) => { if (dispatch && isAdmin) dispatch({ type: "setWorkspaceSetting", key, value }); },
+    [dispatch, isAdmin],
+  );
+  return {
+    settings,
+    set,
+    isAdmin,
+    role: WORKSPACE_ROLE,
+    readOnlyReason: isAdmin ? null : "Only a workspace admin can change this.",
+  };
+}
+
+/** Every connected agent in the workspace — environment-connected and Agents-page-connected, merged by identity. */
+export function useConnectedAgents() {
+  const { state, dispatch, commit } = useSimStore();
+  const agents = useMemo(() => connectedAgentsFrom(state), [state]);
+  /* Saved at once: connecting often navigates straight on (back to an Error
+     Feed issue), and that page reads the store from storage. */
+  const connectAgent = useCallback((agent) => commit({ type: "connectAgent", agent }), [commit]);
+  const removeAgent = useCallback((key) => dispatch({ type: "removeAgent", key }), [dispatch]);
+  const setAgentRuntime = useCallback((key, endpoint) => dispatch({ type: "setAgentRuntime", key, endpoint }), [dispatch]);
+  const setAgentValues = useCallback((key, patch) => dispatch({ type: "setAgentValues", key, patch }), [dispatch]);
+  const recordAgentVersion = useCallback(
+    (key, version, activateEnvId) => dispatch({ type: "recordAgentVersion", key, version, activateEnvId }),
+    [dispatch],
+  );
+  const changeEnvAgent = useCallback(
+    (envId, { agent, versions, activeLabel }) => dispatch({ type: "changeEnvAgent", envId, agent, versions, activeLabel }),
+    [dispatch],
+  );
+  const runVersionIn = useCallback(
+    (envId, label) => dispatch({ type: "patchEnvState", envId, patch: { activeAgentVersion: label } }),
+    [dispatch],
+  );
+  return { agents, connectAgent, removeAgent, setAgentRuntime, setAgentValues, recordAgentVersion, runVersionIn, changeEnvAgent, hydrated: !!state.hydrated, state };
 }
 
 export { emptyEnvState };

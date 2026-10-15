@@ -3,6 +3,7 @@ import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, Button } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { SectionCard, MetricTile, OriginChip } from "../components/primitives";
+import { textTone } from "../components/textTone";
 import { buildRecord, provenanceFor, BUILD_ACCESS } from "../_mock/provenance";
 
 /**
@@ -174,7 +175,7 @@ export default function BuildRecordPanel({ env, envState, patch }) {
                 key={k.id}
                 sx={{
                   px: 0.875, py: 0.375, borderRadius: 0.75,
-                  typography: "s3", fontWeight: 700, color: k.color,
+                  typography: "s3", fontWeight: 700, color: textTone(k.color, "text.secondary"),
                   bgcolor: (t) => alpha(k.color, t.palette.mode === "dark" ? 0.16 : 0.1),
                 }}
               >

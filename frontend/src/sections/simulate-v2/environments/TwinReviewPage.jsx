@@ -104,13 +104,12 @@ export default function TwinReviewPage() {
               },
             ]}
             /*
-              Compose flow ends by kicking off a simulation directly —
-              the env is fully set up (agent connected, scenarios
-              seeded, evals presetted) so there's nothing left to
-              configure. Straight into the run.
+              Straight into the run — but only once the layout's readiness
+              check passes and the tool fit is asked; a missing agent or
+              evaluation opens the workspace on the gap instead.
             */
             onFinish={() => navigate(
-              paths.dashboard.simulate.simulationRun(envId, protoRunId(envId, Date.now().toString(36))),
+              `${paths.dashboard.simulate.simulationRun(envId, protoRunId(envId, Date.now().toString(36)))}?trials=3`,
             )}
           />
         )}

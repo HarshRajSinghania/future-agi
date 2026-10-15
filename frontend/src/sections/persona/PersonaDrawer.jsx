@@ -1,13 +1,9 @@
-import {
-  Box,
-  Button,
-  Divider,
-  Drawer,
-  IconButton,
-  Typography,
-} from "@mui/material";
+import { Box, Button, Divider, IconButton, Typography } from "@mui/material";
 import PropTypes from "prop-types";
-import React, { useState } from "react";
+import SideDrawer from "src/sections/simulate-v2/components/SideDrawer";
+import PersonaDrawerScale from "./PersonaDrawerScale";
+import React, { useEffect, useState } from "react";
+import { normalizePersona } from "./personaApiShape";
 import PersonaListView from "./PersonaListView";
 import Iconify from "src/components/iconify";
 import { Collapse } from "@mui/material";
@@ -20,12 +16,34 @@ const PersonaListContent = ({
   onAddPersonas,
   onCreatePersona,
   preSelectedPersonas,
+  title,
+  subtitle,
+  addLabel,
+  single,
+  current,
+  carried,
+  onSelectionChange,
 }) => {
-  const [selectedPersonas, setSelectedPersonas] = useState(
-    preSelectedPersonas ?? [],
+  /* Single mode starts on the persona already in use, if it came from the
+     library — so what's being swapped out is visible. A selection carried
+     over (from before Create persona, plus what was created) wins. */
+  const [selectedPersonas, setSelectedPersonas] = useState(() =>
+    carried
+      ?? (single
+        ? current?.libraryId != null
+          ? [{ id: current.libraryId, name: current.name }]
+          : []
+        : preSelectedPersonas ?? []),
   );
+  useEffect(() => {
+    onSelectionChange?.(selectedPersonas);
+  }, [selectedPersonas]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleToggleSelect = (persona, newValue) => {
+    if (single) {
+      if (newValue) setSelectedPersonas([persona]);
+      return;
+    }
     setSelectedPersonas((prev) => {
       if (newValue) {
         return prev.some((p) => p.id === persona.id)
@@ -36,9 +54,25 @@ const PersonaListContent = ({
     });
   };
 
+  const picked = selectedPersonas[0];
+  const isCurrent =
+    single &&
+    picked &&
+    current?.libraryId != null &&
+    String(picked.id) === String(current.libraryId);
+  const footerNote = !single
+    ? `Personas selected (${selectedPersonas?.length})`
+    : !picked
+      ? "Pick one persona — a scenario has one caller."
+      : isCurrent
+        ? `${picked.name} is already this scenario's caller.`
+        : current?.name
+          ? `Replaces ${current.name} with ${picked.name}`
+          : `Uses ${picked.name}`;
+
+  /* The list remounts on the next open, so there's nothing to clear here. */
   const handleAddPersonas = () => {
     onAddPersonas(selectedPersonas);
-    setSelectedPersonas([]);
   };
 
   return (
@@ -51,17 +85,40 @@ const PersonaListContent = ({
         position: "relative",
       }}
     >
-      <IconButton
-        onClick={onClose}
+      {/* A header row of its own, so the close button sits beside the title
+         rather than floating over the list's toolbar (Create persona). */}
+      <Box
         sx={{
-          position: "absolute",
-          top: "12px",
-          right: "12px",
-          color: "text.primary",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 2,
+          px: 2,
+          pt: 2,
+          pb: 1.5,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          flexShrink: 0,
         }}
       >
-        <Iconify icon="akar-icons:cross" />
-      </IconButton>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography typography="m2" fontWeight={600}>
+            {title}
+          </Typography>
+          {subtitle && (
+            <Typography typography="s1" color="text.secondary">
+              {subtitle}
+            </Typography>
+          )}
+        </Box>
+        <IconButton
+          onClick={onClose}
+          aria-label="Close"
+          size="small"
+          sx={{ color: "text.primary", mt: -0.25 }}
+        >
+          <Iconify icon="akar-icons:cross" width={18} />
+        </IconButton>
+      </Box>
       <Box
         sx={{
           flex: 1,
@@ -78,6 +135,8 @@ const PersonaListContent = ({
           isSelectable
           personaCreateEditType={personaCreateEditType}
           lockedFilters={lockedFilters}
+          singleSelect={!!single}
+          currentId={single ? (current?.libraryId ?? null) : null}
         />
       </Box>
       <Divider flexItem orientation="horizontal" />
@@ -95,7 +154,7 @@ const PersonaListContent = ({
           fontWeight="fontWeightMedium"
           sx={{ paddingX: 2 }}
         >
-          Personas selected ({selectedPersonas?.length})
+          {footerNote}
         </Typography>
         <Button
           variant="outlined"
@@ -111,10 +170,10 @@ const PersonaListContent = ({
           color="primary"
           sx={{ minWidth: "160px" }}
           size="small"
-          disabled={selectedPersonas?.length === 0}
+          disabled={selectedPersonas?.length === 0 || isCurrent}
           onClick={handleAddPersonas}
         >
-          Add
+          {addLabel}
         </Button>
       </Box>
     </Box>
@@ -128,9 +187,16 @@ PersonaListContent.propTypes = {
   onAddPersonas: PropTypes.func,
   onCreatePersona: PropTypes.func,
   preSelectedPersonas: PropTypes.array,
+  title: PropTypes.node,
+  subtitle: PropTypes.node,
+  addLabel: PropTypes.node,
+  single: PropTypes.bool,
+  current: PropTypes.object,
+  carried: PropTypes.array,
+  onSelectionChange: PropTypes.func,
 };
 
-const PersonaCreateContent = ({ onCancel, type }) => {
+const PersonaCreateContent = ({ onCancel, onCreated, type }) => {
   return (
     <Box sx={{ width: "700px", height: "100vh" }}>
       <IconButton
@@ -146,7 +212,11 @@ const PersonaCreateContent = ({ onCancel, type }) => {
       </IconButton>
       <PersonaCreateEditForm
         onCancel={onCancel}
-        onSuccess={onCancel}
+        onSuccess={(res) => {
+          const saved = res?.data?.result ?? res?.data ?? null;
+          if (saved?.id != null) onCreated?.(normalizePersona(saved));
+          onCancel();
+        }}
         type={type}
       />
     </Box>
@@ -155,6 +225,7 @@ const PersonaCreateContent = ({ onCancel, type }) => {
 
 PersonaCreateContent.propTypes = {
   onCancel: PropTypes.func,
+  onCreated: PropTypes.func,
   type: PropTypes.string,
 };
 
@@ -165,12 +236,21 @@ const PersonaDrawer = ({
   personaCreateEditType,
   lockedFilters = null,
   preSelectedPersonas = [],
+  title = "Add personas",
+  subtitle = "Pick from Future AGI built personas and your team's own.",
+  addLabel = "Add",
+  single = false,
+  current = null,
 }) => {
   const [createEditOpen, setCreateEditOpen] = useState(false);
+  /* The list unmounts while Create persona is open; keep its selection, and
+     come back with the new persona picked — it's the one you meant. */
+  const [carried, setCarried] = useState(null);
 
   const handleDrawerClose = () => {
     onClose();
     setCreateEditOpen(false);
+    setCarried(null);
   };
 
   const handleCreateEditClose = () => {
@@ -178,32 +258,49 @@ const PersonaDrawer = ({
   };
 
   return (
-    <Drawer anchor="right" open={open} onClose={handleDrawerClose}>
-      <Collapse
-        in={createEditOpen && open}
-        unmountOnExit
-        orientation="horizontal"
-      >
-        <PersonaCreateContent
-          onCancel={handleCreateEditClose}
-          type={personaCreateEditType}
-        />
-      </Collapse>
-      <Collapse
-        in={!createEditOpen && open}
-        unmountOnExit
-        orientation="horizontal"
-      >
-        <PersonaListContent
-          personaCreateEditType={personaCreateEditType}
-          lockedFilters={lockedFilters}
-          onClose={handleDrawerClose}
-          onAddPersonas={onAddPersonas}
-          onCreatePersona={() => setCreateEditOpen(true)}
-          preSelectedPersonas={preSelectedPersonas}
-        />
-      </Collapse>
-    </Drawer>
+    <SideDrawer open={open} onClose={handleDrawerClose} width="auto">
+      <PersonaDrawerScale>
+        <Collapse
+          in={createEditOpen && open}
+          unmountOnExit
+          orientation="horizontal"
+        >
+          <PersonaCreateContent
+            onCancel={handleCreateEditClose}
+            onCreated={(saved) =>
+              setCarried((prev) =>
+                single ? [saved] : [...(prev || []), saved],
+              )
+            }
+            type={personaCreateEditType}
+          />
+        </Collapse>
+        <Collapse
+          in={!createEditOpen && open}
+          unmountOnExit
+          orientation="horizontal"
+        >
+          <PersonaListContent
+            personaCreateEditType={personaCreateEditType}
+            lockedFilters={lockedFilters}
+            onClose={handleDrawerClose}
+            onAddPersonas={(picked) => {
+              setCarried(null);
+              onAddPersonas(picked);
+            }}
+            onCreatePersona={() => setCreateEditOpen(true)}
+            preSelectedPersonas={preSelectedPersonas}
+            title={title}
+            subtitle={subtitle}
+            addLabel={addLabel}
+            single={single}
+            current={current}
+            carried={carried}
+            onSelectionChange={setCarried}
+          />
+        </Collapse>
+      </PersonaDrawerScale>
+    </SideDrawer>
   );
 };
 
@@ -214,6 +311,11 @@ PersonaDrawer.propTypes = {
   personaCreateEditType: PropTypes.string,
   lockedFilters: PropTypes.object,
   preSelectedPersonas: PropTypes.array,
+  title: PropTypes.node,
+  subtitle: PropTypes.node,
+  addLabel: PropTypes.node,
+  single: PropTypes.bool,
+  current: PropTypes.object,
 };
 
 export default PersonaDrawer;

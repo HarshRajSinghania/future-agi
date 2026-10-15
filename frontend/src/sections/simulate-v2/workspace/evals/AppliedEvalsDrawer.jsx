@@ -7,9 +7,12 @@ import {
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import SideDrawer from "../../components/SideDrawer";
-import { useAppliedEvals } from "./appliedEvals";
+import { useAppliedEvals } from "./useAppliedEvals";
 import AddEvalsDrawer from "./AddEvalsDrawer";
-import EditEvalDrawer, { canEditEval } from "./EditEvalDrawer";
+import EditEvalDrawer from "./EditEvalDrawer";
+import { canEditEval } from "./canEditEval";
+import { MAPPING_NOTE, mappingWithout } from "./evalMapping";
+import { clickable, focusRing } from "../../components/clickable";
 
 /**
  * All Evaluations — mirrors the prod dataset drawer
@@ -22,13 +25,13 @@ import EditEvalDrawer, { canEditEval } from "./EditEvalDrawer";
  *  · Header: title + close X
  *  · Sub-header: select-all + "Evals (N)" + Add
  *  · Row: checkbox + type icon + name + type badge + status + action icons
- *  · Bottom: Run All (N)
+ *  · Bottom: when the evaluations apply
  */
 
 /* Same type config prod uses in SavedEvalsList — code / agent / llm.
    Kept inline so this file has no dependency on prod. */
 const TYPE_CFG = {
-  code:  { label: "Code",  icon: "mdi:code-braces",   color: "#f59e0b", bg: "rgba(245,158,11,0.10)" },
+  code:  { label: "Code",  icon: "mdi:code-braces",   color: "#f59e0b", text: "text.secondary", bg: "rgba(245,158,11,0.10)" },
   agent: { label: "Agent", icon: "mdi:robot-outline", color: "#16A34A", bg: "rgba(22,163,74,0.10)" },
   llm:   { label: "LLM",   icon: "mdi:brain",         color: "#7857FC", bg: "rgba(120,87,252,0.10)" },
 };
@@ -38,7 +41,7 @@ const evalType = (e) => (
 const typeCfg = (e) => TYPE_CFG[evalType(e)] || TYPE_CFG.agent;
 
 export default function AppliedEvalsDrawer({ open, onClose, env, envState, patch }) {
-  const { appliedEvals, appliedIds, add, remove, update } = useAppliedEvals(envState, patch);
+  const { appliedEvals, appliedIds, add, remove, update, slotsLeft } = useAppliedEvals(envState, patch);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const editing = appliedEvals.find((e) => e.id === editingId) || null;
@@ -173,30 +176,20 @@ export default function AppliedEvalsDrawer({ open, onClose, env, envState, patch
                     onToggle={() => toggleOne(e.id)}
                     onEdit={() => setEditingId(e.id)}
                     onDelete={() => remove(e.id)}
+                    onRemoveMapping={(variable) => update(e.id, { mapping: mappingWithout(e.mapping, variable) })}
                   />
                 ))}
               </Stack>
             )}
           </Box>
 
-          {/* Footer — Run All */}
+          {/* Footer — when they apply. There's no re-scoring of past runs. */}
           {appliedEvals.length > 0 && (
-            <Stack
-              direction="row" justifyContent="flex-end"
-              sx={{
-                px: 2.5, py: 1.5, flexShrink: 0,
-                borderTop: "1px solid", borderColor: "divider",
-              }}
-            >
-              <Button
-                variant="contained" color="primary" size="small"
-                startIcon={<Iconify icon="mdi:play" width={14} />}
-                sx={{ textTransform: "none", fontWeight: 600 }}
-                onClick={() => { /* prototype: no live re-run wiring */ }}
-              >
-                Run All ({appliedEvals.length})
-              </Button>
-            </Stack>
+            <Box sx={{ px: 2.5, py: 1.5, flexShrink: 0, borderTop: "1px solid", borderColor: "divider" }}>
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                {`${appliedEvals.length} evaluation${appliedEvals.length === 1 ? "" : "s"} score every run from the next one on.`}
+              </Typography>
+            </Box>
           )}
         </Stack>
       </SideDrawer>
@@ -209,6 +202,7 @@ export default function AppliedEvalsDrawer({ open, onClose, env, envState, patch
         envState={envState}
         existingIds={appliedIds}
         onAdd={(items) => { add(items); setPickerOpen(false); }}
+        slotsLeft={slotsLeft}
       />
 
       {editing && (
@@ -269,10 +263,11 @@ AppliedEvalsDrawer.propTypes = {
 
 /* ── Row — visual clone of SavedEvalsList's EvalRow (prod). ───────────── */
 
-function EvalRow({ item, selected, onToggle, onEdit, onDelete }) {
+function EvalRow({ item, selected, onToggle, onEdit, onDelete, onRemoveMapping }) {
   const [open, setOpen] = useState(false);
   const t = typeCfg(item);
-  const mappingEntries = Object.entries(item.mapping || {}).slice(0, 3);
+  /* Every pair, not the first three — each carries its own Remove now. */
+  const mappingEntries = Object.entries(item.mapping || {});
   return (
     <Box
       sx={{
@@ -285,8 +280,8 @@ function EvalRow({ item, selected, onToggle, onEdit, onDelete }) {
     >
       {/* Main clickable row */}
       <Box
-        onClick={() => setOpen((p) => !p)}
-        sx={{
+        {...clickable(() => setOpen((p) => !p), { expanded: open })}
+        sx={{ ...focusRing,
           display: "flex", alignItems: "center", gap: 0.75,
           px: 1.25, py: 0.85, cursor: "pointer",
         }}
@@ -313,7 +308,7 @@ function EvalRow({ item, selected, onToggle, onEdit, onDelete }) {
             display: "flex", alignItems: "center", gap: 0.3,
             px: 0.6, py: 0.15, borderRadius: "4px",
             fontSize: 10, fontWeight: 700,
-            color: t.color, bgcolor: t.bg, flexShrink: 0,
+            color: t.text || t.color, bgcolor: t.bg, flexShrink: 0,
           }}
         >
           {t.label}
@@ -324,15 +319,13 @@ function EvalRow({ item, selected, onToggle, onEdit, onDelete }) {
           sx={{ display: "flex", gap: 0.25, ml: 0.25, flexShrink: 0 }}
           onClick={(e) => e.stopPropagation()}
         >
-          <Tooltip title="Run" arrow>
-            <IconButton size="small" sx={{ p: 0.4 }}>
-              <Iconify icon="mdi:play-circle-outline" width={17} sx={{ color: "primary.main" }} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Edit mapping & config" arrow>
-            <IconButton size="small" sx={{ p: 0.4 }} onClick={onEdit} disabled={!canEditEval(item)}>
-              <Iconify icon="mdi:pencil-outline" width={17} sx={{ color: "text.secondary" }} />
-            </IconButton>
+          {/* View, not edit — the mapping is read-only in v0 (PRD v6). */}
+          <Tooltip title="View mapping" arrow>
+            <span>
+              <IconButton size="small" sx={{ p: 0.4 }} onClick={onEdit} disabled={!canEditEval(item)}>
+                <Iconify icon="mdi:eye-outline" width={17} sx={{ color: "text.secondary" }} />
+              </IconButton>
+            </span>
           </Tooltip>
           <Tooltip title="Delete" arrow>
             <IconButton size="small" sx={{ p: 0.4 }} onClick={onDelete}>
@@ -368,18 +361,26 @@ function EvalRow({ item, selected, onToggle, onEdit, onDelete }) {
             </Typography>
           )}
           {mappingEntries.length > 0 && (
-            <Stack spacing={0.5}>
+            <Stack spacing={0.25}>
               {mappingEntries.map(([variable, column]) => (
                 <Stack key={variable} direction="row" alignItems="center" spacing={0.75}>
                   <Typography sx={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11, color: "text.secondary" }}>
                     {variable}
                   </Typography>
                   <Iconify icon="solar:arrow-right-linear" width={11} sx={{ color: "text.disabled" }} />
-                  <Typography sx={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11, color: "text.primary" }}>
+                  <Typography noWrap sx={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11, color: "text.primary", flex: 1, minWidth: 0 }}>
                     {column}
                   </Typography>
+                  {onRemoveMapping && (
+                    <Tooltip title="Remove mapping" arrow>
+                      <IconButton size="small" sx={{ p: 0.25 }} onClick={() => onRemoveMapping(variable)} aria-label={`Remove ${variable} mapping`}>
+                        <Iconify icon="mingcute:close-line" width={13} sx={{ color: "text.subtitle" }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                 </Stack>
               ))}
+              <Typography sx={{ fontSize: 11, color: "text.subtitle", pt: 0.5 }}>{MAPPING_NOTE}</Typography>
             </Stack>
           )}
           {item.threshold != null && (
@@ -399,4 +400,5 @@ EvalRow.propTypes = {
   onToggle: PropTypes.func,
   onEdit: PropTypes.func,
   onDelete: PropTypes.func,
+  onRemoveMapping: PropTypes.func,
 };

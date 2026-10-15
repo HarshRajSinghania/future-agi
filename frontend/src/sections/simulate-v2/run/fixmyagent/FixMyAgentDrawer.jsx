@@ -4,35 +4,35 @@ import { useNavigate } from "react-router-dom";
 import { paths } from "src/routes/paths";
 import SideDrawer from "../../components/SideDrawer";
 import { omegaReport, omegaVerdict, diagnosisTrace } from "../../_mock/omega";
-import {
-  proposalsFor, projectedRate, addressedCount, optimisable, projectedWithGeneralisation,
-} from "../../_mock/optimize";
-import { runSearch, splitScenarios } from "../../_mock/optimizer";
-import { nextAgentVersion } from "../../_mock/versions";
-import { optimizationId, OPT_STATUS, nextOptimizationName } from "../../_mock/optimizationRuns";
+import { proposalsFor, projectedRate, addressedCount, optimisable } from "../../_mock/optimize";
+import { improvementRunName } from "../../_mock/optimizer";
+import { shippedCandidate } from "./tradeoffs";
+import { nextAgentVersion, currentEnvVersion } from "../../_mock/versions";
+import { optimizationSummary, OPT_STATUS } from "../../_mock/optimizationRuns";
 import { protoRunId } from "../../_mock/executionAdapter";
 import DiagnosisPane from "./DiagnosisPane";
+import ImprovementSetup from "./ImprovementSetup";
+import { buildImprovement } from "../../_mock/improvementStart";
+import { envAgentKey } from "../../_mock/agentRegistry";
 import OptimizationRunView from "./OptimizationRunView";
-import CreateOptimizationModal from "./CreateOptimizationModal";
+import { useSimStore } from "../../store";
 
 /**
- * Fix my agent.
+ * Debug failures → Improve.
  *
  * One drawer, two widths. Narrow while you are reading what went wrong, wide
- * once a search is running — because a diagnosis is a column of text and an
- * optimization is a graph, a grid of trials and a scenario matrix, and forcing
- * the second into the width of the first is how the old screen ended up
- * pushing its results into an 80vw drawer anyway.
+ * once an improvement run is open — because a diagnosis is a column of text
+ * and an improvement run is a graph, a grid of trials and a scenario matrix.
  *
  * The drawer itself is the shared `SideDrawer`, so the page behind stays
- * readable and it looks like every other drawer in the product rather than a
- * bespoke persistent one.
+ * readable and it looks like every other drawer in the product.
  */
 
 export default function FixMyAgentDrawer({
   open, onClose, env, envState, patch, addAgentVersion, tasks, stats, runId, onOpenTask, onViewIssue, openOptimizationId,
 }) {
   const navigate = useNavigate();
+  const { state: simState } = useSimStore();
   /* Opening a row in the runs list lands on that run, not on the diagnosis —
      the list already told you which one you wanted. */
   const [view, setView] = useState(openOptimizationId ? "optimization" : "diagnosis");
@@ -43,13 +43,9 @@ export default function FixMyAgentDrawer({
     setView(openOptimizationId ? "optimization" : "diagnosis");
     setActiveId(openOptimizationId || null);
   }, [open, openOptimizationId]);
-  const [modal, setModal] = useState(false);
   /*
-    Every proposed change starts checked so the primary "Create agent
-    version" button is armed the moment the diagnosis lands — the earlier
-    empty-by-default meant a first-time reader had a disabled button
-    staring at them with no cue that the tick boxes above were the
-    unlock. Users still uncheck anything they don't want to bundle.
+    Every proposed change starts included — the improvement run acts on the
+    whole diagnosis, not a hand-picked subset.
   */
   const [applied, setApplied] = useState({});
 
@@ -63,11 +59,8 @@ export default function FixMyAgentDrawer({
   const proposals = useMemo(() => proposalsFor(env, failing, measured), [env, failing, measured]);
 
   /*
-    Seed `applied` with every proposal id checked, so the primary CTA is
-    armed as soon as the drawer opens. Runs when the set of proposals
-    changes (new run, different failures); a `seenRef` prevents the effect
-    from resetting the map every time a user unchecks a row and the
-    dependency identity happens to shift.
+    Seed `applied` with every proposal id, once per proposal — a `seenRef`
+    keeps a later identity change from resetting the map.
   */
   const seenRef = useRef(new Set());
   useEffect(() => {
@@ -93,17 +86,29 @@ export default function FixMyAgentDrawer({
   const willFix = addressedCount(included);
   const current = Math.round((stats?.passRate || 0) * 100);
 
-  /* The split is shown before the run starts, so the modal needs it too. */
-  const split = useMemo(() => {
-    const { train, held } = splitScenarios(tasks, `${env?.id}-split`);
-    return {
-      trainMeasured: train.filter((t) => t.status !== "unmeasured").length,
-      heldMeasured: held.filter((t) => t.status !== "unmeasured").length,
-    };
-  }, [tasks, env]);
-
   const records = envState?.optimizations || [];
   const active = records.find((o) => o.id === activeId) || null;
+
+  /* If the drawer opened from a trial page, `runId` is a synthetic trial id
+     that doesn't exist in envState.runs — resolve it to the run the
+     improvement run started from, so `fromRunId` always names a real run. */
+  const trialM = /^(OPT-\d+)-t(\d+)$/.exec(runId || "");
+  const sourceRunId = trialM ? (records.find((o) => o.id === trialM[1])?.fromRunId || runId) : runId;
+  const sourceRun = (envState?.runs || []).find((r) => r.id === sourceRunId);
+  /* The agent version the diagnosed run tested — what changes are made on. */
+  const runAgentVersion = sourceRun?.agentVersion || null;
+  const allScenarioIds = (envState?.scenarios || []).map((sc) => sc.id);
+  const runScenarioIds = sourceRun?.scenarioIds?.length ? sourceRun.scenarioIds : allScenarioIds;
+
+  /* Earlier improvement runs, newest first — so a finished one can be opened
+     again from the diagnosis instead of only from the moment it ran. */
+  const previous = useMemo(
+    () => [...(envState?.optimizations || [])].reverse().map((o) => {
+      const s = optimizationSummary(o);
+      return { id: o.id, name: improvementRunName(envState, o), sub: o.status === OPT_STATUS.RUNNING ? "running" : s.sub ? `${s.headline} ${s.sub}` : "" };
+    }),
+    [envState],
+  );
 
   /*
     Starting a run writes the record first and marks it running.
@@ -113,46 +118,37 @@ export default function FixMyAgentDrawer({
     drawer mid-search would lose a run that, in a real system, is already
     burning episodes on somebody's infrastructure.
   */
-  const start = ({ name, optimizerId, model }) => {
-    const result = runSearch({ env, tasks, optimizerId, seed: `${env?.id}-${optimizerId}-${records.length}` });
-    /* If the drawer opened from a trial page, `runId` is a synthetic
-       trial id that doesn't exist in envState.runs. Resolve to the
-       trial's parent source run so `fromRunId` always points at a real
-       manual run row — that's what analytics and "which run produced
-       this fix?" queries assume. */
-    const trialM = /^(OPT-\d+)-t(\d+)$/.exec(runId || "");
-    const fromRunId = trialM
-      ? (records.find((o) => o.id === trialM[1])?.fromRunId || runId)
-      : runId;
-    const record = {
-      id: optimizationId(envState),
-      name,
-      optimizerId,
-      model,
-      status: OPT_STATUS.RUNNING,
-      createdAt: new Date().toISOString(),
-      fromRunId,
-      includedIds: included.map((p) => p.id),
-      /* The diagnosis this attempt was made against, kept with it — six weeks
-         on, "why did we try that" is only answerable if the evidence travelled
-         with the attempt. */
-      diagnosis: report.map((a) => ({ id: a.id, label: a.label, headline: a.headline, severity: a.severity })),
-      result,
-    };
+  /*
+    "Run improvement" opens Improve my agent, already on this agent and
+    this environment: name it, pick the optimizer and model, the goal and the
+    budget. Starting writes the record running and opens it here — closing
+    the drawer mid-search doesn't lose a run that, in a real system, is
+    already spending.
+  */
+  const [setupOpen, setSetupOpen] = useState(false);
+  const startFromSetup = ({ name, model, envIds, goal, budget, limits, seed, lineage, reread, textSearch, targetMember, optimizerId }) => {
+    const record = buildImprovement({
+      reread, textSearch, targetMember, optimizerId, state: simState,
+      env, es: envState, tasks, seed,
+      fromRunId: sourceRunId,
+      baseAgentVersion: runAgentVersion,
+      trigger: { kind: "run", goal: goal ? { id: goal.id, label: goal.label, ...(goal.group && { group: goal.group }) } : undefined },
+      limits, budget, regressionEnvIds: envIds, lineage,
+      extra: {
+        ...(name && { name }),
+        ...(model && { model }),
+        includedIds: included.map((p) => p.id),
+        /* The diagnosis this attempt was made against, kept with it — six
+           weeks on, "why did we try that" is only answerable if the evidence
+           travelled with the attempt. */
+        diagnosis: report.map((a) => ({ id: a.id, label: a.label, headline: a.headline, severity: a.severity })),
+      },
+    });
     patch({ optimizations: [...records, record] });
+    setSetupOpen(false);
     setActiveId(record.id);
     setView("optimization");
-    setModal(false);
   };
-
-  /* "Run Self Improvement" starts the run straight away with sensible defaults
-     (ProTeGi · Claude Opus 5 · auto-named) and drops the user into the run
-     drawer — the config step in between was an extra click nobody was tuning. */
-  const startWithDefaults = () => start({
-    name: nextOptimizationName(envState),
-    optimizerId: "protegi",
-    model: "claude-opus-5",
-  });
 
   const finish = () => {
     patch({
@@ -165,47 +161,63 @@ export default function FixMyAgentDrawer({
   };
 
   /*
-    Deployed, so re-run — the loop this whole surface exists to close.
-
-    The refactor into a drawer left this button wired to `onClose`: it said "it
-    is deployed, re-run", closed, and did nothing. Worse, the banner on the runs
-    list that holds a projection against what actually happened reads a record
-    nothing was writing any more, so the verification half of the feature was
-    silently dead on both ends.
-
-    The version is minted here rather than at hand-off because this is the first
-    moment the agent might actually be different.
+    A change landed — merged, pushed, or confirmed deployed. This is the only
+    place a version is saved from here; a PR merge arrives with the version
+    PrCard already saved. The projection the user saw is recorded beside it,
+    with the env version and scenario set a run must match to answer it.
   */
-  /* The agent version the diagnosed run tested — what these changes are
-     made on top of. (A trial id resolves to its source run.) */
-  const runAgentVersion = (() => {
-    const trialM = /^(OPT-\d+)-t(\d+)$/.exec(runId || "");
-    const sourceId = trialM ? records.find((o) => o.id === trialM[1])?.fromRunId : runId;
-    return (envState?.runs || []).find((r) => r.id === sourceId)?.agentVersion || null;
-  })();
-
-  const rerun = (changes, expected) => {
-    const note = changes.length === 1
-      ? changes[0].title
-      : `${changes.length} changes: ${[...new Set(changes.map((c) => c.kind.toLowerCase()))].join(", ")}`;
-    const version = nextAgentVersion(envState, { note, basedOnVersion: runAgentVersion });
-    addAgentVersion?.(version);
+  const land = ({ key, version: minted, origin, note, changes, projected: expected, projectedOn, scenarioIds }) => {
+    const version = minted || {
+      ...nextAgentVersion(envState, { note, applied: changes, fromRunId: sourceRunId, basedOnVersion: runAgentVersion }),
+      origin,
+    };
+    if (!minted) addAgentVersion?.(version);
+    const at = new Date().toISOString();
     patch({
       omegaExpectation: {
+        key,
         version: version.label,
-        fromRun: runId || null,
+        fromRun: sourceRunId || null,
         projected: expected,
-        scenarios: tasks.length,
-        addresses: [...new Set(changes.flatMap((c) => c.addresses))],
-        at: new Date().toISOString(),
+        projectedOn,
+        envVersion: currentEnvVersion(env, envState)?.label || null,
+        scenarios: scenarioIds,
+        addresses: [...new Set(changes.flatMap((c) => c.addresses || []))],
+        at,
       },
+      /* Which hand-off landed as which version — so its button can't save a
+         second one, whatever the expectation slot holds later. */
+      handoffLandings: { ...(envState?.handoffLandings || {}), [key]: version.label },
     });
-    const url = paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)));
-    const ids = tasks.map((t) => t.id);
-    const subset = ids.length < (envState?.scenarios?.length || 0);
-    onClose();
-    navigate(subset ? `${url}?only=${ids.join(",")}` : url);
   };
+
+  /* Re-run tests whatever version is current — after a landing, the new one.
+     It never mints. */
+  const rerun = (scenarioIds) => {
+    const url = paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)));
+    const subset = scenarioIds?.length && scenarioIds.length < allScenarioIds.length;
+    onClose();
+    navigate(subset ? `${url}?only=${scenarioIds.join(",")}` : url);
+  };
+
+  /* The winner on every scenario at the current env version — trials only
+     saw the training split. Tagged on the record so the runs list can name it. */
+  const runWinner = (record, candidate = null) => {
+    const id = protoRunId(env.id, Date.now().toString(36));
+    patch({
+      optimizations: records.map((o) => (
+        o.id === record.id ? { ...o, verifyRunIds: [...(o.verifyRunIds || []), id] } : o
+      )),
+    });
+    onClose();
+    /* Run from a code snapshot when one was picked — the run says so. */
+    const url = paths.dashboard.simulate.simulationRun(env.id, id);
+    navigate(candidate ? `${url}?candidate=${encodeURIComponent(candidate)}` : url);
+  };
+
+  const provenance = { fromRunId: sourceRunId || null, basedOnVersion: runAgentVersion };
+  const diagKey = `diag:${sourceRunId}`;
+  const landedFor = (key) => envState?.handoffLandings?.[key] || null;
 
   const close = () => {
     setView("diagnosis");
@@ -214,69 +226,88 @@ export default function FixMyAgentDrawer({
   };
 
   return (
-    <>
-      <SideDrawer
-        open={open}
-        onClose={close}
-        /*
-          Wide enough for the widest thing it holds, and no wider. 86vw stretched
-          the trials table across a metre of screen so each row was a score at one
-          end and a sentence at the other; the scenario grid — the widest content
-          here at roughly 950px — sets the real requirement.
-        */
-        width={view === "optimization" ? { xs: "100%", md: 1060 } : { xs: "100%", sm: 570 }}
-      >
-        {view === "diagnosis" && (
-          <DiagnosisPane
-            tasks={tasks}
-            report={report}
-            trace={trace}
-            proposals={proposals}
-            verdict={omegaVerdict(report, failing)}
-            applied={applied}
-            setApplied={setApplied}
-            current={current}
-            projected={projected}
-            willFix={willFix}
-            measured={measured}
-            failing={failing}
-            onOpenTask={onOpenTask}
-            onViewIssue={onViewIssue}
-            runId={runId}
-            onOptimize={startWithDefaults}
-            onHandOff={rerun}
-            env={env}
-            envState={envState}
-            patch={patch}
-            onClose={close}
-          />
-        )}
+    <SideDrawer
+      open={open}
+      onClose={close}
+      /*
+        Wide enough for the widest thing it holds, and no wider — the
+        scenario grid, at roughly 950px, sets the real requirement.
+      */
+      width={view === "optimization" ? { xs: "100%", md: 1060 } : { xs: "100%", sm: 570 }}
+    >
+      {view === "diagnosis" && (
+        <DiagnosisPane
+          tasks={tasks}
+          report={report}
+          trace={trace}
+          proposals={proposals}
+          verdict={omegaVerdict(report, failing)}
+          applied={applied}
+          setApplied={setApplied}
+          current={current}
+          projected={projected}
+          willFix={willFix}
+          measured={measured}
+          failing={failing}
+          onOpenTask={onOpenTask}
+          onViewIssue={onViewIssue}
+          runId={runId}
+          onOptimize={() => setSetupOpen(true)}
+          previous={previous}
+          onOpenPrevious={(id) => { setActiveId(id); setView("optimization"); }}
+          handoff={{
+            key: diagKey,
+            landedVersion: landedFor(diagKey),
+            provenance,
+            onLand: (info, changes, expected) => land({
+              ...info, key: diagKey, changes, projected: expected,
+              projectedOn: "if every addressed scenario passes", scenarioIds: runScenarioIds,
+            }),
+            onRerun: () => rerun(runScenarioIds),
+          }}
+          env={env}
+          envState={envState}
+          patch={patch}
+          onClose={close}
+        />
+      )}
 
-        {view === "optimization" && active && (
-          <OptimizationRunView
-            record={active}
-            env={env}
-            envState={envState}
-            patch={patch}
-            tasks={tasks}
-            onOpenTask={onOpenTask}
-            onRerun={(changes) => rerun(changes, projectedWithGeneralisation(measured, changes))}
-            onBack={() => { setView("diagnosis"); setActiveId(null); }}
-            onClose={close}
-            onDone={finish}
-          />
-        )}
-      </SideDrawer>
-
-      <CreateOptimizationModal
-        open={modal}
-        envState={envState}
+      {view === "optimization" && active && (
+        <OptimizationRunView
+          record={active}
+          name={improvementRunName(envState, active)}
+          env={env}
+          envState={envState}
+          patch={patch}
+          tasks={tasks}
+          onOpenTask={onOpenTask}
+          onRunWinner={(candidate) => runWinner(active, candidate)}
+          handoff={{
+            key: active.id,
+            landedVersion: landedFor(active.id),
+            provenance,
+            /* The held-out score is the number the screen showed, so it is
+               the projection — and the full suite is what answers it. */
+            onLand: (info) => land({
+              ...info, key: active.id, changes: shippedCandidate(active)?.proposals || active.result?.winner?.proposals || [],
+              projected: shippedCandidate(active)?.held ?? active.result?.heldScore, projectedOn: "held-back scenarios", scenarioIds: allScenarioIds,
+            }),
+            onRerun: () => rerun(allScenarioIds),
+          }}
+          onBack={() => { setView("diagnosis"); setActiveId(null); }}
+          onClose={close}
+          onDone={finish}
+        />
+      )}
+      <ImprovementSetup
+        open={setupOpen}
+        onClose={() => setSetupOpen(false)}
+        preset={{ agentKey: envAgentKey(envState?.agent, env?.id), envId: env?.id }}
+        tasks={tasks}
         included={included}
-        split={split}
-        onClose={() => setModal(false)}
-        onStart={start}
+        onStart={startFromSetup}
       />
-    </>
+    </SideDrawer>
   );
 }
 

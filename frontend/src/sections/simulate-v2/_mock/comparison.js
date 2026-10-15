@@ -14,6 +14,7 @@
  */
 
 import { buildRun } from "./runStream";
+import { withRegrade } from "./regrade";
 import { resolveEval } from "./evals";
 import { getSurface } from "./surfaces";
 import { runEnvVersion, runInputs } from "./toolFit";
@@ -21,6 +22,8 @@ import { attribute, domainTally, isMeasured, faultReason } from "./failures";
 import { episodeReturn } from "./reward";
 import { checklistSteps } from "./callDetail";
 import { ensureProvenance } from "./scenarioProvenance";
+import { pinnedScenarios } from "./decoupled";
+import { improvementRunName } from "./optimizer";
 
 /**
  * Colours for run identity.
@@ -46,7 +49,10 @@ const evalsOf = (envState) => (envState?.evals || []).map(resolveEval).filter(Bo
  * `dropped` rather than quietly skipped.
  */
 export const runScenarios = (envState, run) => {
-  const all = envState?.scenarios || [];
+  /* Each at the version the run pinned (§4.10.8): an edit since — a major
+     bump to its caller instruction, say — doesn't change what an old run
+     shows. Runs without pins replay today's rows, as they always did. */
+  const all = pinnedScenarios(envState?.scenarios || [], run);
   if (!run?.scenarioIds?.length) return { scenarios: all, dropped: 0 };
   const byId = new Map(all.map((sc) => [sc.id, sc]));
   const scenarios = run.scenarioIds.map((id) => byId.get(id)).filter(Boolean);
@@ -62,15 +68,31 @@ export const rebuildRun = (env, envState, run) => {
     agent: run.agentVersion,
     envVersion: runEnvVersion(env, envState, run),
     actors: run.actors,
+    actorEdits: run.actorEdits || null,
+    toolFaults: run.toolFaults || null,
+    /* Runs from before the extra admission gates replay under the first three. */
+    admissionGates: run.admissionGates || 1,
+    /* Cheat checks replay only on runs that pinned them. */
+    cheatChecks: run.cheatChecks || 0,
+    /* The updated RSI PRD's run rules replay only on runs that pinned them. */
+    outcomes: run.outcomes || 0,
+    requiredEvals: run.requiredEvals || 0,
+    /* Sub-goals deciding, and the turn limit, replay only on runs that pinned them. */
+    gradingRule: run.gradingRule || 0,
+    turnLimits: run.turnLimits || 0,
+    turnLimit: run.turnLimit,
   });
-  return buildRun({
-    seed: run.id,
+  /* A snapshot re-run replays its source's draws; anything else draws from
+     its own id (not `run.seed` — seeded runs carry numeric seeds that differ
+     from their ids, and their results come from the id). */
+  return withRegrade(buildRun({
+    seed: run.replaySeed || run.id,
     scenarios: runScenarios(envState, run).scenarios,
     stage: getSurface(env?.surface).stage,
     evals: (run.evals || envState?.evals || []).map(resolveEval).filter(Boolean),
     repeats: run.repeats || 1,
     ...inputs,
-  }).tasks.map((t) => ({ ...t, status: t.verdict }));
+  }).tasks.map((t) => ({ ...t, status: t.verdict })), run);
 };
 
 /**
@@ -213,6 +235,13 @@ const SI_TRIAL_COLORS = [
    "same" and "still-failing" leave the source run's own outcome in place. */
 export const TRIAL_CHANGES = { fixed: "passed", passed: "passed", broke: "failed" };
 
+/* A small stable hash, so a run's generated numbers are the same every read. */
+const hashOf = (str) => {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i += 1) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+  return (h >>> 0) / 4294967296;
+};
+
 export const trialSummaries = (env, envState) => {
   const opts = envState?.optimizations || [];
   if (!opts.length) return [];
@@ -222,8 +251,10 @@ export const trialSummaries = (env, envState) => {
   opts.forEach((opt, optIdx) => {
     if (!opt?.result?.trials?.length) return;
     const sourceRun = (envState?.runs || []).find((r) => r.id === opt.fromRunId);
+    /* What the run it started from scored — each run's graders, return and
+       "said, not done" move from there by what that run changed. */
+    const source = sourceRun ? runSummary(env, envState, sourceRun, 0) : null;
     const baseFinishedAt = new Date(opt.completedAt || opt.createdAt || Date.now()).getTime();
-    const groupColor = SI_TRIAL_COLORS[optIdx % SI_TRIAL_COLORS.length];
     const winnerN = opt.result.winner?.n;
     const groupOrdinal = optIdx + 1;
     const scenarioCount = envState?.scenarios?.length
@@ -250,7 +281,16 @@ export const trialSummaries = (env, envState) => {
          internally consistent, honest at a glance, and never claiming a
          precision the mock does not have. */
       const jitter = 0.88 + (((trial.n * 37) + optIdx * 13) % 25) / 100;
-      const scores = Object.fromEntries(evalIds.map((id) => [id, passRate]));
+      const lift = source ? passRate - (source.passRate ?? passRate) : 0;
+      const wobble = (key, span) => (hashOf(`${opt.id}:${trial.n}:${key}`) - 0.5) * span;
+      const scores = Object.fromEntries(evalIds.map((id) => {
+        const from = source?.scores?.[id] ?? passRate;
+        const pull = 0.6 + hashOf(`${opt.id}:${id}`) * 0.6;
+        /* A gain closes part of the gap to 100, a loss part of the way to 0 —
+           a grader already near the top can't jump past it. */
+        const room = lift >= 0 ? (100 - from) / 100 : from / 100;
+        return [id, Math.max(0, Math.min(100, Math.round(from + lift * pull * Math.max(0.25, room) * 1.6 + wobble(id, 6))))];
+      }));
       const finishedAt = new Date(baseFinishedAt + tIdx * 60_000).toISOString();
       /* A trial is scored on the training split only — the held-out
          scenarios are what the winner is checked against afterwards. So a
@@ -260,11 +300,17 @@ export const trialSummaries = (env, envState) => {
       const covered = trialIds.length || scenarioCount;
       const passed = Math.round((passRate / 100) * covered);
 
+      const baseVersion = sourceRun?.agentVersion || opt.baseAgentVersion || null;
       results.push({
         id: `${opt.id}-t${trial.n}`,
         kind: "trial",
+        /* A trial ran a candidate on top of the version it started from, so
+           it's named as both — "agent v2" alone read as v2 itself. */
+        trialLabel: `Run ${trial.n} · ${baseVersion ? `${baseVersion} + change` : "change"}`,
         selfImprovementId: opt.id,
-        selfImprovementName: opt.name || `Self improvement ${groupOrdinal}`,
+        /* The improvement's own name — a custom one when it was given, the same
+           helper its page title reads. */
+        selfImprovementName: improvementRunName(envState, opt),
         selfImprovementOrdinal: groupOrdinal,
         trialN: trial.n,
         trialTried: trial.tried,
@@ -275,10 +321,11 @@ export const trialSummaries = (env, envState) => {
         brokeBlocker: !!trial.brokeBlocker,
         heldScore: opt.result.heldScore,
         baseScore: opt.result.base,
-        color: groupColor,
-        letter: `T${trial.n}`,
+        /* Each run its own colour, so two runs of one improvement read apart. */
+        color: SI_TRIAL_COLORS[(trial.n - 1) % SI_TRIAL_COLORS.length],
+        letter: `R${trial.n}`,
         finishedAt,
-        agentVersion: sourceRun?.agentVersion || opt.baseAgentVersion || "trial",
+        agentVersion: baseVersion || "trial",
         envVersion: sourceRun?.envVersion,
         scenarioIds: trialIds,
         partial: true,
@@ -289,12 +336,15 @@ export const trialSummaries = (env, envState) => {
         measured: covered,
         unmeasured: 0,
         repeats: sourceRun?.repeats || 1,
-        meanReturn: null,
+        meanReturn: source?.meanReturn != null
+          ? Math.round((source.meanReturn + (lift / 100) * 0.8 + wobble("return", 0.06)) * 100) / 100
+          : Math.round((passRate / 100) * 0.9 * 100) / 100,
         passRate,
-        avgDurationMs: Math.round((sourceRun?.avgDurationMs || 10000) * jitter),
-        tokens: Math.round((sourceRun?.tokens || 300000) * jitter),
-        cost: Math.round((sourceRun?.cost || 5) * jitter * 100) / 100,
-        saidNotDone: 0,
+        /* Read off the run it started from, as that run's own summary shows it. */
+        avgDurationMs: Math.round((source?.avgDurationMs || sourceRun?.avgDurationMs || 10000) * jitter),
+        tokens: Math.round((source?.tokens || sourceRun?.tokens || 300000) * jitter),
+        cost: Math.round((source?.cost || sourceRun?.cost || 5) * jitter * 100) / 100,
+        saidNotDone: Math.max(0, Math.round((source?.saidNotDone ?? 2) - lift / 12 + wobble("said", 2))),
         scores,
         /* Deliberately empty — the compare pipeline hydrates tasks per
            trial in buildComparison (via buildRun + perScenario overlay)
@@ -325,7 +375,7 @@ export const trialGroups = (envState) => {
     return {
       id: opt.id,
       ordinal: i + 1,
-      name: opt.name || `Self improvement ${i + 1}`,
+      name: improvementRunName(envState, opt),
       color: SI_TRIAL_COLORS[i % SI_TRIAL_COLORS.length],
       status: opt.status,
       trialCount: trials.length,
@@ -464,15 +514,6 @@ const pct = (now, before) => {
  * the run header read the same numbers, so a run is called the same thing on
  * every screen. The runs list applies exactly this rule.
  */
-export const LISTED_TRIAL_CAP = 8;
-export const listOrdinals = (env, envState) => {
-  const when = (r) => new Date(r.finishedAt || r.startedAt || Date.now()).getTime();
-  const byFinish = (a, b) => when(a) - when(b);
-  const trials = trialSummaries(env, envState).slice().sort(byFinish).slice(0, LISTED_TRIAL_CAP);
-  const ordered = [...runSummaries(env, envState), ...trials].filter((r) => !r.synthetic).sort(byFinish);
-  return new Map(ordered.map((r, i) => [r.id, i + 1]));
-};
-
 export const chipIdentity = (env, envState) => {
   /* One identity per row, taken from the row's own stamped letter/colour
      (runs: their ordinal; trials: `T{n}`). Reusing them — rather than
@@ -488,7 +529,10 @@ export const chipIdentity = (env, envState) => {
   return map;
 };
 
-export const buildComparison = (env, envState, runIds) => {
+/* `foreign` (optional): run summaries from another environment, keyed by the
+   id used in `runIds` — a fork's runs compare on carried scenario ids
+   (PRD v7 AC-14.14). */
+export const buildComparison = (env, envState, runIds, { foreign } = {}) => {
   const runsByRow = runSummaries(env, envState);
   const trialsByRow = trialSummaries(env, envState);
   const chips = chipIdentity(env, envState);
@@ -498,7 +542,7 @@ export const buildComparison = (env, envState, runIds) => {
      render. */
   const runs = runIds
     .map((id) => {
-      const run = runsByRow.find((r) => r.id === id);
+      const run = runsByRow.find((r) => r.id === id) || foreign?.get(id);
       if (run) return run;
       const trialM = /^(OPT-\d+)-t(\d+)$/.exec(id);
       if (!trialM) return null;
@@ -584,20 +628,11 @@ export const buildComparison = (env, envState, runIds) => {
        compare page — the badge is the row's identity, and losing it
        between screens breaks the mental model. */
     .map((r) => {
-      const chip = chips.get(r.id);
+      const chip = r._env ? null : chips.get(r.id);
       return chip ? { ...r, letter: chip.letter, color: chip.color } : r;
     });
 
   if (runs.length === 0) return { runs: [], rows: [], evals: [], coverage: null };
-  /* Same "Run N" as the runs list. */
-  const ordinals = listOrdinals(env, envState);
-  runs.forEach((run) => {
-    const n = ordinals.get(run.id);
-    if (!n) return;
-    run.ordinal = n;
-    run.letter = String(n);
-    run.color = RUN_COLORS[(n - 1) % RUN_COLORS.length];
-  });
 
   const baseline = runs[0];
 

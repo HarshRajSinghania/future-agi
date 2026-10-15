@@ -9,6 +9,7 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { ORIGIN_KINDS } from "../_mock/provenance";
+import { textTone } from "./textTone";
 import { alpha } from "@mui/material/styles";
 import {
   Box,
@@ -114,7 +115,7 @@ export function SurfaceChip({ surface, size = "small" }) {
         color: s.color,
         bgcolor: (t) => alpha(s.color, t.palette.mode === "dark" ? 0.16 : 0.1),
         border: () => `1px solid ${alpha(s.color, 0.24)}`,
-        "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 600 },
+        "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 600, color: textTone(s.color) },
         "& .MuiChip-icon": { ml: 0.75, mr: -0.25, color: "inherit" },
       }}
     />
@@ -126,19 +127,19 @@ SurfaceChip.propTypes = { surface: PropTypes.string, size: PropTypes.string };
 
 export const STATUS_META = {
   queued:    { color: "#71717A", label: "Queued" },
-  booting:   { color: "#CA8A04", label: "Provisioning" },
+  booting:   { color: "#CA8A04", text: "text.secondary", label: "Provisioning" },
   running:   { color: "#2563EB", label: "Running" },
   grading:   { color: "#7857FC", label: "Grading" },
   passed:    { color: "#16A34A", label: "Passed" },
   /* Samples that disagreed with each other. Neither a pass nor a failure —
      it is the scenario, not the agent, that has been found out. */
-  flaky:     { color: "#D97706", label: "Flaky" },
+  flaky:     { color: "#D97706", text: "text.secondary", label: "Flaky" },
   /* Nothing upstream of the agent worked, so there is no verdict to report.
      Deliberately not red: this is our failure, not the agent's. */
   unmeasured: { color: "#9AA0A6", label: "Not measured" },
   completed: { color: "#71717A", label: "Completed" },
   failed:    { color: "#DC2626", label: "Failed" },
-  error:     { color: "#EA580C", label: "Error" },
+  error:     { color: "#EA580C", text: "text.secondary", label: "Error" },
   cancelled: { color: "#71717A", label: "Cancelled" },
 };
 
@@ -157,7 +158,7 @@ export const STATUS_META = {
 export const VERDICT_TONE = {
   passed:  { color: "#5AA47B", label: "Passed" },
   failed:  { color: "#C2603F", label: "Failed" },
-  flaky:   { color: "#B98A3C", label: "Flaky" },
+  flaky:   { color: "#B98A3C", text: "text.secondary", label: "Flaky" },
   unmeasured: { color: "#9AA0A6", label: "Not measured" },
   missing: { color: "#9AA0A6", label: "Not run" },
 };
@@ -168,7 +169,7 @@ export function Verdict({ status, passes, repeats, showSamples = true }) {
   return (
     <Stack direction="row" alignItems="center" spacing={0.75}>
       <Box sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: tone.color, flexShrink: 0 }} />
-      <Typography sx={{ typography: "s3", fontWeight: 700, color: tone.color }}>
+      <Typography sx={{ typography: "s3", fontWeight: 700, color: tone.text || tone.color }}>
         {tone.label}
       </Typography>
       {samples && (
@@ -208,7 +209,7 @@ export function DomainChip({ domain, dense }) {
         }}
       >
         <Box sx={{ width: 5, height: 5, borderRadius: "50%", bgcolor: domain.color, flexShrink: 0 }} />
-        <Typography noWrap sx={{ typography: "s3", fontWeight: 700, color: domain.color }}>
+        <Typography noWrap sx={{ typography: "s3", fontWeight: 700, color: textTone(domain.color) }}>
           {domain.short}
         </Typography>
       </Stack>
@@ -258,7 +259,7 @@ export function StatusChip({ status }) {
       spacing={0.25}
       sx={{
         pl: 0.25, pr: 1, height: 22, borderRadius: 0.75,
-        color: meta.color,
+        color: meta.text || meta.color,
         bgcolor: (t) => alpha(meta.color, t.palette.mode === "dark" ? 0.16 : 0.1),
         border: () => `1px solid ${alpha(meta.color, 0.24)}`,
       }}
@@ -421,7 +422,7 @@ export function MetricTile({ label, value, sub, color, icon, progress }) {
         {icon && <Iconify icon={icon} width={14} sx={{ color: color || "text.subtitle" }} />}
         <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>{label}</Typography>
       </Stack>
-      <Typography sx={{ typography: "m1", fontWeight: 700, lineHeight: 1.1, color: color || "text.primary", fontVariantNumeric: "tabular-nums" }}>
+      <Typography sx={{ typography: "m1", fontWeight: 700, lineHeight: 1.1, color: textTone(color || "text.primary"), fontVariantNumeric: "tabular-nums" }}>
         {value}
       </Typography>
       {sub && <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{sub}</Typography>}
@@ -551,7 +552,7 @@ export function OriginChip({ origin, file, line, showPath = true }) {
         <Typography
           sx={{
             px: 0.75, py: 0.25, borderRadius: 0.5,
-            typography: "s3", fontWeight: 700, color: meta.color,
+            typography: "s3", fontWeight: 700, color: textTone(meta.color, "text.secondary"),
             bgcolor: (t) => alpha(meta.color, t.palette.mode === "dark" ? 0.16 : 0.1),
           }}
         >

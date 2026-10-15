@@ -1,15 +1,28 @@
 import PropTypes from "prop-types";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, IconButton, Button, TextField, Slider, Tooltip,
   MenuItem, Select, InputLabel, FormControl, ToggleButton, ToggleButtonGroup, Switch,
 } from "@mui/material";
-import { useSnackbar } from "notistack";
 import Iconify from "src/components/iconify";
 import SideDrawer from "../../components/SideDrawer";
 import { emitBuilderPrompt } from "../../_mock/builderPromptBus";
-import { blockerReason, setBlocker, onlyBlockerChanged, unmarkedNote } from "../../_mock/releaseBlocker";
+import { editBumpOf, bumpNote } from "../../_mock/scenarioEdits";
+import { scenarioVersionOf, SCENARIO_BUMPS } from "../../_mock/decoupled";
+import { TIERS, tierOf } from "../../_mock/tiers";
+import { CANARY_NOTE } from "../../_mock/cheatControls";
+import PersonaDrawer from "src/sections/persona/PersonaDrawer";
+import PersonaCreateEditDrawer from "src/sections/persona/PersonaCreateEdit/PersonaCreateEditDrawer";
+import {
+  callSettingsLine, libraryPrefillFrom, personaOrigin, personaSwapPatch, personaTypeFor, usesPersonaLibrary,
+} from "../../_mock/personaScenarios";
+import { subGoalsOfScenario } from "../../_mock/envModel";
+import { SUBGOAL_MAX, SUBGOAL_MIN, subGoalCountNote, subGoalUsageOf } from "../../_mock/scenarioSubGoals";
+import { MarkToggle } from "./ScenarioStateBits";
+import BlockerFlag from "./BlockerFlag";
+import { setBlocker } from "../../_mock/releaseBlocker";
+import { clickable, focusRing } from "../../components/clickable";
 
 /**
  * Edit one scenario.
@@ -27,6 +40,15 @@ import { blockerReason, setBlocker, onlyBlockerChanged, unmarkedNote } from "../
  *     · Use case
  *     · Branch (what makes this one different from its siblings)
  *     · Passes when
+ *     · Sub-goals — 2–7, each critical or supporting. Changing them changes
+ *       what a pass means, so the row can't be graded until re-proved.
+ *     · Its place in the set — pinned to the anchor core or not, canary
+ *
+ * Nothing is rewritten in place (PRD v7 §4.10.3). The footer states, before
+ * Save, the version the edit makes and what that does to past results:
+ * patch (cosmetic — reused), minor (a grader fix — re-graded) or major (what
+ * the caller does — re-run). A grader edit asks whether the intent stayed
+ * the same. Tier and canary marks move the set, not the scenario.
  *
  *   Voice / chat only
  *     · Caller — tone, style, accent, language
@@ -84,7 +106,12 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
   /* The draft as it opened, derived defaults included — what "changed" is
      measured against. */
   const [initial, setInitial] = useState(row || {});
-  const { enqueueSnackbar } = useSnackbar();
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
+  /* What the last library swap did — said once under the persona row. */
+  const [swapNote, setSwapNote] = useState(null);
+  /* A grader edit: the same intent (a fix → minor) or a different test (major). */
+  const [intent, setIntent] = useState("same");
 
   useEffect(() => {
     if (!row) return;
@@ -101,22 +128,42 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
     };
     setDraft(opened);
     setInitial(opened);
+    setSwapNote(null);
+    setIntent("same");
   }, [row]);
 
   if (!row) return null;
 
   const set = (k) => (v) => setDraft((d) => ({ ...d, [k]: v }));
-  const setCaller = (k) => (v) => setDraft((d) => ({ ...d, caller: { ...(d.caller || {}), [k]: v } }));
-  const setPersona = (k) => (v) => setDraft((d) => ({ ...d, persona: { ...(d.persona || {}), [k]: v } }));
+  const setCaller = (k) => (v) => setDraft((d) => ({ ...d, caller: { ...(d.caller || {}), [k]: v }, callerEdited: true }));
+  /* Editing a library persona here makes it this scenario's own version —
+     it stays linked, but says it's been edited. */
+  const setPersona = (k) => (v) => setDraft((d) => ({
+    ...d,
+    persona: { ...(d.persona || {}), [k]: v, ...(d.persona?.libraryId != null && { edited: true }) },
+  }));
+  const origin = personaOrigin(draft.persona);
+  const canUseLibrary = usesPersonaLibrary(env);
 
   const isConversational = CONVERSATIONAL_SURFACES.includes(env?.surface);
   const isVoice = VOICE_ONLY_SURFACES.includes(env?.surface);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
-  /* Flipping only the blocker flag leaves the proof standing — save the row
-     as it was plus the flag, rather than the derived defaults as an edit. */
-  const blockerOnly = onlyBlockerChanged(initial, draft);
+  /* What the edit does to the scenario's version — stated before Save. */
+  const bump = editBumpOf(initial, draft, { intent });
+  /* Only the set's marks moved (tier, canary): the row as it was plus the
+     marks, rather than the derived defaults as an edit. The proof stands. */
+  const metaOnly = !bump.level;
+  /* Must-pass is a mark on the set, like tier and canary — set through
+     setBlocker so turning it back drops the override. */
+  const toggleMustPass = (on) => setDraft((d) => setBlocker(d, on));
   const save = () => {
-    onSave(blockerOnly ? setBlocker(row, !!draft.critical) : draft, { blockerOnly });
+    const marks = {
+      ...(draft.tier !== initial.tier && { tier: draft.tier }),
+      ...(!!draft.canary !== !!initial.canary && { canary: !!draft.canary }),
+    };
+    const mustPassMoved = !!draft.critical !== !!initial.critical;
+    const meta = mustPassMoved ? setBlocker({ ...row, ...marks }, !!draft.critical) : { ...row, ...marks };
+    onSave(metaOnly ? meta : draft, { metaOnly, bump });
     onClose();
   };
 
@@ -128,7 +175,10 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
           sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
         >
           <Box flex={1} minWidth={0}>
-            <Typography sx={{ typography: "m2", fontWeight: 600 }}>Edit scenario</Typography>
+            <Stack direction="row" alignItems="center" spacing={1} className="blocker-host">
+              <Typography sx={{ typography: "m2", fontWeight: 600 }}>Edit scenario</Typography>
+              <BlockerFlag row={draft} size={15} onToggle={() => toggleMustPass(!draft.critical)} />
+            </Stack>
             <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
               Changes apply to this environment&apos;s copy, not the pack it came from
             </Typography>
@@ -142,7 +192,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
           {/* ─── Directly editable ─── */}
           <SectionHeader
             title="Directly editable"
-            hint="These parts don't touch the verification proof, so we let you save them straight to the row."
+            hint="These parts don't touch the verification proof, so we let you save them straight to the row. Saving still makes a new version — never an edit in place."
           />
 
           <TextField
@@ -169,7 +219,19 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             helperText="What a pass looks like. Evals grade against this."
             InputProps={{ sx: { typography: "s2" } }}
           />
-          <BlockerSwitch row={draft} onChange={(on) => setDraft((d) => setBlocker(d, on))} />
+          <SetMarks
+            row={draft}
+            onTier={(tier) => setDraft((d) => ({ ...d, tier }))}
+            onCanary={(on) => setDraft((d) => ({ ...d, canary: on }))}
+            onMustPass={toggleMustPass}
+          />
+
+          {/* ─── Sub-goals ─── */}
+          <SectionHeader
+            title="Sub-goals"
+            hint={`${SUBGOAL_MIN}–${SUBGOAL_MAX} per scenario. Sub-goals decide pass or fail: it passes when every critical one holds. A new one is critical unless you mark it supporting — supporting is reported, doesn't fail it. Any change here means it can't be graded until re-proved.`}
+          />
+          <SubGoalsEditor draft={draft} setDraft={setDraft} env={env} envState={envState} />
 
           {/* ─── Persona ─── */}
           {/*
@@ -186,6 +248,49 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             title="Persona"
             hint="Who's on the other end of the run. Shapes tone, pacing and any traits the caller carries into the conversation."
           />
+          {/* Where this caller came from, and the way to and from the workspace
+              persona library (Environments → Personas). Callers only — a
+              browser or API agent has no one on the other end. */}
+          {canUseLibrary && (
+            <Stack spacing={0.75}>
+              <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" rowGap={1}>
+                {origin && (
+                  <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, px: 0.875, height: 24, borderRadius: 0.75, border: "1px solid", borderColor: "divider" }}>
+                    <Iconify
+                      icon={origin.kind === "generated" ? "solar:magic-stick-3-linear" : "solar:users-group-rounded-linear"}
+                      width={13} sx={{ color: "text.subtitle" }}
+                    />
+                    <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}>{origin.label}</Typography>
+                  </Box>
+                )}
+                <Box flex={1} />
+                <Button
+                  size="small" variant="outlined" onClick={() => setLibraryOpen(true)}
+                  startIcon={<Iconify icon="solar:users-group-rounded-linear" width={15} />}
+                  sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
+                >
+                  {draft.persona ? "Swap for a library persona" : "Use a library persona"}
+                </Button>
+                {draft.persona && origin?.kind !== "library" && (
+                  <Button
+                    size="small" variant="outlined" onClick={() => setSavingToLibrary(true)}
+                    startIcon={<Iconify icon="solar:bookmark-linear" width={15} />}
+                    sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
+                  >
+                    Save to library
+                  </Button>
+                )}
+              </Stack>
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                {swapNote
+                  || (origin?.kind === "library"
+                    ? "A copy of the library persona — edits below change this scenario only, and later library edits don't reach it."
+                    : origin?.kind === "edited"
+                      ? "Save to library keeps this version as a new persona your other environments can use."
+                      : "The builder wrote this caller for this scenario. Save to library to reuse it in other environments.")}
+              </Typography>
+            </Stack>
+          )}
           <TextField
             size="small" label="Name" value={draft.persona?.name || ""}
             onChange={(e) => setPersona("name")(e.target.value)}
@@ -221,8 +326,15 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             <>
               <SectionHeader
                 title="Caller"
-                hint="How the caller comes across in the run. Voice/chat surfaces only — a browser or coding agent has no caller."
+                hint={draft.callerFrom
+                  ? (draft.callerEdited
+                    ? `Adjusted from ${draft.callerFrom}'s defaults for this scenario.`
+                    : `Set from ${draft.callerFrom}'s personality and library settings — change any to override.`)
+                  : "How the caller comes across in the run. Voice/chat surfaces only — a browser or coding agent has no caller."}
               />
+              {!isVoice && callSettingsLine(draft.persona?.callSettings) && (
+                <LibrarySettingsNote name={draft.persona.name} line={callSettingsLine(draft.persona.callSettings)} />
+              )}
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                 <FormControl size="small" fullWidth>
                   <InputLabel>Tone</InputLabel>
@@ -277,6 +389,9 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
                 title="Call constraints"
                 hint="Voice-agent specific. Every generated scenario carries defaults; overriding them here is safe."
               />
+              {callSettingsLine(draft.persona?.callSettings, { voice: true }) && (
+                <LibrarySettingsNote name={draft.persona.name} line={callSettingsLine(draft.persona.callSettings, { voice: true })} />
+              )}
               <Box>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <Typography sx={{ typography: "s2", fontWeight: 600, flex: 1 }}>
@@ -288,7 +403,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
                 </Stack>
                 <Slider
                   size="small" min={2} max={20} value={draft.turns || 0}
-                  onChange={(_, v) => set("turns")(v)}
+                  onChange={(_, v) => setDraft((d) => ({ ...d, turns: v, maxTurns: v }))}
                 />
                 <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
                   How long the run is allowed to go before it&apos;s called off.
@@ -322,12 +437,39 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             </>
           )}
 
+          {/* ─── Turn limit (chat and other text surfaces) ─── */}
+          {isConversational && !isVoice && (
+            <>
+              <SectionHeader
+                title="Conversation limit"
+                hint="A chat that goes on past this is called off and graded on where it got to. Overriding the default here is safe."
+              />
+              <Box>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Typography sx={{ typography: "s2", fontWeight: 600, flex: 1 }}>
+                    Max turns
+                  </Typography>
+                  <Typography sx={{ typography: "s2", fontVariantNumeric: "tabular-nums" }}>
+                    {draft.maxTurns || draft.turns || 10}
+                  </Typography>
+                </Stack>
+                <Slider
+                  size="small" min={2} max={40} value={draft.maxTurns || draft.turns || 10}
+                  onChange={(_, v) => setDraft((d) => ({ ...d, turns: v, maxTurns: v }))}
+                />
+                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                  Caller and agent messages each count as a turn.
+                </Typography>
+              </Box>
+            </>
+          )}
+
           {/* ─── Twin seed override (twin-backed envs only) ─── */}
           {envState?.twinBacking?.services?.length > 0 && (
             <>
               <SectionHeader
                 title="Clone seed override"
-                hint="Optional. Override the env-level twin state for this scenario only — e.g. Slack starts with a specific DM thread, Notion starts with a specific page. Leave blank to inherit the env default."
+                hint="Optional. Override the environment-level twin state for this scenario only — e.g. Slack starts with a specific DM thread, Notion starts with a specific page. Leave blank to inherit the environment default."
               />
               <TextField
                 size="small" multiline minRows={4}
@@ -381,16 +523,6 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
                   prompt={`change the checks on ${draft.name} to …`}
                   onSend={send}
                 />
-                <LockedRow
-                  label="Sub-goals (what the runner watches)"
-                  value={
-                    draft.subTasks?.length
-                      ? `${draft.subTasks.length} steps: ${draft.subTasks.map((s) => (typeof s === "string" ? s : (s?.label || s?.text || ""))).filter(Boolean).join(" → ")}`
-                      : "derived from the tools + rules this scenario touches"
-                  }
-                  prompt={`rewrite the sub-goals on ${draft.name}`}
-                  onSend={send}
-                />
               </>
             );
           })()}
@@ -420,6 +552,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
           </Stack>
         </Stack>
 
+        {dirty && <BumpPreview row={row} bump={bump} intent={intent} onIntent={setIntent} />}
         <Stack
           direction="row" justifyContent="flex-end" spacing={1}
           sx={{ px: 2.5, py: 1.75, borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}
@@ -432,10 +565,48 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             onClick={save}
             sx={{ typography: "s2", fontWeight: 700 }}
           >
-            Save scenario
+            {dirty && bump.level ? `Save as ${nextVersion(row, bump.level)}` : "Save scenario"}
           </Button>
         </Stack>
       </Stack>
+      <PersonaDrawer
+        open={libraryOpen}
+        onClose={() => setLibraryOpen(false)}
+        personaCreateEditType={personaTypeFor(env)}
+        title="Use a library persona"
+        subtitle="Pick the caller for this scenario. Edits you make after this change this scenario only."
+        addLabel="Use persona"
+        single
+        current={draft.persona ? { libraryId: draft.persona.libraryId ?? null, name: draft.persona.name } : null}
+        onAddPersonas={(picked) => {
+          setLibraryOpen(false);
+          if (!picked?.length) return;
+          /* One caller per scenario — the pick replaces the current one, and
+             anything written in the old caller's voice is rewritten in the
+             new one's, so nothing still speaks for the persona it replaced. */
+          const { rewrote, ...patch } = personaSwapPatch(draft, picked[0]);
+          setDraft((d) => ({ ...d, ...patch, callerEdited: false }));
+          setSwapNote(rewrote
+            ? `Now played by ${picked[0].name} — brief, opening line and caller settings rewritten in their voice.`
+            : `Now played by ${picked[0].name} — caller settings updated. This scenario scripts its own pressure, so its brief is kept.`);
+        }}
+      />
+      {/* Save this scenario's caller as a new library persona, then link the
+          scenario to it. */}
+      <PersonaCreateEditDrawer
+        open={savingToLibrary}
+        onClose={() => setSavingToLibrary(false)}
+        personaCreateEditType={personaTypeFor(env) || "voice"}
+        updatePersonaType={() => {}}
+        prefill={libraryPrefillFrom(draft.persona, draft)}
+        onSaved={(saved) => {
+          setDraft((d) => ({
+            ...d,
+            persona: { ...(d.persona || {}), libraryId: saved.id, libraryName: saved.name, name: saved.name, edited: false },
+          }));
+          setSwapNote(`Saved to the persona library as ${saved.name} — this scenario now uses it.`);
+        }}
+      />
     </SideDrawer>
   );
 }
@@ -450,39 +621,220 @@ ScenarioEditor.propTypes = {
   onBuilderPrompt: PropTypes.func,
 };
 
-/* Whether a failure here stops the release. Sits with the directly-editable
-   fields: it changes how a failure is counted, not what the scenario tests. */
-function BlockerSwitch({ row, onChange }) {
-  const on = !!row.critical;
-  const why = on ? blockerReason(row) : unmarkedNote(row);
+const nextVersion = (row, level) => {
+  const [a, b, c] = String(scenarioVersionOf(row)).split(".").map((n) => parseInt(n, 10) || 0);
+  return level === "major" ? `${a + 1}.0.0` : level === "minor" ? `${a}.${b + 1}.0` : `${a}.${b}.${c + 1}`;
+};
+
+/*
+  The version this edit makes and what that does to past results, read
+  before the click that makes it true. A grader edit asks the one question
+  the fields can't answer: same intent, or a different test?
+*/
+function BumpPreview({ row, bump, intent, onIntent }) {
+  const from = scenarioVersionOf(row);
   return (
-    <Stack
-      direction="row" alignItems="flex-start" spacing={1.25}
-      sx={{ p: 1.5, borderRadius: 1.25, border: "1px solid", borderColor: "divider" }}
-    >
-      <Iconify
-        icon={on ? "solar:danger-triangle-bold" : "solar:danger-triangle-linear"}
-        width={16}
-        sx={{ color: on ? "#DC2626" : "text.disabled", mt: "2px", flexShrink: 0 }}
-      />
-      <Box flex={1} minWidth={0}>
-        <Typography sx={{ typography: "s2", fontWeight: 600 }}>Release blocker</Typography>
-        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          {on
-            ? "Any failure here blocks the release, however high the pass rate."
-            : "A failure here counts against the pass rate but doesn't block the release."}
-        </Typography>
-        {why && <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.5 }}>{why}</Typography>}
-      </Box>
-      <Switch
-        size="small" checked={on} onChange={(e) => onChange(e.target.checked)}
-        inputProps={{ "aria-label": "Release blocker" }}
-        sx={{ flexShrink: 0, mt: "-2px" }}
-      />
+    <Box sx={{ mx: 2.5, mb: 1.5, p: 1.5, borderRadius: 1, border: "1px solid", borderColor: "divider", bgcolor: "action.hover", flexShrink: 0 }}>
+      <Typography sx={{ typography: "s2", fontWeight: 600 }}>
+        {bump.level
+          ? (
+            <>
+              <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{`${from} → ${nextVersion(row, bump.level)}`}</Box>
+              {` · ${SCENARIO_BUMPS[bump.level].label} · past results ${SCENARIO_BUMPS[bump.level].past}`}
+            </>
+          )
+          : `Stays ${from} — the scenario set moves to a new version`}
+      </Typography>
+      <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.25 }}>
+        {bump.why ? `${bump.why}. ` : ""}{bumpNote(bump.level)}
+      </Typography>
+      {bump.graderEdit && !bump.rewrite && !bump.fields.caller.length && (
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 1 }}>
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Its checks changed —</Typography>
+          <ToggleButtonGroup
+            size="small" exclusive value={intent}
+            onChange={(_, v) => v && onIntent(v)}
+            sx={{
+              "& .MuiToggleButton-root": {
+                typography: "s3", fontWeight: 600, textTransform: "none", px: 1, py: 0.125,
+                color: "text.secondary", borderColor: "divider",
+                "&.Mui-selected": { color: "text.primary", bgcolor: "action.selected" },
+              },
+            }}
+          >
+            <ToggleButton value="same">Same intent (a fix)</ToggleButton>
+            <ToggleButton value="changed">It tests something else now</ToggleButton>
+          </ToggleButtonGroup>
+        </Stack>
+      )}
+    </Box>
+  );
+}
+BumpPreview.propTypes = { row: PropTypes.object.isRequired, bump: PropTypes.object.isRequired, intent: PropTypes.string, onIntent: PropTypes.func };
+
+/*
+  Where the scenario sits in the set. Pinning to the anchor core changes how
+  the set treats it, not what it tests — no scenario bump, no re-proof. A
+  canary has no legitimate solution; it only counts as a cheat check.
+*/
+function SetMarks({ row, onTier, onCanary, onMustPass }) {
+  const tier = tierOf(row);
+  const anchored = tier === "anchor";
+  return (
+    <Stack sx={{ borderRadius: 1.25, border: "1px solid", borderColor: "divider" }} divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+      <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ p: 1.5 }}>
+        <Iconify icon="solar:pin-linear" width={16} sx={{ color: anchored ? "text.primary" : "text.disabled", mt: "2px", flexShrink: 0 }} />
+        <Box flex={1} minWidth={0}>
+          <Typography sx={{ typography: "s2", fontWeight: 600 }}>Pin to anchor core</Typography>
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+            {anchored
+              ? "In the frozen slice every agent version is compared on. Taking it out, archiving it or marking it not applicable is logged."
+              : `${TIERS[tier].long} now. Pinned scenarios stay in every comparison, so overlap between agent versions never vanishes.`}
+          </Typography>
+        </Box>
+        <Switch
+          size="small" checked={anchored}
+          onChange={(e) => onTier(e.target.checked ? "anchor" : "core")}
+          inputProps={{ "aria-label": "Pin to anchor core" }}
+          sx={{ flexShrink: 0, mt: "-2px" }}
+        />
+      </Stack>
+      {onMustPass && (
+        <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ p: 1.5 }}>
+          <Iconify icon={row.critical ? "solar:shield-check-bold" : "solar:shield-check-linear"} width={16} sx={{ color: row.critical ? "text.primary" : "text.disabled", mt: "2px", flexShrink: 0 }} />
+          <Box flex={1} minWidth={0}>
+            <Typography sx={{ typography: "s2", fontWeight: 600 }}>Must-pass</Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+              An improvement that breaks it is rejected however much else it lifts. Results are reported; nothing here blocks a release. Moves the scenario set, not this scenario&apos;s version.
+            </Typography>
+          </Box>
+          <Switch
+            size="small" checked={!!row.critical}
+            onChange={(e) => onMustPass(e.target.checked)}
+            inputProps={{ "aria-label": "Must-pass" }}
+            sx={{ flexShrink: 0, mt: "-2px" }}
+          />
+        </Stack>
+      )}
+      <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ p: 1.5 }}>
+        <Iconify icon="solar:shield-warning-linear" width={16} sx={{ color: row.canary ? "text.primary" : "text.disabled", mt: "2px", flexShrink: 0 }} />
+        <Box flex={1} minWidth={0}>
+          <Typography sx={{ typography: "s2", fontWeight: 600 }}>Canary</Typography>
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{CANARY_NOTE}</Typography>
+        </Box>
+        <Switch
+          size="small" checked={!!row.canary}
+          onChange={(e) => onCanary(e.target.checked)}
+          inputProps={{ "aria-label": "Canary" }}
+          sx={{ flexShrink: 0, mt: "-2px" }}
+        />
+      </Stack>
     </Stack>
   );
 }
-BlockerSwitch.propTypes = { row: PropTypes.object.isRequired, onChange: PropTypes.func.isRequired };
+SetMarks.propTypes = { row: PropTypes.object.isRequired, onTier: PropTypes.func.isRequired, onCanary: PropTypes.func.isRequired, onMustPass: PropTypes.func };
+
+/* A library persona's own call settings, said where they apply. */
+function LibrarySettingsNote({ name, line }) {
+  return (
+    <Stack direction="row" spacing={0.75} alignItems="flex-start" sx={{ px: 1.25, py: 1, borderRadius: 1, border: "1px solid", borderColor: "divider" }}>
+      <Iconify icon="solar:users-group-rounded-linear" width={14} sx={{ color: "text.subtitle", mt: 0.25, flexShrink: 0 }} />
+      <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+        <Box component="span" sx={{ fontWeight: 700, color: "text.primary" }}>{`From ${name}: `}</Box>
+        {line}
+        <Box component="span" sx={{ color: "text.subtitle" }}> — set in the persona library.</Box>
+      </Typography>
+    </Stack>
+  );
+}
+LibrarySettingsNote.propTypes = { name: PropTypes.string, line: PropTypes.string };
+
+/*
+  The scenario's own sub-goals. The scenario owns which it has and how much
+  each matters; the catalogue owns what each checks — so each says how many
+  scenarios share its definition. The rule the scenario tests is always one
+  of them, read from the contract, so it can be re-marked but not removed.
+*/
+const goalText = (g) => (typeof g === "string" ? g : g?.text || g?.label || "");
+
+function SubGoalsEditor({ draft, setDraft, env, envState }) {
+  const [adding, setAdding] = useState("");
+  const usage = useMemo(() => subGoalUsageOf(env, envState), [env, envState]);
+  const base = draft.subGoals?.length || !draft.subTasks?.length ? draft : { ...draft, subGoals: draft.subTasks.map(goalText) };
+  const goals = subGoalsOfScenario(base, env, envState);
+  const own = goals.filter((g) => !g.key.endsWith(":rule"));
+  const note = subGoalCountNote(goals.length);
+  const write = (texts, marks) => setDraft((d) => ({
+    ...d,
+    subGoals: texts,
+    subGoalMarks: { ...(d.subGoalMarks || {}), ...marks },
+    subGoalsUnproved: true,
+  }));
+  const add = () => {
+    const text = adding.trim();
+    if (!text || goals.length >= SUBGOAL_MAX) return;
+    write([...own.map((g) => g.text), text], {});
+    setAdding("");
+  };
+  return (
+    <Stack spacing={0.75}>
+      {goals.map((g, i) => {
+        const used = usage.get(g.id)?.usedBy || 0;
+        const isRule = g.key.endsWith(":rule");
+        return (
+          <Stack
+            key={g.key} direction="row" alignItems="center" spacing={1}
+            sx={{ px: 1.25, py: 0.75, border: "1px solid", borderColor: "divider", borderRadius: 1 }}
+          >
+            <Typography sx={{ typography: "s3", color: "text.disabled", width: 14, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{i + 1}.</Typography>
+            <Box flex={1} minWidth={0}>
+              <Typography sx={{ typography: "s2" }}>{g.text}</Typography>
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                {[isRule && "from the rule it tests", used > 1 ? `shared · used by ${used}` : "only this scenario"].filter(Boolean).join(" · ")}
+              </Typography>
+            </Box>
+            <MarkToggle value={g.mark} onChange={(m) => write(own.map((x) => x.text), { [g.id]: m })} />
+            <Tooltip arrow title={isRule ? "Comes from the rule it tests" : goals.length <= SUBGOAL_MIN ? `Keep at least ${SUBGOAL_MIN}` : "Remove"}>
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={isRule || goals.length <= SUBGOAL_MIN}
+                  onClick={() => write(own.filter((x) => x.key !== g.key).map((x) => x.text), {})}
+                >
+                  <Iconify icon="solar:close-circle-linear" width={15} sx={{ color: "text.subtitle" }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Stack>
+        );
+      })}
+      <Stack direction="row" spacing={1} alignItems="center">
+        <TextField
+          size="small" fullWidth value={adding}
+          onChange={(e) => setAdding(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          disabled={goals.length >= SUBGOAL_MAX}
+          placeholder={goals.length >= SUBGOAL_MAX ? `${SUBGOAL_MAX} is the most a scenario takes` : "Add a sub-goal — e.g. Confirm the refund amount before issuing it"}
+          InputProps={{ sx: { typography: "s2" } }}
+        />
+        <Button
+          size="small" variant="outlined" onClick={add}
+          disabled={!adding.trim() || goals.length >= SUBGOAL_MAX}
+          sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
+        >
+          Add
+        </Button>
+      </Stack>
+      {note && <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{note}</Typography>}
+      {draft.subGoalsUnproved && (
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          Can&apos;t be graded until re-proved — re-prove it from its state once saved.
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+SubGoalsEditor.propTypes = { draft: PropTypes.object, setDraft: PropTypes.func, env: PropTypes.object, envState: PropTypes.object };
 
 function SectionHeader({ title, hint }) {
   return (
@@ -543,10 +895,8 @@ function LockedRow({ label, value, prompt, onSend }) {
           {onSend ? (
             <Tooltip arrow placement="top" title="Send this to the builder chat">
               <Box
-                onClick={(e) => { e.stopPropagation(); onSend(prompt); }}
-                role="button"
-                tabIndex={0}
-                sx={{
+                {...clickable((e) => { e.stopPropagation(); onSend(prompt); })}
+                sx={{ ...focusRing,
                   mt: 1, display: "inline-flex", alignItems: "center", gap: 0.75,
                   px: 1, py: 0.5, borderRadius: 1,
                   cursor: "pointer",

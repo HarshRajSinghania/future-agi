@@ -1,3 +1,5 @@
+import IssueAgentCell from "src/sections/simulate-v2/errorFeed/IssueAgentCell";
+import { useAgentImprovementFlag } from "src/sections/simulate-v2/_mock/featureFlags";
 import React, { useCallback, useMemo } from "react";
 import {
   Box,
@@ -23,12 +25,13 @@ import {
 import { useNavigate } from "react-router-dom";
 import { formatDistanceToNowStrict } from "date-fns";
 import Iconify from "src/components/iconify";
-import ErrorStatusChip from "./ErrorStatusChip";
+import IssueStatusChip from "./IssueStatusChip";
 import ErrorSeverityBadge from "./ErrorSeverityBadge";
 import ErrorTrendSparkline from "./ErrorTrendSparkline";
-import { useErrorFeedList } from "src/api/errorFeed/error-feed";
+import { useErrorFeedList } from "src/api/errorFeed/mockAdapter";
 import { useErrorFeedApiParams, useErrorFeedStore } from "../store";
 import PropTypes from "prop-types";
+import { clickable, focusRing } from "src/sections/simulate-v2/components/clickable";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => {
@@ -129,13 +132,16 @@ const COLUMNS = [
     minWidth: 340,
   },
   { id: "severity", label: "Severity", sortable: true, width: 100 },
-  { id: "status", label: "Status", sortable: false, width: 118 },
-  { id: "traceCount", label: "Events", sortable: true, width: 85 },
+  { id: "status", label: "Status", sortable: false, width: 150 },
+  { id: "traceCount", label: "Traces", sortable: true, width: 85 },
   { id: "usersAffected", label: "Users", sortable: false, width: 75 },
-  { id: "fixLayer", label: "Fix Layer", sortable: false, width: 120 },
+  { id: "fixLayer", label: "Layer", sortable: false, width: 120 },
   { id: "trends", label: "Trend (14d)", sortable: false, width: 130 },
   { id: "lastSeen", label: "Last seen", sortable: true, width: 120 },
 ];
+/* With agent improvement on: which agent each issue belongs to, beside its status. */
+const AGENT_COLUMN = { id: "agent", label: "Agent", sortable: false, width: 170 };
+const WITH_AGENT = [...COLUMNS.slice(0, 3), AGENT_COLUMN, ...COLUMNS.slice(3)];
 
 function SortIcon({ active, dir }) {
   if (!active)
@@ -157,7 +163,8 @@ function SortIcon({ active, dir }) {
 SortIcon.propTypes = { active: PropTypes.bool, dir: PropTypes.string };
 
 // ── skeleton rows ──────────────────────────────────────────────────────────
-function SkeletonRow() {
+/* eslint-disable-next-line react/prop-types */
+function SkeletonRow({ withAgent = false }) {
   const theme = useTheme();
   const pulse = {
     bgcolor:
@@ -183,6 +190,11 @@ function SkeletonRow() {
       <TableCell>
         <Box sx={{ ...pulse, height: 20, width: 70, borderRadius: "4px" }} />
       </TableCell>
+      {withAgent && (
+        <TableCell>
+          <Box sx={{ ...pulse, height: 14, width: 90 }} />
+        </TableCell>
+      )}
       <TableCell>
         <Box sx={{ ...pulse, height: 14, width: 40 }} />
       </TableCell>
@@ -206,10 +218,10 @@ function SkeletonRow() {
 }
 
 // ── empty state ────────────────────────────────────────────────────────────
-function EmptyState({ filtered }) {
+function EmptyState({ filtered, colSpan = 9 }) {
   return (
     <TableRow>
-      <TableCell colSpan={9} align="center" sx={{ py: 8 }}>
+      <TableCell colSpan={colSpan} align="center" sx={{ py: 8 }}>
         <Stack alignItems="center" gap={1.5}>
           <Box
             sx={{
@@ -247,11 +259,13 @@ function EmptyState({ filtered }) {
     </TableRow>
   );
 }
-EmptyState.propTypes = { filtered: PropTypes.bool };
+EmptyState.propTypes = { filtered: PropTypes.bool, colSpan: PropTypes.number };
 
 // ── main component ─────────────────────────────────────────────────────────
 export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
   const theme = useTheme();
+  const improving = useAgentImprovementFlag();
+  const columns = improving ? WITH_AGENT : COLUMNS;
   const isDark = theme.palette.mode === "dark";
   const navigate = useNavigate();
   const { sortBy, sortDir, setSortBy, page, pageSize, setPage } =
@@ -297,9 +311,6 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
           flex: 1,
           overflowX: "auto",
           overflowY: "auto",
-          border: "1px solid",
-          borderColor: "divider",
-          borderRadius: 1,
         }}
       >
         <Table stickyHeader size="small" sx={{ minWidth: 900 }}>
@@ -307,10 +318,15 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
           <TableHead>
             <TableRow
               sx={{
+                /* The product's DataTable header: no fill, a quiet 13px title. */
                 "& .MuiTableCell-head": {
-                  bgcolor: isDark ? "background.neutral" : "background.default",
-                  borderBottom: "1px solid",
-                  borderColor: "divider",
+                  bgcolor: "background.paper",
+                  /* The theme paints table heads with a grey gradient — off. */
+                  backgroundImage: "none",
+                  /* A sticky cell's border isn't painted in a collapsed table —
+                     the divider under the header is drawn as a shadow. */
+                  borderBottom: "none",
+                  boxShadow: (t) => `inset 0 -1px 0 ${t.palette.divider}`,
                   py: 1.25,
                   px: 1.5,
                   whiteSpace: "nowrap",
@@ -332,7 +348,7 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
                   }
                 />
               </TableCell>
-              {COLUMNS.map((col) => (
+              {columns.map((col) => (
                 <TableCell
                   key={col.id}
                   sx={{ width: col.width, minWidth: col.minWidth }}
@@ -343,14 +359,15 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
                       alignItems="center"
                       gap={0.25}
                       sx={{
+                        ...focusRing,
                         cursor: "pointer",
                         userSelect: "none",
                         width: "fit-content",
                       }}
-                      onClick={() => setSortBy(col.id)}
+                      {...clickable(() => setSortBy(col.id))}
                     >
                       <Typography
-                        typography="s3"
+                        fontSize={13}
                         fontWeight="fontWeightMedium"
                         color="text.secondary"
                       >
@@ -360,7 +377,7 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
                     </Stack>
                   ) : (
                     <Typography
-                      typography="s3"
+                      fontSize={13}
                       fontWeight="fontWeightMedium"
                       color="text.secondary"
                     >
@@ -377,10 +394,10 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
           <TableBody>
             {isLoading ? (
               Array.from({ length: pageSize }).map((_, i) => (
-                <SkeletonRow key={i} />
+                <SkeletonRow key={i} withAgent={improving} />
               ))
             ) : rows.length === 0 ? (
-              <EmptyState filtered={isFiltered} />
+              <EmptyState filtered={isFiltered} colSpan={columns.length + 2} />
             ) : (
               rows.map((row) => {
                 const isSelected = selected.includes(row.cluster_id);
@@ -389,8 +406,10 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
                     key={row.cluster_id}
                     hover
                     selected={isSelected}
-                    onClick={() => handleRowClick(row.cluster_id)}
+                    {...clickable(() => handleRowClick(row.cluster_id), { role: "link" })}
+                    role={undefined}
                     sx={{
+                      ...focusRing,
                       cursor: "pointer",
                       height: 56,
                       "&.MuiTableRow-hover:hover": { bgcolor: hoverBg },
@@ -467,10 +486,18 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
 
                     {/* Status */}
                     <TableCell onClick={(e) => e.stopPropagation()}>
-                      <ErrorStatusChip status={row.status} />
+                      {/* One status: the fix's once there is one, else the issue's own. */}
+                      <IssueStatusChip issue={row} />
                     </TableCell>
 
-                    {/* Events */}
+                    {/* Agent */}
+                    {improving && (
+                      <TableCell>
+                        <IssueAgentCell issue={row} />
+                      </TableCell>
+                    )}
+
+                    {/* Traces */}
                     <TableCell>
                       <Typography
                         typography="s2_1"
@@ -493,7 +520,7 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
                       </Typography>
                     </TableCell>
 
-                    {/* Fix Layer */}
+                    {/* Layer */}
                     <TableCell>
                       <FixLayerChip layer={row.fix_layer} />
                     </TableCell>

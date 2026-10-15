@@ -1,5 +1,9 @@
 import { Box, Button, Divider, Stack, Typography } from "@mui/material";
-import React, { useCallback, useEffect, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { MenuItem, Select } from "@mui/material";
+import { useNavigate } from "react-router-dom";
+import { paths } from "src/routes/paths";
+import { SLACK_CHANNELS, useIntegrations } from "src/sections/simulate-v2/_mock/integrations";
 import { Controller, useForm } from "react-hook-form";
 import FormTextFieldV2 from "src/components/FormTextField/FormTextFieldV2";
 import {
@@ -92,6 +96,11 @@ export default function AlertSettingsForm({
   const metric = watch("metric");
 
   const selectedNotificationMethod = watch("notification.method");
+  /* With the Slack app installed, an alert goes to a channel — no webhook
+     URL to paste. The webhook stays available as a fallback. */
+  const { slack: slackApp } = useIntegrations();
+  const [slackWebhookMode, setSlackWebhookMode] = useState(false);
+  const slackChannelMode = !!slackApp && !slackWebhookMode;
   const thresholdType = watch("threshold_type");
 
   useEffect(() => {
@@ -977,10 +986,17 @@ export default function AlertSettingsForm({
                 </Box>
               </ShowComponent>
               <ShowComponent condition={selectedNotificationMethod === "slack"}>
+                <SlackDestination
+                  setValue={setValue}
+                  watch={watch}
+                  webhookMode={slackWebhookMode}
+                  onWebhookMode={setSlackWebhookMode}
+                />
                 <Stack
                   sx={{
                     padding: 3,
                     gap: 3,
+                    display: slackChannelMode ? "none" : "flex",
                   }}
                 >
                   <FormTextFieldV2
@@ -1056,4 +1072,71 @@ AlertSettingsForm.propTypes = {
   setCriticalValue: PropTypes.func,
   setFormIsDirty: PropTypes.func,
   onPayloadChange: PropTypes.func,
+};
+
+/* Slack as an alert destination: pick a channel when the Future AGI app is
+   installed; otherwise point at Settings → Integrations. */
+function SlackDestination({ setValue, watch, webhookMode, onWebhookMode }) {
+  const navigate = useNavigate();
+  const { slack } = useIntegrations();
+  const notes = watch("notification.slack.notes") || "";
+  const current = SLACK_CHANNELS.find((c) => notes.includes(c)) || "";
+
+  const pick = (channel) => {
+    /* In the product the installed app routes by channel; the prototype
+       keeps the existing backend contract by deriving a webhook for it. */
+    setValue("notification.slack.webhookUrl", `https://hooks.slack.com/services/future-agi/${channel.replace("#", "")}`, { shouldValidate: true });
+    setValue("notification.slack.notes", `Posted by the Future AGI Slack app to ${channel}`);
+  };
+
+  if (!slack) {
+    return (
+      <Stack direction="row" alignItems="center" gap={1} sx={{ px: 3, pt: 3 }}>
+        <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1 }}>
+          Connect Slack in Settings → Integrations to pick a channel instead of pasting a webhook URL.
+        </Typography>
+        <Button size="small" variant="outlined" onClick={() => navigate(`${paths.dashboard.settings.integrations}/slack`)}>
+          Connect Slack
+        </Button>
+      </Stack>
+    );
+  }
+  if (webhookMode) {
+    return (
+      <Typography
+        role="button" onClick={() => onWebhookMode(false)}
+        sx={{ typography: "s2", color: "text.secondary", cursor: "pointer", px: 3, pt: 3, "&:hover": { textDecoration: "underline" } }}
+      >
+        {`Pick a channel in ${slack.workspace} instead`}
+      </Typography>
+    );
+  }
+  return (
+    <Stack sx={{ p: 3, gap: 1 }}>
+      <Typography sx={{ typography: "s2", fontWeight: 600 }}>Channel</Typography>
+      <Select
+        size="small" fullWidth displayEmpty value={current}
+        onChange={(e) => pick(e.target.value)}
+        renderValue={(v) => v || "Choose a channel"}
+      >
+        {SLACK_CHANNELS.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+      </Select>
+      <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+        {`Posted by the Future AGI app in ${slack.workspace}. `}
+        <Box
+          component="span" role="button" onClick={() => onWebhookMode(true)}
+          sx={{ cursor: "pointer", textDecoration: "underline" }}
+        >
+          Use a webhook URL instead
+        </Box>
+      </Typography>
+    </Stack>
+  );
+}
+
+SlackDestination.propTypes = {
+  setValue: PropTypes.func,
+  watch: PropTypes.func,
+  webhookMode: PropTypes.bool,
+  onWebhookMode: PropTypes.func,
 };

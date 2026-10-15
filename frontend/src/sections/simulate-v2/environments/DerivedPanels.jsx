@@ -4,20 +4,13 @@ import { Tooltip, Box, Stack, Typography, Tab } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { CustomTabs } from "src/components/tabs/tabs";
-import DerivingAnimation from "./DerivingAnimation";
-import PipelineChecks from "./PipelineChecks";
-import { pipelineStatus } from "../_mock/buildPipeline";
 import { setupGaps } from "../_mock/setupGaps";
-import { actorsOf } from "../_mock/actors";
 
 import OverviewPanel from "../workspace/OverviewPanel";
-import AgentsPanel from "../workspace/AgentsPanel";
 import RlContractPanel from "../workspace/RlContractPanel";
 import WorldPanel from "../workspace/WorldPanel";
 import { withPinnedWorld } from "../_mock/toolFit";
 import ScenariosStep from "../workspace/ScenariosStep";
-import PersonasPanel from "../workspace/PersonasPanel";
-import ActorsPanel from "../workspace/ActorsPanel";
 import EvalsStep from "../workspace/EvalsStep";
 import SettingsPanel from "../workspace/SettingsPanel";
 
@@ -55,8 +48,9 @@ import SettingsPanel from "../workspace/SettingsPanel";
 */
 const TABS = [
   { id: "overview",  label: "Overview",         needs: null },
-  { id: "world",     label: "World",            needs: "understand" },
-  { id: "contract",  label: "Contract",         needs: "understand" },
+  /* Open from the start of a build — each shows its own part being written. */
+  { id: "world",     label: "World",            needs: null },
+  { id: "contract",  label: "Contract",         needs: null },
   { id: "scenarios", label: "Scenarios",        needs: "build",     badge: "scenarios" },
   { id: "evals",     label: "Evaluations",      needs: null,        badge: "evals" },
   { id: "settings",  label: "Settings",         needs: null },
@@ -79,6 +73,7 @@ const TABS = [
 const GAP_AREA_TO_TAB = {
   Contract: "contract",
   Grading: "evals",
+  Tools: "world",
 };
 
 function firstReadyTab(done) {
@@ -93,8 +88,10 @@ function firstReadyTab(done) {
 */
 function liveTab(done) {
   if (done.includes("build")) return "scenarios";
-  /* Until scenarios start, what's being produced is the contract — and it
-     fills in on the Overview's build table as the agent is read. */
+  /* The world is built once the agent has been read. */
+  if (done.includes("understand")) return "world";
+  /* Until then what's being produced is the contract — it fills in on the
+     Overview's build table as the agent is read. */
   return "overview";
 }
 
@@ -125,12 +122,10 @@ export default function DerivedPanels({
     panels read from the store, and rendering them a frame early made them
     look empty.
   */
-  const readDone = done.includes("understand");
   const primed = !!envState && !!patch;
-  /* The illustration only covers the moment before anything is known —
-     once the first tool has been read, the contract shows as it's written. */
-  const contractStarted = (contractProgress?.tools || 0) > 0;
-  const isLoading = !primed || (!readDone && !contractStarted);
+  /* No illustration: the tabs show the build live from the first frame. Only
+     the frame before the store catches up renders nothing. */
+  const isLoading = !primed;
   const ready = (t) => !t.needs || done.includes(t.needs);
 
   /* Follow the derivation until the user picks something. */
@@ -154,9 +149,9 @@ export default function DerivedPanels({
   const current = TABS.find((t) => t.id === tab && ready(t)) || TABS[0];
 
   /*
-    All in-panel CTAs (RlContractPanel, PersonasPanel, ActorsPanel,
-    OverviewPanel) call `onGo(tabId)` to move between tabs. Passing
-    `noop` used to silently break every one of them — "Go to
+    All in-panel CTAs (RlContractPanel, OverviewPanel) call
+    `onGo(tabId)` to move between tabs. Passing `noop` used to
+    silently break every one of them — "Go to
     scenarios", "Open inbox", "See personas" all clicked into
     nothing. Wire it to the tab setter that already exists.
   */
@@ -170,9 +165,9 @@ export default function DerivedPanels({
   /* Panels see the world of the pinned environment version. */
   const worldEnv = useMemo(() => withPinnedWorld(env, envState), [env, envState]);
   const rendered = useMemo(() => renderPanel(current.id, {
-    env: worldEnv, envState, patch, source, onBuilderTurn, onGo: go, onBuilderPrompt, onStartRun, contractProgress,
+    env: worldEnv, envState, patch, source, onBuilderTurn, onGo: go, onBuilderPrompt, onStartRun, contractProgress, done,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [current.id, worldEnv, envState, patch, source, onBuilderTurn, onBuilderPrompt, onStartRun, contractProgress]);
+  }), [current.id, worldEnv, envState, patch, source, onBuilderTurn, onBuilderPrompt, onStartRun, contractProgress, done]);
 
   if (!env) return null;
 
@@ -220,7 +215,7 @@ export default function DerivedPanels({
                  come back once running settles to false. */
               /* Scenarios is the exception: its count is the progress of the
                  stage writing them, so it ticks up live. */
-              const count = primed && (!running || t.badge === "scenarios") ? badgeCountFor(t.badge, env, envState) : null;
+              const count = primed && (!running || t.badge === "scenarios") ? badgeCountFor(t.badge, envState) : null;
               const locked = !ready(t);
               const gapItems = gapsByTab[t.id];
               const tabLabel = (
@@ -291,28 +286,7 @@ export default function DerivedPanels({
 
       {/* ── body ── */}
       <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "auto" }}>
-        {isLoading ? (
-          /*
-            The loading screen: the illustrated hero across the whole body,
-            regardless of the selected tab. Users asked for it back — it was
-            being suppressed for tabs whose `needs` were null (Overview, Agent,
-            Evals, Gaps), which meant the animation only showed up sometimes.
-          */
-          <>
-            <DerivingAnimation
-              label={
-                !done.includes("understand")
-                  ? "Reading your agent — extracting tools and rules"
-                  : !done.includes("build")
-                    ? "Building the world — seeding data and wiring handlers"
-                    : !done.includes("scenarios")
-                      ? "Writing scenarios — proving each one solvable"
-                      : "Loading the editor for what we derived"
-              }
-            />
-            <PipelineChecks pipeline={pipelineStatus(done, running, "setup")} />
-          </>
-        ) : (
+        {isLoading ? null : (
           <>
             {current.id === "scenarios" && scenarioProgress?.streaming && (
               <ScenarioStreamStrip progress={scenarioProgress} />
@@ -377,36 +351,25 @@ ScenarioStreamStrip.propTypes = { progress: PropTypes.object };
 
 /* Which panels are meaningful to edit before a run. */
 function isEditable(id) {
-  return ["scenarios", "personas", "actors", "evals", "agent"].includes(id);
+  return ["scenarios", "evals"].includes(id);
 }
 
-function badgeCountFor(kind, env, envState) {
+function badgeCountFor(kind, envState) {
   if (!envState) return null;
   if (kind === "scenarios") return envState.scenarios?.length ?? 0;
-  if (kind === "personas") {
-    /* Personas are derived from scenarios now — count the unique
-       archetypes actually in play, not a separate list. */
-    const seen = new Set();
-    (envState.scenarios || []).forEach((s) => {
-      if (s.persona) seen.add(s.persona.slug || s.persona.name);
-    });
-    return seen.size;
-  }
-  if (kind === "actors") return actorsOf(env, envState).length;
   if (kind === "evals") return envState.evals?.length ?? 0;
   return null;
 }
 
 function renderPanel(id, ctx) {
-  const { env, envState, patch, source, onBuilderTurn, onGo, onBuilderPrompt, onStartRun, contractProgress } = ctx;
+  const { env, envState, patch, source, onGo, onBuilderPrompt, onStartRun, contractProgress, done } = ctx;
   switch (id) {
-    case "agent":     return <AgentsPanel env={env} envState={envState} patch={patch} onGo={onGo} buildMode onBuilderTurn={onBuilderTurn} />;
-    case "world":     return <WorldPanel env={env} envState={envState} patch={patch} onGo={onGo} />;
-    case "contract":  return <RlContractPanel env={env} envState={envState} patch={patch} onGo={onGo} buildMode />;
+    case "world":     return <WorldPanel env={env} envState={envState} patch={patch} onGo={onGo} buildProgress={contractProgress} buildDone={done} />;
+    case "contract":  return <RlContractPanel env={env} envState={envState} patch={patch} onGo={onGo} buildMode buildProgress={contractProgress} buildDone={done} />;
     case "scenarios": return <ScenariosStep env={env} envState={envState} patch={patch} onGo={onGo} buildMode onBuilderPrompt={onBuilderPrompt} onStartRun={onStartRun} />;
     case "evals":     return <EvalsStep env={env} envState={envState} patch={patch} onGo={onGo} buildMode />;
     case "settings":  return <SettingsPanel env={env} envState={envState} patch={patch} />;
-    default:          return <OverviewPanel env={env} envState={envState} patch={patch} onGo={onGo} agentConnected={!!envState?.agent} source={source} buildMode contractProgress={contractProgress} />;
+    default:          return <OverviewPanel env={env} envState={envState} patch={patch} onGo={onGo} agentConnected={!!envState?.agent} source={source} buildMode contractProgress={contractProgress} buildDone={done} />;
   }
 }
 

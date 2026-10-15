@@ -1,5 +1,6 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useRef } from "react";
+import { useSnackbar } from "notistack";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Box, Stack, Typography, Button, IconButton, Tooltip, LinearProgress,
@@ -11,13 +12,29 @@ import RunResults from "./RunResults";
 import { publishRun, installMockExecutionAdapter } from "../_mock/executionAdapter";
 import { rebuildRun, TRIAL_CHANGES } from "../_mock/comparison";
 import { agentVersions, currentAgentVersion, currentEnvVersion, environmentVersions } from "../_mock/versions";
-import { runInputs, scenariosInEnvVersion, toolFit } from "../_mock/toolFit";
+import { runInputs, toolFit } from "../_mock/toolFit";
+import { runIdentityOf, isCandidateRun } from "../_mock/runIdentity";
+import { runSummaries } from "../_mock/comparison";
+import { runReportOf } from "../_mock/runReport";
+import { digestDestinationsOf } from "../_mock/runDigest";
+import SharedReport from "./SharedReport";
+import ClarifyCard from "./ClarifyCard";
+import { deriveUseCaseLabel } from "./traceTableHelpers";
+import { runPlan } from "../_mock/proofs";
+import { runReadiness } from "../_mock/setupGaps";
 import { twinTimelineFor } from "../_mock/twins";
 import { getEnvironment } from "../_mock/environments";
 import { getSurface } from "../_mock/surfaces";
 import { getEval, resolveEval } from "../_mock/evals";
-import { BOOT_STEPS } from "../_mock/runStream";
+import { BOOT_STEPS, parallelOf, runSizeOf, envTurnLimitOf } from "../_mock/runStream";
+import { runDefaultsOf } from "../_mock/rsiModel";
+import { staleScenariosOf } from "../_mock/runCauses";
+import { runProofKindOf, gradingOf } from "../_mock/runRollup";
+import { subGoalBasisOf } from "../_mock/scenarioSubGoals";
+import { OUTCOMES, causeOf, outcomeOfCause } from "../_mock/decoupled";
+import { ProofKindChip } from "./RunSummaryChip";
 import { SHADOW_SUMMARY } from "../_mock/sandbox";
+import { postSlack, getIntegrations } from "../_mock/integrations";
 import { useSimStore, useEnvState } from "../store";
 import {
   StatusDot, StatusChip, ScorePill, EmptyState, pulse,
@@ -25,26 +42,25 @@ import {
 import { ProvisioningPanel } from "../components/loading";
 import useRunPlayer from "./useRunPlayer";
 import Stage from "./stages";
+import FromImprovement from "./FromImprovement";
+import CandidateSourcePicker from "./CandidateSourcePicker";
+import { candidateSourceOf, takesSnapshot } from "../_mock/candidateSource";
+import RunGroupBar from "./RunGroupBar";
+import { groupMembersOf, settledRun } from "../_mock/runGroup";
 import { gradedRuleIds } from "../_mock/provenance";
-import { admissionOf } from "../_mock/coverage";
 import { subTasksFor } from "../_mock/contract";
-import BlockerFlag from "../workspace/scenarios/BlockerFlag";
+import { pinsForNewRun } from "../_mock/envModel";
+import { pinnedScenarios } from "../_mock/decoupled";
+import { withRegrade } from "../_mock/regrade";
+import { envLabelOf } from "../_mock/envVersionKinds";
 import { milestoneOf } from "../_mock/runScripts";
+import { currentUser } from "../_mock/scenarioProvenance";
+import { clickable, focusRing } from "../components/clickable";
 
-const FLAKY = "#D97706";
+// Flaky counts and results read as neutral words — amber never colours text.
+const FLAKY = "text.primary";
 const UNMEASURED = "#9AA0A6";
 const RED = "#DC2626";
-
-/* Why a scenario can't be run on this world, or null when it can. Only proved
-   scenarios are ever run — the rest are listed as skipped, not run and then
-   written off as "not measured". */
-const skipReasonFor = (sc, envLabel) => {
-  if (sc.provedBroke && (!sc.brokeAgainst || !envLabel || sc.brokeAgainst === envLabel)) {
-    return "Its proof broke when the environment changed. Re-prove it to run it again.";
-  }
-  const adm = admissionOf(sc);
-  return adm.admitted ? null : `Quarantined — ${adm.reason}`;
-};
 
 /**
  * The live run.
@@ -53,13 +69,36 @@ const skipReasonFor = (sc, envLabel) => {
  * graders think of it. The middle column is the point of the whole screen —
  * a user should be able to leave this open on a second monitor and understand
  * their agent's behaviour without reading a single log line.
+ *
+ * Keyed on the run, so going from one run to another — a trial's "From
+ * Improvement 2" back to the run it started from — opens that run fresh
+ * rather than carrying the last one's drawer, tab and filters across.
  */
 export default function LiveRunView() {
+  const { runId } = useParams();
+  const [params] = useSearchParams();
+  /* `?shared=<token>` — the read-only report a share link opens. */
+  if (params.get("shared")) return <SharedReport key={runId} />;
+  return <LiveRun key={runId} />;
+}
+
+function LiveRun() {
   const { envId, runId } = useParams();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const { state } = useSimStore();
-  const { envState, recordRun } = useEnvState(envId);
+  const { state, commit } = useSimStore();
+  const { envState, recordRun, patch } = useEnvState(envId);
+
+  /*
+    A run-group member that hasn't streamed yet. A group records every member
+    the moment it starts, so opening one finds a record — but it is a run to
+    play, not one to read back. Latched: playing it rewrites the record, and
+    the pairing it pinned must not change under the player mid-run.
+  */
+  const recorded = envState.runs.find((r) => r.id === runId);
+  const pendingRef = useRef(null);
+  if (!pendingRef.current && recorded?.pending && !recorded.finishedAt) pendingRef.current = recorded;
+  const pendingMember = pendingRef.current;
 
   const env = getEnvironment(envId) || state.myEnvironments.find((e) => e.id === envId);
   const surface = getSurface(env?.surface);
@@ -75,42 +114,58 @@ export default function LiveRunView() {
     and the run records what it actually covered, so nothing downstream reads a
     four-scenario check as a full sweep that lost twenty-eight rows.
   */
-  const only = params.get("only");
+  /*
+    `?snapshot=<run>` — "Re-run exact snapshot" (PRD v7 §4.10.8): replay the
+    scenarios, environment version, pins and seed the source run used. The
+    agent version is the only thing that may differ (`?agent=`). Without it,
+    a run is "as configured now" and picks up every edit.
+  */
+  const snapshotParam = params.get("snapshot");
+  const snapshotSrc = snapshotParam ? (envState.runs || []).find((r) => r.id === snapshotParam && r.finishedAt) || null : null;
+  const only = params.get("only") || (snapshotSrc?.scenarioIds?.length ? snapshotSrc.scenarioIds.join(",") : null);
   /* `?agent=` runs a specific agent version — how a comparison re-runs v1 on
      the environment v2 was rebuilt for. Otherwise the current one. */
-  const agentParam = params.get("agent");
+  const agentParam = params.get("agent") || pendingMember?.agentVersion || snapshotSrc?.agentVersion;
   const runAgent = agentParam && agentVersions(envState).some((v) => v.label === agentParam)
     ? agentParam
-    : currentAgentVersion(envState).label;
+    : currentAgentVersion(envState)?.label;
+  /* `?candidate=sha:<sha>` or `?candidate=upload:<archive>` — the candidate
+     taken from a code snapshot (a commit, or an uploaded archive) instead of
+     an agent version; the run says "from snapshot <sha>". */
+  const candidate = candidateSourceOf(params.get("candidate") || recorded?.candidateSource?.param, envState.agent);
+  const pickCandidate = (value) => {
+    const q = new URLSearchParams(params);
+    if (value) q.set("candidate", value); else q.delete("candidate");
+    navigate(`?${q.toString()}`, { replace: true });
+  };
   /* `?env=` runs on a specific environment version without moving the
      environment's own pin — how Compare re-runs an older agent on the newer
      world. Otherwise the pinned one. */
-  const envParam = params.get("env");
+  const envParam = params.get("env") || pendingMember?.envVersion || snapshotSrc?.envVersion;
   const runEnv = envParam && environmentVersions(env, envState).some((v) => v.label === envParam)
     ? envParam
     : currentEnvVersion(env, envState)?.label;
-  /* Only the scenarios that exist in this environment version — ones a later
-     rebuild added for a tool this world never learned are not part of it. */
-  const { scenarios, skipped, poolSize } = useMemo(() => {
-    const inVersion = scenariosInEnvVersion(envState, runEnv);
-    let pool = inVersion;
-    if (only) {
-      const wanted = new Set(only.split(","));
-      const subset = inVersion.filter((sc) => wanted.has(sc.id));
-      pool = subset.length ? subset : inVersion;
-    }
-    const run = [];
-    const skip = [];
-    pool.forEach((sc) => {
-      const why = skipReasonFor(sc, runEnv);
-      if (why) skip.push({ ...sc, skipReason: why });
-      else run.push(sc);
-    });
-    return { scenarios: run, skipped: skip, poolSize: inVersion.length };
+  /* Shown as the environment version (a snapshot of world, scenarios, evals
+     and caller); the stored world label is what's matched and recorded. */
+  const runEnvShown = envLabelOf(env, envState, runEnv);
+  /* Only the scenarios that exist in this environment version, re-proved
+     against it at run start — what still can't stage is skipped and listed.
+     A selection is never widened to the whole set. */
+  const plan = useMemo(
+    () => runPlan(env, envState, { only: only ? only.split(",") : null, envVersion: runEnv }),
     /* Keyed on the scenario list, not the whole env state — recording the run
        itself updates the env state, and must not rebuild the run mid-flight. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [only, envState.scenarios, runEnv]);
+    [only, envState.scenarios, runEnv],
+  );
+  const { run: planned, skipped, poolSize } = plan;
+  /* An exact snapshot plays each scenario at the version its source pinned —
+     the text it had then, not today's edit (§4.10.8). As configured now, today's. */
+  const scenarios = useMemo(
+    () => (snapshotSrc ? pinnedScenarios(planned, snapshotSrc) : planned),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [planned, snapshotSrc?.id],
+  );
   /* A re-run of some scenarios, not the whole set. */
   const partial = !!only && scenarios.length + skipped.length < poolSize;
 
@@ -122,33 +177,117 @@ export default function LiveRunView() {
     Clamped 1–20 so a bad URL can't blow up the batch.
   */
   const repeats = (() => {
-    const raw = Number(params.get("trials"));
-    if (!Number.isFinite(raw) || raw < 1) return 3;
+    const raw = Number(params.get("trials") || pendingMember?.repeats || snapshotSrc?.repeats);
+    /* No count asked for: the environment's default (3 unless Settings changed it). */
+    if (!Number.isFinite(raw) || raw < 1) return runDefaultsOf(envState).repeats;
     return Math.min(20, Math.floor(raw));
   })();
 
   /* What the outcome depends on — the agent version and the environment
      version this run pins — read exactly as a later replay reads them.
      Memoised: the player rebuilds the run whenever its inputs change identity. */
+  /* What a run replays its pins from: itself once recorded, else the
+     snapshot it re-runs, else nothing (a new run takes today's). */
+  const pinSource = recorded && !recorded.pending ? recorded : snapshotSrc;
   const inputs = useMemo(
-    () => runInputs(env, envState, { agent: runAgent, envVersion: runEnv }),
+    () => runInputs(env, envState, {
+      agent: runAgent,
+      envVersion: runEnv,
+      /* A finished run replays the faults it pinned, not today's dial. */
+      toolFaults: pinSource ? pinSource.toolFaults || null : undefined,
+      actorEdits: pinSource ? pinSource.actorEdits || null : undefined,
+      actors: snapshotSrc ? snapshotSrc.actors : undefined,
+      admissionGates: pinSource ? pinSource.admissionGates || 1 : 3,
+      /* Cheat checks: on for every new run; a stored run replays what it pinned. */
+      cheatChecks: pinSource ? pinSource.cheatChecks || 0 : 1,
+      /* The updated RSI PRD's run rules — retry once, pull a scenario test
+         invalid twice, required evaluations: on for every new run; a stored
+         run (or the snapshot it re-runs) replays what it pinned. */
+      outcomes: pinSource ? pinSource.outcomes || 0 : 1,
+      requiredEvals: pinSource ? pinSource.requiredEvals || 0 : 1,
+      /* Sub-goals decide, and the turn limit at the environment's limit:
+         on for every new run; a stored run replays what it pinned. */
+      gradingRule: pinSource ? pinSource.gradingRule || 0 : 2,
+      turnLimits: pinSource ? pinSource.turnLimits || 0 : 1,
+      turnLimit: pinSource ? pinSource.turnLimit : envTurnLimitOf(envState),
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [env, runAgent, runEnv, envState.envVersions, envState.agentVersions, envState.actors],
+    [env, runAgent, runEnv, envState.envVersions, envState.agentVersions, envState.actors, envState.toolEnv, recorded?.id, recorded?.pending, snapshotSrc?.id],
+  );
+  /* Which rule grades this run and what its sub-goals are checked against —
+     a new run takes the sub-goal rule; a stored one (or its snapshot) keeps
+     its own. */
+  const liveGrading = gradingOf(pinSource || null, envState, { fresh: !pinSource });
+  /* The snapshot's seed, so the same scenarios meet the same draws. */
+  const replaySeed = snapshotSrc ? snapshotSrc.replaySeed || snapshotSrc.id : null;
+  /* …and the graders it was scored by. */
+  const runEvals = useMemo(
+    () => (snapshotSrc?.evals ? snapshotSrc.evals.map(resolveEval).filter(Boolean) : evals),
+    [snapshotSrc, evals],
   );
 
+  /* Outdated / Re-check scenarios as this run starts: they run, but count
+     toward no decision. Pinned on the record; a stored run replays its own. */
+  const liveStale = useMemo(
+    () => (pinSource || !env ? null : staleScenariosOf(env, envState, scenarios)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scenarios, pinSource?.id],
+  );
+  const staleIds = pinSource ? pinSource.staleScenarios || null : liveStale;
+  /* Up to 4 conversations at once where parallel runs are on. */
+  const parallel = parallelOf(envState);
+  /* 1–20 repeats, at most 200 conversations, and — for voice — how long it takes. */
+  const size = runSizeOf({ scenarios: scenarios.length, repeats, surface: env?.surface, parallel });
+
   const player = useRunPlayer({
-    seed: runId,
+    seed: replaySeed || runId,
     scenarios,
     stage: surface.stage,
-    evals,
+    evals: runEvals,
     repeats,
+    concurrency: parallel,
+    staleIds,
     ...inputs,
   });
 
   const {
     phase, start, finishNow, tasks, focus, focusId, setFocusId, stats, elapsed,
-    sinceLastEvent, stalled,
+    sinceLastEvent, stalled, blocked, answer, clarifications,
   } = player;
+
+  /*
+    A scenario paused on a clarifying question (AC-15.13). Long runs are left
+    unattended, so the question comes to the person: an in-app notice, and a
+    browser notification if they've already allowed them — never a permission
+    prompt out of nowhere. The inline card below is where it's answered.
+  */
+  const { enqueueSnackbar, closeSnackbar } = useSnackbar();
+  useEffect(() => {
+    if (!blocked) return;
+    const sc = tasks.find((t) => t.id === blocked.taskId);
+    const name = sc?.name || sc?.title || "A scenario";
+    const n = envState.runs.find((r) => r.id === runId)?.ordinal;
+    const title = `${n ? `Run ${n}` : "Your run"} needs an answer`;
+    enqueueSnackbar(`${title} — ${name}: ${blocked.question}`, {
+      variant: "info",
+      autoHideDuration: 9000,
+      action: (key) => (
+        <Button
+          size="small" color="inherit"
+          onClick={() => { setFocusId(blocked.taskId); closeSnackbar(key); }}
+          sx={{ typography: "s2", fontWeight: 700 }}
+        >
+          Answer
+        </Button>
+      ),
+    });
+    try {
+      if (typeof window !== "undefined" && "Notification" in window && window.Notification.permission === "granted") {
+        const note = new window.Notification(title, { body: `${name}: ${blocked.question}`, tag: `clarify-${runId}` });
+        note.onclick = () => { window.focus(); setFocusId(blocked.taskId); note.close(); };
+      }
+    } catch { /* notifications unavailable */ }
+  }, [blocked?.askedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /*
     A run that is already in history is being read, not run. Replaying it —
@@ -192,7 +331,18 @@ export default function LiveRunView() {
           || Object.keys(trialMatch.trial.perScenario || {}),
         repeats: trialMatch.sourceRun?.repeats || 1,
       }
-    : envState.runs.find((r) => r.id === runId);
+    : (pendingMember ? undefined : recorded);
+
+  /* Persist the start-of-run re-proof, so the Scenarios tab reads the same
+     verdicts this run used. Only for a new run — history is read, not re-run. */
+  const isNewRun = !trialMatch && !stored;
+  useEffect(() => {
+    if (!isNewRun || !env) return;
+    if (plan.reproofed.some((sc, i) => sc !== envState.scenarios[i])) patch({ scenarios: plan.reproofed });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan, isNewRun]);
+  /* Every way into a run ends here, so this is the gate that can't be skipped. */
+  const readiness = runReadiness(envState, env);
 
   const wasLive = useRef(false);
   useEffect(() => {
@@ -203,7 +353,8 @@ export default function LiveRunView() {
 
   const storedTasks = useMemo(() => {
     if (!readOnly || !env || !stored) return [];
-    const base = rebuildRun(env, envState, stored);
+    /* Read under the graders it was re-graded with, if it was (AC-12.23). */
+    const base = withRegrade(rebuildRun(env, envState, stored), stored);
     if (!trialMatch) return base;
     /*
       Overlay the trial's per-scenario verdicts. The source run's traces are
@@ -228,11 +379,15 @@ export default function LiveRunView() {
   }, [readOnly, env, envState, stored, trialMatch]);
 
   const storedStats = useMemo(() => {
-    const passed = storedTasks.filter((t) => t.status === "passed").length;
-    const failed = storedTasks.filter((t) => t.status === "failed").length;
-    const flaky = storedTasks.filter((t) => t.status === "flaky").length;
-    const unmeasured = storedTasks.filter((t) => t.status === "unmeasured").length;
-    const measured = storedTasks.filter((t) => t.status !== "unmeasured");
+    /* Pulled (test invalid twice) and Outdated / Re-check scenarios are left
+       out of every count. Runs from before them have neither. */
+    const stale = stored?.staleScenarios || {};
+    const counted = storedTasks.filter((t) => !t.pulled && !stale[t.id]);
+    const passed = counted.filter((t) => t.status === "passed").length;
+    const failed = counted.filter((t) => t.status === "failed").length;
+    const flaky = counted.filter((t) => t.status === "flaky").length;
+    const unmeasured = counted.filter((t) => t.status === "unmeasured").length;
+    const measured = counted.filter((t) => t.status !== "unmeasured");
     return {
       total: storedTasks.length,
       passed,
@@ -247,7 +402,7 @@ export default function LiveRunView() {
         ? measured.reduce((a, t) => a + (t.passShare ?? (t.status === "passed" ? 1 : 0)), 0) / measured.length
         : 0,
       tokens: storedTasks.reduce((a, t) => a + (t.tokens || 0), 0),
-      cost: storedTasks.reduce((a, t) => a + (t.cost || 0), 0),
+      cost: storedTasks.filter((t) => !t.costUnverified).reduce((a, t) => a + (t.cost || 0), 0),
     };
   }, [storedTasks, stored]);
 
@@ -278,7 +433,9 @@ export default function LiveRunView() {
   const startedRef = useRef(false);
   useEffect(() => {
     if (phase !== "running" || startedRef.current) return;
-    if (envState.runs.some((r) => r.id === runId)) {
+    /* A pending group member is already recorded, but only as a placeholder —
+       it gets the full start record like any new run. */
+    if (envState.runs.some((r) => r.id === runId && !r.pending)) {
       startedRef.current = true;
       return;
     }
@@ -288,9 +445,11 @@ export default function LiveRunView() {
       id: runId,
       label: only
         ? `${totalTasks} scenario${totalTasks === 1 ? "" : "s"} re-run`
-        : `${env?.name} · ${totalTasks} tasks`,
+        : `${env?.name} · ${totalTasks} scenario${totalTasks === 1 ? "" : "s"}`,
       status: "running",
       startedAt: new Date().toISOString(),
+      /* Who started it — the runs table's By column. */
+      startedBy: currentUser().name,
       total: totalTasks,
       passed: 0,
       failed: 0,
@@ -298,12 +457,32 @@ export default function LiveRunView() {
       unmeasured: 0,
       agentVersion: runAgent,
       envVersion: runEnv,
+      ...(candidate && { candidateSource: { kind: candidate.kind, sha: candidate.sha, param: candidate.param, label: candidate.label, detail: candidate.detail, ...(candidate.name && { name: candidate.name }) } }),
+      /* Everything else it held fixed — suite, sub-goal catalogue, eval
+         version, simulated caller, scenario versions, surface, fidelity,
+         trials, seed — so Compare can say what matched. An exact snapshot
+         re-run holds the source run's pins, not today's. */
+      ...(snapshotSrc
+        ? {
+          ...pinsForNewRun(env, envState, { trials: repeats, seed: replaySeed }),
+          ...Object.fromEntries(["admissionGates", "actorEdits", "suiteVersion", "catalogVersion", "evalVersion", "simulator", "toolEnv", "toolEnvSummary", "toolFaults", "scenarioVersions", "surface", "runFidelity", "outcomes", "requiredEvals", "proofKind", "staleScenarios", "gradingRule", "turnLimits", "turnLimit", "runSettings"]
+            .filter((k) => snapshotSrc[k] !== undefined).map((k) => [k, snapshotSrc[k]])),
+          cheatChecks: snapshotSrc.cheatChecks || 0,
+          snapshotOf: snapshotSrc.id,
+          replaySeed,
+        }
+        : {
+          /* A run from the Run button takes the updated RSI PRD's run rules,
+             and pins the scenarios that were stale when it started. */
+          ...pinsForNewRun(env, envState, { trials: repeats, seed: runId, rules: true }),
+          ...(liveStale && { staleScenarios: liveStale }),
+        }),
       /* Run anyway on a world that can't answer some of the agent's tools —
          recorded; calls to them come back as not measured. */
       toolGap: toolFit(env, envState, { agent: runAgent, envVersion: runEnv }).missing.map((t) => t.name),
       /* The graders applied when it ran — a later eval change must not
          regrade history. */
-      evals: envState.evals,
+      evals: snapshotSrc?.evals || envState.evals,
       /* And the rules that graded it — confirming a held rule later changes
          the test, and Compare needs to be able to say so. */
       rules: gradedRuleIds(env, envState),
@@ -314,9 +493,10 @@ export default function LiveRunView() {
       skippedIds: skipped.map((sc) => sc.id),
       repeats,
       partial: !!only,
-      ordinal: Math.max(0, ...(envState.runs || []).map((r) => r.ordinal || 0)) + 1,
-      seed: runId,
+      ordinal: pendingMember?.ordinal ?? Math.max(0, ...(envState.runs || []).map((r) => r.ordinal || 0)) + 1,
+      seed: replaySeed || runId,
       twinWrites: null,
+      ...(pendingMember && { pending: false }),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, runId]);
@@ -333,7 +513,7 @@ export default function LiveRunView() {
       id: runId,
       label: only
         ? `${stats.total} scenario${stats.total === 1 ? "" : "s"} re-run`
-        : `${env?.name} · ${stats.total} tasks`,
+        : `${env?.name} · ${stats.total} scenario${stats.total === 1 ? "" : "s"}`,
       /* A run where nothing could be measured passed nothing. */
       status: stats.total - stats.unmeasured > 0 && stats.failed === 0 && !stats.flaky ? "passed" : "failed",
       finishedAt: new Date().toISOString(),
@@ -350,6 +530,85 @@ export default function LiveRunView() {
         : null,
     });
   }, [phase, runId, env, envState, stats, scenarios, only, recordRun]);
+
+  /*
+    The rest of its group. Members ran alongside this one; any that nobody
+    watched stream are settled now — rebuilt from their own ids, the way a
+    finished run is always read back — so every run in the group is finished
+    and in its environment's history, and switching to one reads it.
+  */
+  const settledRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "done" || settledRef.current) return;
+    settledRef.current = true;
+    const members = groupMembersOf(state, recorded || pendingMember);
+    (members || []).forEach((m) => {
+      if (m.runId === runId || !m.run || m.run.finishedAt || !m.env || !m.envState) return;
+      commit({ type: "recordRun", envId: m.envId, run: settledRun(m.env, m.envState, m.run) });
+    });
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /*
+    Tell the team. Posted once per run, to whichever Slack channel the
+    workspace routes each kind of message to (no-op without Slack): the run
+    itself, a regression against the previous agent version on the same
+    scenarios, and any critical scenario that failed. Information only —
+    nothing here blocks or ships anything.
+  */
+  const notifiedRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "done" || notifiedRef.current) return;
+    notifiedRef.current = true;
+    const rate = stats.total ? Math.round((stats.passed / stats.total) * 100) : 0;
+    /*
+      The run digest (AC-20.8): one compact message — score, the run summary
+      (pass^1 · pass^k, counts by cause), the top three issues, deep links — to wherever the workspace
+      already routes "Simulation finished". Never one per scenario, and not
+      for an improvement's candidate runs, which run by the dozen.
+    */
+    /* An improvement's candidate runs post nothing — not the digest, not a
+       regression, not a release blocker. They run by the dozen, and the
+       improvement says what they found. */
+    const candidateRun = isCandidateRun({ ...(recorded || {}), id: runId }, envState);
+    if (candidateRun) return;
+    const integrations = getIntegrations();
+    const rep = runReportOf({
+      env, envState, runId, tasks, summaries: runSummaries(env, envState), goalOf: deriveUseCaseLabel, integrations,
+    });
+    postSlack({ event: "run_finished", title: rep.digest.title, lines: rep.digest.lines, actions: rep.digest.links.map((l) => l.label), links: Object.fromEntries(rep.digest.links.map((l) => [l.label, l.href])) });
+    /* Where it went, and any question the run asked — kept on the record. */
+    recordRun({
+      id: runId,
+      digest: digestDestinationsOf(integrations),
+      ...(clarifications.length && { clarifications }),
+    });
+    const prev = (envState.runs || []).find((r) => r.id !== runId && r.finishedAt && r.total === stats.total && r.agentVersion !== runAgent);
+    if (prev && prev.total) {
+      const prevRate = Math.round((prev.passed / prev.total) * 100);
+      if (rate <= prevRate - 5) {
+        postSlack({
+          event: "regression",
+          title: `Regression · agent ${runAgent} is down ${prevRate - rate} pts`,
+          lines: [`${env?.name}: ${prevRate}% on ${prev.agentVersion} → ${rate}% on ${runAgent}, same scenarios`],
+          actions: ["Compare runs", "View failures"],
+          links: {
+            "Compare runs": `${paths.dashboard.simulate.simulationCompare(envId)}?runs=${prev.id},${runId}`,
+            "View failures": `${paths.dashboard.simulate.simulationRun(envId, runId)}?tab=tasks`,
+          },
+        });
+      }
+    }
+    const blockers = tasks.filter((t) => t.critical && t.status !== "passed" && t.status !== "unmeasured");
+    if (blockers.length) {
+      postSlack({
+        event: "release_blocker",
+        title: `${blockers.length} critical scenario${blockers.length === 1 ? "" : "s"} failing · ${env?.name}`,
+        lines: blockers.slice(0, 3).map((t) => t.title || t.name || t.id),
+        actions: ["View failures"],
+        links: { "View failures": `${paths.dashboard.simulate.simulationRun(envId, runId)}?tab=tasks` },
+      });
+    }
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /*
     A finished run goes to the summary, not to its own results. On its own a
@@ -407,13 +666,33 @@ export default function LiveRunView() {
     );
   }
 
-  if (!readOnly && scenarios.length === 0 && skipped.length) {
+  if (!readOnly && !readiness.ready) {
     return (
       <Box sx={{ p: 2 }}>
         <EmptyState
-          icon="solar:shield-cross-linear"
-          title="Nothing proved to run"
-          body={`All ${skipped.length} scenario${skipped.length === 1 ? " needs" : "s need"} re-proving on environment ${runEnv} before a run can give them a verdict.`}
+          icon="solar:danger-triangle-linear"
+          title="Not ready to run"
+          body={readiness.reason}
+          action={
+            <Button
+              variant="contained" color="primary" size="small"
+              onClick={() => navigate(readiness.href || paths.dashboard.simulate.environmentStep(envId, readiness.step), { replace: true })}
+            >
+              {readiness.href ? "Open the agent" : "Open the environment"}
+            </Button>
+          }
+        />
+      </Box>
+    );
+  }
+
+  if (!readOnly && plan.selectionMissing) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <EmptyState
+          icon="solar:layers-minimalistic-linear"
+          title="Nothing selected is in this version"
+          body={`None of the selected scenarios are part of environment ${runEnvShown} — they were added on a later version. Pick others, or switch environment version.`}
           action={
             <Button
               variant="contained" color="primary" size="small"
@@ -422,6 +701,66 @@ export default function LiveRunView() {
               Go to scenarios
             </Button>
           }
+        />
+      </Box>
+    );
+  }
+
+  if (!readOnly && scenarios.length === 0 && skipped.length) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <EmptyState
+          icon="solar:shield-cross-linear"
+          title="Nothing proved to run"
+          body={`${skipped.length === 1 ? "The 1 scenario" : `All ${skipped.length} scenarios`} ${skipped.length === 1 ? "is" : "are"} broken, quarantined or unproved on environment ${runEnvShown}, so a run couldn't give ${skipped.length === 1 ? "it" : "them"} a verdict.`}
+          action={
+            <Button
+              variant="contained" color="primary" size="small"
+              onClick={() => navigate(paths.dashboard.simulate.environmentStep(envId, "scenarios"))}
+            >
+              Go to scenarios
+            </Button>
+          }
+        />
+      </Box>
+    );
+  }
+
+  /*
+    At most 200 conversations per run. Over it, the run doesn't start: it says
+    why and offers the two ways to fit — fewer scenarios, or fewer repeats.
+  */
+  if (!readOnly && phase === "booting" && size.over) {
+    const fitTo = (patchParams) => {
+      const q = new URLSearchParams(params);
+      Object.entries(patchParams).forEach(([k, v]) => q.set(k, v));
+      navigate(`?${q.toString()}`, { replace: true });
+    };
+    return (
+      <Box sx={{ p: 2 }}>
+        <EmptyState
+          icon="solar:layers-minimalistic-linear"
+          title="Over the 200-conversation limit"
+          body={`${size.reason}. Each run holds at most ${size.cap} conversations.`}
+          action={(
+            <Stack direction="row" spacing={1} justifyContent="center">
+              <Button
+                variant="contained" color="primary" size="small"
+                onClick={() => fitTo({ only: scenarios.slice(0, size.fit.scenarios).map((sc) => sc.id).join(","), trials: String(size.repeats) })}
+              >
+                {`Run ${size.fit.scenarios} scenarios`}
+              </Button>
+              {size.fit.repeats && (
+                <Button
+                  variant="outlined" size="small"
+                  onClick={() => fitTo({ trials: String(size.fit.repeats) })}
+                  sx={{ color: "text.primary", borderColor: "divider" }}
+                >
+                  {`Run ${size.fit.repeats} ${size.fit.repeats === 1 ? "repeat" : "repeats"}`}
+                </Button>
+              )}
+            </Stack>
+          )}
         />
       </Box>
     );
@@ -436,7 +775,6 @@ export default function LiveRunView() {
         tasks={storedTasks}
         stats={storedStats}
         evals={evals}
-        stage={surface.stage}
       />
     );
   }
@@ -453,10 +791,14 @@ export default function LiveRunView() {
             /* What this run is actually about to do — a re-run of four
                scenarios is not "17 tasks", and the boot panel is the first
                place that claim appears. */
-            subtitle={`${scenarios.length}${partial ? ` of ${poolSize}` : ""} scenario${scenarios.length === 1 ? "" : "s"} × ${repeats} repeat${repeats === 1 ? "" : "s"} · 4 at a time · agent ${runAgent} on a fresh sandbox copy of environment ${runEnv} for each${skipped.length ? ` · ${skipped.length} skipped, not proved` : ""}`}
+            subtitle={`${scenarios.length}${partial ? ` of ${poolSize}` : ""} scenario${scenarios.length === 1 ? "" : "s"} × ${repeats} repeat${repeats === 1 ? "" : "s"} = ${size.conversations} conversations · up to ${parallel} at once · agent ${runAgent}${candidate ? ` ${candidate.label}` : ""} on a fresh sandbox copy of environment ${runEnvShown} for each${skipped.length ? ` · ${skipped.length} skipped` : ""}${size.voice ? ` · voice runs in real time: ${size.voice.line}` : ""}`}
             steps={BOOT_STEPS[surface.stage] || BOOT_STEPS.voice}
             onDone={start}
           />
+          {/* A code agent's candidate can come from a commit or an uploaded archive. */}
+          {(takesSnapshot(envState.agent) || candidate) && (
+            <CandidateSourcePicker agent={envState.agent} agentVersion={runAgent} current={candidate} onPick={pickCandidate} />
+          )}
         </Box>
       </Box>
     );
@@ -464,21 +806,40 @@ export default function LiveRunView() {
 
   /* ── results ── */
   if (phase === "done") {
-    return <RunResults env={env} runId={runId} tasks={tasks} stats={stats} evals={evals} stage={surface.stage} />;
+    return <RunResults env={env} runId={runId} tasks={tasks} stats={stats} evals={evals} />;
   }
 
   /* ── live ── */
   const live = focus && ["running", "grading"].includes(focus.status);
 
-  /* The run's number — the same one the Runs tab lists it under. */
-  const ordinal = stored?.ordinal
+  /* The run's number — the same one the Runs tab lists it under — and its
+     name, "agent v3 × env v7", the way that row will name it. */
+  const ordinal = (stored || pendingMember)?.ordinal
     ?? Math.max(0, ...(envState.runs || []).map((r) => r.ordinal || 0)) + 1;
+  const named = runIdentityOf(
+    { ...(stored || {}), id: runId, agentVersion: runAgent, envVersion: runEnv, agentName: stored?.agentName },
+    envState, env,
+  );
 
-  /* Release blockers, counted as they settle. One failing is the thing worth
-     knowing before the run ends. */
+  /* Critical scenarios, counted as they settle. One failing is worth knowing
+     before the run ends — it informs; it blocks nothing. */
   const blockers = tasks.filter((t) => t.critical);
   const blockersPassed = blockers.filter((t) => t.status === "passed").length;
   const blockersFailed = blockers.filter((t) => t.status === "failed");
+
+  /* Sealed · Live · Prompt only: a new run records it as it starts; a stored
+     one shows what it pinned. */
+  const liveProof = (() => {
+    const p = runProofKindOf(pinSource, envState);
+    return p && !pinSource ? { ...p, pinned: true } : p;
+  })();
+
+  /* Outdated / Re-check scenarios in this run — "3 outdated scenarios". */
+  const staleCount = Object.keys(staleIds || {}).filter((id) => tasks.some((t) => t.id === id)).length;
+  const staleKinds = ["outdated", "recheck"].map((k) => [k, Object.entries(staleIds || {}).filter(([id, v]) => v === k && tasks.some((t) => t.id === id)).length]).filter(([, n]) => n);
+  const staleLine = `${staleKinds.map(([k, n]) => `${n} ${k === "outdated" ? "outdated" : "re-check"}`).join(" and ")} ${staleCount === 1 ? "scenario" : "scenarios"}`;
+  /* Pulled scenarios settle into their own group in the left column. */
+  const pulledDone = tasks.filter((t) => t.pulled && t.status === "unmeasured");
 
   /* Tools the agent calls that this world can't answer — the run was started
      anyway, and scenarios that reach for them come back not measured. */
@@ -505,22 +866,39 @@ export default function LiveRunView() {
           <Box minWidth={0} flex={1}>
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography noWrap sx={{ typography: "s1_2", fontWeight: 700 }}>
-                Run {ordinal}
+                Run {ordinal} · {named.label}
               </Typography>
               <StatusChip status="running" />
               {partial && (
                 <Chip label={`Re-run · ${scenarios.length} of ${poolSize} scenarios`} />
               )}
-              {/* The isolation claim, where a viewer is most likely to doubt it. */}
-              <Tooltip arrow title={SHADOW_SUMMARY}>
-                <Box sx={{ display: "flex" }}>
-                  <Chip icon="solar:shield-keyhole-linear" label="Sandbox" />
-                </Box>
-              </Tooltip>
+              {/* The isolation claim, where a viewer is most likely to doubt it —
+                  not on a Live run, whose tools reach real systems. */}
+              {liveProof?.kind !== "live" && (
+                <Tooltip arrow title={SHADOW_SUMMARY}>
+                  <Box sx={{ display: "flex" }}>
+                    <Chip icon="solar:shield-keyhole-linear" label="Sandbox" />
+                  </Box>
+                </Tooltip>
+              )}
+              {/* Sealed · Live · Prompt only — what this run's proof is. */}
+              <ProofKindChip proof={liveProof} />
+              {/* The candidate came from a code snapshot, not a version. */}
+              {candidate && (
+                <Tooltip arrow title={candidate.detail}>
+                  <Box sx={{ display: "flex" }}>
+                    <Chip icon="solar:code-square-linear" label={candidate.label} />
+                  </Box>
+                </Tooltip>
+              )}
             </Stack>
             <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>
-              {env.name} · agent {runAgent} on environment {runEnv} · {stats.done} of {stats.total} scenarios done
+              {env.name}
+              {named.improvement && <>{" · "}<FromImprovement improvement={named.improvement} /></>}
+              {" · "}{stats.done} of {stats.total} scenarios done
               {repeats > 1 ? ` · ${repeats} repeats each` : ""} · {formatMs(elapsed)} elapsed
+              {/* Voice runs in real time — the expected length, said up front. */}
+              {size.voice ? ` · expected ${size.voice.line}` : ""}
             </Typography>
             {/*
               Slow and stalled look identical on a progress bar, and telling
@@ -528,7 +906,15 @@ export default function LiveRunView() {
               heartbeat is stated: how long since anything moved, and a warning
               once that gap stops being normal.
             */}
-            {phase === "running" && (
+            {phase === "running" && blocked && (
+              <Stack direction="row" alignItems="center" spacing={0.625} sx={{ mt: 0.25 }}>
+                <Iconify icon="solar:chat-round-dots-linear" width={12} sx={{ color: "text.subtitle" }} />
+                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                  Waiting on your answer for one scenario · the rest keep running
+                </Typography>
+              </Stack>
+            )}
+            {phase === "running" && !blocked && (
               <Stack direction="row" alignItems="center" spacing={0.625} sx={{ mt: 0.25 }}>
                 <Box
                   sx={{
@@ -552,10 +938,9 @@ export default function LiveRunView() {
             label="Flaky" value={stats.flaky} color={FLAKY}
             hint="Repeats disagreed — passed some, failed others."
           />
-          <LiveCounter
-            label="Not measured" value={stats.unmeasured} color={UNMEASURED}
-            hint="Nothing could be scored — an environment or grading fault, not the agent's."
-          />
+          {["inconclusive", "test-invalid", "error"].map((o) => (
+            <LiveCounter key={o} label={OUTCOMES[o].label} value={stats.notCounted?.[o] || 0} color={UNMEASURED} hint={OUTCOMES[o].note} />
+          ))}
           <LiveCounter label="Running" value={stats.active} color="#2563EB" />
 
           <Tooltip title="Stop run" arrow>
@@ -575,8 +960,11 @@ export default function LiveRunView() {
         />
       </Box>
 
+      {/* ── the run group it was started with, if any ── */}
+      <RunGroupBar envId={envId} runId={runId} live />
+
       {/* ── what to know about this run ── */}
-      {(blockers.length > 0 || toolGap.length > 0 || skipped.length > 0) && (
+      {(blockers.length > 0 || toolGap.length > 0 || skipped.length > 0 || stats.retried > 0 || stats.pulled > 0 || staleCount > 0) && (
         <Stack
           direction="row" alignItems="center" spacing={2.5} flexWrap="wrap" rowGap={0.75}
           sx={{ px: 3, py: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
@@ -585,13 +973,13 @@ export default function LiveRunView() {
             <Tooltip
               arrow
               title={blockersFailed.length
-                ? `Failed: ${blockersFailed.map((t) => t.name || t.title).join(", ")}. Any release blocker failing blocks the release.`
-                : "Any release blocker failing blocks the release, however high the pass rate."}
+                ? `Failed: ${blockersFailed.map((t) => t.name || t.title).join(", ")}. Counted in the run summary — what to do about it is your call.`
+                : "Scenarios marked critical, counted as they settle. They inform the report; nothing is blocked."}
             >
               <Stack direction="row" alignItems="center" spacing={0.625}>
                 <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: RED }} />
                 <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-                  Release blockers · <b>{blockersPassed} of {blockers.length}</b> passed
+                  Critical scenarios · <b>{blockersPassed} of {blockers.length}</b> passed
                 </Typography>
                 {blockersFailed.length > 0 && (
                   <Typography sx={{ typography: "s3", fontWeight: 700, color: RED }}>
@@ -605,16 +993,44 @@ export default function LiveRunView() {
             <Stack direction="row" alignItems="center" spacing={0.625}>
               <Iconify icon="solar:plug-circle-linear" width={14} sx={{ color: "#CA8A04" }} />
               <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-                Environment {runEnv} can&apos;t answer {toolGap.join(", ")} — scenarios that call {toolGap.length === 1 ? "it" : "them"} come back not measured.
+                Environment {runEnvShown} can&apos;t answer {toolGap.join(", ")} — scenarios that call {toolGap.length === 1 ? "it" : "them"} come back not measured.
+              </Typography>
+            </Stack>
+          )}
+          {stats.retried > 0 && (
+            <Tooltip arrow title="A conversation that ends test invalid or error runs once more before it's read. Neither counts for or against the agent.">
+              <Stack direction="row" alignItems="center" spacing={0.625}>
+                <Iconify icon="solar:restart-linear" width={14} sx={{ color: "text.subtitle" }} />
+                <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                  {`${stats.retried} retried once`}
+                </Typography>
+              </Stack>
+            </Tooltip>
+          )}
+          {stats.pulled > 0 && (
+            <Tooltip arrow title="Test invalid twice — taken out of this run and flagged for review. Left out of every count.">
+              <Stack direction="row" alignItems="center" spacing={0.625}>
+                <Iconify icon="solar:flag-linear" width={14} sx={{ color: "text.subtitle" }} />
+                <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                  {`${stats.pulled} pulled for review`}
+                </Typography>
+              </Stack>
+            </Tooltip>
+          )}
+          {staleCount > 0 && (
+            <Stack direction="row" alignItems="center" spacing={0.625}>
+              <Iconify icon="solar:history-linear" width={14} sx={{ color: "text.subtitle" }} />
+              <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                {`${staleLine} ran but count toward no decision until updated or archived`}
               </Typography>
             </Stack>
           )}
           {skipped.length > 0 && (
-            <Tooltip arrow title="Only proved scenarios are run. Re-prove these on the Scenarios tab to include them.">
+            <Tooltip arrow title="Scenarios are re-proved when a run starts, and only proved ones run. Fix these on the Scenarios tab to include them.">
               <Stack direction="row" alignItems="center" spacing={0.625}>
                 <Iconify icon="solar:shield-cross-linear" width={14} sx={{ color: "text.subtitle" }} />
                 <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-                  {skipped.length} skipped — not proved on environment {runEnv}
+                  {skipped.length} skipped — can&apos;t stage on environment {runEnvShown}
                 </Typography>
               </Stack>
             </Tooltip>
@@ -622,24 +1038,43 @@ export default function LiveRunView() {
         </Stack>
       )}
 
+      {/* ── a scenario waiting on a clarifying question ── */}
+      <ClarifyCard
+        blocked={blocked}
+        scenario={blocked ? tasks.find((t) => t.id === blocked.taskId) : null}
+        onAnswer={answer}
+        onOpen={() => blocked && setFocusId(blocked.taskId)}
+      />
+
       {/* ── three columns ── */}
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
         {/* scenarios */}
         <Box sx={{ width: 300, flexShrink: 0, borderRight: "1px solid", borderColor: "divider", overflow: "auto", display: { xs: "none", md: "block" } }}>
           <ColumnLabel sticky>Scenarios ({stats.total})</ColumnLabel>
           <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-            {tasks.map((t) => (
+            {tasks.filter((t) => !pulledDone.includes(t)).map((t) => (
               <TaskRow
                 key={t.id}
                 task={t}
                 active={t.id === focusId}
+                stale={staleIds?.[t.id] || null}
                 onClick={() => setFocusId(t.id)}
               />
             ))}
           </Stack>
+          {pulledDone.length > 0 && (
+            <>
+              <ColumnLabel>Pulled for review ({pulledDone.length})</ColumnLabel>
+              <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+                {pulledDone.map((t) => (
+                  <TaskRow key={t.id} task={t} active={t.id === focusId} onClick={() => setFocusId(t.id)} />
+                ))}
+              </Stack>
+            </>
+          )}
           {skipped.length > 0 && (
             <>
-              <ColumnLabel>Skipped · not proved ({skipped.length})</ColumnLabel>
+              <ColumnLabel>Skipped ({skipped.length})</ColumnLabel>
               <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
                 {skipped.map((sc) => <SkippedRow key={sc.id} scenario={sc} />)}
               </Stack>
@@ -686,7 +1121,7 @@ export default function LiveRunView() {
 
         {/* live evals */}
         <Box sx={{ width: 288, flexShrink: 0, borderLeft: "1px solid", borderColor: "divider", overflow: "auto", display: { xs: "none", lg: "block" } }}>
-          <LiveEvalPanel task={focus} evals={evals} env={env} />
+          <LiveEvalPanel task={focus} evals={evals} env={env} grading={liveGrading} />
         </Box>
       </Box>
     </Box>
@@ -746,24 +1181,27 @@ function LiveCounter({ label, value, color, hint }) {
 
 /* How a finished scenario came out, across its repeats. */
 const resultText = (task) => {
-  if (task.status === "unmeasured") return { text: "Not measured", color: UNMEASURED };
+  if (task.pulled && task.status === "unmeasured") return { text: "Pulled", color: UNMEASURED };
+  /* Inconclusive, test invalid or error — none counts for or against the agent. */
+  if (task.status === "unmeasured") return { text: OUTCOMES[outcomeOfCause(causeOf(task))]?.label || "Inconclusive", color: UNMEASURED };
   if (!["passed", "failed", "flaky"].includes(task.status)) return null;
   const color = { passed: "#16A34A", failed: RED, flaky: FLAKY }[task.status];
   return { text: task.repeats > 1 ? `${task.passes}/${task.repeats}` : task.status === "passed" ? "Passed" : "Failed", color };
 };
 
-function TaskRow({ task, active, onClick }) {
+function TaskRow({ task, active, stale = null, onClick }) {
   const progress = task.steps.length
     ? ((task.stepIndex + 1) / task.steps.length) * 100
     : 0;
   const result = resultText(task);
   return (
     <Box
-      onClick={onClick}
+      {...clickable(onClick)}
       sx={{
         px: 2, py: 1.375, cursor: "pointer", position: "relative",
         bgcolor: active ? "action.hover" : "transparent",
         "&:hover": { bgcolor: "action.hover" },
+        ...focusRing,
       }}
     >
       {active && (
@@ -776,12 +1214,31 @@ function TaskRow({ task, active, onClick }) {
             <Typography noWrap sx={{ typography: "s2", fontWeight: active ? 700 : 600 }}>
               {task.name || task.title}
             </Typography>
-            <BlockerFlag row={task} reason={task.blockerReason} size={12} />
+            {/* Marked critical — information for the reader, never a gate. */}
+            {task.critical && (
+              <Tooltip arrow title={`Critical scenario${task.blockerReason ? ` — ${task.blockerReason}` : ""}. Counted in the run summary; it blocks nothing.`}>
+                <Box sx={{ display: "flex", flexShrink: 0 }}>
+                  <Iconify icon="solar:danger-triangle-linear" width={12} sx={{ color: "text.subtitle" }} />
+                </Box>
+              </Tooltip>
+            )}
           </Stack>
           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
-            {[task.summary, task.persona?.name].filter(Boolean).join(" · ")}
+            {[
+              task.pulled && task.status === "unmeasured" ? "Test invalid twice" : null,
+              task.retried && ["passed", "failed", "flaky", "unmeasured"].includes(task.status) ? "retried once" : null,
+              stale ? `${stale === "outdated" ? "Outdated" : "Re-check"} · not counted` : null,
+              task.summary, task.persona?.name,
+            ].filter(Boolean).join(" · ")}
           </Typography>
         </Box>
+        {task.blocked && (
+          <Tooltip arrow title="Paused on a clarifying question — answer it above to resume">
+            <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", flexShrink: 0 }}>
+              Needs answer
+            </Typography>
+          </Tooltip>
+        )}
         {result && (
           <Tooltip arrow title={task.repeats > 1 ? `Passed ${task.passes} of ${task.repeats} repeats` : ""}>
             <Typography sx={{ typography: "s3", fontWeight: 700, color: result.color, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
@@ -814,7 +1271,7 @@ function SkippedRow({ scenario }) {
           <Typography noWrap sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>
             {scenario.name || scenario.title}
           </Typography>
-          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>Skipped — needs re-proving</Typography>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{scenario.skipReason}</Typography>
         </Box>
       </Stack>
     </Tooltip>
@@ -829,11 +1286,12 @@ function SkippedRow({ scenario }) {
  * conversation ends, one grader at a time. Then what a pass looks like, and
  * who is calling.
  */
-function LiveEvalPanel({ task, evals, env }) {
+function LiveEvalPanel({ task, evals, env, grading: rule = null }) {
   if (!task) return null;
   const grading = task.status === "grading";
   const settled = ["passed", "failed", "flaky", "unmeasured"].includes(task.status);
-  const goals = subGoalStates(task, env);
+  const basis = rule?.basis || null;
+  const goals = subGoalStates(task, env).map((g) => ({ ...g, basis: subGoalBasisOf(g.label, basis, env) }));
 
   return (
     <Box>
@@ -842,6 +1300,19 @@ function LiveEvalPanel({ task, evals, env }) {
           <ColumnLabel>
             Sub-goals · {goals.filter((g) => g.state === "met").length} of {goals.length}
           </ColumnLabel>
+          {/* Which rule decides, and what the sub-goals are checked against. */}
+          {rule && (
+            <Tooltip arrow placement="left" title={[rule.note, basis?.note].filter(Boolean).join(" ")}>
+              <Typography sx={{ px: 2, pt: 1.25, typography: "s3", color: "text.subtitle", cursor: "default" }}>
+                {[rule.rule >= 2 ? "Every critical sub-goal must hold" : rule.label, basis && (basis.judged ? "judged from the conversation; only the starting state is checked" : "checked against end state and tool calls")].filter(Boolean).join(" · ")}
+              </Typography>
+            </Tooltip>
+          )}
+          {task.turnLimit && (
+            <Typography sx={{ px: 2, pt: 0.5, typography: "s3", color: RED, fontWeight: 600 }}>
+              {`Hit the turn limit (${task.turnLimit.limit}) — stopped here`}
+            </Typography>
+          )}
           <Stack spacing={1.125} sx={{ px: 2, py: 1.5 }}>
             {goals.map((g) => <SubGoalRow key={g.id} goal={g} />)}
           </Stack>
@@ -853,7 +1324,7 @@ function LiveEvalPanel({ task, evals, env }) {
         <EmptyState
           icon="solar:shield-cross-linear"
           title="No evals applied"
-          body="You'll get transcripts, but nothing scoring whether the agent was right."
+          body={rule?.rule >= 2 ? "Sub-goals still decide pass or fail. Evaluations would score each conversation on top." : "You'll get transcripts, but nothing scoring whether the agent was right."}
         />
       ) : (
         <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
@@ -893,7 +1364,7 @@ function LiveEvalPanel({ task, evals, env }) {
           <Stack direction="row" spacing={0.75} alignItems="flex-start">
             <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: RED, flexShrink: 0, mt: "2px" }} />
             <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-              <b>Release blocker</b> · {shortReason(task.blockerReason)}
+              <b>Critical</b> · {shortReason(task.blockerReason)}
             </Typography>
           </Stack>
         )}
@@ -933,7 +1404,7 @@ function LiveEvalPanel({ task, evals, env }) {
 }
 
 /* The blocker reason without the rule quoted again — "Passes when" just said it. */
-const shortReason = (reason) => (reason || "any failure here blocks the release.")
+const shortReason = (reason) => (reason || "marked critical — worth reading first.")
   .replace(/:\s*“.*”\.?$/, ".")
   .replace(/^./, (c) => c.toLowerCase());
 
@@ -1006,6 +1477,11 @@ function SubGoalRow({ goal }) {
       >
         {goal.label}
       </Typography>
+      {goal.basis && (
+        <Tooltip arrow placement="left" title={goal.basis.label}>
+          <Iconify icon={goal.basis.icon} width={12} sx={{ color: "text.disabled", flexShrink: 0, mt: "2px" }} />
+        </Tooltip>
+      )}
       {meta.note && (
         <Typography
           sx={{
@@ -1038,6 +1514,7 @@ LiveCounter.propTypes = {
 TaskRow.propTypes = {
   task: PropTypes.object,
   active: PropTypes.bool,
+  stale: PropTypes.string,
   onClick: PropTypes.func,
 };
 
@@ -1045,6 +1522,7 @@ SkippedRow.propTypes = { scenario: PropTypes.object };
 SubGoalRow.propTypes = { goal: PropTypes.object };
 
 LiveEvalPanel.propTypes = {
+  grading: PropTypes.object,
   task: PropTypes.object,
   evals: PropTypes.array,
   env: PropTypes.object,

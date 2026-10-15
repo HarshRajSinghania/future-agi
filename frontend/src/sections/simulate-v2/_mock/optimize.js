@@ -33,6 +33,20 @@ export const FILE_FOR_KIND = {
   "Tool description":  { path: (env, p) => `${env?.id || "agent"}/tools/${(p?.step || "tool").toLowerCase()}.py`, language: "python" },
   Memory:              { path: (env) => `${env?.id || "agent"}/state/memory.py`, language: "python" },
   Architecture:        { path: (env) => `${env?.id || "agent"}/graph.py`, language: "python" },
+  "Agent setting":     { path: (env) => `${env?.id || "agent"}/agent.yaml`, language: "yaml" },
+  "Tool code":         { path: (env, p) => `${env?.id || "agent"}/tools-api/${(p?.step || "tool").toLowerCase()}.py`, language: "python" },
+};
+
+/* The prompt section a System-prompt change edits — what a protected
+   section is matched against. */
+export const SECTION_FOR = (proposal) => {
+  if (proposal?.kind !== "System prompt") return null;
+  /* An issue's own proposals name the section they write. */
+  if (proposal.section) return proposal.section;
+  if (proposal.id === "unsupported-claims" || proposal.id === "memory-carry") return "Closing";
+  if (proposal.id === "state-rule" || proposal.id.startsWith("lineage-")) return "Policies";
+  if (proposal.id.startsWith("grader-")) return "Tool use";
+  return null;
 };
 
 /**
@@ -112,13 +126,16 @@ export const proposalsFor = (env, failing = [], measured = []) => {
       ],
       addresses: claimed.map((t) => t.id),
       step: "closing",
+      /* Makes the agent depend on the tool result — a fix that needs
+         evidence, not one that only rewords the claim. */
+      evidence: true,
     });
   }
 
   /* ── 3. rules this environment declares that a failing task breached ── */
   const critical = failing.filter((t) => t.critical);
   if (critical.length && (env?.rules || []).length) {
-    /* The rule the failing blockers are actually about, matched on the
+    /* The rule the failing critical scenarios are actually about, matched on the
        scenario titles rather than assumed. */
     const rule = (env.rules || []).find((r) => {
       const key = r.toLowerCase().match(/[a-z]{5,}/g) || [];
@@ -129,7 +146,7 @@ export const proposalsFor = (env, failing = [], measured = []) => {
       id: "state-rule",
       kind: "System prompt",
       title: "State the rule in the prompt, not just in the world",
-      why: `${critical.length} release ${critical.length === 1 ? "blocker" : "blockers"} failed on a rule the environment enforces but the prompt never states.`,
+      why: `${critical.length} critical ${critical.length === 1 ? "scenario" : "scenarios"} failed on a rule the environment enforces but the prompt never states.`,
       diff: [
         { type: "add", text: `${rule} If the caller pushes back, explain the rule rather than making an exception.` },
       ],
@@ -198,10 +215,305 @@ export const proposalsFor = (env, failing = [], measured = []) => {
     });
   }
 
+  /*
+    Agent settings — the same agent, configured differently. Turn-taking for
+    voice: an agent that answers before the caller finishes reads half the
+    request. Temperature for the turns a rule decides: a policy answer
+    shouldn't vary between calls.
+  */
+  const hashOf = (k) => { let h = 0; for (let i = 0; i < k.length; i += 1) h = (h * 31 + k.charCodeAt(i)) >>> 0; return h; };
+  if (env?.surface === "voice") {
+    const cut = failing.filter((t) => hashOf(`setting-turn-taking:${t.id}`) % 4 === 0);
+    if (cut.length) {
+      out.push({
+        id: "setting-turn-taking",
+        kind: "Agent setting",
+        title: "Wait longer before answering when the caller pauses",
+        why: `${cut.length} ${cut.length === 1 ? "call" : "calls"} went wrong after the agent answered mid-sentence — it acted on half the request.`,
+        diff: [
+          { type: "remove", text: "interruptions: allowed after 300ms" },
+          { type: "add", text: "interruptions: allowed after 650ms of silence" },
+        ],
+        addresses: cut.map((t) => t.id),
+        step: "turn_taking",
+      });
+    }
+  }
+  const policy = failing.filter((t) => t.critical && hashOf(`setting-temperature:${t.id}`) % 3 === 0);
+  if (policy.length) {
+    out.push({
+      id: "setting-temperature",
+      kind: "Agent setting",
+      title: "Lower temperature for policy answers",
+      why: `${policy.length} critical ${policy.length === 1 ? "scenario" : "scenarios"} got a different answer to the same rule on different repeats.`,
+      diff: [
+        { type: "remove", text: "temperature: 0.7" },
+        { type: "add", text: "temperature: 0.2" },
+      ],
+      addresses: policy.map((t) => t.id),
+      step: "model_settings",
+    });
+  }
+
+  /*
+    Tool code — the world's side. A tool that answers with less than the
+    agent needs (the lookup that omits the active booking) is fixed in its
+    handler, not in the prompt. It changes the world that grades the agent,
+    so it is only tried when tool code is allowed, and verified on a
+    re-proved candidate world.
+  */
+  const handlerTool = (env?.tools || []).find((t) => /lookup|status|get|search/i.test(t.name));
+  if (handlerTool) {
+    const thin = failing.filter((t) => hashOf(`toolcode:${t.id}`) % 5 === 0);
+    if (thin.length) {
+      out.push({
+        id: `toolcode-${handlerTool.name}`,
+        kind: "Tool code",
+        title: `Return the full record from ${handlerTool.name}`,
+        why: `${thin.length} ${thin.length === 1 ? "call" : "calls"} failed because ${handlerTool.name} answers without the fields the next step needs — the agent can't ask for what the tool never returns.`,
+        diff: [
+          { type: "remove", text: `return {"id": row.id, "status": row.status}` },
+          { type: "add", text: `return {"id": row.id, "status": row.status, "active": row.active_booking, "updated_at": row.updated_at}` },
+        ],
+        addresses: thin.map((t) => t.id),
+        step: handlerTool.name,
+        worldChange: true,
+      });
+    }
+  }
+
   /* Weights are deliberately not a lever here: closed models cannot be tuned,
      and offering it would be a promise the product cannot keep. */
 
   return out.map((p) => ({ ...p, lift: pct(p.addresses.length) }));
+};
+
+/*
+  A run issue's own proposals — written from its root cause and the fix the
+  Insights tab suggested, not from whatever else failed in the run. A Fix on
+  'Gives way on "Return window is 30 days from delivery"' should first try
+  stating that rule with refusal wording, not describing an unrelated tool.
+
+  `issue` is the trigger's issueRoot plus its issueId; `targets` are the
+  issue's scenarios the search can see that still fail. Each proposal names
+  its issue so a held-back issue scenario can be asked whether it applies.
+*/
+const ACCOUNT_TOOL = /refund|cancel|update|order|account|return|label|shipping|address|change|modify|book|reschedul|transfer|dispute|freeze|transaction/i;
+const shortText = (s = "", n = 60) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+const lowerFirst = (s = "") => s.charAt(0).toLowerCase() + s.slice(1);
+
+export const issueProposals = (env, issue, targets = [], measured = []) => {
+  if (!issue || !targets.length) return [];
+  const ids = targets.map((t) => t.id);
+  const n = ids.length;
+  const pct = measured.length ? Math.round((n / measured.length) * 100) : 0;
+  const scen = `${n} ${n === 1 ? "scenario" : "scenarios"}`;
+  const from = `From the issue "${issue.title}"${issue.fix ? ` — suggested fix: ${issue.fix}` : ""}`;
+  const make = (p) => ({
+    addresses: ids,
+    issueId: issue.issueId || null,
+    fromIssueRoot: issue.focus,
+    lift: pct,
+    ...p,
+    why: `${p.why} ${from}`,
+  });
+  const tools = env?.tools || [];
+  const out = [];
+
+  switch (issue.focus) {
+    case "rule": {
+      const rule = (issue.rule || issue.subGoal || "the rule").replace(/\.$/, "");
+      out.push(make({
+        id: "issue-rule",
+        kind: "System prompt",
+        section: "Policies",
+        title: `State "${rule}" with refusal wording`,
+        trialLabel: `state "${rule}" with refusal wording`,
+        why: `The agent gave way on this rule in ${scen} — the prompt never states it or how to say no.`,
+        diff: [
+          { type: "add", text: `Policy: ${rule}.` },
+          { type: "add", text: `If the caller asks for an exception, refuse in one sentence — "I'm not able to do that: ${lowerFirst(rule)}." — then offer what you can do instead.` },
+        ],
+        step: "policy_check",
+      }));
+      out.push(make({
+        id: "issue-rule-hold",
+        kind: "System prompt",
+        section: "Policies",
+        title: `Hold "${rule}" when the caller pushes back`,
+        trialLabel: `hold "${rule}" when the caller pushes back`,
+        why: `In ${scen} the agent stated the rule, then conceded once the caller pushed a second time.`,
+        diff: [
+          { type: "add", text: `Before agreeing to anything the caller asks for again, re-check it against: ${rule}. Pushback, urgency or a complaint is not a reason to make an exception.` },
+        ],
+        step: "policy_check",
+      }));
+      break;
+    }
+    case "refuse": {
+      const sub = (issue.subGoal || "Refuse when a rule applies").replace(/\.$/, "");
+      out.push(make({
+        id: "issue-refuse",
+        kind: "System prompt",
+        section: "Policies",
+        title: `Give the refusal wording for "${shortText(sub, 50)}"`,
+        trialLabel: `give the refusal wording for "${shortText(sub, 50)}"`,
+        why: `The agent didn't refuse cleanly in ${scen}.`,
+        diff: [
+          { type: "add", text: `${sub}: say the policy in one sentence, then offer the alternative you can do. Don't apologise the rule away.` },
+        ],
+        step: "policy_check",
+      }));
+      break;
+    }
+    case "identity": {
+      const verify = tools.find((t) => /verif|identity|auth|kyc/i.test(t.name))?.name || null;
+      const gated = tools.filter((t) => t.name !== verify && ACCOUNT_TOOL.test(t.name)).map((t) => t.name).slice(0, 4);
+      const check = verify || "the identity check";
+      const list = gated.length ? gated.join(", ") : "any account tool";
+      out.push(make({
+        id: "issue-identity-gate",
+        kind: "System prompt",
+        section: "Policies",
+        title: `Gate account tools on ${check}`,
+        trialLabel: `gate ${gated.length ? `${gated.slice(0, 2).join(", ")}${gated.length > 2 ? " and the other account tools" : ""}` : "account tools"} on ${check}`,
+        why: `${scen} reached an account action before the caller was verified.`,
+        diff: [
+          { type: "add", text: `Verify the caller${verify ? ` with ${verify}` : ""} before anything else. Until they're verified, don't call ${list} — not even to look something up.` },
+          { type: "add", text: "If the caller pushes to skip it, explain that you can't open the account without it, and ask again." },
+        ],
+        step: verify || "verify_identity",
+        evidence: true,
+      }));
+      out.push(make({
+        id: "issue-identity-graph",
+        kind: "Architecture",
+        title: `Make ${check} a step the graph can't skip`,
+        trialLabel: `make ${check} a step the graph can't skip`,
+        why: `A prompt line asks the agent to verify first; a step in the graph doesn't let ${list} run until it has.`,
+        diff: [
+          { type: "add", text: `before_tool(${gated.length ? gated.join(", ") : "account_tools"}): require state.verified_identity — otherwise route to ${verify || "the identity check"}.` },
+        ],
+        step: verify || "verify_identity",
+      }));
+      break;
+    }
+    case "tool-args": {
+      const tool = issue.tool;
+      const desc = tools.find((t) => t.name === tool)?.desc;
+      out.push(make({
+        id: `issue-args-${tool}`,
+        kind: "Tool description",
+        title: `Spell out ${tool}'s required arguments`,
+        trialLabel: `spell out ${tool}'s required arguments in its description`,
+        why: `${scen} called ${tool} with the wrong arguments${desc ? ` — the description says only "${desc}"` : ""}.`,
+        diff: [
+          { type: "add", text: `Required: every argument ${tool} declares, taken from what the caller confirmed or an earlier tool returned — never guessed. Read them back before the call goes out.` },
+        ],
+        step: tool,
+        evidence: true,
+      }));
+      break;
+    }
+    case "tool": {
+      const tool = issue.tool;
+      out.push(make({
+        id: `issue-when-${tool}`,
+        kind: "Tool description",
+        title: `Say when ${tool} applies, and hold the close until it returns`,
+        trialLabel: `say when ${tool} applies and hold the close until it returns`,
+        why: `${scen} needed ${tool} and never called it.`,
+        diff: [
+          { type: "add", text: `Call it whenever the caller's request depends on ${tool.replace(/_/g, " ")}. Don't close the conversation until it has returned.` },
+        ],
+        step: tool,
+        evidence: true,
+        mechanism: "tool",
+      }));
+      break;
+    }
+    case "claim": {
+      out.push(make({
+        id: "issue-claim",
+        kind: "System prompt",
+        section: "Closing",
+        title: "Only claim it's done after the tool returns success",
+        trialLabel: "only claim it's done after the tool returns success",
+        why: `${scen} told the caller something was done that the call log doesn't support.`,
+        diff: [
+          { type: "add", text: "Only say something is done after the tool that does it has returned success. Otherwise say what you attempted and what is still outstanding." },
+        ],
+        step: "closing",
+        evidence: true,
+        mechanism: "claim",
+      }));
+      break;
+    }
+    case "fault": {
+      const tool = issue.tool;
+      const said = issue.faultSaid || "fails";
+      out.push(make({
+        id: `issue-fault-${tool}`,
+        kind: "System prompt",
+        section: "Tool use",
+        title: `When ${tool} ${said}, retry once, then hand off`,
+        trialLabel: `retry ${tool} once when it ${said}, then hand off`,
+        why: `${scen} lost the call when ${tool} ${said} — the agent neither retried nor escalated.`,
+        diff: [
+          { type: "add", text: `If ${tool} ${said}, retry it once. If it fails again, tell the caller what's still pending and hand off to a person.` },
+        ],
+        step: tool,
+        evidence: true,
+      }));
+      out.push(make({
+        id: `issue-fault-claim-${tool}`,
+        kind: "System prompt",
+        section: "Closing",
+        title: `Don't report success ${tool} didn't return`,
+        trialLabel: `don't report success ${tool} didn't return`,
+        why: `After ${tool} ${said}, the agent closed as if it had worked in some of the ${scen}.`,
+        diff: [
+          { type: "add", text: `Never tell the caller ${tool.replace(/_/g, " ")} worked unless it returned success in this conversation.` },
+        ],
+        step: "closing",
+        evidence: true,
+      }));
+      break;
+    }
+    case "eval": {
+      const name = issue.eval || "the grader";
+      out.push(make({
+        id: "issue-eval",
+        kind: "System prompt",
+        section: "Tool use",
+        title: `Check the answer against ${name} before closing`,
+        trialLabel: `check the answer against ${name} before closing`,
+        why: `${scen} came in under the ${name} bar.`,
+        diff: [
+          { type: "add", text: `Before closing, check the answer against what ${name} measures: say only what the tools returned, in the caller's terms.` },
+        ],
+      }));
+      break;
+    }
+    case "step": {
+      const sub = (issue.subGoal || "the missed step").replace(/\.$/, "");
+      out.push(make({
+        id: "issue-step",
+        kind: "System prompt",
+        section: "Policies",
+        title: `Make "${shortText(sub, 56)}" an explicit step`,
+        trialLabel: `make "${shortText(sub, 56)}" an explicit step`,
+        why: `${scen} fell through this critical sub-goal.`,
+        diff: [
+          { type: "add", text: `${sub} — as an explicit step, before you act or close, every time.` },
+        ],
+      }));
+      break;
+    }
+    default:
+      break;
+  }
+  return out;
 };
 
 /**
@@ -311,6 +623,16 @@ export const generalisesTo = (proposal, task) => {
   if (!proposal || !task) return false;
   const missing = task.callLog?.missing || [];
 
+  /* A run issue's own change helps that issue's scenarios — the ones the
+     search never saw too — and, where it's about a tool or a claim, any
+     scenario that failed the same way. */
+  if (proposal.issueId) {
+    if (task.fromIssue && task.fromIssue === proposal.issueId) return true;
+    if (proposal.mechanism === "tool") return missing.includes(proposal.step);
+    if (proposal.mechanism === "claim") return !!task.callLog?.unsupportedClaim;
+    return false;
+  }
+
   if (proposal.id.startsWith("missing-")) {
     return missing.includes(proposal.id.slice("missing-".length));
   }
@@ -324,6 +646,35 @@ export const generalisesTo = (proposal, task) => {
     return (task.steps || []).length > 6 && !!task.callLog?.unsupportedClaim;
   }
   if (proposal.id === "architecture-gate") return missing.length > 0;
+  /* A handler fix helps where the handler was the cause — the same pairs, by id. */
+  if (proposal.id.startsWith("toolcode-") && task.status === "failed") {
+    let h = 0;
+    const key = `${proposal.id}:${task.id}`;
+    for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return h % 5 === 0;
+  }
+  /* A setting helps the scenarios it helps — the same pairs, by id. */
+  if (proposal.id.startsWith("setting-") && task.status === "failed") {
+    let h = 0;
+    const key = `${proposal.id}:${task.id}`;
+    for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return h % 4 === 0;
+  }
+  /* A change from the agent's history helps where it helped — same rule as a model switch. */
+  if (proposal.id.startsWith("lineage-") && task.status === "failed") {
+    let h = 0;
+    const key = `${proposal.id}:${task.id}`;
+    for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return h % 3 === 0;
+  }
+  /* A model switch helps the scenarios it helps — the same pairs the search
+     scored it on, decided by the two ids. */
+  if (proposal.id.startsWith("model-")) {
+    const key = `${proposal.id.slice("model-".length)}:${task.id}`;
+    let h = 0;
+    for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return task.status === "failed" && h % 3 === 0;
+  }
   return false;
 };
 

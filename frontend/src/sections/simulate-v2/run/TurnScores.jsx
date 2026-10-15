@@ -57,12 +57,13 @@ export default function TurnScores({ task }) {
               {Object.entries(t.scores).map(([k, v]) => {
                 const bad = v < 0.6;
                 const color = bad ? "#DC2626" : v < 0.9 ? "#CA8A04" : "#16A34A";
+                const textColor = !bad && v < 0.9 ? "text.primary" : color;
                 return (
                   <Tooltip key={k} arrow title={`${k} ${Math.round(v * 100)}%`}>
                     <Typography
                       sx={{
                         px: 0.625, py: 0.125, borderRadius: 0.5,
-                        typography: "s3", fontWeight: 700, color,
+                        typography: "s3", fontWeight: 700, color: textColor,
                         bgcolor: (th) => alpha(color, th.palette.mode === "dark" ? 0.16 : 0.1),
                       }}
                     >

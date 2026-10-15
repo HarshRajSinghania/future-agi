@@ -68,6 +68,15 @@ const MCPServerPage = lazyWithRetry(
 const FalconAIConnectorsPage = lazyWithRetry(
   () => import("src/pages/dashboard/settings/FalconAIConnectors"),
 );
+const GithubIntegrationPage = lazyWithRetry(
+  () => import("src/sections/simulate-v2/integrations/GithubIntegrationPage"),
+);
+const SlackIntegrationPage = lazyWithRetry(
+  () => import("src/sections/simulate-v2/integrations/SlackIntegrationPage"),
+);
+const CodingAgentsIntegrationPage = lazyWithRetry(
+  () => import("src/sections/simulate-v2/integrations/CodingAgentsIntegrationPage"),
+);
 const IntegrationDetailPage = lazyWithRetry(
   () => import("src/sections/settings/integrations/IntegrationDetail"),
 );
@@ -310,12 +319,6 @@ const ScenarioDatasetView = lazyWithRetry(
 const SimEnvironments = lazyWithRetry(
   () => import("src/pages/dashboard/simulate-v2/Environments"),
 );
-const SimEnvironmentsBrowse = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate-v2/EnvironmentsBrowsePage"),
-);
-const SimTemplatesBrowse = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate-v2/TemplatesBrowsePage"),
-);
 const SimBuildEnvironment = lazyWithRetry(
   () => import("src/pages/dashboard/simulate-v2/BuildEnvironmentPage"),
 );
@@ -334,33 +337,14 @@ const SimRunWidgetEditor = lazyWithRetry(
 const SimRunCompare = lazyWithRetry(
   () => import("src/pages/dashboard/simulate-v2/RunComparePage"),
 );
-const SimCreateEnvironment = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate-v2/CreateEnvironmentPage"),
-);
-const SimUseTemplate = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate-v2/UseTemplatePage"),
-);
 const SimNewTwinEnvironment = lazyWithRetry(
   () => import("src/pages/dashboard/simulate-v2/NewTwinEnvironmentPage"),
-);
-const SimTwinDetail = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate-v2/TwinDetailPage"),
 );
 const SimTwinReview = lazyWithRetry(
   () => import("src/pages/dashboard/simulate-v2/TwinReviewPage"),
 );
-const SimTwinConnect = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate-v2/TwinConnectPage"),
-);
-const AgentDefinitions = lazyWithRetry(
-  () => import("src/pages/dashboard/agent-definitions/AgentDefinitions"),
-);
-const AgentDetails = lazyWithRetry(
-  () => import("src/pages/dashboard/agent-definitions/AgentDetails"),
-);
-const CreateNewAgentDefinition = lazyWithRetry(
-  () =>
-    import("src/pages/dashboard/agent-definitions/CreateNewAgentDefinition"),
+const LegacyDefinitionRedirect = lazyWithRetry(
+  () => import("src/sections/simulate-v2/agents/LegacyDefinitionRedirect"),
 );
 // const SimulatorAgent = lazyWithRetry(
 //   () => import("src/pages/dashboard/simulator-agent/SimulatorAgent"),
@@ -374,8 +358,13 @@ const SimulatedRuns = lazyWithRetry(
 const SimImprovementsPage = lazyWithRetry(
   () => import("src/pages/dashboard/simulate-v2/ImprovementsPage"),
 );
-const SimImprovementEnvRunsPage = lazyWithRetry(
-  () => import("src/pages/dashboard/simulate-v2/ImprovementEnvRunsPage"),
+/* Improvements level 2 — one environment's (or dataset's) improvement runs. */
+const SimImprovementDataset = lazyWithRetry(
+  () => import("src/sections/simulate-v2/improvements/ImprovementDatasetView"),
+);
+/* One improvement on its own page — reopened directly, whatever started it. */
+const SimImprovementRunPage = lazyWithRetry(
+  () => import("src/sections/simulate-v2/improvements/ImprovementRunPage"),
 );
 const RunTestDetail = lazyWithRetry(
   () => import("src/pages/dashboard/run-tests/RunTestDetail"),
@@ -469,6 +458,11 @@ function LegacyFeedDetailRedirect() {
   const { id } = useParams();
   return <Navigate to={`/dashboard/error-feed/${id}`} replace />;
 }
+/* Retired prototype pages: their environment, or the Environments landing. */
+function SimEnvironmentRedirect() {
+  const { envId } = useParams();
+  return <Navigate to={envId ? `/dashboard/simulate/environments/${envId}` : "/dashboard/simulate/environments"} replace />;
+}
 function ModelDetailDefaultRedirect() {
   const { id } = useParams();
   return <Navigate to={`/dashboard/models/${id}/performance`} replace />;
@@ -506,6 +500,12 @@ const WidgetEditorView = lazyWithRetry(
 
 const Agents = lazyWithRetry(
   () => import("src/sections/agent-playground/Agents"),
+);
+const ConnectAgentPage = lazyWithRetry(
+  () => import("src/sections/simulate-v2/agents/ConnectAgentPage"),
+);
+const ConnectedAgentViewPage = lazyWithRetry(
+  () => import("src/sections/simulate-v2/agents/AgentViewPage"),
 );
 const AgentPlayground = lazyWithRetry(
   () => import("src/sections/agent-playground/AgentPlayground"),
@@ -702,6 +702,25 @@ export const dashboardRoutes = (
           <IntegrationsPage />
         </RoleProtection>
       ),
+    },
+    /* GitHub and Slack — workspace integrations used across Agents and
+       Simulate (prototype-backed). The page reads connected agents, so it
+       shares the simulation store. */
+    {
+      path: "integrations/github",
+      element: (
+        <SimStoreProvider>
+          <GithubIntegrationPage />
+        </SimStoreProvider>
+      ),
+    },
+    {
+      path: "integrations/slack",
+      element: <SlackIntegrationPage />,
+    },
+    {
+      path: "integrations/coding-agents",
+      element: <CodingAgentsIntegrationPage />,
     },
     {
       path: "integrations/:connectionId",
@@ -1304,10 +1323,25 @@ export const dashboardRoutes = (
     },
     {
       path: "agents",
+      /* Connected agents read the simulation store — the same agents
+         environments test — so the Agents section shares its provider. */
+      element: (
+        <SimStoreProvider>
+          <Outlet />
+        </SimStoreProvider>
+      ),
       children: [
         {
           index: true,
           element: <Agents />,
+        },
+        {
+          path: "connect",
+          element: <ConnectAgentPage />,
+        },
+        {
+          path: "connected/:agentId",
+          element: <ConnectedAgentViewPage />,
         },
         {
           path: "playground/:agentId",
@@ -1357,7 +1391,10 @@ export const dashboardRoutes = (
           index: true,
           element: (
             <CapabilityGate feature={CAPABILITY.ERROR_FEED}>
-              <ErrorFeed />
+              {/* Each issue's fix status reads the prototype store. */}
+              <SimStoreProvider>
+                <ErrorFeed />
+              </SimStoreProvider>
             </CapabilityGate>
           ),
         },
@@ -1365,7 +1402,10 @@ export const dashboardRoutes = (
           path: ":id",
           element: (
             <CapabilityGate feature={CAPABILITY.ERROR_FEED}>
-              <ErrorFeedDetail />
+              {/* "Fix it in code" reads connected agents (prototype store). */}
+              <SimStoreProvider>
+                <ErrorFeedDetail />
+              </SimStoreProvider>
             </CapabilityGate>
           ),
         },
@@ -1404,12 +1444,22 @@ export const dashboardRoutes = (
               element: <SimImprovementsPage />,
             },
             {
-              /* Improvements — L2 (env): env-scoped runs lens. Shares
-                 the env's SimStore, so any edit here (add runs, edit
-                 evals, choose winner) mutates the same env state the
-                 env workspace reads. */
+              /* The per-environment level is gone — an improvement is level 1's
+                 row now. Old links land on the list. */
               path: "improvements/env/:envId",
-              element: <SimImprovementEnvRunsPage />,
+              element: <Navigate to="/dashboard/simulate/improvements" replace />,
+            },
+            {
+              /* Improvements level 2 — a dataset (Coming soon). */
+              path: "improvements/dataset/:datasetId",
+              element: <SimImprovementDataset />,
+            },
+            {
+              /* Improvements — one improvement run, by environment and id.
+                 The static "env" segment above ranks first, so the two
+                 never collide. */
+              path: "improvements/:envId/:optId",
+              element: <SimImprovementRunPage />,
             },
             {
               /* /environments/browse is legacy — the old two-column
@@ -1423,11 +1473,9 @@ export const dashboardRoutes = (
               element: <Navigate to="/dashboard/simulate/environments" replace />,
             },
             {
-              /* Full-page templates browse — reached from the "Use our
-                 template" hero on the picker. Hands off to the existing
-                 /environments/use/:templateId flow when a template is picked. */
+              /* Templates live on the Environments landing now. */
               path: "environments/templates",
-              element: <SimTemplatesBrowse />,
+              element: <Navigate to="/dashboard/simulate/environments" replace />,
             },
             {
               /* Twins browse consolidated into the Environments Templates
@@ -1436,13 +1484,14 @@ export const dashboardRoutes = (
               element: <Navigate to="/dashboard/simulate/environments" replace />,
             },
             {
-              /* Twin detail page still lives — post-provisioning UX. */
+              /* A twin is an environment — it opens as one. */
               path: "twins/:envId",
-              element: <SimTwinDetail />,
+              element: <SimEnvironmentRedirect />,
             },
             {
+              /* The old new-environment page — building starts on the landing. */
               path: "environments/new",
-              element: <SimCreateEnvironment />,
+              element: <Navigate to="/dashboard/simulate/environments" replace />,
             },
             {
               /* Chat + derivation view — reached from any "Build
@@ -1465,13 +1514,13 @@ export const dashboardRoutes = (
             },
             {
               path: "environments/use/:templateId",
-              element: <SimUseTemplate />,
+              element: <Navigate to="/dashboard/simulate/environments" replace />,
             },
             {
               /* Must appear before the :envId/:step catch-all so the
                  static segment wins. */
               path: "environments/:envId/twin-connect",
-              element: <SimTwinConnect />,
+              element: <SimEnvironmentRedirect />,
             },
             {
               path: "environments/:envId/twin-review",
@@ -1501,17 +1550,23 @@ export const dashboardRoutes = (
             },
           ],
         },
+        /* Legacy Agent definitions moved to Agents → Connected agents
+           (updated RSI PRD). Old links land there, with a note. */
         {
           path: "agent-definitions",
-          element: <AgentDefinitions />,
+          element: <Navigate to="/dashboard/agents?tab=connected&moved=agent-definitions" replace />,
         },
         {
           path: "agent-definitions/create-new-agent-definition",
-          element: <CreateNewAgentDefinition />,
+          element: <Navigate to="/dashboard/agents/connect" replace />,
         },
         {
           path: "agent-definitions/:agentDefinitionId",
-          element: <AgentDetails />,
+          element: (
+            <SimStoreProvider>
+              <LegacyDefinitionRedirect />
+            </SimStoreProvider>
+          ),
         },
         {
           path: "scenarios",

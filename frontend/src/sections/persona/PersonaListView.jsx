@@ -4,6 +4,7 @@ import {
   Button,
   Chip,
   IconButton,
+  Radio,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -84,6 +85,15 @@ const PersonaListView = ({
   onCreatePersona,
   personaCreateEditType = null,
   lockedFilters = null,
+  onUseInEnvironment = null,
+  /* Pick exactly one (a scenario's caller): a radio per row instead of
+     checkboxes, and `currentId` tags the persona already in use. */
+  singleSelect = false,
+  currentId = null,
+  /* Where each persona is in use — { [id]: { scenarios, envs: [names] } }.
+     When given, the list shows a "Used in" column and deleting says what
+     uses the personas. */
+  usage = null,
 }) => {
   const { role } = useAuthContext();
   const canCreate = RolePermission.SIMULATION_AGENT[PERMISSIONS.CREATE][role];
@@ -202,8 +212,31 @@ const PersonaListView = ({
     }
   }, [deletableSelected, bulkDelete, handleCancelSelection]);
 
+  const selectedId = singleSelect ? selectedPersonas[0]?.id ?? null : null;
+
   const columns = useMemo(
     () => [
+      ...(singleSelect
+        ? [
+            {
+              id: "pick",
+              accessorKey: "id",
+              header: "",
+              size: 52,
+              enableSorting: false,
+              cell: ({ row }) => (
+                <Radio
+                  size="small"
+                  checked={row.original?.id === selectedId}
+                  onChange={() => onToggleSelect?.(row.original, true)}
+                  onClick={(e) => e.stopPropagation()}
+                  inputProps={{ "aria-label": `Use ${row.original?.name}` }}
+                  sx={{ p: 0.5 }}
+                />
+              ),
+            },
+          ]
+        : []),
       {
         id: "name",
         accessorKey: "name",
@@ -212,13 +245,23 @@ const PersonaListView = ({
         minSize: 220,
         enableSorting: false,
         cell: ({ row }) => (
-          <Typography
-            variant="body2"
-            noWrap
-            sx={{ fontWeight: 500, fontSize: "13px" }}
-          >
-            {row.original?.name}
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+            <Typography
+              variant="body2"
+              noWrap
+              sx={{ fontWeight: 500, fontSize: "13px" }}
+            >
+              {row.original?.name}
+            </Typography>
+            {currentId != null && String(row.original?.id) === String(currentId) && (
+              <Chip
+                size="small"
+                label="Current"
+                variant="outlined"
+                sx={{ fontSize: "11px", height: 20, flexShrink: 0 }}
+              />
+            )}
+          </Box>
         ),
       },
       {
@@ -379,6 +422,34 @@ const PersonaListView = ({
           }
         },
       },
+      ...(usage
+        ? [
+            {
+              id: "usedIn",
+              accessorKey: "id",
+              header: "Used in",
+              size: 170,
+              enableSorting: false,
+              cell: ({ row }) => {
+                const u = usage[String(row.original?.id)];
+                if (!u?.scenarios) {
+                  return (
+                    <Typography variant="body2" noWrap sx={{ fontSize: "13px", color: "text.disabled" }}>
+                      Not used yet
+                    </Typography>
+                  );
+                }
+                return (
+                  <Tooltip title={u.envs.join(", ")} placement="top" arrow>
+                    <Typography variant="body2" noWrap sx={{ fontSize: "13px" }}>
+                      {`${u.scenarios} scenario${u.scenarios === 1 ? "" : "s"} · ${u.envs.length} env${u.envs.length === 1 ? "" : "s"}`}
+                    </Typography>
+                  </Tooltip>
+                );
+              },
+            },
+          ]
+        : []),
       ...(isSelectable
         ? []
         : [
@@ -386,16 +457,44 @@ const PersonaListView = ({
               id: "actions",
               accessorKey: "id",
               header: "",
-              size: 88,
+              size: onUseInEnvironment ? 156 : 88,
               enableSorting: false,
               cell: ({ row }) => {
                 const persona = row.original;
                 const canEdit = !persona?.isDefault && canCreate;
-                if (!canCreate) return null;
+                if (!canCreate && !onUseInEnvironment) return null;
                 return (
                   <Box
                     sx={{ display: "flex", alignItems: "center", gap: 0.25 }}
                   >
+                    {onUseInEnvironment && (
+                      <Tooltip title="Write scenarios for this persona in an environment" arrow>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          aria-label={`Use ${persona?.name || "persona"} in an environment`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onUseInEnvironment([persona]);
+                          }}
+                          startIcon={<Iconify icon="mingcute:add-line" width={13} />}
+                          sx={{
+                            mr: 0.5,
+                            minWidth: 0,
+                            height: 26,
+                            px: 1,
+                            fontSize: "12px",
+                            textTransform: "none",
+                            color: "text.primary",
+                            borderColor: "divider",
+                            "& .MuiButton-startIcon": { mr: 0.5 },
+                          }}
+                        >
+                          Use
+                        </Button>
+                      </Tooltip>
+                    )}
+                    {canCreate && (
                     <IconButton
                       size="small"
                       aria-label={`Duplicate persona ${persona?.name || ""}`}
@@ -407,6 +506,7 @@ const PersonaListView = ({
                     >
                       <Iconify icon="solar:copy-linear" width={16} />
                     </IconButton>
+                    )}
                     {canEdit && (
                       <IconButton
                         size="small"
@@ -430,7 +530,7 @@ const PersonaListView = ({
             },
           ]),
     ],
-    [canCreate, isSelectable],
+    [canCreate, isSelectable, onUseInEnvironment, singleSelect, selectedId, currentId, onToggleSelect, usage],
   );
 
   const hiddenColumns = useMemo(
@@ -594,15 +694,19 @@ const PersonaListView = ({
             <PersonasBulkActionsBar
               selectedCount={selectedItems.length}
               deletableCount={deletableSelected.length}
+              onUse={onUseInEnvironment ? () => onUseInEnvironment(selectedItems) : undefined}
               onDelete={() => setDeleteDialogOpen(true)}
               onCancel={handleCancelSelection}
             />
           ) : (
+            /* Outlined like Filter and Columns: the screens this list sits
+               on already carry a primary action (Build environment, Add
+               scenarios), so creating a persona is the secondary one. */
             <Button
-              variant="contained"
-              color="primary"
+              size="small"
+              variant="outlined"
               disabled={!canCreate}
-              startIcon={<Iconify icon="mingcute:add-line" width={18} />}
+              startIcon={<Iconify icon="mingcute:add-line" width={16} />}
               onClick={() => {
                 if (onCreatePersona) {
                   onCreatePersona();
@@ -614,7 +718,14 @@ const PersonaListView = ({
                   personaCreateEditType: null,
                 });
               }}
-              sx={{ px: 2.5, typography: "body2", textTransform: "none" }}
+              sx={{
+                px: 1.5,
+                textTransform: "none",
+                fontSize: "13px",
+                height: "32px",
+                borderColor: "divider",
+                color: "text.primary",
+              }}
             >
               Create persona
             </Button>
@@ -696,6 +807,10 @@ const PersonaListView = ({
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={setColumnVisibility}
         onRowClick={(row) => {
+          if (singleSelect) {
+            onToggleSelect?.(row, true);
+            return;
+          }
           if (isSelectable) {
             const isSelected = selectedPersonas.some((p) => p.id === row.id);
             onToggleSelect?.(row, !isSelected);
@@ -704,13 +819,17 @@ const PersonaListView = ({
           setInfoDrawer({ open: true, persona: row });
         }}
         getRowId={(row) => row.id}
-        enableSelection
+        enableSelection={!singleSelect}
         emptyMessage={
-          typeFilter === "custom"
-            ? "You haven't created any custom personas yet"
-            : typeFilter === "prebuilt"
-              ? "No prebuilt personas found"
-              : "No personas found"
+          debouncedSearch
+            ? "No personas match your search"
+            : typeFilter === "custom"
+              ? "You haven't created any custom personas yet"
+              : typeFilter === "prebuilt"
+                ? "No prebuilt personas found"
+                : lockedSimulationType
+                  ? `No ${lockedSimulationType === AGENT_TYPES.VOICE ? "voice" : "chat"} personas yet — use Create persona to add one`
+                  : "No personas found"
         }
       />
 
@@ -751,6 +870,14 @@ const PersonaListView = ({
         open={deleteDialogOpen}
         count={deletableSelected.length}
         skippedCount={selectedItems.length - deletableSelected.length}
+        usageNote={(() => {
+          if (!usage) return null;
+          const used = deletableSelected.map((p) => usage[String(p.id)]).filter((u) => u?.scenarios);
+          if (!used.length) return null;
+          const scenarios = used.reduce((n, u) => n + u.scenarios, 0);
+          const envs = new Set(used.flatMap((u) => u.envs));
+          return `${scenarios} scenario${scenarios === 1 ? "" : "s"} in ${envs.size} environment${envs.size === 1 ? "" : "s"} use ${deletableSelected.length === 1 ? "this persona" : "these personas"}. They keep their own copy and will still run — they just won't link back to the library.`;
+        })()}
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteDialogOpen(false)}
         isLoading={bulkDelete.isPending}
@@ -775,6 +902,11 @@ const PersonaListView = ({
         }
         editPersona={editDrawer.persona}
         personaCreateEditType={editDrawer.personaCreateEditType}
+        /* In a picker, a persona you just created is the one you meant to
+           pick — select it rather than leaving you to find it. */
+        onSaved={(saved) => {
+          if (isSelectable && editDrawer.mode === "create") onToggleSelect?.(saved, true);
+        }}
       />
       <DuplicatePersonas
         open={duplicateDialog.open}
@@ -797,6 +929,10 @@ PersonaListView.propTypes = {
   onToggleSelect: PropTypes.func,
   onCreatePersona: PropTypes.func,
   personaCreateEditType: PropTypes.string,
+  onUseInEnvironment: PropTypes.func,
+  singleSelect: PropTypes.bool,
+  currentId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+  usage: PropTypes.object,
 };
 
 export default PersonaListView;

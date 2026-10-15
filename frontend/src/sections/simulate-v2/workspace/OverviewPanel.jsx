@@ -1,16 +1,13 @@
 import PropTypes from "prop-types";
 import { useMemo, useState } from "react";
-import { useSnackbar } from "notistack";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Button, Grid, Chip, Tooltip,
-  IconButton, CircularProgress,
+  CircularProgress,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
-import AgentsPanel from "./AgentsPanel";
-import SideDrawer from "../components/SideDrawer";
 import { getSurface, getDomain } from "../_mock/surfaces";
-import { twinById, detectedTwinsFor, liveSandboxContentFor } from "../_mock/twins";
+import { twinById, liveSandboxContentFor } from "../_mock/twins";
 import TwinLogo from "./../components/TwinLogo";
 import SlackSandboxMock from "../twins/SlackSandboxMock";
 import NotionSandboxMock from "../twins/NotionSandboxMock";
@@ -33,9 +30,13 @@ import { provenanceFor } from "../_mock/provenance";
 import { OriginChip, SectionCard, EmptyState } from "../components/primitives";
 import CapabilityGraph from "./CapabilityGraph";
 import ToolFitBanner from "./ToolFitBanner";
-import AgentPromptDrawer from "./agents/AgentPromptDrawer";
-import { agentPromptOf } from "../_mock/agentPrompt";
-import { agentToolsFor } from "../_mock/toolFit";
+import { isConnectOnly } from "../_mock/envModel";
+import { toolSettingOf } from "../_mock/toolEnv";
+import { unexplainedMoveOf } from "../_mock/resultDrift";
+import ConnectOnlyWorld, { ResultsMovedNote, EnvironmentKindNote } from "./ConnectOnlyWorld";
+import { BlockingGapsInline } from "./SetupGapsPanel";
+import EnvAgentLine from "./EnvAgentLine";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * What this environment is.
@@ -49,26 +50,11 @@ import { agentToolsFor } from "../_mock/toolFit";
 const seedBlurb = (rows) =>
   `${rows.toLocaleString()} rows that fill this environment before your agent arrives — the world it actually works in. Rebuilt for every task, so nothing carries over.`;
 
-export default function OverviewPanel({ buildMode, env, envState, patch, onGo, agentConnected, locked = false, onFork, contractProgress }) {
+export default function OverviewPanel({ buildMode, env, envState, patch, onGo, agentConnected, locked = false, onFork, contractProgress, buildDone = null }) {
 
-  /*
-    Nikhil's env-first feedback: agent version management stays inside
-    Overview, not on its own tab. Clicking "Manage versions" in
-    AgentSummarySection opens this drawer overlaying the tab — the
-    user sees the version-history + add-version affordance without
-    losing their place. The drawer hosts the full AgentsPanel so we
-    don't have to reimplement version-history / roll-back / add.
-  */
-  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
-  /*
-    AgentsPanel opens its own drawers ("Add new version",
-    "Promote to source"). When one of those is open we hide the
-    outer drawer so the user sees ONE drawer at a time — otherwise
-    two drawers stack side by side and read as broken layering.
-    The outer drawer's state is preserved (still `open`), only its
-    render is suppressed while a nested drawer takes over.
-  */
-  const [nestedAgentDrawer, setNestedAgentDrawer] = useState(false);
+  /* The agent lives in Agents; "Connect agent" here opens the picker in place. */
+  const [pick, setPick] = useState(0);
+  const go = (step) => (step === "agent" ? setPick(Date.now()) : onGo?.(step));
 
   const surface = getSurface(env.surface);
   const domain = getDomain(env.domain);
@@ -93,29 +79,27 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
      the card links through to the review queue. */
   const ruleProv = provenanceFor(env).rules;
   const held = ruleProv.filter((r) => r.held && !(envState?.confirmedRules || []).includes(r.id));
+  /* A connect-only agent has no world, and a result can move for reasons
+     outside everything we version — the account it books under. */
+  const connectOnly = isConnectOnly(env);
+  const moved = useMemo(() => (connectOnly ? unexplainedMoveOf(env, envState) : null), [connectOnly, env, envState]);
+  /* While it builds, the page fills in the order the build learns things:
+     the agent first, then what it is as its tools are read, the capabilities
+     as they stream, use cases once rules are found, the world once stores
+     are, and the counts when the build is done. */
+  const inBuild = !!buildMode && Array.isArray(buildDone) && !buildDone.includes("build");
+  const prog = contractProgress || {};
+  const understood = !!buildDone?.includes("understand");
+  const showIntro = !inBuild || (prog.tools || 0) > 0 || understood;
+  const showUseCases = !inBuild || (prog.rules || 0) > 0 || understood;
+  const showWorld = !inBuild || (prog.stores || 0) > 0;
+  const showSummary = !inBuild;
 
   return (
     <Box sx={{ p: 2 }}>
       {/* TwinSandboxSection + CapabilityGraph moved to the Contract tab.
           Overview now answers "how's this env doing right now?" — state,
           not definition. */}
-
-      {/* Auto-detected twin suggestion — for agent-derived envs where
-          we read the agent's code and noticed it talks to SaaS
-          services. Nudges the user toward attaching a twin backing
-          without forcing them; a one-click action provisions and
-          drops them into the twin-config mini-flow. */}
-      {/* Twin suggestion banner intentionally suppressed on this
-          variation. The Create Environments picker now offers Clones as
-          a first-class starting choice, so users have already made the
-          call about whether to back the env with twins — resurfacing
-          the same nudge post-run reads as second-guessing the choice
-          they made upstream. If we later want to bring it back for envs
-          that were built from source before clones existed, re-enable
-          the render below. */}
-      {false && !envState?.twinBacking && !buildMode && agentConnected && (
-        <TwinSuggestionBanner env={env} envState={envState} patch={patch} />
-      )}
 
       {/*
         The "Connect your agent" banner never fires in build mode
@@ -127,8 +111,8 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         <Box
           sx={{
             p: 2, mb: 2, borderRadius: 1.5,
-            border: "1px solid", borderColor: alpha(surface.color, 0.3),
-            bgcolor: (t) => alpha(surface.color, t.palette.mode === "dark" ? 0.1 : 0.05),
+            border: "1px solid", borderColor: "divider",
+            bgcolor: "background.paper",
           }}
         >
           <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "center" }} spacing={2}>
@@ -143,7 +127,7 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
             <Button
               variant="contained"
               color="primary"
-              onClick={() => onGo("agent")}
+              onClick={() => go("agent")}
               endIcon={<Iconify icon="solar:arrow-right-linear" width={16} />}
               sx={{ flexShrink: 0, typography: "s2", fontWeight: 700 }}
             >
@@ -159,6 +143,8 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         both the alignment and the pattern. As a labelled select beside the
         description it reads as what it is — a setting you change before a run.
       */}
+      {showIntro && (
+      <FadeIn>
       <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "flex-start" }} spacing={2}>
         <Typography sx={{ typography: "s2", color: "text.secondary", maxWidth: 820 }}>
           {env.description}
@@ -177,32 +163,35 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         <Fact label="Transports" value={surface.transports.join(" · ")} />
         <Fact label="Scenario packs" value={`${stats.packs} packs · ${envState?.scenarios?.length || stats.scenarios} scenarios`} />
       </Stack>
+      </FadeIn>
+      )}
 
       {/*
-        Agent summary — the env's current "test subject". Nikhil's
-        feedback: the env is the reusable asset, the agent is one
-        attribute. So this is a compact card inside Overview, not a
-        standalone tab. Reads: "here's the agent currently attached;
-        manage its versions or swap it out via the actions". Different
-        agents can attach to the same env over time — the env is
-        frozen, the test subject rotates.
+        What holds the run, answered where it's read (PRD v6 Story 3). The
+        full inbox — optional and settled items too — opens from the header.
+        "Connect an agent" is skipped while the banner above is saying it.
       */}
-      <AgentSummarySection
-        env={env}
-        envState={envState}
-        onGo={onGo}
-        onManageVersions={() => setAgentDrawerOpen(true)}
-        agentConnected={agentConnected}
-        locked={locked}
-        onFork={onFork}
-      />
+      {!buildMode && (
+        <BlockingGapsInline
+          env={env}
+          envState={envState}
+          patch={locked ? null : patch}
+          onGo={go}
+          skip={agentConnected ? [] : ["no-agent"]}
+          sx={{ mb: 2 }}
+        />
+      )}
+
+      {/* The agent this environment tests, in one line — its detail is the Agent tab. */}
+      <EnvAgentLine env={env} envState={envState} patch={patch} locked={locked} onFork={onFork} openPick={pick} />
 
       {!locked && <AgentRefreshBanner env={env} envState={envState} patch={patch} />}
 
       {/* State-of-the-env summary tiles + latest run — the "how's this
           env doing right now?" answer that used to be missing. Each
           tile jumps to the tab it summarises. */}
-      <StateSummary env={env} envState={envState} onGo={onGo} />
+      {showSummary && <FadeIn><StateSummary env={env} envState={envState} onGo={go} /></FadeIn>}
+      <ResultsMovedNote move={moved} sx={{ mt: -1.5, mb: 3 }} />
 
       {/*
         Getting-started checklist for envs that haven't been seeded
@@ -213,7 +202,7 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         the CapabilityGraph + downstream sections do the talking.
       */}
       {!agentConnected && !envState?.twinBacking && !hasDerivedWorld && (
-        <NextStepsChecklist env={env} envState={envState} onGo={onGo} />
+        <NextStepsChecklist env={env} envState={envState} onGo={go} />
       )}
 
       {/*
@@ -223,7 +212,7 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         "0 tools · 0 rules · 0 rows" cards from filling the screen.
       */}
       {envState?.twinBacking ? (
-        <TwinBackedSections env={env} envState={envState} onGo={onGo} />
+        <TwinBackedSections env={env} envState={envState} onGo={go} />
       ) : (
         <>
       {/*
@@ -240,17 +229,15 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
       {/*
         The reviewability record — how the reader mapped source to
         sandbox. Every derived fact carries an origin and a sandbox
-        target, side by side. If the reader stopped short on any row
-        (call-graph says it's invoked, prompt doesn't say what it
-        does), the row itself carries the resolve control — the
-        question is anchored to the fact it belongs to, not tucked
-        into a settings dialog. This is the artifact someone comes
+        target, side by side. This is the artifact someone comes
         back to three weeks later to see which decisions a human
         made and which the reader made itself.
       */}
       {(showRichOverview || contractProgress?.streaming) && (
-        <SourceToSandboxMap env={env} envState={envState} patch={patch} progress={contractProgress} />
+        <SourceToSandboxMap env={env} envState={envState} progress={contractProgress} />
       )}
+      {showUseCases && (
+      <FadeIn>
       <Grid container spacing={2} alignItems="flex-start" sx={{ mb: 3 }}>
         <Grid item xs={12} md={7}>
           <SectionCard title="Use cases" subtitle="What it is actually for">
@@ -275,8 +262,7 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
                   key={a.subject}
                   sx={{
                     p: 1.5, borderRadius: 1,
-                    border: "1px solid", borderColor: alpha("#CA8A04", 0.3),
-                    bgcolor: (t) => alpha("#CA8A04", t.palette.mode === "dark" ? 0.1 : 0.05),
+                    border: "1px solid", borderColor: "divider",
                   }}
                 >
                   <Typography sx={{ typography: "s2", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>
@@ -290,9 +276,16 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
           )}
         </Grid>
       </Grid>
+      </FadeIn>
+      )}
 
       {/* ── the world it acts on ── */}
+      {showWorld && (
+      <FadeIn>
       <GroupHeading>The world</GroupHeading>
+      {/* Sealed or Live (RSI PRD) — said where the world is. */}
+      <EnvironmentKindNote env={env} envState={envState} sx={{ mb: 2 }} />
+      {connectOnly ? <ConnectOnlyWorld env={env} sx={{ mb: 3 }} /> : (
       <Grid container spacing={2} alignItems="flex-start" sx={{ mb: 3 }}>
         <Grid item xs={12} md={7}>
           <SectionCard title="Seeded data" subtitle={seedBlurb(totalRows)}>
@@ -340,67 +333,31 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
           </SectionCard>
         </Grid>
       </Grid>
+      )}
+      </FadeIn>
+      )}
       </>
       )}
 
-      {/*
-        Agent version-management drawer. Uses the shared SideDrawer so
-        it matches every other drawer in this feature (FixMyAgent,
-        Replay, CallDrawer, AddEvals) — transparent backdrop,
-        background.paper surface, subtle shadow. Overlays Overview so
-        the user never leaves this tab.
-      */}
-      <SideDrawer
-        open={agentDrawerOpen && !nestedAgentDrawer}
-        onClose={() => setAgentDrawerOpen(false)}
-        width={{ xs: "100%", sm: 720, md: 880 }}
-        /* keepMounted preserves AgentsPanel state while a nested
-           drawer (Add version, Promote) hides this outer one —
-           without it the inner unmounts on close and the whole
-           flow resets. */
-        keepMounted={agentDrawerOpen}
-      >
-        <Stack sx={{ height: "100%", minHeight: 0 }}>
-          <Stack
-            direction="row" alignItems="center" spacing={1.5}
-            sx={{
-              px: 2.5, py: 1.5, borderBottom: "1px solid",
-              borderColor: "divider", flexShrink: 0,
-            }}
-          >
-            <Iconify icon="solar:cpu-bolt-linear" width={18} sx={{ color: "text.secondary" }} />
-            <Box flex={1} minWidth={0}>
-              <Typography sx={{ typography: "s1", fontWeight: 700 }}>
-                Test subject
-              </Typography>
-              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                Manage the agent versions running against this environment
-              </Typography>
-            </Box>
-            <IconButton size="small" onClick={() => setAgentDrawerOpen(false)}>
-              <Iconify icon="solar:close-circle-linear" width={20} />
-            </IconButton>
-          </Stack>
-          <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-            <AgentsPanel
-              env={env}
-              envState={envState}
-              patch={patch}
-              onGo={(step) => {
-                setAgentDrawerOpen(false);
-                onGo?.(step);
-              }}
-              onNestedDrawerChange={setNestedAgentDrawer}
-            />
-          </Box>
-        </Stack>
-      </SideDrawer>
+
 
     </Box>
   );
 }
 
+/* A block arriving while the environment builds. */
+function FadeIn({ children }) {
+  return (
+    <Box sx={{ animation: "ov-in 360ms ease both", "@keyframes ov-in": { from: { opacity: 0, transform: "translateY(4px)" }, to: { opacity: 1, transform: "none" } } }}>
+      {children}
+    </Box>
+  );
+}
+FadeIn.propTypes = { children: PropTypes.node };
+
 OverviewPanel.propTypes = {
+  /* Build stages finished so far (build screen only) — paces the reveal. */
+  buildDone: PropTypes.array,
   "buildMode": PropTypes.bool,
   env: PropTypes.object.isRequired,
   envState: PropTypes.object.isRequired,
@@ -432,7 +389,7 @@ function StateSummary({ env, envState, onGo }) {
     { id: "scenarios", label: "Scenarios",     value: scenarioCount, icon: "solar:layers-minimalistic-linear", to: "scenarios" },
     { id: "evals",     label: "Evaluations",   value: evalCount,     icon: "solar:shield-check-linear",        to: "evals" },
     { id: "runs",      label: "Runs",          value: runs.length,   icon: "solar:play-circle-linear",         to: "runs", disabled: runs.length === 0 },
-    { id: "rules",     label: "Hard rules",    value: ruleCount,     icon: "solar:shield-keyhole-linear",      to: "contract" },
+    { id: "rules",     label: "Rules",         value: ruleCount,     icon: "solar:shield-keyhole-linear",      to: "contract" },
   ];
 
   return (
@@ -441,8 +398,8 @@ function StateSummary({ env, envState, onGo }) {
         {tiles.map((t) => (
           <Box
             key={t.id}
-            onClick={t.disabled ? undefined : () => onGo?.(t.to)}
-            sx={{
+            {...clickable(t.disabled ? undefined : () => onGo?.(t.to))}
+            sx={{ ...focusRing,
               flex: 1, minWidth: 0, p: 1.75, borderRadius: 1.5,
               border: "1px solid", borderColor: "divider",
               bgcolor: "background.paper",
@@ -517,161 +474,6 @@ function AgentRefreshBanner({ env, envState, patch }) {
 }
 AgentRefreshBanner.propTypes = { env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func };
 
-/* ── agent summary section ──────────────────────────────────────────────────
-   Compact card that reflects Nikhil's env-first feedback: the agent is a
-   *test subject* attached to the env, not the env's identity. Shows the
-   current agent's version + connection, and a "Manage versions" button
-   that jumps to the full AgentsPanel via the still-live `agent` deep-link
-   route. The tab was retired from the rail but the panel is reachable
-   from this button, and from any deep link that arrives with step=agent. */
-
-function AgentSummarySection({ env, envState, onGo, onManageVersions, agentConnected, locked, onFork }) {
-  const agent = envState?.agent;
-  const versions = envState?.agentVersions || [];
-  const activeLabel = envState?.activeAgentVersion
-    || versions[versions.length - 1]?.label
-    || "v1";
-  const versionCount = Math.max(1, versions.length);
-  const endpoint = agent?.values?.sdkEndpoint || agent?.values?.endpoint || null;
-  /* Sync affordance — only for hosted agent types (voice_platform,
-     chat_openai, mcp_agent) whose runtime lives on a third-party
-     platform we don't own. Repo / raw SIP / user-hosted endpoint
-     types are the source of truth themselves. */
-  const values = agent?.values || {};
-  const HOSTED_TYPE_IDS = new Set(["voice_platform", "chat_openai", "mcp_agent"]);
-  const hosted = Boolean(agent?.typeId && HOSTED_TYPE_IDS.has(agent.typeId));
-  const { enqueueSnackbar } = useSnackbar();
-  const [syncing, setSyncing] = useState(false);
-  const [promptOpen, setPromptOpen] = useState(false);
-  /* The active version's own prompt when it carries one; otherwise the one
-     its source would hold, read against the tools that version calls. */
-  const activeVersion = versions.find((v) => v.label === activeLabel);
-  const prompt = activeVersion?.prompt
-    || (agent ? agentPromptOf(env?.builtFrom || { kind: agent.sourceKind, value: agent.location }, { ...env, tools: agentToolsFor(env, envState, activeLabel) }) : null);
-  const handleSync = () => {
-    if (syncing) return;
-    setSyncing(true);
-    const provider = values.provider || "the hosted platform";
-    setTimeout(() => {
-      setSyncing(false);
-      enqueueSnackbar(`Fetched latest from ${provider} — already in sync with ${activeLabel}`, {
-        variant: "success", autoHideDuration: 4000,
-      });
-    }, 900);
-  };
-
-  return (
-    <Box
-      sx={{
-        my: 2, p: 2, borderRadius: 1.5, border: "1px solid", borderColor: "divider",
-      }}
-    >
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }}>
-        <Box
-          sx={{
-            width: 34, height: 34, borderRadius: 1, display: "grid", placeItems: "center",
-            bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.06 : 0.04),
-            color: "text.secondary", flexShrink: 0,
-          }}
-        >
-          <Iconify icon="solar:cpu-bolt-linear" width={18} />
-        </Box>
-        <Box flex={1} minWidth={0}>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography sx={{ typography: "s3", color: "text.subtitle", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              Test subject
-            </Typography>
-            {agentConnected && (
-              <Box
-                sx={{
-                  height: 18, px: 0.75, borderRadius: 0.75,
-                  display: "inline-flex", alignItems: "center",
-                  bgcolor: (t) => alpha("#16A34A", t.palette.mode === "dark" ? 0.16 : 0.1),
-                  color: "#16A34A",
-                }}
-              >
-                <Typography sx={{ typography: "s3", fontWeight: 700 }}>Connected</Typography>
-              </Box>
-            )}
-          </Stack>
-          <Typography sx={{ typography: "s1", fontWeight: 700, mt: 0.25 }}>
-            {agent ? `Agent ${activeLabel}` : "No agent attached"}
-          </Typography>
-          <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-            {locked
-              ? "Seeded baseline shipped with this template. Fork the environment to add your own agent versions."
-              : agent
-                ? `${versionCount} version${versionCount === 1 ? "" : "s"} on record${endpoint ? ` · ${endpoint}` : ""}. This environment stays put — swap in another agent to compare.`
-                : "This environment is portable. Attach an agent as the test subject; you can swap in different agents later without rebuilding the env."}
-          </Typography>
-        </Box>
-        <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
-          {agent && hosted && !locked && (
-            <Tooltip arrow title={syncing
-              ? "Re-fetching from the hosted platform…"
-              : `Re-fetch the latest definition from ${values.provider || "the hosted platform"}.`}
-            >
-              <span>
-                <Button
-                  variant="outlined" size="small"
-                  onClick={handleSync}
-                  disabled={syncing}
-                  startIcon={syncing
-                    ? <CircularProgress size={13} thickness={5} sx={{ color: "text.subtitle" }} />
-                    : <Iconify icon="solar:refresh-linear" width={15} />}
-                  sx={{
-                    typography: "s2", fontWeight: 700,
-                    color: "text.primary", borderColor: "divider",
-                    "&:hover": { borderColor: "text.subtitle", bgcolor: "action.hover" },
-                  }}
-                >
-                  {syncing ? "Syncing…" : "Sync"}
-                </Button>
-              </span>
-            </Tooltip>
-          )}
-          {agent && !locked && (
-            <Button
-              variant="outlined" size="small"
-              onClick={() => setPromptOpen(true)}
-              startIcon={<Iconify icon="solar:document-text-linear" width={15} />}
-              sx={{
-                typography: "s2", fontWeight: 700,
-                color: "text.primary", borderColor: "divider",
-                "&:hover": { borderColor: "text.subtitle", bgcolor: "action.hover" },
-              }}
-            >
-              View prompt
-            </Button>
-          )}
-          {locked ? null : (
-            <Button
-              variant="contained" size="small"
-              onClick={onManageVersions}
-              sx={{
-                typography: "s2", fontWeight: 700,
-                bgcolor: "common.white", color: "common.black",
-                "&:hover": { bgcolor: (t) => alpha("#FFFFFF", 0.88) },
-              }}
-            >
-              {agent ? "Manage versions" : "Attach agent"}
-            </Button>
-          )}
-        </Stack>
-      </Stack>
-      <AgentPromptDrawer open={promptOpen} onClose={() => setPromptOpen(false)} label={activeLabel} prompt={prompt} />
-    </Box>
-  );
-}
-AgentSummarySection.propTypes = {
-  env: PropTypes.object,
-  envState: PropTypes.object,
-  onGo: PropTypes.func,
-  onManageVersions: PropTypes.func,
-  agentConnected: PropTypes.bool,
-  locked: PropTypes.bool,
-  onFork: PropTypes.func,
-};
 
 /* ── twin backing surface panel ───────────────────────────────────────────── */
 
@@ -836,8 +638,8 @@ export function TwinSandboxSection({ env, envState }) {
           <Tooltip arrow title={`Connected: ${envState.agent.values.sdkEndpoint}`}>
             <Stack
               direction="row" alignItems="center" spacing={0.75}
-              onClick={() => setConnectOpen(true)}
-              sx={{
+              {...clickable(() => setConnectOpen(true))}
+              sx={{ ...focusRing,
                 px: 1, height: 28, borderRadius: 999, cursor: "pointer",
                 border: (t) => `1px solid ${alpha("#16A34A", t.palette.mode === "dark" ? 0.35 : 0.28)}`,
                 bgcolor: (t) => alpha("#16A34A", t.palette.mode === "dark" ? 0.14 : 0.08),
@@ -933,7 +735,7 @@ function TwinBackingPanel({ backing, envState }) {
           TWIN-BACKED WORLD
         </Typography>
         <Chip
-          size="small" label={anyActivity ? "Live" : "Ready"}
+          size="small" label={anyActivity ? "Active" : "Ready"}
           sx={{
             height: 18, borderRadius: 0.75,
             bgcolor: (t) => alpha("#16A34A", t.palette.mode === "dark" ? 0.18 : 0.1),
@@ -1115,87 +917,6 @@ function TrendSparkline({ points, tint }) {
 TrendSparkline.propTypes = { points: PropTypes.array, tint: PropTypes.string };
 
 /*
-  Detected-twins banner for agent-derived envs. Reads what services
-  the agent talks to (from imports and tool schemas in the real
-  product; scripted per-surface in the prototype) and nudges the
-  user toward attaching a twin backing.
-
-  The wedge: NOBODY else auto-detects. Arga Labs offers a menu of
-  30 SaaS logos. We know the agent talks to Slack, so we say so
-  and offer a one-click attach.
-*/
-function TwinSuggestionBanner({ env, envState, patch }) {
-  const detected = useMemo(() => detectedTwinsFor(env).map(twinById).filter(Boolean), [env]);
-  if (detected.length === 0) return null;
-  const attachAll = () => {
-    const services = detected.map((t) => t.id);
-    patch({
-      twinBacking: {
-        services,
-        seedPrompt: "",
-        seed: JSON.stringify(
-          Object.fromEntries(services.map((s) => {
-            try { return [s, JSON.parse(twinById(s)?.seedShape || "{}")]; }
-            catch { return [s, {}]; }
-          })),
-          null, 2,
-        ),
-        endpoints: Object.fromEntries(services.map((s) => [
-          s, `https://${s}.sandbox.futureagi.com/e/${env.id.slice(-6)}`,
-        ])),
-        activity: Object.fromEntries(services.map((s) => [s, { requests: 0, failures: 0 }])),
-        provisionedAt: new Date().toISOString(),
-        status: "ready",
-      },
-    });
-  };
-  return (
-    <Box sx={{
-      mb: 2, p: 1.75, borderRadius: 1.5,
-      border: "1px solid",
-      borderColor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.4 : 0.35),
-      bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.08 : 0.04),
-    }}>
-      <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "center" }} spacing={1.5}>
-        <Iconify icon="solar:magnet-linear" width={16} sx={{ color: "#7857FC", flexShrink: 0 }} />
-        <Box flex={1} minWidth={0}>
-          <Typography sx={{ typography: "s2", fontWeight: 700, color: "text.primary" }}>
-            We detected {detected.length} service{detected.length === 1 ? "" : "s"} your agent talks to.
-          </Typography>
-          <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" rowGap={0.5} sx={{ mt: 0.75 }}>
-            {detected.map((t) => (
-              <Stack key={t.id} direction="row" alignItems="center" spacing={0.5} sx={{
-                px: 0.75, py: 0.25, borderRadius: 0.75,
-                bgcolor: (th) => alpha(t.color, th.palette.mode === "dark" ? 0.14 : 0.08),
-                color: t.color,
-                border: "1px solid", borderColor: alpha(t.color, 0.35),
-              }}>
-                <Iconify icon={t.icon} width={11} />
-                <Typography sx={{ typography: "s3", fontWeight: 700 }}>{t.name}</Typography>
-              </Stack>
-            ))}
-          </Stack>
-          <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
-            Attach twins so runs test what actually landed in {detected.length === 1 ? detected[0].name : "these services"} — not just the decision to call.
-          </Typography>
-        </Box>
-        <Button
-          variant="contained" color="primary" size="small"
-          onClick={attachAll}
-          startIcon={<Iconify icon="solar:link-circle-linear" width={14} />}
-          sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}
-        >
-          Attach {detected.length} twin{detected.length === 1 ? "" : "s"}
-        </Button>
-      </Stack>
-    </Box>
-  );
-}
-TwinSuggestionBanner.propTypes = {
-  env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func,
-};
-
-/*
   Overview sections for twin-backed envs — replace the source-derived
   Capabilities and "The world" groups. Focused on what actually exists
   in a twin env: the twinned services, the starting state each run
@@ -1296,14 +1017,6 @@ function TwinBackedSections({ env, envState, onGo }) {
                   Connected {timeAgo(agent.connectedAt)}
                 </Typography>
               )}
-              <Box>
-                <Button size="small" onClick={() => onGo?.("agent")}
-                  startIcon={<Iconify icon="solar:settings-linear" width={13} />}
-                  sx={{ typography: "s3", fontWeight: 700, px: 0.5 }}
-                >
-                  Change agent
-                </Button>
-              </Box>
             </Stack>
           </SectionCard>
         </Grid>
@@ -1321,8 +1034,7 @@ function TwinBackedSections({ env, envState, onGo }) {
               {backing?.seedPrompt ? (
                 <Typography sx={{
                   typography: "s2", color: "text.secondary", fontStyle: "italic",
-                  p: 1.5, borderRadius: 1, borderLeft: "3px solid",
-                  borderColor: "primary.main", bgcolor: "background.neutral",
+                  p: 1.5, borderRadius: 1, bgcolor: "background.neutral",
                 }}>
                   &ldquo;{backing.seedPrompt}&rdquo;
                 </Typography>
@@ -1433,8 +1145,8 @@ function ApiSurfaceBadge({ apiLevel }) {
   return (
     <Tooltip arrow title={
       isUi
-        ? "This twin exposes both an API for the agent to call and a browsable UI you can open to inspect state."
-        : "This twin exposes an API only. Inspect state via the OpenAPI viewer or the Raw requests tab in a run."
+        ? "This clone exposes both an API for the agent to call and a browsable UI you can open to inspect state."
+        : "This clone exposes an API only. Inspect state via the OpenAPI viewer or the Raw requests tab in a run."
     }>
       <Typography sx={{
         typography: "s3", fontWeight: 700, letterSpacing: 0.3,
@@ -1477,7 +1189,7 @@ function ApiOnlySandboxPanel({ twin, endpoint, envState }) {
         <TwinLogo twin={twin} width={22} />
         <Box flex={1} minWidth={0}>
           <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-            {twin?.name} twin — API only
+            {twin?.name} clone — API only
           </Typography>
           <Typography sx={{
             typography: "s3", color: "text.subtitle",
@@ -1637,11 +1349,11 @@ function NextStepsChecklist({ env, envState, onGo }) {
     {
       id: "run",
       title: "Run your first simulation",
-      body: "Kick off a run — you'll see the transcript, tool calls, and eval verdicts land in real time.",
+      /* This list only shows while no agent is connected, and a run needs one —
+         so the step says that instead of offering a button that can't work. */
+      body: "Needs a connected agent. Then Run simulation in the header starts it — transcripts, tool calls and eval verdicts land as it runs.",
       done: runCount > 0,
-      cta: "Run simulation",
-      onClick: () => {},
-      disabled: true,
+      cta: null,
       icon: "solar:play-circle-linear",
     },
   ];
@@ -1727,10 +1439,7 @@ NextStepsChecklist.propTypes = {
  * A two-column ledger: what was read from source, and what it became in
  * the sandbox. Rows sit on a CSS grid so every origin chip lines up in
  * one vertical band and every sandbox target aligns to the same left
- * edge — the alignment IS the readability. When the reader could not
- * classify a row from static analysis (tool invoked in the call-graph,
- * effect unnamed in the prompt), the row carries the resolve control
- * anchored below it, contained inside the highlighted zone.
+ * edge — the alignment IS the readability.
  * ─────────────────────────────────────────────────────────────────────── */
 
 /* Shared grid template so column headers, group headers and every row
@@ -1740,7 +1449,7 @@ NextStepsChecklist.propTypes = {
 const MAP_GRID = "minmax(0, 1fr) min-content 24px minmax(0, 1fr)";
 const MAP_PX = 3;
 
-function SourceToSandboxMap({ env, envState, patch, progress }) {
+function SourceToSandboxMap({ env, envState, progress }) {
   /*
     While the build is still reading the agent, the table is the contract
     being written: tools appear as their signatures are read, then rules as
@@ -1758,41 +1467,36 @@ function SourceToSandboxMap({ env, envState, patch, progress }) {
   /* A group's count line: how far along it is while reading, what it holds after. */
   const found = (shown, total, done) => (streaming && shown < total ? `${shown} of ${total} found` : done);
 
-  const classifyTool = (t) => {
-    const n = t.name.toLowerCase();
-    if (/^(book|create|reschedule|update|cancel|delete|send|post|upsert|issue|generate)/.test(n)) return "writes";
-    if (/^(get|read|check|list|search|fetch|verify|lookup)/.test(n)) return "reads";
-    return "unknown";
-  };
-  const targetForEffect = (effect) => {
-    if (effect === "writes") return "writes to the sandbox";
-    if (effect === "reads") return "reads from fixture state";
-    return "stubbed · returns fixture";
-  };
-
-  const toolResolutions = envState?.toolResolutions || {};
-  const setToolResolution = (name, choice) => patch?.({ toolResolutions: { ...toolResolutions, [name]: choice } });
+  /*
+    Each tool's row reads its tier off the fidelity dial (PRD v6 Story 5) —
+    the default from its side-effect class, or what someone set on the World
+    tab. A connect-only agent's tools are answered by its own systems.
+  */
+  const connectOnly = isConnectOnly(env);
+  const targetForTier = (tier) => ({
+    stub: "stub · a canned response",
+    replay: "replay · a recorded response",
+    stateful: "stateful · reads and writes the world",
+    live: "live · the real tool, sandboxed",
+  }[tier] || "stateful · reads and writes the world");
 
   /*
-    Every tool renders with an effect classification — verb heuristic
-    fills in the common case; a stored override wins. The "Needs your
-    answer" inline card that used to live below one row was homework
-    the reader shouldn't be handing back to the user in the build
-    flow; the classification and its override control now live on the
-    Contract tab's Tool implementations card, next to the code.
+    Every tool renders with its tier — the side-effect default fills in the
+    common case; a choice on the World tab wins. The "Needs your answer"
+    inline card that used to live below one row was homework the reader
+    shouldn't be handing back to the user in the build flow; the dial now
+    lives on the World tab's tools card, next to the code.
   */
   const toolRows = tools.map((t) => {
-    const effect = toolResolutions[t.name] || classifyTool(t);
+    const setting = toolSettingOf(t, envState);
     return {
       key: t.name,
       name: t.name,
       origin: "config",
-      target: targetForEffect(effect === "unknown" ? "reads" : effect),
-      confirmed: !!toolResolutions[t.name],
-      isUnresolved: false,
+      target: connectOnly ? "answered by your systems" : targetForTier(setting.tier),
+      confirmed: !connectOnly && setting.confirmed,
     };
   });
-  const toAnswer = 0;
 
   const surface = getSurface(env.surface);
   const actors = [
@@ -1822,7 +1526,7 @@ function SourceToSandboxMap({ env, envState, patch, progress }) {
         <Typography sx={{ typography: "s2", color: "text.subtitle", mt: 0.25, maxWidth: 720 }}>
           {streaming
             ? "Filling in as the builder reads your agent — tools first, then the rules, then the data the world is seeded with. Each carries where it was read from."
-            : "Every derived fact carries where it was read from and what it became in the sandbox. Rows the reader could not classify carry a resolve control right on the row."}
+            : "Every derived fact carries where it was read from and what it became in the sandbox."}
         </Typography>
       </Box>
 
@@ -1843,8 +1547,8 @@ function SourceToSandboxMap({ env, envState, patch, progress }) {
 
       {/* Groups */}
       <MapGroup label="Tools" hint="from the agent config & call-graph"
-        right={found(tools.length, allTools.length, `${tools.length} mapped${toAnswer ? ` · ${toAnswer} to answer` : ""}`)}
-        toAnswer={toAnswer} first
+        right={found(tools.length, allTools.length, `${tools.length} mapped`)}
+        first
       >
         {streaming && tools.length < allTools.length && <ReadingRow what="tool signatures" />}
         {toolRows.map((r, i) => (
@@ -1853,16 +1557,9 @@ function SourceToSandboxMap({ env, envState, patch, progress }) {
             index={i}
             name={r.name}
             origin={r.origin}
-            target={r.isUnresolved ? <NeedsAnswerLabel /> : r.target}
+            target={r.target}
             mono
-            highlight={r.isUnresolved}
             trailing={r.confirmed && <ConfirmedChip />}
-            below={r.isUnresolved && (
-              <InlineResolve
-                toolName={r.name}
-                onPick={(choice) => setToolResolution(r.name, choice)}
-              />
-            )}
           />
         ))}
       </MapGroup>
@@ -1879,14 +1576,14 @@ function SourceToSandboxMap({ env, envState, patch, progress }) {
             index={i}
             name={r.subject}
             origin={r.origin === "code" ? "policy" : r.origin}
-            target={ruleTarget(r.subject, r.origin)}
+            target={ruleTarget(r.subject, r.origin, connectOnly)}
             mono
           />
         ))}
       </MapGroup>
 
       <MapGroup label="Stores" hint="from your fixtures"
-        right={found(tables.length, allTables.length, `${tables.length} mapped · 1 derived`)}
+        right={found(tables.length, allTables.length, `${tables.length} mapped`)}
       >
         {streaming && tables.length < allTables.length && (
           <ReadingRow what={ruleProv.length < allRules.length ? "once the rules are in" : "the data the world is seeded with"} waiting={ruleProv.length < allRules.length} />
@@ -1901,19 +1598,10 @@ function SourceToSandboxMap({ env, envState, patch, progress }) {
             mono
           />
         ))}
-        {!streaming && (
-          <MapRow
-            index={tables.length}
-            name={null}
-            origin={null}
-            target="appointments (empty)"
-            derived
-          />
-        )}
       </MapGroup>
 
       {!streaming && (
-      <MapGroup label="Actors" hint="from the call-graph & prompt"
+      <MapGroup label="Other parties" hint="from the call-graph & prompt"
         right={`${actorMapped} mapped · ${actors.length - actorMapped} derived`}
       >
         {actors.map((a, i) => (
@@ -1933,7 +1621,7 @@ function SourceToSandboxMap({ env, envState, patch, progress }) {
   );
 }
 SourceToSandboxMap.propTypes = {
-  env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func, progress: PropTypes.object,
+  env: PropTypes.object, envState: PropTypes.object, progress: PropTypes.object,
 };
 
 /* The row a group shows while its items are still being read — or, for a
@@ -1982,8 +1670,11 @@ function ConfirmedChip() {
   );
 }
 
-function ruleTarget(subject, origin) {
+function ruleTarget(subject, origin, live = false) {
   if (origin === "doc") return "held for review · click to accept";
+  /* A live environment has no sandbox: the agent's tools reach its real
+     systems, so a rule is judged from the conversation, not enforced. */
+  if (live) return "judged from the conversation";
   const s = subject.toLowerCase();
   if (s.includes("double") || s.includes("overlap")) return "blocks overlapping slots";
   if (s.includes("hour") || s.includes("time")) return "blocks off-hours attempts";
@@ -1994,7 +1685,7 @@ function ruleTarget(subject, origin) {
   return "enforced at the sandbox boundary";
 }
 
-function MapGroup({ label, hint, right, toAnswer, children, first }) {
+function MapGroup({ label, hint, right, children, first }) {
   return (
     <Box>
       <Box
@@ -2012,7 +1703,7 @@ function MapGroup({ label, hint, right, toAnswer, children, first }) {
         <Typography
           sx={{
             typography: "s3", fontWeight: 700,
-            color: toAnswer ? "primary.main" : "text.subtitle",
+            color: "text.subtitle",
           }}
         >
           {right}
@@ -2024,12 +1715,11 @@ function MapGroup({ label, hint, right, toAnswer, children, first }) {
 }
 MapGroup.propTypes = {
   label: PropTypes.string, hint: PropTypes.string, right: PropTypes.string,
-  toAnswer: PropTypes.number, children: PropTypes.node, first: PropTypes.bool,
+  children: PropTypes.node, first: PropTypes.bool,
 };
 
-function MapRow({ index, name, origin, target, mono, highlight, derived, trailing, below }) {
+function MapRow({ index, name, origin, target, mono, derived, trailing }) {
   const rowBg = (t) => {
-    if (highlight) return alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.06 : 0.03);
     if (index % 2 === 1) return alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.025 : 0.015);
     return "transparent";
   };
@@ -2038,7 +1728,7 @@ function MapRow({ index, name, origin, target, mono, highlight, derived, trailin
       <Box
         sx={{
           display: "grid", gridTemplateColumns: MAP_GRID, columnGap: 2.5,
-          alignItems: "center", minHeight: highlight ? 44 : 40,
+          alignItems: "center", minHeight: 40,
           pl: MAP_PX,
           pr: MAP_PX,
         }}
@@ -2083,132 +1773,11 @@ function MapRow({ index, name, origin, target, mono, highlight, derived, trailin
           {trailing}
         </Stack>
       </Box>
-
-      {below && (
-        <Box sx={{ pl: MAP_PX, pr: MAP_PX, pb: 2, pt: 0.25 }}>
-          {below}
-        </Box>
-      )}
     </Box>
   );
 }
 MapRow.propTypes = {
   index: PropTypes.number, name: PropTypes.node, origin: PropTypes.string,
-  target: PropTypes.node, mono: PropTypes.bool, highlight: PropTypes.bool,
-  derived: PropTypes.bool, trailing: PropTypes.node, below: PropTypes.node,
-};
-
-function NeedsAnswerLabel() {
-  return (
-    <Stack direction="row" alignItems="center" spacing={0.75}>
-      <Box sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "primary.main" }} />
-      <Typography sx={{ typography: "s2", fontWeight: 700, color: "primary.main" }}>
-        Needs your answer
-      </Typography>
-    </Stack>
-  );
-}
-
-/* Flat inline resolver — no nested card. The row already carries the
-   highlight zone; a second card inside it read as boxed-in-a-box.
-   This is a plain block: question, why, two option pills capped at
-   a comfortable reading width, then Confirm + secondary. */
-function InlineResolve({ toolName, onPick }) {
-  const [pick, setPick] = useState("reads");
-  const options = [
-    { id: "reads", label: "Read-only", detail: "scenarios call it directly", suggested: true },
-    { id: "writes", label: "Writes data", detail: "writes hit the sandbox, never production" },
-  ];
-  return (
-    <Box sx={{ maxWidth: 560 }}>
-      <Stack direction="row" alignItems="baseline" spacing={0.75}>
-        <Iconify icon="solar:question-circle-linear" width={14} sx={{ color: "primary.main", position: "relative", top: 2 }} />
-        <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-          Does <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{toolName}</Box> change data?
-        </Typography>
-      </Stack>
-      <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25, ml: 2.5 }}>
-        Called from the agent&apos;s code, unnamed in the prompt — we can&apos;t tell from static analysis alone.
-      </Typography>
-
-      <Stack direction="row" spacing={1} sx={{ mt: 1.25, ml: 2.5 }}>
-        {options.map((o) => {
-          const selected = pick === o.id;
-          return (
-            <Box
-              key={o.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => setPick(o.id)}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setPick(o.id); }}
-              sx={{
-                flex: 1, borderRadius: 1, px: 1.25, py: 0.875,
-                border: "1px solid",
-                borderColor: selected ? "primary.main" : "divider",
-                bgcolor: (t) => selected
-                  ? alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.14 : 0.06)
-                  : "background.paper",
-                cursor: "pointer",
-                display: "flex", alignItems: "center", gap: 1,
-                transition: "border-color 120ms, background-color 120ms",
-                "&:hover": {
-                  borderColor: selected ? "primary.main" : "text.disabled",
-                },
-              }}
-            >
-              <Box sx={{
-                width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
-                border: "1.5px solid",
-                borderColor: selected ? "primary.main" : "text.disabled",
-                display: "grid", placeItems: "center",
-              }}>
-                {selected && <Box sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "primary.main" }} />}
-              </Box>
-              <Box flex={1} minWidth={0}>
-                <Stack direction="row" alignItems="baseline" spacing={0.5}>
-                  <Typography sx={{ typography: "s2", fontWeight: 700 }}>{o.label}</Typography>
-                  {o.suggested && (
-                    <Typography sx={{ typography: "s3", color: "text.subtitle", fontStyle: "italic" }}>
-                      suggested
-                    </Typography>
-                  )}
-                </Stack>
-                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
-                  {o.detail}
-                </Typography>
-              </Box>
-            </Box>
-          );
-        })}
-      </Stack>
-
-      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 1.25, ml: 2.5 }}>
-        <Button
-          size="small"
-          variant="contained"
-          onClick={() => onPick(pick)}
-          sx={{
-            typography: "s2", fontWeight: 700,
-            px: 1.5, py: 0.5, minHeight: 0,
-          }}
-        >
-          Confirm {options.find((o) => o.id === pick).label.toLowerCase()}
-        </Button>
-        <Button
-          size="small"
-          variant="text"
-          sx={{
-            typography: "s2", fontWeight: 600, color: "text.subtitle",
-            px: 1, py: 0.5, minHeight: 0,
-            "&:hover": { bgcolor: "transparent", color: "text.primary" },
-          }}
-        >
-          Ask a teammate
-        </Button>
-      </Stack>
-    </Box>
-  );
-}
-InlineResolve.propTypes = {
-  toolName: PropTypes.string, onPick: PropTypes.func,
+  target: PropTypes.node, mono: PropTypes.bool,
+  derived: PropTypes.bool, trailing: PropTypes.node,
 };

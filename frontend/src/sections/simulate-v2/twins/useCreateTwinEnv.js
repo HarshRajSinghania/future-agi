@@ -106,7 +106,7 @@ export function useCreateTwinEnv() {
           connectedAt: new Date().toISOString(),
           values: {
             sdkEndpoint: agent.sdkEndpoint,
-            ...(agent.authToken ? { authToken: agent.authToken } : {}),
+            ...(agent.authTokenRef ? { authTokenRef: agent.authTokenRef, hasToken: true } : {}),
           },
         } : undefined,
       },

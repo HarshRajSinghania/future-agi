@@ -12,7 +12,7 @@ import {
 } from "@mui/material";
 import PropTypes from "prop-types";
 import Iconify from "src/components/iconify";
-import { useErrorFeedTrends } from "src/api/errorFeed/error-feed";
+import { useErrorFeedTrends } from "src/api/errorFeed/mockAdapter";
 
 // ── Events over time — dual-axis area + bars ────────────────────────────────
 function EventsLineChart({ eventsData }) {
@@ -189,7 +189,7 @@ function ScoreTrends({ scoreTrends }) {
   if (!scoreTrends?.length) {
     return (
       <Typography fontSize="11px" color="text.disabled" sx={{ py: 1 }}>
-        No eval scores recorded for this cluster yet.
+        No eval scores recorded for this issue yet.
       </Typography>
     );
   }

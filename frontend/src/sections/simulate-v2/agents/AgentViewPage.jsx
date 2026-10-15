@@ -1,0 +1,2088 @@
+import { staleSince } from "../_mock/optimizationRuns";
+import PropTypes from "prop-types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Helmet } from "react-helmet-async";
+import { useSnackbar } from "notistack";
+import {
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import {
+  Box,
+  Button,
+  Dialog,
+  IconButton,
+  Menu,
+  MenuItem,
+  Select,
+  Stack,
+  Switch,
+  Tab,
+  TextField,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import Iconify from "src/components/iconify";
+import { CustomTabs } from "src/components/tabs/tabs";
+import { paths } from "src/routes/paths";
+import { useConnectedAgents, useSimStore } from "../store";
+import { raiseNudgesIn, dispatchNudges, nudgeAnnouncement } from "../_mock/nudgeEffects";
+import { agentNeedsRuntime, agentSourceOf, pushedVersion } from "../_mock/agentRegistry";
+import { cloneNameFor, replicationOf } from "../_mock/replication";
+import {
+  githubAccessLabel,
+  githubAccessOf,
+  postSlack,
+  setSyncOnPush,
+  useIntegrations,
+} from "../_mock/integrations";
+import { agentFilesOf } from "../_mock/agentFiles";
+import { agentToolsFor } from "../_mock/toolFit";
+import { currentEnvVersion } from "../_mock/versions";
+import { currentEnvSnapshot } from "../_mock/envSnapshot";
+import { runResultOf } from "../_mock/runResult";
+import { ObserveProjectsCard } from "./AgentObserveProjects";
+import ImprovementSourcesList from "../improvements/ImprovementSourcesList";
+import { improvementRowsOf } from "../improvements/improvementRows";
+import AgentSyncDialog from "../components/AgentSyncDialog";
+import AgentDefinitionTab from "./AgentDefinitionTab";
+import AgentOverviewTab, { PassRateCard } from "./AgentOverviewTab";
+import AddVersionDialog from "./AddVersionDialog";
+import AgentRuntimeEditor from "./AgentRuntimeEditor";
+import AgentCallSettings from "./AgentCallSettings";
+import AgentReplicationCard from "./AgentReplicationCard";
+import { EndpointConsent } from "./connect/replicationBits";
+import { SecretRefEditor, SecretRefText, PreflightLine, RefTag } from "../workspace/SecretRefControls";
+import { defaultRefFor, preflightRecord } from "../_mock/secretRefs";
+import { ObservabilityCard } from "./AgentObservability";
+import ProductionCalls from "./ProductionCalls";
+import ProductionScorecard from "./ProductionScorecard";
+import { productionRowsOf, simulationCallsOf } from "./agentCalls";
+import {
+  agentEvalIds,
+  observabilityOf,
+  observabilityPatch,
+  productionCallsFor,
+} from "../_mock/observability";
+import AgentVersionsTab from "./AgentVersionsTab";
+import AgentConstraintsTab from "./AgentConstraintsTab";
+import BuildEnvironmentDialog from "./BuildEnvironmentDialog";
+import SwitchVersionDialog from "./SwitchVersionDialog";
+import MovePlatformDialog from "./MovePlatformDialog";
+import AgentSetupCard from "./AgentSetupCard";
+import { COMING_SOON_NOTE, agentStatusOf, deleteBlockOf, isComingSoon, mainEnvOf } from "../_mock/rsiModel";
+import { OUTSIDE_CHANGE_LABEL, isOutsideChange } from "../_mock/agentSync";
+import { runIdentityOf } from "../_mock/runIdentity";
+import { limitsOf } from "./agentLimits";
+import { AgentStatusBanner, NeedsConsentNotice } from "./AgentProfileStrip";
+import { LiveConsentCard, RetellPinCard } from "./AgentLiveConsent";
+import { ArchiveDialog, LifecycleCard, PrototypeControlsCard, ReleaseDetectionCard } from "./AgentLifecycleCard";
+import { ActionText, DemoLabel, InfoTip, QuietTag } from "./AgentBits";
+import { clickable, focusRing } from "../components/clickable";
+import SettingsSection from "./SettingsSection";
+import { IdentityCard, SourceCard } from "./AgentProfileCards";
+import { PLATFORM_KEY_SCOPE, identityOf, isHostedPlatform, languagesLabel } from "./agentProfile";
+import { currentUser } from "../_mock/scenarioProvenance";
+import {
+  MONO,
+  ORIGIN_LABEL,
+  ago,
+  buildPresetFor,
+  fixDepthLine,
+  isFinishedRun,
+  parentLabel,
+  passRate,
+  plural,
+  runsOfAgent,
+  showsSetup,
+} from "./agentViewUtils";
+
+const TABS = [
+  { id: "overview", label: "Overview" },
+  /* What we read about the agent, then the files themselves. */
+  { id: "definition", label: "Definition" },
+  { id: "versions", label: "Versions" },
+  /* What an improvement may change on this agent, and what it must not move. */
+  { id: "constraints", label: "Constraints" },
+  { id: "environments", label: "Environments" },
+  /* The improvement runs that tried to make this agent better. */
+  { id: "improvements", label: "Improvements" },
+  { id: "connections", label: "Connections" },
+];
+
+/* Old tab ids still arrive in links — each lands on the tab that took its
+   content. Production is a section of Overview now. */
+const TAB_ALIAS = {
+  files: "definition",
+  used: "environments",
+  usedin: "environments",
+  "used-in": "environments",
+  connection: "connections",
+  production: "overview",
+};
+const PRODUCTION_ANCHOR = "agent-production";
+
+/**
+ * One connected agent. Answers, in order: what is this agent made of, what
+ * changed lately, did it get better or worse, and where is it being tested.
+ */
+export default function AgentViewPage() {
+  const { agentId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [params, setParams] = useSearchParams();
+  /* Opened from an environment's View agent: back names it and goes there. */
+  const fromEnv = location.state?.from === "environment" && location.state?.envId
+    ? { id: location.state.envId, name: location.state.envName || "the environment" }
+    : null;
+  const goBack = () =>
+    fromEnv
+      ? navigate(paths.dashboard.simulate.environmentDetail(fromEnv.id))
+      : location.state?.from
+        ? navigate(-1)
+        : navigate(`${paths.dashboard.agents}?tab=connected`);
+  const {
+    agents,
+    removeAgent,
+    recordAgentVersion,
+    runVersionIn,
+    setAgentValues,
+    state,
+    hydrated,
+  } = useConnectedAgents();
+  const { dispatch: storeDispatch } = useSimStore();
+  const agent = agents.find((a) => a.id === agentId);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [focusPath, setFocusPath] = useState(null);
+  const [buildOpen, setBuildOpen] = useState(false);
+  /* The channel a Build environment is for, when one is picked (Calls settings). */
+  const [buildChannel, setBuildChannel] = useState(null);
+  const [switchFor, setSwitchFor] = useState(null); // { envId, label }
+  const [moreAnchor, setMoreAnchor] = useState(null);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const integrations = useIntegrations();
+  const { syncOnPush, prs } = integrations;
+  const { enqueueSnackbar } = useSnackbar();
+
+  const rawTab = params.get("tab") || "overview";
+  const tab = TAB_ALIAS[rawTab] || (TABS.some((t) => t.id === rawTab) ? rawTab : "overview");
+  const viewing =
+    agent && agent.versions.some((v) => v.label === params.get("v"))
+      ? params.get("v")
+      : agent?.latest;
+  const setQuery = (patch) => {
+    const next = new URLSearchParams(params);
+    Object.entries(patch).forEach(([k, v]) =>
+      v == null ? next.delete(k) : next.set(k, v),
+    );
+    setParams(next, { replace: true, state: location.state });
+  };
+
+  /* The environment the agent was first read in — its world is where the
+     agent's own tools and knowledge were read from. The earliest one, so
+     the order environments happen to be listed in never changes "what the
+     agent is made of". An agent connected from the Agents page has none. */
+  const home = useMemo(() => {
+    if (!agent) return null;
+    const cands = [...agent.usedIn, ...(agent.formerlyIn || [])];
+    const at = (id) =>
+      Date.parse(
+        state.myEnvironments.find((e) => e.id === id)?.adoptedAt || 0,
+      ) || 0;
+    return [...cands].sort((a, b) => at(a.envId) - at(b.envId))[0] || null;
+  }, [agent, state.myEnvironments]);
+  const env = home
+    ? state.myEnvironments.find((e) => e.id === home.envId)
+    : null;
+  const ctxState = useMemo(
+    () =>
+      agent
+        ? {
+            ...(home ? state.byEnv[home.envId] : {}),
+            agentVersions: agent.versions,
+            activeAgentVersion: null,
+          }
+        : null,
+    [agent, home, state.byEnv],
+  );
+
+  const filesOf = useCallback(
+    (label) =>
+      agentFilesOf({
+        agent,
+        version: agent.versions.find((v) => v.label === label),
+        env,
+        envState: ctxState,
+      }).files,
+    [agent, env, ctxState],
+  );
+  /* A version's tools as the world it was read in resolves them — what the
+     Versions tab fingerprints. */
+  const toolsOf = useCallback(
+    (label) => (env ? agentToolsFor(env, ctxState, label) : null),
+    [env, ctxState],
+  );
+
+  /* Every run of this agent, each marked full or partial. A partial run (a
+     rule probe, a hand-picked subset) is real history but not comparable to
+     a full sweep, so pass rates only ever compare full runs. */
+  const allRuns = useMemo(
+    () => (agent ? runsOfAgent(agent, state) : []),
+    [agent, state],
+  );
+  /* A run still in progress (or one that never finished) isn't a result —
+     it's recorded as 0 of N when it starts. */
+  const inProgress = useMemo(
+    /* One unfinished for over a day was timed out — shown as stopped, not running. */
+    () => allRuns.filter((r) => !isFinishedRun(r)).map((r) => (staleSince(r) ? { ...r, stopped: true } : r)),
+    [allRuns],
+  );
+  const runs = useMemo(
+    () =>
+      allRuns.filter(isFinishedRun).map((raw) => {
+        /* Scored from the run's own scenarios, as the run screen shows it. */
+        const r = runResultOf(
+          state.myEnvironments.find((e) => e.id === raw.envId),
+          state.byEnv[raw.envId],
+          raw,
+        );
+        /* Use what the run recorded about itself; only guess for old runs. */
+        if (typeof r.partial === "boolean") return r;
+        const size = state.byEnv[r.envId]?.scenarios?.length || 0;
+        return {
+          ...r,
+          partial: r.scenarioIds?.length
+            ? r.scenarioIds.length < size
+            : !(r.total >= size || /all scenarios/i.test(r.label || "")),
+        };
+      }),
+    [allRuns, state],
+  );
+  /* Results compare within ONE environment — a run is environment × agent
+     version, so the same version scores differently in different worlds. */
+  const [scopeEnvId, setScopeEnvId] = useState(null);
+  const scopes = agent ? [...agent.usedIn, ...(agent.formerlyIn || [])] : [];
+  /* Opens on its main environment — where its fixes run. */
+  const mainScopeId = agent ? mainEnvOf(agent, state)?.envId : null;
+  const scopeEnv =
+    scopes.find((u) => u.envId === scopeEnvId) || scopes.find((u) => u.envId === mainScopeId) || scopes[0] || null;
+  /* …and within one version of that environment: a changed world scores the
+     same agent differently, so runs on an older world don't compare. */
+  const scopeEnvObj = scopeEnv
+    ? state.myEnvironments.find((e) => e.id === scopeEnv.envId)
+    : null;
+  const scopeEnvVersion = scopeEnvObj
+    ? currentEnvVersion(scopeEnvObj, state.byEnv[scopeEnv.envId])?.label
+    : null;
+  /* …named as its environment version (a snapshot of world, scenarios, evals). */
+  const scopeEnvShown = scopeEnvObj
+    ? currentEnvSnapshot(scopeEnvObj, state.byEnv[scopeEnv.envId])?.label || null
+    : null;
+  const scopedRuns = useMemo(
+    () =>
+      runs.filter(
+        (r) =>
+          r.envId === scopeEnv?.envId &&
+          !r.partial &&
+          (!r.envVersion ||
+            !scopeEnvVersion ||
+            r.envVersion === scopeEnvVersion),
+      ),
+    [runs, scopeEnv, scopeEnvVersion],
+  );
+  const statsOf = useCallback(
+    (label) => {
+      const mine = scopedRuns.filter((r) => r.agentVersion === label);
+      if (!mine.length) return null;
+      /* Each run's pass rate, weighted by how many scenarios it measured. */
+      const measured = mine.reduce((n, r) => n + (r.measured ?? r.total ?? 0), 0);
+      const points = mine.reduce((n, r) => n + (passRate(r) || 0) * (r.measured ?? r.total ?? 0), 0);
+      return {
+        runs: mine.length,
+        rate: measured ? Math.round(points / measured) : 0,
+      };
+    },
+    [scopedRuns],
+  );
+
+  /* Production: watched or not, and — when it is — the real calls. A hosted
+     platform keeps call history, so turning watching on backfills the week;
+     traced agents only have what's arrived since tracing went in. */
+  const observe = useMemo(
+    () => (agent ? observabilityOf(agent, integrations) : null),
+    [agent, integrations],
+  );
+  const production = useMemo(() => {
+    if (!agent || !observe?.on) return { rows: [], weekTotal: 0 };
+    const { calls, weekTotal } = productionCallsFor(agent, {
+      evalIds: agentEvalIds(agent, state),
+      tools: (env?.tools || []).map((t) => t.name),
+      since: observe.mode === "platform" ? null : observe.since,
+    });
+    return { rows: productionRowsOf(calls, agent), weekTotal };
+  }, [agent, observe, state, env]);
+  /* Simulated calls are only read to compare against — rebuilt when
+     Overview (where Production lives) is open, not on every tab. */
+  const simulation = useMemo(
+    () =>
+      agent && tab === "overview" && observe?.on
+        ? simulationCallsOf(runs, state)
+        : [],
+    [agent, tab, observe, runs, state],
+  );
+  /* Only counts — the Improvements tab builds its own list. */
+  const improvementStats = useMemo(() => {
+    const mine = agent ? improvementRowsOf({ state, agents, prs }).filter((r) => r.agentKey === agent.key) : [];
+    return {
+      total: mine.length,
+      ready: mine.filter((r) => r.status?.key === "ready").length,
+      running: mine.filter((r) => r.status?.key === "running").length,
+    };
+  }, [agent, agents, state, prs]);
+  const improvementCount = improvementStats.total;
+
+  /* An old Production link lands on Overview, scrolled to where it went. */
+  /* Production's detail is folded on the Overview — "View calls" opens it. */
+  const [prodOpen, setProdOpen] = useState(false);
+  const scrollToProduction = useCallback(() => {
+    setProdOpen(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById(PRODUCTION_ANCHOR)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }, []);
+  const hasAgent = !!agent;
+  useEffect(() => {
+    if (hasAgent && rawTab === "production") scrollToProduction();
+  }, [hasAgent, rawTab, scrollToProduction]);
+
+  if (!agent) {
+    return (
+      <Box sx={{ p: 4 }}>
+        <Typography sx={{ typography: "s1", color: "text.subtitle" }}>
+          {hydrated
+            ? "No connected agent here — it was disconnected, or the link is out of date."
+            : "Loading…"}
+        </Typography>
+        {hydrated && (
+          <Button
+            size="small"
+            sx={{ mt: 1 }}
+            onClick={() => navigate(`${paths.dashboard.agents}?tab=connected`)}
+          >
+            Back to connected agents
+          </Button>
+        )}
+      </Box>
+    );
+  }
+
+  const source = agentSourceOf(agent);
+  /* How the platform copies it — said in the header, set on Connections. */
+  const replication = replicationOf(agent, env);
+  /* The labelled clone each environment made, as its build recorded it. */
+  const clones = agent.usedIn.map((u) => {
+    const e = state.myEnvironments.find((x) => x.id === u.envId);
+    return { envId: u.envId, envName: u.envName, cloneName: e?.replication?.cloneName || cloneNameFor(e || { name: u.envName }) };
+  });
+  const saveValues = (patch, msg) => {
+    setAgentValues(agent.key, patch);
+    if (msg) enqueueSnackbar(msg, { variant: "success" });
+  };
+  /* Connected, disconnected (a revoked key, a removed app, a deleted agent)
+     or archived — said in the header and on Connections. */
+  const status = agentStatusOf(agent);
+  /* Finish setting up is on the Overview (see AgentSetupCard). */
+  const settingUp = showsSetup(agent);
+  const archived = status.status === "archived";
+  const identity = identityOf(agent);
+  const deleteBlocked = deleteBlockOf(agent);
+  /* The environment Fix runs in by default. */
+  const mainEnv = mainEnvOf(agent, state);
+  /* What archiving removes on the platform — the test copies we made. */
+  const madeCopies = ["provider_clone", "platform_branch"].includes(replication.mode)
+    ? clones.map((c) => c.cloneName)
+    : replication.mode === "platform_draft" ? [`Draft versions created for ${agent.usedIn.length === 1 ? agent.usedIn[0].envName : `${agent.usedIn.length} environments`}`] : [];
+  const toggleArchive = () => {
+    setArchiveOpen(false);
+    if (archived) {
+      saveValues({ archived: null }, `${agent.name} restored — runs and improvements can start again.`);
+    } else {
+      saveValues(
+        { archived: { at: new Date().toISOString(), removedCopies: madeCopies } },
+        `${agent.name} archived${madeCopies.length ? ` — ${madeCopies.length === 1 ? "its test copy was" : `${madeCopies.length} test copies were`} removed` : ""}. Versions, environments, runs and proofs stay.`,
+      );
+    }
+  };
+  const { files, definition } = agentFilesOf({
+    agent,
+    version: agent.versions.find((v) => v.label === viewing),
+    env,
+    envState: ctxState,
+  });
+  /* Diff against what this version was built on, not just the one listed before it. */
+  const prevLabel = parentLabel(agent.versions, viewing);
+  const prevFiles = prevLabel ? filesOf(prevLabel) : null;
+
+  /* Add version changes the latest, whichever version is being viewed. */
+  const latestDefinition =
+    viewing === agent.latest
+      ? definition
+      : agentFilesOf({
+          agent,
+          version: agent.versions[agent.versions.length - 1],
+          env,
+          envState: ctxState,
+        }).definition;
+
+  const pushSync = !!(source.viaApp && syncOnPush?.[agent.key]);
+  const baseTools = env
+    ? agentToolsFor(env, ctxState, agent.latest)
+    : agentFilesOf({
+        agent,
+        version: agent.versions[agent.versions.length - 1],
+        env,
+        envState: ctxState,
+      }).definition.tools.items;
+  const announce = (v, how) =>
+    postSlack({
+      event: "version",
+      title: `${agent.name} · ${v.label} saved from ${how}`,
+      lines: [
+        v.commit
+          ? `${v.commit.sha} ${v.commit.message} — ${v.commit.author}`
+          : v.note,
+        agent.usedIn.length
+          ? `${agent.usedIn.length} environment${agent.usedIn.length === 1 ? "" : "s"} keep running their current version until someone switches.`
+          : "No environment tests it right now.",
+      ],
+      actions: [
+        "Compare with the previous version",
+        ...(agent.usedIn.length ? [`Switch an environment to ${v.label}`] : []),
+      ],
+      links: {
+        "Compare with the previous version": `${paths.dashboard.agents}/connected/${agent.id}?tab=versions`,
+        [`Switch an environment to ${v.label}`]: `${paths.dashboard.agents}/connected/${agent.id}?tab=environments`,
+      },
+    });
+  /* Prototype stand-in for the GitHub push webhook. */
+  const simulatePush = () => {
+    const v = pushedVersion({
+      agent,
+      versions: agent.versions,
+      env,
+      baseTools,
+    });
+    recordAgentVersion(agent.key, v);
+    /* A new agent version only — anything it no longer fits is raised as a
+       nudge in each environment using it, never applied (PRD v7 §4.10). */
+    const envs = agent.usedIn.map((u) => state.myEnvironments.find((x) => x.id === u.envId)).filter(Boolean);
+    const raised = raiseNudgesIn(state, envs, v);
+    dispatchNudges(storeDispatch, raised);
+    announce(v, "a push");
+    setQuery({ v: null });
+    const said = nudgeAnnouncement(raised);
+    enqueueSnackbar(
+      `Push ${v.commit.sha} saved as agent ${v.label}. Environments and scenarios stay as they are${said ? ` · ${said}` : ""}.`,
+      { variant: "success" },
+    );
+  };
+
+  /* Opening a file from a change shows it at the version that made the
+     change, with the diff on — that's what the person clicked to see. */
+  const openFile = (path, atVersion) => {
+    setFocusPath(path);
+    setQuery({
+      tab: "definition",
+      ...(atVersion && {
+        v: atVersion === agent.latest ? null : atVersion,
+        diff: "1",
+      }),
+    });
+  };
+  /* From the Calls settings, for one channel ("voice", "chat") — the
+     environment is built for that channel; elsewhere the agent's own. */
+  const buildEnvironment = (ch) => { setBuildChannel(typeof ch === "string" ? ch : null); setBuildOpen(true); };
+  const startBuild = (choice) =>
+    navigate(paths.dashboard.simulate.environmentBuild, {
+      state: { presetSource: buildPresetFor(agent, { ...choice, channel: buildChannel }) },
+    });
+  /* Which version an environment should test — the one in production
+     unless another was picked from Versions. */
+  const switchTo = (envId, label = agent.production) =>
+    setSwitchFor({ envId, label });
+  const switchEnv = switchFor
+    ? state.myEnvironments.find((e) => e.id === switchFor.envId)
+    : null;
+  /* Disconnecting would orphan environments testing it, so they go first. */
+  const disconnect = () => {
+    setDisconnectOpen(false);
+    navigate(`${paths.dashboard.agents}?tab=connected`);
+    removeAgent(agent.key);
+    enqueueSnackbar(
+      `${agent.name} deleted. Its runs stay with the environments that ran them.`,
+      { variant: "success" },
+    );
+  };
+
+  const observeInfo = { ...observe, weekTotal: production.weekTotal };
+  /* Must-pass scenarios — each one, with the environment it lives in. */
+  const mustPassItems = agent.usedIn.flatMap((u) => (state.byEnv[u.envId]?.scenarios || [])
+    .filter((x) => x.critical)
+    .map((x) => ({
+      id: x.id,
+      name: x.title || x.name || "Scenario",
+      persona: typeof x.persona === "string" ? x.persona : x.persona?.name || null,
+      envId: u.envId,
+      envName: u.envName,
+    })));
+  const mustPass = { total: mustPassItems.length, envs: agent.usedIn.length, items: mustPassItems };
+  const setWatching = (on) => {
+    setAgentValues(agent.key, observabilityPatch(agent, on));
+    enqueueSnackbar(
+      on
+        ? observe.mode === "platform"
+          ? `Watching ${agent.name}'s production calls — the last week is in Production now.`
+          : "Watching — traces show up as soon as the agent sends them."
+        : "Stopped watching production calls. What was collected stays in Observe.",
+      { variant: on ? "success" : "info" },
+    );
+  };
+  /* Anything that isn't a single switch is set up on the Connections tab. */
+  const setUpWatching = () => setQuery({ tab: "connections" });
+  const openProduction = () => {
+    setQuery({ tab: "overview" });
+    scrollToProduction();
+  };
+  /* Production calls are on the released version, never a pending draft. */
+  const latestProd = production.rows.filter((r) => r.version === agent.production);
+  /* Where production calls can become scenarios — only environments testing
+     this agent now, the one picked on Overview first. */
+  const prodTargets = [...agent.usedIn].sort(
+    (a, b) =>
+      (b.envId === scopeEnv?.envId) - (a.envId === scopeEnv?.envId),
+  );
+
+  return (
+    <Box sx={{ p: 2, height: "100%", overflow: "auto" }}>
+      <Helmet>
+        <title>{`${agent.name} · Agents | Future AGI`}</title>
+      </Helmet>
+
+      {/* ── header ── */}
+      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 1.5 }}>
+        {fromEnv ? (
+          <Button
+            size="small" onClick={goBack}
+            startIcon={<Iconify icon="eva:arrow-ios-back-fill" width={16} />}
+            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0, maxWidth: 220 }}
+          >
+            <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fromEnv.name}</Box>
+          </Button>
+        ) : (
+          <IconButton size="small" onClick={goBack} aria-label="Back">
+            <Iconify icon="eva:arrow-ios-back-fill" width={18} />
+          </IconButton>
+        )}
+        <Box flex={1} minWidth={0}>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <Typography noWrap sx={{ typography: "m3", fontWeight: 700 }}>
+              {agent.name}
+            </Typography>
+            <Pill>{source.label}</Pill>
+            <Tooltip arrow title={`${replication.how} ${replication.proofLabel} proof — ${replication.proofNote}`}>
+              <Box
+                {...clickable(() => setQuery({ tab: "connections" }))}
+                sx={{ cursor: "pointer", ...focusRing }}
+              >
+                <Pill>{`${replication.label} · ${replication.proofLabel}`}</Pill>
+              </Box>
+            </Tooltip>
+            {isComingSoon(agent) && (
+              <Tooltip arrow title={COMING_SOON_NOTE}>
+                <Box component="span"><QuietTag>Coming soon</QuietTag></Box>
+              </Tooltip>
+            )}
+            {status.status !== "connected" && (
+              <Tooltip arrow title={status.reason || ""}>
+                <Box {...clickable(() => setQuery({ tab: "connections" }))} sx={{ cursor: "pointer", ...focusRing }}>
+                  <Pill dot={status.status === "disconnected" ? "#DC2626" : undefined}>{status.label}</Pill>
+                </Box>
+              </Tooltip>
+            )}
+            {pushSync && <Pill>Syncs on push</Pill>}
+            {observe.on && (
+              <Box
+                {...clickable(openProduction)}
+                sx={{ cursor: "pointer", ...focusRing }}
+              >
+                <Pill dot="#16A34A">Watching production</Pill>
+              </Box>
+            )}
+          </Stack>
+          {/* One line: where it lives, when it was last read, where it's
+              tested, who owns it. Languages and the description sit in the
+              tooltip — both are set on Connections. */}
+          <Tooltip
+            arrow placement="bottom-start"
+            title={[identity.description, languagesLabel(identity.languages), "Owner, languages and description — edit on Connections"].filter(Boolean).join(" · ")}
+          >
+            <Typography
+              noWrap
+              sx={{ typography: "s3", color: "text.subtitle", mt: 0.25, width: "fit-content", maxWidth: "100%" }}
+            >
+              {source.idMissing ? (
+                <Box
+                  component="span"
+                  {...clickable(() => setQuery({ tab: "connections" }))}
+                  sx={{ color: "#DC2626", cursor: "pointer", "&:hover": { textDecoration: "underline" }, ...focusRing }}
+                >
+                  Assistant ID missing
+                </Box>
+              ) : (
+                <Box component="span" sx={{ fontFamily: MONO }}>
+                  {/* A pasted prompt has nowhere to point — show what it runs at. */}
+                  {(source.kind === "prompt" ? source.runtime.where : source.where) || "—"}
+                </Box>
+              )}
+              {replication.runLocation === "hosted" ? " · hosted sandbox" : ""}
+              {` · ${agent.lastSyncedAt ? `Synced ${ago(agent.lastSyncedAt)}` : `Connected ${ago(agent.connectedAt)}`} · `}
+              <Box
+                component="span"
+                {...clickable(() => setQuery({ tab: "environments" }))}
+                sx={{ cursor: "pointer", "&:hover": { color: "text.primary", textDecoration: "underline" }, ...focusRing }}
+              >
+                {agent.usedIn.length
+                  ? `${agent.usedIn.length} environment${agent.usedIn.length === 1 ? "" : "s"}`
+                  : agent.formerlyIn?.length || agent.deletedIn?.length ? "No environment now" : "No environment yet"}
+              </Box>
+              {" · "}
+              <Box
+                component="span"
+                {...clickable(() => setQuery({ tab: "connections" }))}
+                sx={{ cursor: "pointer", "&:hover": { color: "text.primary", textDecoration: "underline" }, ...focusRing }}
+              >
+                {`Owner ${identity.owner}`}
+              </Box>
+            </Typography>
+          </Tooltip>
+        </Box>
+        <Select
+          size="small"
+          value={viewing}
+          onChange={(e) =>
+            setQuery({
+              v: e.target.value === agent.latest ? null : e.target.value,
+            })
+          }
+          /* Only changes what this page shows — environments pick their own. */
+          /* The same words as every version picker: draft / in production. */
+          renderValue={(l) =>
+            l === agent.production ? `${l} · in production`
+              : l === agent.latest && agent.latestIsDraft ? `${l} · draft` : `Viewing ${l}`
+          }
+          sx={{ height: 32, typography: "s2", fontWeight: 600, minWidth: 120 }}
+        >
+          {[...agent.versions].reverse().map((v) => (
+            <MenuItem key={v.label} value={v.label} sx={{ typography: "s2" }}>
+              <Box
+                component="span"
+                sx={{ fontFamily: MONO, fontWeight: 600, mr: 1 }}
+              >
+                {v.label}
+              </Box>
+              <Box component="span" sx={{ color: "text.subtitle" }}>
+                {[
+                  v.pendingDraft ? "draft" : v.label === agent.production ? "in production" : null,
+                  ago(v.createdAt || v.connectedAt),
+                ].filter(Boolean).join(" · ")}
+              </Box>
+            </MenuItem>
+          ))}
+        </Select>
+        {/* Re-read the source when we can; otherwise record the change by hand. */}
+        <Tooltip
+          arrow
+          title={
+            status.status !== "connected" && source.syncable
+              ? `${status.label} — ${status.reason}`
+              : source.syncable
+              ? `Sync from ${source.label} and save any changes as a new version`
+              : source.idMissing
+                ? `This agent lost its ${source.label} assistant ID. Add it back and Sync works again.`
+                : source.appLost
+                  ? "The GitHub app no longer has access to this repository — record a change by hand, or reinstall it."
+                  : `We can't sync ${source.label} agents — record what changed as a new version.`
+          }
+        >
+          <span>
+          <Button
+            variant="outlined"
+            size="small"
+            disabled={source.syncable && status.status !== "connected"}
+            onClick={() =>
+              source.syncable
+                ? setSyncOpen(true)
+                : source.idMissing
+                  ? setQuery({ tab: "connections", edit: "id" })
+                  : setAddOpen(true)
+            }
+            startIcon={
+              <Iconify
+                icon={
+                  source.syncable
+                    ? "solar:refresh-linear"
+                    : source.idMissing
+                      ? "solar:link-round-linear"
+                      : "solar:add-circle-linear"
+                }
+                width={15}
+              />
+            }
+            sx={{
+              typography: "s2",
+              fontWeight: 700,
+              height: 32,
+              color: "text.primary",
+              borderColor: "divider",
+            }}
+          >
+            {source.syncable
+              ? "Sync"
+              : source.idMissing
+                ? "Reconnect"
+                : "Add version"}
+          </Button>
+          </span>
+        </Tooltip>
+        <Tooltip arrow title={archived ? "Archived — restore it to build environments and run it again." : ""}>
+          <span>
+            <Button
+              variant="contained"
+              color="primary"
+              size="small"
+              disabled={archived}
+              onClick={buildEnvironment}
+              startIcon={<Iconify icon="solar:add-circle-linear" width={15} />}
+              sx={{ typography: "s2", fontWeight: 700, height: 32 }}
+            >
+              Build environment
+            </Button>
+          </span>
+        </Tooltip>
+        <IconButton
+          size="small"
+          aria-label="More actions"
+          onClick={(e) => setMoreAnchor(e.currentTarget)}
+          sx={{ color: "text.subtitle" }}
+        >
+          <Iconify icon="solar:menu-dots-bold" width={18} />
+        </IconButton>
+        <Menu
+          anchorEl={moreAnchor}
+          open={!!moreAnchor}
+          onClose={() => setMoreAnchor(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+          slotProps={{ paper: { sx: { minWidth: 180, mt: 0.5 } } }}
+        >
+          <MenuItem
+            onClick={() => {
+              setMoreAnchor(null);
+              setArchiveOpen(true);
+            }}
+            sx={{ gap: 1, py: 1 }}
+          >
+            <Iconify icon={archived ? "solar:restart-linear" : "solar:archive-linear"} width={16} sx={{ flexShrink: 0, color: "text.secondary" }} />
+            <Typography sx={{ typography: "s2", fontWeight: 600 }}>
+              {archived ? "Restore" : "Archive"}
+            </Typography>
+          </MenuItem>
+          <Tooltip arrow placement="left" title={deleteBlocked || ""}>
+            <Box>
+              <MenuItem
+                disabled={!!deleteBlocked}
+                onClick={() => {
+                  setMoreAnchor(null);
+                  setDisconnectOpen(true);
+                }}
+                sx={{ gap: 1, py: 1, color: "#DC2626" }}
+              >
+                <Iconify
+                  icon="solar:trash-bin-minimalistic-linear"
+                  width={16}
+                  sx={{ flexShrink: 0 }}
+                />
+                <Typography
+                  sx={{ typography: "s2", fontWeight: 600, color: "inherit" }}
+                >
+                  Delete
+                </Typography>
+              </MenuItem>
+            </Box>
+          </Tooltip>
+        </Menu>
+      </Stack>
+
+      <Box sx={{ borderBottom: "1px solid", borderColor: "divider", mb: 2 }}>
+        <CustomTabs value={tab} onChange={(_, v) => setQuery({ tab: v })}>
+          {TABS.map((t) => (
+            <Tab
+              key={t.id}
+              value={t.id}
+              disableRipple
+              label={
+                t.id === "versions"
+                  ? `Versions ${agent.versions.length}`
+                  : t.id === "environments"
+                    ? agent.usedIn.length || !agent.formerlyIn?.length
+                      ? `Environments ${agent.usedIn.length}`
+                      : "Environments"
+                    : t.id === "improvements" && improvementCount
+                      ? `Improvements ${improvementCount}`
+                      : t.label
+              }
+            />
+          ))}
+        </CustomTabs>
+      </Box>
+
+      {tab !== "connections" && (
+        <AgentStatusBanner
+          agent={agent}
+          onReconnect={() => setQuery({ tab: "connections" })}
+          onRestore={() => setArchiveOpen(true)}
+        />
+      )}
+      {/* What needs doing, as rows of one card — not a stack of banners. */}
+      {/* Connected in one step: what's left, in one place — it carries consent
+          and where it runs, so their own notices step aside while it shows. */}
+      {tab === "overview" && !archived && (
+        <AgentSetupCard
+          agent={agent} env={env}
+          onTab={(t) => setQuery({ tab: t })}
+          onBuild={buildEnvironment}
+          onSaveValues={saveValues}
+        />
+      )}
+      {tab === "overview" && !settingUp && (
+        <Box sx={TODO_CARD_SX}>
+          {!archived && <NeedsConsentNotice agent={agent} env={env} onOpen={() => setQuery({ tab: "connections" })} />}
+        </Box>
+      )}
+      {/* Set to run through the SDK with no address yet — can't be simulated yet. */}
+      {tab === "overview" && !settingUp && agentNeedsRuntime(agent) && <AgentRuntimeEditor agent={agent} />}
+      {/* An endpoint connected before the acknowledgment existed: blocked
+          until someone says the real agent may be driven (AC-1.12). */}
+      {tab === "overview" && replication.needsConsent && (
+        <Box sx={{ mb: 2 }}>
+          <EndpointConsent
+            value={replication.consent}
+            showWebhook={false}
+            lead="Runs of this agent are blocked until this is acknowledged"
+            onChange={(next) => next && saveValues(
+              { endpointConsent: next },
+              "Acknowledged — simulations can drive this agent. Add a secondary webhook on Connections to see its tool calls.",
+            )}
+          />
+        </Box>
+      )}
+      {tab === "overview" && (
+        <AgentOverviewTab
+          improvements={improvementStats}
+          production={{
+            on: observe.on,
+            weekTotal: production.weekTotal,
+            sampled: latestProd.length,
+            rate: latestProd.length ? Math.round((latestProd.filter((r) => r.result === "passed").length / latestProd.length) * 100) : null,
+            onOpen: scrollToProduction,
+            /* One switch for a platform with its key; anything else is set up on Connections. */
+            onTurnOn: observeInfo.mode === "platform" && !observeInfo.needsKey ? () => setWatching(true) : setUpWatching,
+            turnOnLabel: observeInfo.mode === "platform" ? (observeInfo.needsKey ? "Add the API key" : "Watch production calls") : "Set up tracing",
+          }}
+          agent={agent}
+          source={source}
+          files={files}
+          runs={runs}
+          inProgress={inProgress}
+          scopedRuns={scopedRuns}
+          statsOf={statsOf}
+          onOpenFile={openFile}
+          scopeEnv={scopeEnv}
+          scopeEnvVersion={scopeEnvShown}
+          scopes={scopes}
+          onScopeEnv={setScopeEnvId}
+          onSwitch={(envId) => switchTo(envId)}
+          onOpenRun={(r) =>
+            navigate(paths.dashboard.simulate.simulationRun(r.envId, r.id))
+          }
+          onTab={(t) => setQuery({ tab: t })}
+        />
+      )}
+      {/* Real calls next to how the version did in simulation — the one view
+          the old Live analytics / Live call logs screens were for. Simulated
+          calls aren't listed again here; they live on each run. Not watched
+          yet? The strip at the top says so and turns it on. */}
+      {tab === "overview" && observe.on && (
+        <Box id={PRODUCTION_ANCHOR} sx={{ mt: 3, scrollMarginTop: 16 }}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1}
+            {...clickable(() => setProdOpen((o) => !o), { expanded: prodOpen })}
+            sx={{ pb: 1.25, mb: prodOpen ? 2 : 0, borderBottom: "1px solid", borderColor: "divider", cursor: "pointer", ...focusRing }}
+          >
+            <Iconify icon={prodOpen ? "solar:alt-arrow-down-linear" : "solar:alt-arrow-right-linear"} width={16} sx={{ color: "text.subtitle" }} />
+            <Typography sx={{ typography: "s1", fontWeight: 700 }}>
+              Production
+            </Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>
+              Real calls next to how the version did in simulation
+            </Typography>
+            <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>{prodOpen ? "Hide" : "Show"}</Typography>
+          </Stack>
+          {prodOpen && (
+          <Stack spacing={3}>
+            <ProductionScorecard
+              agent={agent}
+              viewing={viewing}
+              simulation={simulation}
+              production={production.rows}
+              weekTotal={production.weekTotal}
+              addTargets={prodTargets}
+              onAddFromProduction={(envId) =>
+                navigate(
+                  `${paths.dashboard.simulate.environmentDetail(envId)}/scenarios?add=production`,
+                )
+              }
+            />
+            <ProductionCalls
+              agent={agent}
+              rows={production.rows}
+              observe={observeInfo}
+              viewing={viewing}
+            />
+          </Stack>
+          )}
+        </Box>
+      )}
+      {tab === "definition" && (
+        <AgentDefinitionTab
+          agent={agent}
+          definition={definition}
+          source={source}
+          files={files}
+          prevFiles={prevFiles}
+          label={viewing}
+          prevLabel={prevLabel}
+          latest={agent.latest}
+          focusPath={focusPath}
+          diffOn={params.get("diff") === "1"}
+          onOpenFile={(path) => setFocusPath(path)}
+          onTab={(t) => setQuery({ tab: t })}
+          protectedMembers={limitsOf(state, agent.key).protectedMembers || []}
+        />
+      )}
+      {/* Pass rate by version, above the versions it scores. */}
+      {tab === "versions" && (
+        <Box sx={{ mb: 2, height: 300 }}>
+          <PassRateCard agent={agent} statsOf={statsOf} scopeEnv={scopeEnv} scopeEnvVersion={scopeEnvShown} scopes={scopes} onScopeEnv={setScopeEnvId} />
+        </Box>
+      )}
+      {tab === "versions" && (
+        <AgentVersionsTab
+          agent={agent}
+          source={source}
+          filesOf={filesOf}
+          toolsOf={toolsOf}
+          statsOf={statsOf}
+          scopeName={scopeEnv?.envName}
+          onView={(l) =>
+            setQuery({ v: l === agent.latest ? null : l, tab: "definition" })
+          }
+          onRunIn={switchTo}
+          onMakeActive={(label) => saveValues(
+            { activeVersion: { label, at: new Date().toISOString(), by: currentUser().name } },
+            `${label} is active — released. Environments keep the version they test until someone switches.`,
+          )}
+        />
+      )}
+      {tab === "constraints" && (
+        <AgentConstraintsTab
+          agent={agent}
+          onBuildEnv={archived ? null : buildEnvironment}
+          files={filesOf(agent.latest)}
+          model={definition?.model?.visible ? definition.model.name : null}
+          speech={definition?.voice?.visible ? definition.voice : null}
+          mustPass={mustPass}
+        />
+      )}
+      {tab === "environments" && (
+        <EnvironmentsTab
+          agent={agent}
+          focusEnvId={params.get("env")}
+          mainEnvId={mainEnv?.envId}
+          mainPicked={!!mainEnv?.picked}
+          onMakeMain={(envId, envName) => saveValues(
+            { mainEnvId: envId },
+            `${envName} is now the main environment — improvements run there, including fixes for Error Feed issues.`,
+          )}
+          onBuild={buildEnvironment}
+          runs={runs}
+          onRun={(envId) => switchTo(envId)}
+          onOpen={(envId) =>
+            navigate(paths.dashboard.simulate.environmentDetail(envId))
+          }
+        />
+      )}
+      {/* Archived: past improvements stay listed; a new one can't start. */}
+      {tab === "improvements" && archived && (
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+          <Iconify icon="solar:archive-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+          <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+            Improvements are off — this agent is archived. Restore it from the menu at the top to start one.
+          </Typography>
+        </Stack>
+      )}
+      {tab === "improvements" && <ImprovementSourcesList agent={agent} />}
+      {tab === "connections" && (
+        <ConnectionTab
+          agent={agent}
+          source={source}
+          definition={definition}
+          onSync={() => setSyncOpen(true)}
+          pushSync={pushSync}
+          onPushSync={(on) => {
+            setSyncOnPush(agent.key, on);
+            enqueueSnackbar(
+              on
+                ? "Every push that changes this agent now saves a new version."
+                : "Push sync off — use Sync to read the repository by hand.",
+              { variant: "info" },
+            );
+          }}
+          onSimulatePush={simulatePush}
+          onOpenVersions={() => setQuery({ tab: "versions" })}
+          observe={observeInfo}
+          onWatch={setWatching}
+          env={env}
+          clones={clones}
+          onSaveValues={saveValues}
+          onArchive={() => setArchiveOpen(true)}
+          onDelete={() => setDisconnectOpen(true)}
+          state={state}
+          onBuildEnv={archived ? null : buildEnvironment}
+          editId={params.get("edit") === "id"}
+          onSetId={(id) => {
+            setAgentValues(agent.key, { agentId: id });
+            setQuery({ edit: null });
+            enqueueSnackbar(`Reconnected — Sync reads ${source.label} again.`, {
+              variant: "success",
+            });
+          }}
+        />
+      )}
+
+      <BuildEnvironmentDialog
+        open={buildOpen}
+        onClose={() => setBuildOpen(false)}
+        agent={agent}
+        defaultVersion={agent.production || agent.latest}
+        channel={buildChannel}
+        onBuild={startBuild}
+      />
+      <SwitchVersionDialog
+        open={!!switchFor}
+        onClose={() => setSwitchFor(null)}
+        env={switchEnv}
+        envState={switchFor ? state.byEnv[switchFor.envId] : null}
+        label={switchFor?.label}
+        onConfirm={() => {
+          runVersionIn(switchFor.envId, switchFor.label);
+          enqueueSnackbar(
+            `${switchEnv?.name} now tests ${switchFor.label}. Its next run uses it.`,
+            { variant: "success" },
+          );
+          setSwitchFor(null);
+        }}
+      />
+
+      <AddVersionDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        agent={agent}
+        definition={latestDefinition}
+        baseTools={baseTools}
+        onSave={(v) => {
+          recordAgentVersion(agent.key, v);
+          setAddOpen(false);
+          setQuery({ v: null });
+          enqueueSnackbar(
+            `Saved as ${v.label}. Environments keep the version they run.`,
+            { variant: "success" },
+          );
+        }}
+      />
+      <AgentSyncDialog
+        open={syncOpen}
+        onClose={() => setSyncOpen(false)}
+        agent={agent}
+        versions={agent.versions}
+        env={env}
+        baseTools={baseTools}
+        usedInCount={agent.usedIn.length}
+        onOpenEnvironments={() => setQuery({ tab: "environments", v: null })}
+        onSave={(v) => {
+          recordAgentVersion(agent.key, v);
+          announce(v, "a sync");
+          setQuery({ v: null });
+        }}
+      />
+      <ArchiveDialog
+        open={archiveOpen}
+        agent={agent}
+        copies={madeCopies}
+        onClose={() => setArchiveOpen(false)}
+        onConfirm={toggleArchive}
+      />
+      <DisconnectDialog
+        open={disconnectOpen}
+        agent={agent}
+        onClose={() => setDisconnectOpen(false)}
+        onConfirm={disconnect}
+      />
+    </Box>
+  );
+}
+
+/* ── environments ─────────────────────────────────────────────────────────── */
+
+function EnvironmentsTab({ agent, runs, onBuild, onRun, onOpen, mainEnvId, mainPicked, onMakeMain, focusEnvId = null }) {
+  const { state: simState } = useSimStore();
+  /* "agent vN × environment vM" — what the last run there held fixed, as every run reads. */
+  const pairOfLast = (last, envId) => {
+    const env = simState.myEnvironments.find((e) => e.id === envId);
+    const envPart = runIdentityOf(last, simState.byEnv?.[envId], env).label.split(" × ")[1];
+    return `agent ${last.agentVersion}${envPart ? ` × ${envPart}` : ""}`;
+  };
+  /* How it did there — the newest finished run in each environment. */
+  const lastIn = (envId) => runs.find((r) => r.envId === envId);
+  /* Environments that share a name are told apart by when they were built. */
+  const nameCount = agent.usedIn.reduce((m, u) => m.set(u.envName, (m.get(u.envName) || 0) + 1), new Map());
+  const builtAt = (envId) => simState.myEnvironments.find((e) => e.id === envId)?.adoptedAt || null;
+  /* A clock time, not "1h ago" — copies built minutes apart must still differ. */
+  const builtWhen = (iso, withSeconds = false) => {
+    const d = new Date(iso);
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...(withSeconds && { second: "2-digit" }) });
+    return d.toDateString() === new Date().toDateString()
+      ? time
+      : `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+  };
+  /* Two built in the same minute get their seconds too. */
+  const minuteLabels = agent.usedIn.map((u) => (builtAt(u.envId) ? builtWhen(builtAt(u.envId)) : null));
+  const builtLabel = (envId) => {
+    const at = builtAt(envId);
+    const label = builtWhen(at);
+    return minuteLabels.filter((l) => l === label).length > 1 ? builtWhen(at, true) : label;
+  };
+  const former = agent.formerlyIn || [];
+  /* Deleted environments took their runs with them — say so, quietly. */
+  const deleted = agent.deletedIn?.length ? (
+    <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+      {`Was tested in ${agent.deletedIn.map((u) => u.envName).join(", ")} (deleted)`}
+    </Typography>
+  ) : null;
+  if (!agent.usedIn.length && !former.length) {
+    return (
+      <Box
+        sx={{
+          p: 4,
+          textAlign: "center",
+          border: "1px dashed",
+          borderColor: "divider",
+          borderRadius: 1.5,
+        }}
+      >
+        <Typography sx={{ typography: "s1", fontWeight: 600 }}>
+          {deleted
+            ? "Not used in an environment"
+            : "Not used in any environment yet"}
+        </Typography>
+        {deleted && <Box sx={{ mt: 0.25 }}>{deleted}</Box>}
+        <Typography
+          sx={{ typography: "s2", color: "text.subtitle", mt: 0.5, mb: 2 }}
+        >
+          An environment gives this agent a world to act in — tools, seeded
+          data, rules and scenarios to run.
+        </Typography>
+        <Button
+          variant="contained"
+          color="primary"
+          size="small"
+          onClick={onBuild}
+          sx={{ typography: "s2", fontWeight: 700 }}
+        >
+          Build environment
+        </Button>
+      </Box>
+    );
+  }
+  return (
+    <Stack spacing={2}>
+      {agent.usedIn.length > 0 && (
+        <Card
+          title="Environments testing this agent"
+          action={
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+              {agent.usedIn.length > 1
+                ? `Fixes run in the main one${mainPicked ? "" : " — the first built"}`
+                : "Each environment picks the version it runs"}
+            </Typography>
+          }
+        >
+          <Row
+            header
+            cells={["Environment", "Testing", "Last result", "Status", ""]}
+          />
+          {agent.usedIn.map((u) => {
+            const last = lastIn(u.envId);
+            const rate = last ? passRate(last) : null;
+            return (
+              <Row
+                key={u.envId}
+                highlight={u.envId === focusEnvId}
+                cells={[
+                  <Stack key="n" direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+                    <Box component="span" sx={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {u.envName}
+                    </Box>
+                    {nameCount.get(u.envName) > 1 && builtAt(u.envId) && (
+                      <Box component="span" sx={{ color: "text.subtitle", flexShrink: 0, whiteSpace: "nowrap" }}>
+                        {`built ${builtLabel(u.envId)}`}
+                      </Box>
+                    )}
+                    {u.envId === mainEnvId && (
+                      <Tooltip arrow title="Every fix from the Error Feed runs here. Other improvements start here unless you pick another environment.">
+                        <Box component="span"><QuietTag>Main</QuietTag></Box>
+                      </Tooltip>
+                    )}
+                  </Stack>,
+                  <Box key="r" component="span" sx={{ fontFamily: MONO }}>
+                    {u.running}
+                  </Box>,
+                  last ? (
+                    <Box key="l" component="span">
+                      <Box
+                        component="span"
+                        sx={{
+                          fontWeight: 700,
+                          color:
+                            rate >= 80
+                              ? "#16A34A"
+                              : rate >= 50
+                                ? "text.primary"
+                                : "#DC2626",
+                        }}
+                      >{`${rate}%`}</Box>
+                      <Box
+                        component="span"
+                        sx={{ color: "text.subtitle" }}
+                      >{` · ${pairOfLast(last, u.envId)} · ${ago(last.finishedAt)}`}</Box>
+                    </Box>
+                  ) : (
+                    <Box
+                      key="l"
+                      component="span"
+                      sx={{ color: "text.subtitle" }}
+                    >
+                      No runs yet
+                    </Box>
+                  ),
+                  u.behind ? (
+                    <Box
+                      key="s"
+                      component="span"
+                      sx={{ color: "text.primary", fontWeight: 600 }}
+                    >{`${agent.production} in production`}</Box>
+                  ) : (
+                    <Box
+                      key="s"
+                      component="span"
+                      sx={{ color: "text.secondary" }}
+                    >
+                      On the production version
+                    </Box>
+                  ),
+                  <Stack
+                    key="a"
+                    direction="row"
+                    spacing={1}
+                    justifyContent="flex-end"
+                  >
+                    {u.envId !== mainEnvId && onMakeMain && (
+                      <Button
+                        size="small"
+                        onClick={() => onMakeMain(u.envId, u.envName)}
+                        sx={{
+                          typography: "s3",
+                          fontWeight: 700,
+                          height: 26,
+                          color: "text.secondary",
+                        }}
+                      >
+                        Make main
+                      </Button>
+                    )}
+                    {u.behind && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => onRun(u.envId)}
+                        sx={{
+                          typography: "s3",
+                          fontWeight: 700,
+                          height: 26,
+                          color: "text.primary",
+                          borderColor: "divider",
+                        }}
+                      >
+                        {`Switch to ${agent.production}`}
+                      </Button>
+                    )}
+                    <Button
+                      size="small"
+                      onClick={() => onOpen(u.envId)}
+                      sx={{
+                        typography: "s3",
+                        fontWeight: 700,
+                        height: 26,
+                        color: "text.secondary",
+                      }}
+                    >
+                      Open
+                    </Button>
+                  </Stack>,
+                ]}
+              />
+            );
+          })}
+        </Card>
+      )}
+      {former.length > 0 && (
+        <Card
+          title="Earlier runs in"
+          action={
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+              Environments that no longer test it — its runs there stay with this agent
+            </Typography>
+          }
+        >
+          {former.map((u) => (
+            <Stack
+              key={u.envId}
+              direction="row"
+              alignItems="center"
+              spacing={2}
+              sx={{
+                px: 2,
+                py: 1,
+                borderTop: "1px solid",
+                borderColor: "divider",
+                "&:first-of-type": { borderTop: "none" },
+              }}
+            >
+              <Typography sx={{ typography: "s2", fontWeight: 600, flex: 1 }}>
+                {u.envName}
+              </Typography>
+              <Typography
+                sx={{ typography: "s3", color: "text.subtitle" }}
+              >{`Last tested ${ago(u.replacedAt)}`}</Typography>
+              <Button
+                size="small"
+                onClick={() => onOpen(u.envId)}
+                sx={{
+                  typography: "s3",
+                  fontWeight: 700,
+                  height: 26,
+                  color: "text.secondary",
+                }}
+              >
+                Open
+              </Button>
+            </Stack>
+          ))}
+        </Card>
+      )}
+      {deleted}
+    </Stack>
+  );
+}
+
+EnvironmentsTab.propTypes = {
+  /* The environment the page was opened from — its row is picked out. */
+  focusEnvId: PropTypes.string,
+  mainEnvId: PropTypes.string,
+  mainPicked: PropTypes.bool,
+  onMakeMain: PropTypes.func,
+  agent: PropTypes.object,
+  runs: PropTypes.array,
+  onBuild: PropTypes.func,
+  onRun: PropTypes.func,
+  onOpen: PropTypes.func,
+};
+
+/* ── connection ───────────────────────────────────────────────────────────── */
+
+/* The overview's to-do card: each notice inside it loses its own frame and
+   becomes a row. Hidden when nothing needs doing. */
+const TODO_CARD_SX = {
+  mb: 2, border: "1px solid", borderColor: "divider", borderRadius: 1.5, bgcolor: "background.paper", overflow: "hidden",
+  "&:empty": { display: "none" },
+  "& > *": { m: "0 !important", border: "none !important", borderRadius: "0 !important", bgcolor: "transparent !important" },
+  "& > * + *": { borderTop: (t) => `1px solid ${t.palette.divider} !important` },
+};
+
+function ConnectionTab({
+  agent,
+  source,
+  definition,
+  onSync,
+  pushSync,
+  onPushSync,
+  onSimulatePush,
+  onOpenVersions,
+  editId,
+  onSetId,
+  observe,
+  onWatch,
+  onSaveValues,
+  env,
+  clones,
+  onArchive,
+  onDelete,
+  state,
+  onBuildEnv,
+}) {
+  const [editingRuntime, setEditingRuntime] = useState(false);
+  const replication = replicationOf(agent, env);
+  /* The repository a GitHub installation would cover — the agent's own record first. */
+  const repoForAccess = agent?.definition?.repoUrl || agent?.source?.repoUrl || definition?.repoUrl;
+  const [idDraft, setIdDraft] = useState("");
+  /* Keys get rotated; a stale one quietly breaks Sync and production
+     watching, so it can be replaced here without reconnecting. */
+  const [editingKey, setEditingKey] = useState(false);
+  /* Moved to another platform, or rebuilt under a new ID — still this agent. */
+  const [moving, setMoving] = useState(false);
+  const isPlatform =
+    source.kind === "platform" && agent.values?.provider !== "other";
+  /* Voice agents get their call settings as controls, not read-only rows. */
+  const voice =
+    ["voice_platform", "voice_sip"].includes(agent.typeId) ||
+    !!agent.values?.contact;
+  /* What a re-read can pick up from this source — an MCP server publishes
+     instructions and tools, not the model; only a platform holds a voice. */
+  const syncReads = (
+    source.kind === "mcp" ? ["instructions", "tools"]
+      : source.kind === "platform" && voice ? ["instructions", "model", "voice", "tools"]
+        : ["instructions", "model", "tools"]
+  ).join(", ");
+  /* Only where an endpoint is how we reach it — a platform or a phone line
+     is reached its own way, so editing an endpoint there would do nothing. */
+  const editableRuntime =
+    source.kind !== "platform" &&
+    ["endpoint", "none"].includes(source.runtime.kind);
+  const syncs = agent.versions
+    .filter((v) => ["sync", "push", "pr"].includes(v.origin))
+    .reverse();
+  const rows = [
+    {
+      label: "Reached at",
+      value: source.runtime.where
+        ? `${source.runtime.label} · ${source.runtime.where}${source.runtime.by ? ` · ${source.runtime.by}` : ""}`
+        : source.idMissing
+          ? `${source.label} API — needs the assistant ID below`
+          : "Not set — simulations need it",
+      edit: editableRuntime,
+    },
+    ...(source.idMissing
+      ? [{ label: "Assistant ID", value: "Missing", idRow: true }]
+      : []),
+    /* Read at install; write only once someone opens the first draft PR. */
+    ...(githubAccessOf(repoForAccess)
+      ? [{ label: "GitHub access", value: githubAccessLabel(githubAccessOf(repoForAccess)) }]
+      : []),
+    /* How deep an improvement can go for how it came in — plainly, for an
+       agent we can only call. */
+    { label: "Fix depth", value: fixDepthLine(agent), hint: replication.mode === "phone_call" || replication.mode === "wrapped_endpoint" || replication.mode === "project_call" ? "We can't change it ourselves — a re-run on the same environment version proves the fix once you apply it." : null },
+    ...definition.connection
+      .filter((r) => !/^(endpoint|agent id|provider)$/i.test(r.label))
+      .filter(
+        (r) =>
+          !(
+            voice &&
+            /^(simulated calls|agent speaks first|call direction)$/i.test(
+              r.label,
+            )
+          ),
+      )
+      .map((r) => (/^api key$/i.test(r.label) ? { ...r, keyRow: true } : r)),
+    ...(isPlatform && !agent.values?.hasApiKey && !agent.values?.apiKeyRef
+      ? [{ label: "API key", value: "Not stored", keyRow: true, missing: true }]
+      : []),
+    {
+      label: "Connected",
+      value: agent.connectedAt
+        ? `${new Date(agent.connectedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })} · ${ago(agent.connectedAt)}`
+        : "—",
+      /* Where it first came in — said on hover, not as its own row. */
+      hint: `First seen ${agent.origin === "agents" ? "on the Agents page" : agent.origin === "github" ? "in Settings → GitHub" : `in ${agent.firstEnvName || "an environment"}`} · ${ORIGIN_LABEL(agent.versions[0], source).toLowerCase()} as v1.`,
+    },
+  ];
+  const syncWhat = source.kind === "repo" ? "the repository" : source.kind === "framework" ? `the agent through its ${source.label} adapter` : source.label;
+  return (
+    <Stack minWidth={0}>
+      <SettingsSection
+        title="How we reach it"
+        sub={(
+          <>
+            Same for every version
+            <InfoTip text="Changing how we reach the agent doesn't create a version — versions track what the agent does, not where it lives." />
+          </>
+        )}
+      >
+        <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.5, bgcolor: "background.paper", overflow: "hidden" }}>
+          {rows.map((r) => (
+            <Stack
+              key={r.label}
+              direction="row"
+              alignItems={r.keyRow && (editingKey || agent.values?.apiKeyCheck) ? "flex-start" : "center"}
+              spacing={2}
+              sx={{
+                px: 2,
+                py: 1,
+                borderTop: "1px solid",
+                borderColor: "divider",
+                "&:first-of-type": { borderTop: "none" },
+              }}
+            >
+              <Typography
+                sx={{
+                  typography: "s2",
+                  color: "text.subtitle",
+                  width: 150,
+                  flexShrink: 0,
+                  ...(r.keyRow && editingKey && { pt: 0.75 }),
+                }}
+              >
+                {r.label}
+                {r.keyRow && isHostedPlatform(agent) && <InfoTip text={PLATFORM_KEY_SCOPE} />}
+              </Typography>
+              {r.idRow ? (
+                /* A platform agent that lost its assistant ID — add it back and Sync works again. */
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{ flex: 1, minWidth: 0 }}
+                >
+                  <TextField
+                    size="small"
+                    fullWidth
+                    autoFocus={editId}
+                    value={idDraft}
+                    onChange={(e) => setIdDraft(e.target.value)}
+                    placeholder={`${source.label} assistant ID`}
+                    InputProps={{ sx: { typography: "s2", fontFamily: MONO } }}
+                  />
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="primary"
+                    disabled={!idDraft.trim()}
+                    onClick={() => onSetId(idDraft.trim())}
+                    sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}
+                  >
+                    Reconnect
+                  </Button>
+                </Stack>
+              ) : r.keyRow ? (
+                /* By reference (AC-6.12): the path is shown, never the key.
+                   Replacing it re-runs the access check and nothing else —
+                   no new agent version. */
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  {editingKey ? (
+                    <SecretRefEditor
+                      placeholder={agent.values?.apiKeyRef || defaultRefFor(`${agent.values?.provider || "agent"}_api_key`)}
+                      saveLabel={r.missing ? "Save reference" : "Replace"}
+                      onSave={(ref) => {
+                        onSaveValues(
+                          {
+                            hasApiKey: true,
+                            apiKeyRef: ref,
+                            apiKeyMigrated: false,
+                            apiKeyCheck: preflightRecord(ref, agent.values?.provider),
+                            /* A new key reconnects an agent whose key was revoked. */
+                            ...(agent.values?.disconnected?.cause === "key" && { disconnected: null }),
+                          },
+                          r.missing
+                            ? "API key reference saved — checking access."
+                            : "API key reference replaced — access re-checked, no new version.",
+                        );
+                        setEditingKey(false);
+                      }}
+                      onCancel={() => setEditingKey(false)}
+                    />
+                  ) : (
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
+                      <SecretRefText
+                        value={agent.values?.apiKeyRef}
+                        empty={r.missing ? "Not set" : "Held by the connection · no reference recorded"}
+                        sx={{ flex: 1 }}
+                      />
+                      {agent.values?.apiKeyMigrated && <RefTag>moved from a pasted key</RefTag>}
+                      <ActionText onClick={() => setEditingKey(true)}>
+                        {r.missing ? "Add" : "Replace"}
+                      </ActionText>
+                    </Stack>
+                  )}
+                  {!editingKey && agent.values?.apiKeyCheck && (
+                    <PreflightLine check={agent.values.apiKeyCheck} sx={{ mt: 0.5 }} />
+                  )}
+                </Box>
+              ) : r.edit && editingRuntime ? (
+                <AgentRuntimeEditor
+                  agent={agent}
+                  current={source.runtime.where || ""}
+                  variant="inline"
+                  onDone={() => setEditingRuntime(false)}
+                />
+              ) : r.hint ? (
+                <Typography
+                  sx={{
+                    typography: "s2",
+                    flex: 1,
+                    minWidth: 0,
+                    fontFamily: r.mono ? MONO : undefined,
+                  }}
+                >
+                  {r.value}
+                  <InfoTip text={r.hint} />
+                </Typography>
+              ) : (
+                <>
+                  <Typography
+                    noWrap
+                    sx={{
+                      typography: "s2",
+                      fontFamily: r.mono ? MONO : undefined,
+                      minWidth: 0,
+                      flex: 1,
+                      color:
+                        r.edit && !source.runtime.where
+                          ? "#DC2626"
+                          : "text.primary",
+                    }}
+                  >
+                    {r.value}
+                  </Typography>
+                  {r.edit && (
+                    <ActionText onClick={() => setEditingRuntime(true)}>
+                      {source.runtime.where ? "Edit" : "Add"}
+                    </ActionText>
+                  )}
+                </>
+              )}
+            </Stack>
+          ))}
+          {isPlatform && !source.idMissing && (
+            <Stack direction="row" alignItems="center" spacing={2} sx={{ px: 2, py: 1, borderTop: "1px solid", borderColor: "divider" }}>
+              <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 0 }}>
+                {`Moved off ${source.label}, or rebuilt under a new ID? It stays this agent.`}
+              </Typography>
+              <ActionText onClick={() => setMoving(true)}>Move…</ActionText>
+            </Stack>
+          )}
+        </Box>
+        <MovePlatformDialog
+          open={moving} onClose={() => setMoving(false)} agent={agent}
+          onSave={(patch, msg) => { onSaveValues(patch, msg); setMoving(false); }}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Live testing" sub="What we create and call in your account.">
+        {/* Live agents: consent before the first run (an endpoint has its own, under How we test it). */}
+        {replication.mode !== "wrapped_endpoint" && <LiveConsentCard agent={agent} env={env} onSave={onSaveValues} />}
+        <RetellPinCard agent={agent} onSave={onSaveValues} />
+        <AgentReplicationCard agent={agent} env={env} clones={clones} onSaveValues={onSaveValues} />
+      </SettingsSection>
+
+      <SettingsSection title="Calls" sub="How simulations reach it, per channel.">
+        <AgentCallSettings
+          bare
+          agent={agent}
+          state={state}
+          callOver={source.kind !== "prompt"}
+          onSave={onSaveValues}
+          onBuildEnv={onBuildEnv ? (ch) => onBuildEnv(ch) : null}
+        />
+      </SettingsSection>
+
+      {/* Its real calls, and the Observe project they land in — one place. */}
+      <SettingsSection
+        title="Production"
+        sub={(
+          <>
+            {observe.on ? "Watching its real calls, and where they land." : "Its real calls, next to simulations."}
+            <InfoTip text="Error Feed issues from its project are this agent's — Fix, Copy for coding agent and an environment's From Error Feed all read it." />
+          </>
+        )}
+      >
+        <Stack spacing={1.5}>
+          <ObservabilityCard bare agent={agent} observe={observe} onToggle={onWatch} />
+          <ObserveProjectsCard agent={agent} />
+        </Stack>
+      </SettingsSection>
+
+      <SettingsSection title="Source and sync" sub="What a version pins, and how it syncs.">
+        <SourceCard agent={agent} source={source} onSave={onSaveValues} />
+        <Card
+          title={(
+            <>
+              Sync
+              {source.syncable && (
+                <InfoTip text={`Starting an improvement syncs it too. A change found there is marked "${OUTSIDE_CHANGE_LABEL}" and the improvement starts from it.`} />
+              )}
+            </>
+          )}
+          action={
+            source.syncable && (
+              <ActionText onClick={onSync}>Sync now</ActionText>
+            )
+          }
+        >
+          {source.viaApp && (
+            <Box
+              sx={{
+                px: 2,
+                py: 1.25,
+                borderBottom: "1px solid",
+                borderColor: "divider",
+              }}
+            >
+              <Stack direction="row" alignItems="center" spacing={1.5}>
+                <Box flex={1} minWidth={0}>
+                  <Typography sx={{ typography: "s2", fontWeight: 600 }}>
+                    Sync on every push
+                  </Typography>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                    {"A push to "}
+                    <Box component="span" sx={{ fontFamily: MONO }}>
+                      {definition.ref || "main"}
+                    </Box>
+                    {" saves a new version"}
+                    <InfoTip text="Only a push that changes the agent, tied to its commit. Environments keep the version they run." />
+                  </Typography>
+                </Box>
+                <Switch
+                  size="small"
+                  checked={!!pushSync}
+                  onChange={(e) => onPushSync(e.target.checked)}
+                />
+              </Stack>
+              {pushSync && (
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  spacing={1}
+                  sx={{ mt: 1 }}
+                >
+                  <Typography
+                    sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}
+                  >
+                    <DemoLabel />
+                    <InfoTip text="In the product this happens when GitHub tells us about a push." />
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={onSimulatePush}
+                    startIcon={
+                      <Iconify
+                        icon="solar:upload-minimalistic-linear"
+                        width={14}
+                      />
+                    }
+                    sx={{
+                      typography: "s3",
+                      fontWeight: 700,
+                      height: 26,
+                      color: "text.primary",
+                      borderColor: "divider",
+                    }}
+                  >
+                    Simulate a push
+                  </Button>
+                </Stack>
+              )}
+            </Box>
+          )}
+          <Typography
+            sx={{ px: 2, py: 1.25, typography: "s3", color: "text.subtitle" }}
+          >
+            {source.syncable
+              ? `Syncs from ${syncWhat} — a change is saved as a new version`
+              : source.idMissing ? "Needs the assistant ID — add it under How we reach it"
+                : source.appLost ? "The GitHub app lost access to the repository"
+                  : "Can't be synced — use Add version when it changes"}
+            <InfoTip
+              text={source.syncable
+                ? `What it picks up: ${syncReads}. Environments keep running their current version until someone switches.`
+                : source.appLost
+                  ? "Reinstall it from Settings → Integrations → GitHub — or use Add version at the top of this page."
+                  : source.kind === "repo" && !source.idMissing
+                    ? "No repository is recorded for this agent, so there's nothing to sync."
+                    : null}
+            />
+          </Typography>
+          {/* The last re-read, in one line — every version it saved is on Versions. */}
+          {syncs.length > 0 && (
+            <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 2, pb: 1.5 }}>
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                {`Last synced ${ago(syncs[0].createdAt || syncs[0].connectedAt)} · saved as `}
+                <Box component="span" sx={{ fontFamily: MONO, color: "text.primary" }}>{syncs[0].label}</Box>
+                {isOutsideChange(syncs[0]) ? ` · ${OUTSIDE_CHANGE_LABEL}` : ""}
+              </Typography>
+              {onOpenVersions && <ActionText onClick={onOpenVersions}>See versions</ActionText>}
+            </Stack>
+          )}
+          {source.syncable && !syncs.length && (
+            <Typography
+              sx={{ px: 2, pb: 1.5, typography: "s3", color: "text.subtitle" }}
+            >
+              Never synced.
+            </Typography>
+          )}
+        </Card>
+        <ReleaseDetectionCard agent={agent} onSaveValues={onSaveValues} />
+      </SettingsSection>
+
+      <SettingsSection title="Identity" sub="Shown in the header and on Connected agents.">
+        <IdentityCard bare agent={agent} onSave={onSaveValues} />
+      </SettingsSection>
+
+      <SettingsSection title="Archive or delete">
+        <LifecycleCard agent={agent} onSaveValues={onSaveValues} onArchive={onArchive} onDelete={onDelete} />
+      </SettingsSection>
+
+      <SettingsSection title={<><DemoLabel />Prototype controls</>} sub="States the product reaches on its own.">
+        <PrototypeControlsCard agent={agent} onSaveValues={onSaveValues} />
+      </SettingsSection>
+    </Stack>
+  );
+}
+ConnectionTab.propTypes = {
+  state: PropTypes.object,
+  onBuildEnv: PropTypes.func,
+  onArchive: PropTypes.func,
+  onDelete: PropTypes.func,
+  editId: PropTypes.bool,
+  onSetId: PropTypes.func,
+  agent: PropTypes.object,
+  source: PropTypes.object,
+  definition: PropTypes.object,
+  onSync: PropTypes.func,
+  pushSync: PropTypes.bool,
+  onPushSync: PropTypes.func,
+  onSimulatePush: PropTypes.func,
+  onOpenVersions: PropTypes.func,
+  observe: PropTypes.object,
+  onWatch: PropTypes.func,
+  onSaveValues: PropTypes.func,
+  env: PropTypes.object,
+  clones: PropTypes.array,
+};
+
+/* ── disconnect ───────────────────────────────────────────────────────────── */
+
+function DisconnectDialog({ open, agent, onClose, onConfirm }) {
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      PaperProps={{
+        sx: {
+          borderRadius: 2,
+          maxWidth: 440,
+          width: "100%",
+          bgcolor: "background.paper",
+          backgroundImage: "none",
+          border: "1px solid",
+          borderColor: "divider",
+        },
+      }}
+    >
+      <Box sx={{ px: 3, pt: 2.5, pb: 2 }}>
+        <Typography sx={{ typography: "m3", fontWeight: 700 }}>
+          {`Delete ${agent.name}?`}
+        </Typography>
+        <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.75 }}>
+          {`It leaves Connected agents with its ${plural(agent.versions.length, "version")}. Runs stay with the environments that ran them, and proofs on shipped changes are kept. Connect it again any time — or archive it instead to keep it listed.`}
+        </Typography>
+      </Box>
+      <Stack
+        direction="row"
+        justifyContent="flex-end"
+        spacing={1}
+        sx={{ px: 3, py: 1.75, borderTop: "1px solid", borderColor: "divider" }}
+      >
+        <Button
+          size="small"
+          onClick={onClose}
+          sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}
+        >
+          Cancel
+        </Button>
+        <Button
+          size="small"
+          variant="contained"
+          onClick={onConfirm}
+          sx={{
+            typography: "s2",
+            fontWeight: 700,
+            bgcolor: "#DC2626",
+            color: "#fff",
+            "&:hover": { bgcolor: "#B91C1C", color: "#fff" },
+          }}
+        >
+          Delete
+        </Button>
+      </Stack>
+    </Dialog>
+  );
+}
+DisconnectDialog.propTypes = {
+  open: PropTypes.bool,
+  agent: PropTypes.object.isRequired,
+  onClose: PropTypes.func,
+  onConfirm: PropTypes.func,
+};
+
+/* ── small pieces ─────────────────────────────────────────────────────────── */
+
+function Card({ title, action, children }) {
+  return (
+    <Box
+      sx={{
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 1.5,
+        bgcolor: "background.paper",
+        overflow: "hidden",
+        minWidth: 0,
+      }}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1}
+        sx={{
+          px: 2,
+          py: 1.25,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        }}
+      >
+        <Typography sx={{ typography: "s2", fontWeight: 700, flex: 1 }}>
+          {title}
+        </Typography>
+        {action}
+      </Stack>
+      {children}
+    </Box>
+  );
+}
+Card.propTypes = {
+  title: PropTypes.node,
+  action: PropTypes.node,
+  children: PropTypes.node,
+};
+
+function Row({ cells, header, onClick, highlight = false }) {
+  return (
+    <Box
+      {...clickable(onClick)}
+      sx={{
+        ...focusRing,
+        display: "grid",
+        gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))`,
+        gap: 1.5,
+        px: 2,
+        py: header ? 0.75 : 1,
+        alignItems: "center",
+        borderTop: "1px solid",
+        borderColor: "divider",
+        /* Header reads like the product's DataTable: no fill, quiet title. */
+        /* The row the page was opened for — an environment's View agent. */
+        bgcolor: (t) => (highlight ? alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.05 : 0.03) : "transparent"),
+        cursor: onClick ? "pointer" : "default",
+        "&:hover": onClick ? { bgcolor: "action.hover" } : {},
+      }}
+    >
+      {cells.map((c, i) => (
+        <Typography
+          // eslint-disable-next-line react/no-array-index-key
+          key={i}
+          component="div"
+          noWrap
+          sx={{
+            typography: "s2",
+            ...(header && { fontSize: 13 }),
+            fontWeight: header ? 500 : 400,
+            color: header ? "text.secondary" : "text.primary",
+          }}
+        >
+          {c}
+        </Typography>
+      ))}
+    </Box>
+  );
+}
+Row.propTypes = {
+  cells: PropTypes.array,
+  header: PropTypes.bool,
+  onClick: PropTypes.func,
+  highlight: PropTypes.bool,
+};
+
+function Pill({ children, dot }) {
+  return (
+    <Box
+      sx={{
+        px: 0.75,
+        height: 20,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.625,
+        borderRadius: 0.75,
+        border: "1px solid",
+        borderColor: "divider",
+        flexShrink: 0,
+      }}
+    >
+      {dot && (
+        <Box sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: dot }} />
+      )}
+      <Typography
+        sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}
+      >
+        {children}
+      </Typography>
+    </Box>
+  );
+}
+Pill.propTypes = { children: PropTypes.node, dot: PropTypes.string };

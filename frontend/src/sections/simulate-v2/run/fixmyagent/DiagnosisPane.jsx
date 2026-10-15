@@ -1,14 +1,24 @@
 import PropTypes from "prop-types";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, Button, Chip, Collapse, IconButton, Tooltip } from "@mui/material";
+import { Box, Stack, Typography, Button, Chip, Collapse, IconButton, Tooltip, Menu, MenuItem, ListItemText } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { clickable, focusRing } from "../../components/clickable";
+import { connectedAgentPath } from "../../improvements/improvementNav";
 import { RunTraceLog } from "../../components/RunTrace";
 import { outcomeOf } from "../taskOutcome";
 import TaskLinks from "./TaskLinks";
 import CallScanStrip from "./CallScanStrip";
 import OmegaHandoff from "../OmegaHandoff";
 import ImaginePane from "./ImaginePane";
+import CopyBriefButton from "../../components/CopyBriefButton";
+import { useSimStore, useConnectedAgents } from "../../store";
+import { envAgentKey, agentDefinitionOf } from "../../_mock/agentRegistry";
+import { limitsOf, surfaceAvailability } from "../../agents/agentLimits";
+import { fixScope, codingAgentBrief } from "../../_mock/codingAgentBrief";
+import { decidingMoment } from "../../_mock/comparison";
+import { runIdentityOf } from "../../_mock/runIdentity";
 
 /**
  * What is wrong, and what to change about it.
@@ -27,11 +37,11 @@ import ImaginePane from "./ImaginePane";
  * team spends a month improving a number that was never measuring anything.
  */
 
-/* A change that unblocks a release outranks one that lifts the average. */
+/* A change that fixes a critical scenario outranks one that lifts the average. */
 const priorityOf = (p, tasks) => {
   const blockers = p.addresses.filter((id) => tasks.find((t) => t.id === id)?.critical).length;
   if (blockers) return { label: "Critical", color: "#DC2626", level: 0 };
-  if (p.addresses.length > 2) return { label: "High", color: "#CA8A04", level: 1 };
+  if (p.addresses.length > 2) return { label: "High", color: "#CA8A04", text: "text.primary", level: 1 };
   return { label: "Medium", color: "#6B7280", level: 2 };
 };
 
@@ -66,7 +76,7 @@ const CONFIRM_AFTER = 2;
 const liveWhy = (why, n) => {
   if (!why) return why;
   return why.replace(
-    /^\d+( (?:release |long )?)(task|episode|blocker)s?\b/,
+    /^\d+( (?:release |long |critical )?)(task|episode|blocker|scenario)s?\b/,
     (_, mid, noun) => `${n}${mid}${noun}${n === 1 ? "" : "s"}`,
   );
 };
@@ -74,8 +84,11 @@ const liveWhy = (why, n) => {
 function TabButton({ active, onClick, icon, children, disabled }) {
   return (
     <Box
-      onClick={disabled ? undefined : onClick}
+      role="tab"
+      aria-selected={!!active}
+      {...clickable(disabled ? null : onClick, { role: "tab", disabled })}
       sx={{
+        ...focusRing,
         display: "inline-flex", alignItems: "center", gap: 0.5,
         py: 1.25, cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.45 : 1,
@@ -98,11 +111,66 @@ TabButton.propTypes = {
   disabled: PropTypes.bool,
 };
 
+/*
+  Which of the agent's constraints a fix touches, in one quiet line. A fix
+  the constraints rule out stays on the list — it is still what the evidence
+  says — with the reason and the way to change it, rather than vanishing.
+*/
+function ScopeLine({ scope, available, onChangeConstraints }) {
+  const blocked = !scope.environment && !scope.ok;
+  const link = blocked && onChangeConstraints && (
+    <>
+      {" · "}
+      <Box
+        component="span" {...clickable(onChangeConstraints, { role: "link" })}
+        sx={{ fontWeight: 700, color: "text.secondary", cursor: "pointer", "&:hover": { color: "text.primary" }, ...focusRing }}
+      >
+        Change constraints
+      </Box>
+    </>
+  );
+  let detail;
+  if (scope.environment) detail = null;
+  else if (!scope.allowed) detail = <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>not allowed for this agent</Box>;
+  else if (scope.protected) {
+    detail = (
+      <>
+        edits <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{scope.path}</Box>,{" "}
+        <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>which this agent protects</Box>
+      </>
+    );
+  } else detail = available?.ok === false ? `allowed · ${available.why.charAt(0).toLowerCase()}${available.why.slice(1)}` : "allowed";
+
+  return (
+    <Tooltip
+      arrow placement="top-start"
+      title={blocked ? "An improvement only tries changes this agent's constraints allow — it will skip this one." : ""}
+    >
+      <Stack direction="row" alignItems="flex-start" spacing={0.625} sx={{ mt: 1 }}>
+        <Iconify
+          icon={scope.environment ? "solar:test-tube-linear" : blocked ? "solar:lock-keyhole-minimalistic-linear" : "solar:shield-check-linear"}
+          width={13} sx={{ color: "text.disabled", flexShrink: 0, mt: "2px" }}
+        />
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          {scope.label}
+          {detail && <>{" · "}{detail}</>}
+          {link}
+        </Typography>
+      </Stack>
+    </Tooltip>
+  );
+}
+ScopeLine.propTypes = {
+  scope: PropTypes.object.isRequired,
+  available: PropTypes.object,
+  onChangeConstraints: PropTypes.func,
+};
+
 export default function DiagnosisPane({
   tasks, report, trace, proposals, verdict,
   applied, setApplied, current, projected, willFix,
   measured, failing, onOpenTask, onViewIssue, onOptimize, onClose,
-  env, envState, patch, onHandOff, runId,
+  env, envState, patch, handoff: handoffProps, runId, previous = [], onOpenPrevious,
 }) {
   /* First open of this runId: play the analyzer animation. Every
      subsequent open in this session: skip straight to the results. */
@@ -131,6 +199,7 @@ export default function DiagnosisPane({
     setPhase("running");
   };
   const [handoff, setHandoff] = useState(false);
+  const [previousAnchor, setPreviousAnchor] = useState(null);
   const [open, setOpen] = useState({});
   const [showDiagnosis, setShowDiagnosis] = useState(true);
   /* Diagnosis is the fixed six-analyzer read; Imagine is the freeform
@@ -142,9 +211,27 @@ export default function DiagnosisPane({
   const included = proposals.filter((p) => applied[p.id]);
   /* Nothing failed, so there is nothing to search for. The refactor into a
      drawer dropped this branch and left an empty recommendation list under a
-     live "Optimize my agent" button — a search over an empty candidate pool
+     live "Run improvement" button — a search over an empty candidate pool
      that would have burned episodes to re-confirm the score it started from. */
   const nothingToFix = !failing.length;
+
+  /* The agent this environment tests, and the constraints every fix for it
+     is held to — the same ones an improvement run searches within. */
+  const navigate = useNavigate();
+  const { state } = useSimStore();
+  const { agents } = useConnectedAgents();
+  const agentKey = envAgentKey(envState?.agent, env?.id);
+  const agent = useMemo(() => agents.find((a) => a.key === agentKey) || null, [agents, agentKey]);
+  const limits = useMemo(() => limitsOf(state, agentKey), [state, agentKey]);
+  const available = useMemo(() => (agent ? surfaceAvailability(agent) : {}), [agent]);
+  const model = useMemo(() => {
+    if (!agent || !env) return null;
+    const def = agentDefinitionOf({ agent, env, envState });
+    return def.model?.visible ? def.model.name : null;
+  }, [agent, env, envState]);
+  const changeConstraints = agent
+    ? () => { onClose?.(); navigate(connectedAgentPath(agent.id, "constraints")); }
+    : null;
 
   const sorted = useMemo(() => (
     [...proposals].sort((a, b) =>
@@ -156,12 +243,25 @@ export default function DiagnosisPane({
      which each issue has enough calls behind it to be shown. */
   const found = useMemo(() => {
     const at = new Map(tasks.map((t, i) => [t.id, i]));
-    return sorted.map((p, rank) => {
+    const list = sorted.map((p, rank) => {
       const idx = p.addresses.map((id) => at.get(id)).filter((i) => i != null).sort((a, b) => a - b);
       const k = Math.min(CONFIRM_AFTER, idx.length);
       return { p, rank, idx, foundAt: k ? idx[k - 1] + 1 : 0 };
     });
-  }, [sorted, tasks]);
+    /* Paced across the whole read, one at a time: two calls usually confirm
+       every issue in the first few, which made them land all at once. Each
+       now waits for its share of the scan and a gap after the one before. */
+    const live = list.filter((f) => f.idx.length).sort((a, b) => a.foundAt - b.foundAt || a.rank - b.rank);
+    const n = live.length;
+    const slot = total / (n + 1);
+    const gap = Math.max(1, Math.floor(slot * 0.6));
+    let prev = 0;
+    live.forEach((f, i) => {
+      f.foundAt = Math.min(total, Math.max(f.foundAt, prev + gap, Math.round((i + 1) * slot)));
+      prev = f.foundAt;
+    });
+    return list;
+  }, [sorted, tasks, total]);
 
   /* Discovery order while reading; ranked order once every call is in. Each
      card carries only the calls read so far, so its count, lift and priority
@@ -169,9 +269,10 @@ export default function DiagnosisPane({
   const shownIssues = useMemo(() => {
     if (!running) return sorted.map((p, i) => ({ p, rank: i + 1 }));
     const pct = (n) => (measured.length ? Math.round((n / measured.length) * 100) : 0);
+    /* Newest first while reading, so each one arrives where it's seen. */
     return found
       .filter((f) => f.idx.length && scanned >= f.foundAt)
-      .sort((a, b) => a.foundAt - b.foundAt || a.rank - b.rank)
+      .sort((a, b) => b.foundAt - a.foundAt || a.rank - b.rank)
       .map(({ p, idx }) => {
         const seen = idx.filter((i) => i < scanned).map((i) => tasks[i].id);
         return { p: { ...p, addresses: seen, lift: pct(seen.length), why: liveWhy(p.why, seen.length) }, rank: null };
@@ -208,6 +309,56 @@ export default function DiagnosisPane({
   const causeCount = proposals.length;
   const topFrees = sorted[0]?.addresses.length || 0;
   const alreadyPass = Math.max(0, measured.length - failing.length);
+
+  /* The diagnosis as a brief for a coding agent: the verdict and what the
+     analyzers flagged, every fix with the constraint it touches, and the
+     calls the top fix addresses first as evidence. */
+  /* "agent v3 × env v7" — the run the brief is about, named the way every screen names it. */
+  const runPairing = (() => {
+    const run = (envState?.runs || []).find((r) => r.id === runId);
+    return run && env ? runIdentityOf(run, envState, env).label : null;
+  })();
+  const brief = () => {
+    const top = new Set(sorted[0]?.addresses || []);
+    const byTop = [...failing].sort((a, b) => Number(top.has(b.id)) - Number(top.has(a.id)));
+    const flagged = report.filter((a) => a.severity && a.severity !== "low");
+    return codingAgentBrief({
+      agent: agent ? { name: agent.name, key: agent.key } : null,
+      env,
+      issue: {
+        title: `${failing.length} of ${measured.length} measured scenarios failing in ${env?.name || "this environment"}`,
+        severity: sorted[0] ? priorityOf(sorted[0], tasks).label.toLowerCase() : null,
+      },
+      runId,
+      pairing: runPairing,
+      rootCause: [verdict, ...flagged.map((a) => `- ${a.label}: ${a.headline}`)].join("\n"),
+      suggestedFix: sorted.map((p) => ({ ...p, scope: fixScope(p, { env, limits }) })),
+      evidence: byTop.map((t) => ({ source: t.title || t.id, text: decidingMoment(t).text })),
+      failingScenarios: failing.map((t) => t.title || t.id),
+      limits,
+      model,
+    });
+  };
+
+  /* One fix card as its own brief: just that proposal, the calls it
+     addresses as evidence. Visible scenarios only — never a held-back one,
+     which is only fair to judge on if nobody has seen it. */
+  const briefFor = (p) => () => {
+    const visible = tasks.filter((t) => p.addresses.includes(t.id) && !t.held && !t.heldBack && !t.heldOut);
+    return codingAgentBrief({
+      agent: agent ? { name: agent.name, key: agent.key } : null,
+      env,
+      issue: { title: p.title, severity: priorityOf(p, tasks)?.label?.toLowerCase() || null },
+      runId,
+      pairing: runPairing,
+      rootCause: p.why,
+      suggestedFix: [{ ...p, scope: fixScope(p, { env, limits }) }],
+      evidence: visible.map((t) => ({ source: t.title || t.id, text: decidingMoment(t).text })),
+      failingScenarios: visible.filter((t) => t.status !== "passed").map((t) => t.title || t.id),
+      limits,
+      model,
+    });
+  };
 
   /* Export the diagnosis as a plain-text report. Defensive: restricted
      sandboxes block programmatic downloads, so a failure is swallowed. */
@@ -249,7 +400,7 @@ export default function DiagnosisPane({
         <Box
           sx={{
             width: 30, height: 30, borderRadius: 1, display: "grid", placeItems: "center", flexShrink: 0,
-            bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.16 : 0.1), color: "#7857FC",
+            border: "1px solid", borderColor: "divider", bgcolor: "background.paper", color: "text.secondary",
           }}
         >
           <Iconify icon="solar:magic-stick-3-linear" width={16} />
@@ -261,6 +412,40 @@ export default function DiagnosisPane({
             {tasks.length - measured.length ? ` · ${tasks.length - measured.length} not measured` : ""}
           </Typography>
         </Box>
+        {/* Earlier improvement runs reopen from here — the one place a
+            finished run was otherwise unreachable. */}
+        {!!previous.length && (
+          <Button
+            size="small"
+            onClick={(e) => setPreviousAnchor(e.currentTarget)}
+            sx={{
+              typography: "s3", fontWeight: 700, color: "text.secondary",
+              textTransform: "none", height: 28, px: 1,
+              "&:hover": { bgcolor: "transparent", color: "text.primary" },
+            }}
+          >
+            {`Improvements (${previous.length})`}
+          </Button>
+        )}
+        <Menu
+          anchorEl={previousAnchor}
+          open={!!previousAnchor}
+          onClose={() => setPreviousAnchor(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+          slotProps={{ paper: { sx: { minWidth: 260 } } }}
+        >
+          {previous.map((r) => (
+            <MenuItem key={r.id} onClick={() => { setPreviousAnchor(null); onOpenPrevious?.(r.id); }}>
+              <ListItemText
+                primary={r.name}
+                secondary={r.sub}
+                primaryTypographyProps={{ sx: { typography: "s2", fontWeight: 600 } }}
+                secondaryTypographyProps={{ sx: { typography: "s3", color: "text.subtitle" } }}
+              />
+            </MenuItem>
+          ))}
+        </Menu>
         {phase === "done" && !nothingToFix && (
           <Button
             size="small"
@@ -291,7 +476,7 @@ export default function DiagnosisPane({
             ends; Imagine waits for the diagnosis it reads from. ── */}
       {!(phase === "done" && nothingToFix) && (
         <Stack
-          direction="row" spacing={2}
+          direction="row" spacing={2} role="tablist" aria-label="Debug failures"
           sx={{ px: 2.5, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
         >
           <TabButton active={tab === "diagnosis"} onClick={() => setTab("diagnosis")} icon="solar:document-medicine-linear">
@@ -318,7 +503,7 @@ export default function DiagnosisPane({
           </Box>
           <Typography sx={{ typography: "s1", fontWeight: 700 }}>Nothing to fix</Typography>
           <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-            Every measured scenario passed and no analyzer found a problem with the measurement. Optimizing
+            Every measured scenario passed and no analyzer found a problem with the measurement. Improving
             against this run would spend episodes confirming the score it started from — add harder scenarios
             to find the edges instead.
           </Typography>
@@ -344,8 +529,8 @@ export default function DiagnosisPane({
             <Box sx={{ px: 2.5, pt: 2.5 }}>
               <Stack
                 direction="row" alignItems="center" spacing={0.75}
-                onClick={running ? undefined : () => setShowDiagnosis((v) => !v)}
-                sx={{ cursor: running ? "default" : "pointer", mb: 1 }}
+                {...clickable(running ? null : () => setShowDiagnosis((v) => !v), { expanded: showDiagnosis })}
+                sx={{ cursor: running ? "default" : "pointer", mb: 1, ...focusRing }}
               >
                 <Typography sx={{ typography: "s2", fontWeight: 700, flex: 1 }}>Diagnosis</Typography>
                 <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
@@ -376,8 +561,8 @@ export default function DiagnosisPane({
                       >
                         <Stack
                           direction="row" alignItems="center" spacing={1}
-                          onClick={() => setOpen((o) => ({ ...o, [a.id]: !o[a.id] }))}
-                          sx={{ px: 1.25, py: 0.625, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                          {...clickable(() => setOpen((o) => ({ ...o, [a.id]: !o[a.id] })), { expanded: !!open[a.id] })}
+                          sx={{ px: 1.25, py: 0.625, cursor: "pointer", "&:hover": { bgcolor: "action.hover" }, ...focusRing }}
                         >
                           <Typography sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}>{a.label}</Typography>
                           {a.always && (
@@ -439,13 +624,11 @@ export default function DiagnosisPane({
               <Box
                 sx={{
                   mx: 2.5, mt: 2.5, px: 1.75, py: 1.5, borderRadius: 1,
-                  border: "1px solid",
-                  borderColor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.35 : 0.25),
-                  bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.1 : 0.05),
+                  border: "1px solid", borderColor: "divider", bgcolor: "background.paper",
                 }}
               >
                 <Stack direction="row" alignItems="flex-start" spacing={1.25}>
-                  <Iconify icon="solar:lightbulb-bolt-linear" width={15} sx={{ color: "#7857FC", flexShrink: 0, mt: "2px" }} />
+                  <Iconify icon="solar:lightbulb-bolt-linear" width={15} sx={{ color: "text.secondary", flexShrink: 0, mt: "2px" }} />
                   <Typography sx={{ typography: "s2", fontWeight: 700 }}>{verdict}</Typography>
                 </Stack>
                 {causeCount > 0 && topFrees > 0 && (
@@ -465,14 +648,11 @@ export default function DiagnosisPane({
             </Collapse>
 
             {/*
-              Hand off without minting a version.
-
-              Kept as the quieter alternative — a tool description one
-              scenario obviously needs is sometimes a review-in-Git change,
-              not a bundled version. This is the same OmegaHandoff panel as
-              before, just no longer the primary path.
+              Hand the diagnosis's changes over without a search — the
+              quieter alternative. Same source-aware hand-off as a winner's;
+              a version is saved only when the change lands.
             */}
-            {!running && handoff && !!included.length && (
+            {!running && (handoff || handoffProps?.landedVersion) && !!included.length && (
               <Box sx={{ px: 2.5, pt: 2.5 }}>
                 <OmegaHandoff
                   env={env}
@@ -480,24 +660,34 @@ export default function DiagnosisPane({
                   patch={patch}
                   included={included}
                   projected={projected}
+                  projectedOn="if every addressed scenario passes"
                   current={current}
                   willFix={willFix}
-                  onRerun={() => onHandOff?.(included, projected)}
+                  handoffKey={handoffProps?.key}
+                  landedVersion={handoffProps?.landedVersion}
+                  provenance={handoffProps?.provenance}
+                  onLand={(info) => handoffProps?.onLand?.(info, included, projected)}
+                  onRerun={handoffProps?.onRerun}
                 />
               </Box>
             )}
 
             {/* ── fixable: change the agent, in priority order ── */}
             <Box sx={{ px: 2.5, pt: 2.5, pb: 2.5 }}>
-              <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 1 }}>
-                <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-                  {running ? "Issues found" : "Fix in this order"}
-                </Typography>
-                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                  {running
-                    ? `${shownIssues.length} so far · ranked once every call is read`
-                    : "ranked by severity, then how many scenarios each one frees"}
-                </Typography>
+              <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 1 }}>
+                <Box flex={1} minWidth={0}>
+                  <Typography sx={{ typography: "s2", fontWeight: 700 }}>
+                    {running ? "Issues found" : "Fix in this order"}
+                  </Typography>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                    {running
+                      ? `${shownIssues.length} so far · ranked once every call is read`
+                      : "ranked by severity, then how many scenarios each one frees"}
+                  </Typography>
+                </Box>
+                {/* For teams whose coding agent makes the edit — it gets the
+                    evidence and the constraints, and submits back here. */}
+                {!running && !!sorted.length && <CopyBriefButton size="small" getBrief={brief} target={{ kind: "run", envId: env?.id, runId }} />}
               </Stack>
               {running && !shownIssues.length && (
                 <Box
@@ -515,25 +705,25 @@ export default function DiagnosisPane({
               <Stack spacing={1} sx={{ position: "relative" }}>
                 {shownIssues.map(({ p, rank }) => {
                   const pr = priorityOf(p, tasks);
+                  const scope = fixScope(p, { env, limits });
                   return (
                     <Box
                       key={p.id}
                       ref={(el) => { cardEls.current[p.id] = el; }}
                       sx={{
                         /* Presentation-only card — every proposal is
-                           included by default; the checkbox was removed
-                           because the Self Improvement run acts on the
-                           whole diagnosis, not a user-picked subset. */
+                           included; the improvement run acts on the whole
+                           diagnosis, not a user-picked subset. */
                         p: 1.75, borderRadius: 1, border: "1px solid",
                         borderColor: "divider",
                         bgcolor: "transparent",
-                        /* A card arrives with a brief accent edge so the eye
-                           finds the new one, then settles like the rest. */
+                        /* A card arrives with a short fade and slide — no accent
+                           border; its place at the top says it's new. */
                         ...(running && {
-                          animation: "issue-in 1600ms ease both",
+                          animation: "issue-in 360ms ease both",
                           "@keyframes issue-in": {
-                            "0%": { opacity: 0, transform: "translateY(-6px)", borderColor: "#7857FC" },
-                            "18%": { opacity: 1, transform: "none", borderColor: "#7857FC" },
+                            from: { opacity: 0, transform: "translateY(-6px)" },
+                            to: { opacity: 1, transform: "none" },
                           },
                         }),
                       }}
@@ -567,7 +757,7 @@ export default function DiagnosisPane({
                               <Chip
                                 size="small" label={pr.label}
                                 sx={{
-                                  height: 18, borderRadius: 0.5, color: pr.color,
+                                  height: 18, borderRadius: 0.5, color: pr.text || pr.color,
                                   border: "1px solid", borderColor: alpha(pr.color, 0.4), bgcolor: "transparent",
                                   "& .MuiChip-label": { px: 0.625, typography: "s3", fontWeight: 700 },
                                 }}
@@ -614,6 +804,10 @@ export default function DiagnosisPane({
                                 View affected calls
                               </Button>
                             )}
+                            {/* This proposal alone, for a coding agent. */}
+                            {!running && (
+                              <CopyBriefButton size="small" getBrief={briefFor(p)} target={{ kind: "run", envId: env?.id, runId }} />
+                            )}
                           </Stack>
                           <Stack spacing={0.375} sx={{ mt: 1.125 }}>
                             {p.diff.map((d) => (
@@ -639,6 +833,7 @@ export default function DiagnosisPane({
                               </Stack>
                             ))}
                           </Stack>
+                          <ScopeLine scope={scope} available={available[scope.surface]} onChangeConstraints={changeConstraints} />
                         </Box>
                       </Stack>
                     </Box>
@@ -654,28 +849,19 @@ export default function DiagnosisPane({
             sx={{ px: 2.5, py: 2, borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}
           >
             {/*
-              The concept correction: the primary path is the optimizer.
-              The diagnosis names the candidate changes; the optimizer
-              searches over the checked ones — trying combinations,
-              scoring each on the training scenarios — and the code
-              actually evolves trial by trial in the pane below. The
-              winner is the version worth running.
-
-              "Hand off" stays as the quiet alternative for teams that
-              would rather review the diff in Git than watch a search.
-              The direct "Create agent version" shortcut was removed:
-              the correct way to mint a version from a diagnosis is to
-              let the optimizer pick the best combination, not to bundle
-              whatever was ticked.
+              The primary path is an improvement run: it searches over the
+              diagnosis's changes, trying combinations as trials scored on
+              the training scenarios. Hand-off stays as the quiet
+              alternative for teams that would rather skip the search.
             */}
             <Tooltip
               arrow
               title={
                 running
-                  ? "Available once every call is read — the self improver searches over the full diagnosis."
+                  ? "Available once every call is read — the improvement searches over the full diagnosis."
                   : included.length
                     ? ""
-                    : "Tick at least one change in the list above — the self improver needs a candidate pool to search over."
+                    : "The diagnosis found no change to try."
               }
               placement="top"
             >
@@ -687,7 +873,7 @@ export default function DiagnosisPane({
                   startIcon={<Iconify icon="solar:magic-stick-3-bold" width={16} />}
                   sx={{ typography: "s2", fontWeight: 700 }}
                 >
-                  Run Self Improvement
+                  Run improvement
                 </Button>
               </Box>
             </Tooltip>
@@ -710,7 +896,7 @@ export default function DiagnosisPane({
                   "&:hover": { bgcolor: "transparent", color: "text.primary" },
                 }}
               >
-                {handoff ? "Hide hand-off" : "or hand off as a PR / patch / ticket"}
+                {handoff ? "Hide hand-off" : "or hand these changes over without a search"}
               </Button>
             </Box>
           </Stack>
@@ -741,5 +927,7 @@ DiagnosisPane.propTypes = {
   env: PropTypes.object,
   envState: PropTypes.object,
   patch: PropTypes.func,
-  onHandOff: PropTypes.func,
+  handoff: PropTypes.object,
+  previous: PropTypes.array,
+  onOpenPrevious: PropTypes.func,
 };

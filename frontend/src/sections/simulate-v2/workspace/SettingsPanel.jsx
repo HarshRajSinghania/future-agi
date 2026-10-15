@@ -3,20 +3,37 @@ import { useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Button, TextField, IconButton, Switch, Slider, Chip, Tooltip,
-  Dialog, DialogTitle, DialogContent, DialogActions,
+  Dialog, DialogTitle, DialogContent, DialogActions, Select, MenuItem,
 } from "@mui/material";
 import { useSnackbar } from "notistack";
+import { Link as RouterLink } from "react-router-dom";
 import Iconify from "src/components/iconify";
+import { paths } from "src/routes/paths";
 import { SectionCard, CopyField } from "../components/primitives";
 import {
-  DEFAULT_ENV_VARS, DEFAULT_BUILD_ARGS, DEFAULT_RUNTIME,
-  ISOLATION_OPTIONS,
+  DEFAULT_BUILD_ARGS, DEFAULT_RUNTIME,
+  ISOLATION_OPTIONS, envVarsOf, envVarRefPatch, envVarCheckOf,
 } from "../_mock/envConfig";
-import { environmentVersions, nextEnvVersion, ENV_CHANGES } from "../_mock/versions";
+import { validateSecretRef, looksLikeRawKey, RAW_KEY_MESSAGE } from "../_mock/secretRefs";
+import { SecretRefText, SetRefAction, SecretRefEditor, PreflightLine, RefTag } from "./SecretRefControls";
+import {
+  environmentVersions, nextEnvVersion, currentEnvVersion,
+  pendingEnvChanges, envChangePatch, saveEnvChangesPatch, envChangeLabel,
+} from "../_mock/versions";
 import { INVALIDATING, staleScenarios } from "../_mock/proofs";
 import { twinById, resolveSeedPromptToJson } from "../_mock/twins";
 import TwinLogo from "./../components/TwinLogo";
 import { scenariosInEnvVersion } from "../_mock/toolFit";
+import { envLabelOf, pendingCostOf } from "../_mock/envVersionKinds";
+import { snapshotHistoryOf, currentEnvSnapshot, envSnapshotsOf, SNAPSHOT_KIND_LABEL } from "../_mock/envSnapshot";
+import { REPLAY_HEADER, REPLAY_SDK, stubbedToolNames, toggleStubPatch } from "../_mock/replay";
+import {
+  runDefaultsOf, SIMULATOR_MODELS, REPEATS_MAX, PARALLEL_MAX, productionScenariosOn,
+} from "../_mock/rsiModel";
+import { simulatorOf, callerChangePatch } from "../_mock/envModel";
+import { envTurnLimitOf, TURN_LIMIT_RANGE } from "../_mock/runStream";
+import { useWorkspaceSettings } from "../store";
+import { clickable, focusRing } from "../components/clickable";
 
 const TWIN_TINT = "#7857FC";
 
@@ -28,37 +45,27 @@ const TWIN_TINT = "#7857FC";
  * anything, and burying them in code means nobody checks them before pressing
  * Run. The pre-flight quotes its estimate from these numbers.
  */
-export default function SettingsPanel({ env, envState, patch, onDelete }) {
-  const [changing, setChanging] = useState(null);
+export default function SettingsPanel({ env, envState, patch, onDelete, locked = false }) {
+  /* Edits made since the pinned version — what "New version" saves. */
+  const pending = pendingEnvChanges(envState);
+  const pinned = currentEnvVersion(env, envState);
+  /* Stored labels read as major.minor (v3 → v2.1). */
+  const shown = (label) => envLabelOf(env, envState, label);
   /* The version pending a Restore confirmation. Null when the dialog is
      closed. Holds the actual version object so the preflight can read
      its `changed` list. */
   const [restoring, setRestoring] = useState(null);
-  const [vars, setVars] = useState(DEFAULT_ENV_VARS);
-  const [newVar, setNewVar] = useState({ key: "", value: "", secret: true });
   const [buildArgs, setBuildArgs] = useState(
     DEFAULT_BUILD_ARGS.map((a) => `${a.key}=${a.value}`).join("\n"),
   );
   const [runtime, setRuntime] = useState(DEFAULT_RUNTIME);
-  const [reveal, setReveal] = useState({});
 
   const set = (patch) => setRuntime((r) => ({ ...r, ...patch }));
 
-  const addVar = () => {
-    if (!newVar.key.trim()) return;
-    setVars((v) => [...v, { ...newVar, key: newVar.key.trim(), usedBy: "environment" }]);
-    setNewVar({ key: "", value: "", secret: true });
-  };
-
   return (
     <Box sx={{ p: 2 }}>
-      <Box sx={{ mb: 3 }}>
-        <Typography sx={{ typography: "m2", fontWeight: 600 }}>Settings</Typography>
-        <Typography sx={{ typography: "s1", color: "text.secondary", maxWidth: 760 }}>
-          How this environment is built and how runs behave inside it.
-        </Typography>
-      </Box>
-
+      {/* No heading — opens straight on the build details; the tab's
+          hover hint carries the description. */}
       <Stack spacing={2}>
         {/* ── identity ── */}
         <SectionCard title="Environment info">
@@ -97,6 +104,7 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
             backing={envState.twinBacking}
             envState={envState}
             patch={patch}
+            locked={locked}
           />
         )}
 
@@ -114,8 +122,8 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                   return (
                     <Box
                       key={o.value}
-                      onClick={() => set({ isolation: o.value })}
-                      sx={{
+                      {...clickable(() => set({ isolation: o.value }), { role: "radio", checked: on })}
+                      sx={{ ...focusRing,
                         p: 1.5, borderRadius: 1.25, cursor: "pointer",
                         border: "1px solid",
                         borderColor: on ? "primary.main" : "divider",
@@ -134,7 +142,7 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                             size="small"
                             label="Not comparable"
                             sx={{
-                              height: 18, borderRadius: 0.5, color: "#CA8A04",
+                              height: 18, borderRadius: 0.5, color: "text.secondary",
                               bgcolor: (t) => alpha("#CA8A04", t.palette.mode === "dark" ? 0.16 : 0.1),
                               "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 700 },
                             }}
@@ -191,87 +199,18 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
           </Stack>
         </SectionCard>
 
-        {/* ── env vars ── */}
-        <SectionCard
-          title="Environment variables"
-          subtitle="Runtime secrets and configuration passed into the environment"
-        >
-          <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-            {vars.map((v, i) => (
-              <Stack key={v.key} direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 1.375 }}>
-                <Typography
-                  sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", width: 220, flexShrink: 0 }}
-                >
-                  {v.key}
-                </Typography>
-                <Typography
-                  noWrap
-                  sx={{ flex: 1, typography: "s2", fontFamily: "ui-monospace, Menlo, monospace", color: "text.subtitle" }}
-                >
-                  {v.secret && !reveal[v.key] ? "••••••••••••" : v.value}
-                </Typography>
-                <Chip
-                  size="small"
-                  label={v.usedBy}
-                  sx={{
-                    height: 19, borderRadius: 0.5, color: "text.secondary",
-                    border: "1px solid", borderColor: "divider", bgcolor: "transparent",
-                    "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 600 },
-                  }}
-                />
-                {v.secret && (
-                  <IconButton size="small" onClick={() => setReveal((r) => ({ ...r, [v.key]: !r[v.key] }))}>
-                    <Iconify
-                      icon={reveal[v.key] ? "solar:eye-closed-linear" : "solar:eye-linear"}
-                      width={15}
-                      sx={{ color: "text.subtitle" }}
-                    />
-                  </IconButton>
-                )}
-                <IconButton size="small" onClick={() => setVars((x) => x.filter((_, idx) => idx !== i))}>
-                  <Iconify icon="solar:trash-bin-trash-linear" width={15} sx={{ color: "text.subtitle" }} />
-                </IconButton>
-              </Stack>
-            ))}
-          </Stack>
+        {/* ── what each new run starts from, saved on the environment ── */}
+        <SimulationDefaultsSection env={env} envState={envState} patch={patch} locked={locked} />
 
-          <Stack
-            direction="row" alignItems="center" spacing={1}
-            sx={{ px: 2.5, py: 2, borderTop: "1px solid", borderColor: "divider" }}
-          >
-            <TextField
-              size="small"
-              placeholder="ENV_KEY_…"
-              value={newVar.key}
-              onChange={(e) => setNewVar((n) => ({ ...n, key: e.target.value }))}
-              sx={{ width: 220, "& .MuiInputBase-root": { typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" } }}
-            />
-            <TextField
-              size="small"
-              placeholder="Value"
-              value={newVar.value}
-              onChange={(e) => setNewVar((n) => ({ ...n, value: e.target.value }))}
-              sx={{ flex: 1, maxWidth: 360, "& .MuiInputBase-root": { typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" } }}
-            />
-            <Stack direction="row" alignItems="center" spacing={0.5}>
-              <Switch
-                size="small"
-                checked={newVar.secret}
-                onChange={(e) => setNewVar((n) => ({ ...n, secret: e.target.checked }))}
-              />
-              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Secret</Typography>
-            </Stack>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={addVar}
-              disabled={!newVar.key.trim()}
-              sx={{ color: "text.primary", borderColor: "divider", typography: "s2", fontWeight: 600 }}
-            >
-              Add
-            </Button>
-          </Stack>
-        </SectionCard>
+        {/* ── production-derived scenario sources (workspace admin) ── */}
+        <ProductionScenariosSection envState={envState} />
+
+        {/* ── replay flag — so the agent can hold back real side effects ── */}
+        <ReplaySection env={env} envState={envState} patch={patch} />
+
+        {/* ── env vars — secrets by reference ── */}
+        <EnvVarsSection envState={envState} patch={patch} locked={locked} />
+        <AgentCredentialsSection envState={envState} />
 
         {/* ── build args ── */}
         <SectionCard
@@ -298,88 +237,48 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
         {/* ── versions — reproducibility, which HUD does not surface ── */}
         <SectionCard
           title="Versions"
-          subtitle="Every run pins a version, so a result can always be traced to the world that produced it"
-          action={
-            <Button
-              size="small"
-              onClick={() => setChanging(changing ? null : ENV_CHANGES[0].id)}
-              startIcon={<Iconify icon="solar:add-circle-linear" width={15} />}
-              sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}
-            >
-              New version
-            </Button>
-          }
-        >
-          {/*
-            Changing the world is an event, not a save.
-
-            Every proof in this environment is a claim about one version of it,
-            so a change that reseeds the data or rewrites the checks has to
-            invalidate those claims rather than quietly outdate them. Naming the
-            kind of change is what decides which ones survive: rules are graded,
-            so they leave every scenario stageable; seed, checks and tools do
-            not.
-          */}
-          {changing && (
-            <Box sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider", bgcolor: "background.neutral" }}>
-              <Typography sx={{ typography: "s2", fontWeight: 700, mb: 1 }}>What changed in the world?</Typography>
-              <Stack spacing={0.75} sx={{ mb: 1.5 }}>
-                {ENV_CHANGES.map((c) => (
-                  <Stack
-                    key={c.id}
-                    direction="row" alignItems="flex-start" spacing={1}
-                    onClick={() => setChanging(c.id)}
-                    sx={{
-                      p: 1.25, borderRadius: 1, cursor: "pointer",
-                      border: "1px solid", borderColor: changing === c.id ? "primary.main" : "divider",
-                    }}
-                  >
-                    <Iconify
-                      icon={changing === c.id ? "solar:record-circle-bold" : "solar:circle-linear"}
-                      width={15}
-                      sx={{ color: changing === c.id ? "primary.main" : "text.disabled", flexShrink: 0, mt: "1px" }}
-                    />
-                    <Box minWidth={0}>
-                      <Stack direction="row" alignItems="center" spacing={0.75}>
-                        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{c.label}</Typography>
-                        <Typography sx={{ typography: "s3", fontWeight: 700, color: c.invalidates ? "#CA8A04" : "text.subtitle" }}>
-                          {c.invalidates ? "invalidates proofs" : "proofs survive"}
-                        </Typography>
-                      </Stack>
-                      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{c.blurb}</Typography>
-                    </Box>
-                  </Stack>
-                ))}
-              </Stack>
-              <Stack direction="row" spacing={1}>
+          subtitle="One environment version covers the world, scenarios, sub-goals, evaluations and simulated caller. Every run pins one, so a result can always be traced to what produced it"
+          action={!locked && (
+            <Tooltip arrow title={pending.length ? "" : `Nothing to save since environment ${currentEnvSnapshot(env, envState)?.label || shown(pinned.label)} — edit the world, contract or actors first. Scenario, sub-goal, evaluation and caller changes make a version on their own.`}>
+              <span>
                 <Button
-                  size="small" variant="contained" color="primary"
-                  onClick={() => {
-                    const change = ENV_CHANGES.find((c) => c.id === changing);
-                    const list = envState?.envVersions?.length
-                      ? envState.envVersions
-                      : [...environmentVersions(env, envState)].reverse();
-                    const minted = nextEnvVersion(env, envState, { changed: [changing], note: change.label });
-                    /* The new version keeps the world's learned tools and becomes
-                       the one runs use. */
-                    patch({ envVersions: [...list, minted], activeEnvVersion: minted.label });
-                    setChanging(null);
-                  }}
-                  sx={{ typography: "s2", fontWeight: 700 }}
-                >
-                  Create {nextEnvVersion(env, envState).label}
-                </Button>
-                <Button
-                  size="small" onClick={() => setChanging(null)}
+                  size="small"
+                  disabled={!pending.length}
+                  onClick={() => patch(saveEnvChangesPatch(env, envState))}
+                  startIcon={<Iconify icon="solar:add-circle-linear" width={15} />}
                   sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}
                 >
-                  Cancel
+                  New version
                 </Button>
+              </span>
+            </Tooltip>
+          )}
+        >
+          {/*
+            Changing the world is an event, not a save. A version records the
+            edits made since the one runs pinned — kinds decide which proofs
+            survive (rules and evaluations are graded, so every scenario can
+            still be staged; seed, scenario checks and tools may not).
+          */}
+          {pending.length > 0 && (
+            <Box sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider", bgcolor: "background.neutral" }}>
+              <Typography sx={{ typography: "s2", fontWeight: 700 }}>
+                {`Changes since environment ${currentEnvSnapshot(env, envState)?.label || shown(pinned.label)} · ${pendingCostOf(env, envState)?.text}`}
+              </Typography>
+              <Stack spacing={0.25} sx={{ mt: 0.5 }}>
+                {pending.map((c) => (
+                  <Typography key={c.at + c.detail} sx={{ typography: "s3", color: "text.subtitle" }}>
+                    · {envChangeLabel(c.kind)}{c.detail ? ` — ${c.detail}` : ""}
+                  </Typography>
+                ))}
               </Stack>
             </Box>
           )}
           <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-            {environmentVersions(env, envState).map((v) => (
+            {snapshotHistoryOf(env, envState).map((v) => {
+              /* The world version underneath — what Switch and Restore act on. */
+              const world = environmentVersions(env, envState).find((w) => w.label === v.parts.env);
+              return (
               <Stack key={v.label} direction="row" alignItems="center" spacing={2} sx={{ px: 2.5, py: 1.5 }}>
                 <Typography
                   sx={{ typography: "s2", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", width: 44, flexShrink: 0 }}
@@ -388,7 +287,7 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                 </Typography>
                 <Box flex={1} minWidth={0}>
                   <Stack direction="row" alignItems="center" spacing={0.75}>
-                    <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{v.note}</Typography>
+                    <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{v.summary}</Typography>
                     {v.current && (
                       <Chip
                         size="small"
@@ -402,40 +301,43 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                     )}
                   </Stack>
                   <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                    {new Date(v.createdAt).toLocaleDateString()} · {scenariosInEnvVersion(envState, v.label).length} scenarios
+                    {[
+                      v.at && new Date(v.at).toLocaleDateString(),
+                      v.kinds.map((k) => SNAPSHOT_KIND_LABEL[k]).join(" + "),
+                      `${scenariosInEnvVersion(envState, v.parts.env).length} scenarios`,
+                      `${v.runs} run${v.runs === 1 ? "" : "s"}`,
+                    ].filter(Boolean).join(" · ")}
                   </Typography>
                 </Box>
                 {/*
-                  Two actions per historical row: **Switch** just pins
-                  the active pointer to this version (non-destructive —
-                  newest still exists), and **Restore** forks by minting
-                  a new version with the same intent as this one, so the
-                  history stays linear. Both are inline here; the header
-                  pin also switches, this is the settings-side entry
-                  point.
+                  Two actions on the newest version of each world: **Switch**
+                  pins runs to that world (non-destructive — newest still
+                  exists), and **Restore** forks by minting the next version
+                  with that world, so the history stays linear. An older
+                  version on the same world differs only in scenarios or
+                  evals, which aren't rolled back, so it offers neither.
                 */}
-                {!v.current && (
+                {!v.current && v.worldHead && world && !locked && (
                   <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }}>
                     <Button
                       size="small"
-                      onClick={() => patch({ activeEnvVersion: v.label })}
+                      onClick={() => patch({ activeEnvVersion: world.label })}
                       startIcon={<Iconify icon="solar:arrow-right-linear" width={13} />}
                       sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}
                     >
                       Switch
                     </Button>
                     {/*
-                      Restore forks — mints v(N+1) with the same intent
-                      as the older row and pins it active. Preflight
-                      first because the fork can invalidate proofs on
-                      every scenario currently proved against the newer
-                      world, and doing that silently on click is exactly
-                      the kind of thing versioning exists to make
-                      visible.
+                      Restore forks — mints the next version with this
+                      world and pins it active. Preflight first because the
+                      fork can invalidate proofs on every scenario currently
+                      proved against the newer world, and doing that
+                      silently on click is exactly the kind of thing
+                      versioning exists to make visible.
                     */}
                     <Button
                       size="small"
-                      onClick={() => setRestoring(v)}
+                      onClick={() => setRestoring(world)}
                       startIcon={<Iconify icon="solar:refresh-linear" width={13} />}
                       sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}
                     >
@@ -444,7 +346,8 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                   </Stack>
                 )}
               </Stack>
-            ))}
+              );
+            })}
           </Stack>
         </SectionCard>
 
@@ -461,7 +364,7 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                 Delete this environment
               </Typography>
               <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                Removes the environment, its scenarios and every run against it. Cannot be undone.
+                Removes the environment, its scenarios, evaluations and every run against it. Personas stay in your library. Cannot be undone.
               </Typography>
             </Box>
             <Tooltip arrow title={onDelete ? "" : "Built-in templates can't be deleted."}>
@@ -504,7 +407,7 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
           const forked = nextEnvVersion(env, envState, {
             from: restoring.label,
             changed: restoring.changed || [],
-            note: `Restored from ${restoring.label} — ${restoring.note}`,
+            note: `Restored from ${shown(restoring.label)} — ${restoring.note}`,
           });
           patch({
             envVersions: [...list, forked],
@@ -522,6 +425,260 @@ SettingsPanel.propTypes = {
   patch: PropTypes.func,
   env: PropTypes.object.isRequired,
   onDelete: PropTypes.func,
+  locked: PropTypes.bool,
+};
+
+/* ── environment variables ─────────────────────────────────────────────── */
+
+const MONO = "ui-monospace, Menlo, monospace";
+const KEY_W = 220;
+
+/*
+  Secrets are references into the team's secret manager (AC-6.12): a secret
+  row shows where its value lives, never the value or a mask of it, and
+  "Set reference" takes only a reference. Pointing a key somewhere else
+  re-runs the access check and nothing else — no rebuild, no new version.
+  Plain variables keep plain values.
+*/
+/* What runs use to reach the agent — the platform key a test copy or a draft
+   is made with. By reference only; read here, set where the agent connects. */
+function AgentCredentialsSection({ envState }) {
+  const refs = Object.entries(envState?.credentialRefs || {});
+  if (!refs.length) return null;
+  return (
+    <SectionCard
+      title="Agent credentials"
+      subtitle="What runs use to reach the agent. References into your secret manager — the values are never stored here."
+    >
+      <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+        {refs.map(([k, ref]) => (
+          <Stack key={k} direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 1.375 }}>
+            <Typography sx={{ typography: "s2", fontWeight: 600, fontFamily: MONO, width: KEY_W, flexShrink: 0 }}>{k}</Typography>
+            <Box sx={{ flex: 1, minWidth: 0 }}><SecretRefText value={ref} /></Box>
+            <Iconify icon="solar:lock-keyhole-minimalistic-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+          </Stack>
+        ))}
+      </Stack>
+    </SectionCard>
+  );
+}
+AgentCredentialsSection.propTypes = { envState: PropTypes.object };
+
+function EnvVarsSection({ envState, patch, locked = false }) {
+  const vars = envVarsOf(envState);
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState({ key: "", value: "", secret: true });
+  const [addError, setAddError] = useState(null);
+
+  const save = (next) => patch?.({ envVars: next });
+  const setRef = (key, ref) => { patch?.(envVarRefPatch(envState, key, ref)); setEditing(null); };
+  const remove = (key) => save(vars.filter((v) => v.key !== key));
+
+  const add = () => {
+    const key = draft.key.trim();
+    if (!key) return;
+    if (vars.some((v) => v.key === key)) { setAddError(`${key} is already set.`); return; }
+    if (draft.secret) {
+      const res = validateSecretRef(draft.value);
+      if (!res.ok) { setAddError(res.error); return; }
+      patch?.(envVarRefPatch({ ...envState, envVars: [...vars, { key, secret: true, usedBy: "environment", ref: res.ref }] }, key, res.ref));
+    } else {
+      if (looksLikeRawKey(draft.value)) { setAddError(RAW_KEY_MESSAGE); return; }
+      save([...vars, { key, value: draft.value, secret: false, usedBy: "environment" }]);
+    }
+    setAddError(null);
+    setDraft({ key: "", value: "", secret: true });
+  };
+
+  return (
+    <SectionCard
+      title="Environment variables"
+      subtitle="Configuration passed into the environment. Secrets are references into your secret manager — the value is resolved inside the sandbox and never stored here."
+    >
+      <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+        {vars.map((v) => {
+          const check = v.secret ? envVarCheckOf(envState, v.key) : null;
+          const open = editing === v.key;
+          return (
+            <Box key={v.key} sx={{ px: 2.5, py: 1.375 }}>
+              <Stack direction="row" alignItems="center" spacing={1.5}>
+                <Typography sx={{ typography: "s2", fontWeight: 600, fontFamily: MONO, width: KEY_W, flexShrink: 0 }}>
+                  {v.key}
+                </Typography>
+                <Stack direction="row" alignItems="center" spacing={1} sx={{ flex: 1, minWidth: 0 }}>
+                  {v.secret
+                    ? <SecretRefText value={v.ref} />
+                    : <Typography noWrap sx={{ typography: "s2", fontFamily: MONO, color: "text.secondary", minWidth: 0 }}>{v.value}</Typography>}
+                  {v.migrated && <RefTag>moved from a pasted value</RefTag>}
+                </Stack>
+                {v.secret && (
+                  <Tooltip arrow title="Stored as a reference — the value stays in your secret manager">
+                    <Iconify icon="solar:lock-keyhole-minimalistic-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+                  </Tooltip>
+                )}
+                <Chip
+                  size="small"
+                  label={v.usedBy}
+                  sx={{
+                    height: 19, borderRadius: 0.5, color: "text.secondary", flexShrink: 0,
+                    border: "1px solid", borderColor: "divider", bgcolor: "transparent",
+                    "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 600 },
+                  }}
+                />
+                {v.secret && !locked && !open && <SetRefAction onClick={() => setEditing(v.key)} />}
+                {!locked && (
+                  <IconButton size="small" onClick={() => remove(v.key)} aria-label={`Remove ${v.key}`}>
+                    <Iconify icon="solar:trash-bin-trash-linear" width={15} sx={{ color: "text.subtitle" }} />
+                  </IconButton>
+                )}
+              </Stack>
+              {(open || check) && (
+                <Box sx={{ pl: { md: `calc(${KEY_W}px + 12px)` }, pt: 1 }}>
+                  {open ? (
+                    <SecretRefEditor
+                      initial=""
+                      placeholder={v.ref || "vault://acme/sim/api_key"}
+                      onSave={(ref) => setRef(v.key, ref)}
+                      onCancel={() => setEditing(null)}
+                    />
+                  ) : (
+                    <PreflightLine check={check} />
+                  )}
+                </Box>
+              )}
+            </Box>
+          );
+        })}
+      </Stack>
+
+      {!locked && (
+        <Box sx={{ px: 2.5, py: 2, borderTop: "1px solid", borderColor: "divider" }}>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <TextField
+              size="small"
+              placeholder="ENV_KEY_…"
+              value={draft.key}
+              onChange={(e) => { setDraft((n) => ({ ...n, key: e.target.value })); setAddError(null); }}
+              sx={{ width: KEY_W, "& .MuiInputBase-root": { typography: "s2", fontFamily: MONO } }}
+            />
+            <TextField
+              size="small"
+              placeholder={draft.secret ? "vault://acme/sim/…" : "Value"}
+              value={draft.value}
+              error={!!addError}
+              onChange={(e) => { setDraft((n) => ({ ...n, value: e.target.value })); setAddError(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+              inputProps={{ spellCheck: false, autoComplete: "off" }}
+              sx={{ flex: 1, maxWidth: 360, "& .MuiInputBase-root": { typography: "s2", fontFamily: MONO } }}
+            />
+            <Stack direction="row" alignItems="center" spacing={0.5}>
+              <Switch
+                size="small"
+                checked={draft.secret}
+                onChange={(e) => { setDraft((n) => ({ ...n, secret: e.target.checked })); setAddError(null); }}
+              />
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Secret</Typography>
+            </Stack>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={add}
+              disabled={!draft.key.trim()}
+              sx={{ color: "text.primary", borderColor: "divider", typography: "s2", fontWeight: 600 }}
+            >
+              Add
+            </Button>
+          </Stack>
+          <Typography
+            role={addError ? "alert" : undefined}
+            sx={{ typography: "s3", color: addError ? "error.main" : "text.subtitle", mt: 0.75, pl: { md: `calc(${KEY_W}px + 8px)` } }}
+          >
+            {addError || (draft.secret ? "A secret is added as a reference — paste its path in your secret manager, not the key." : "Plain configuration — stored and shown as typed.")}
+          </Typography>
+        </Box>
+      )}
+    </SectionCard>
+  );
+}
+EnvVarsSection.propTypes = { envState: PropTypes.object, patch: PropTypes.func, locked: PropTypes.bool };
+
+/* ── replay flag ────────────────────────────────────────────────────────── */
+
+/**
+ * The flag every simulated call carries, and which tools the agent should stub
+ * when it sees it. The sandbox answers these tools either way; the flag is for
+ * the agent's own code, which may call a real system directly (a payments API,
+ * a booking backend) — a refund issued during a test is still a refund.
+ */
+function ReplaySection({ env, envState, patch }) {
+  const tools = env.tools || [];
+  const stubbed = stubbedToolNames(env, envState);
+  return (
+    <SectionCard
+      title="Replay flag"
+      subtitle="Every simulated call says it is one, so your agent can hold back tools with real side effects"
+    >
+      <Box sx={{ p: 2.5 }}>
+        <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+          <Box sx={{ flex: 1, minWidth: 0, maxWidth: 360 }}>
+            <CopyField label="HTTP header" value={REPLAY_HEADER} />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0, maxWidth: 360 }}>
+            <CopyField label="SDK context" value={REPLAY_SDK} />
+          </Box>
+        </Stack>
+      </Box>
+      <Stack
+        direction="row" alignItems="baseline" spacing={0.75}
+        sx={{ px: 2.5, py: 1, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider", bgcolor: "background.neutral" }}
+      >
+        <Typography sx={{ typography: "s2", fontWeight: 600 }}>Tools</Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          {`${stubbed.length} of ${tools.length} marked as side effect`}
+        </Typography>
+      </Stack>
+      {tools.length === 0 ? (
+        <Typography sx={{ px: 2.5, py: 1.5, typography: "s2", color: "text.subtitle" }}>
+          This environment has no tools yet — nothing to stub.
+        </Typography>
+      ) : (
+        <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+          {tools.map((t) => {
+            const on = stubbed.includes(t.name);
+            return (
+              <Stack key={t.name} direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 1 }}>
+                <Typography
+                  noWrap
+                  sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", width: 220, flexShrink: 0 }}
+                >
+                  {t.name}
+                </Typography>
+                <Typography noWrap sx={{ flex: 1, minWidth: 0, typography: "s2", color: "text.subtitle" }}>
+                  {t.desc || ""}
+                </Typography>
+                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0 }}>
+                  <Typography sx={{ typography: "s3", color: on ? "text.primary" : "text.subtitle" }}>Side effect</Typography>
+                  <Switch
+                    size="small"
+                    checked={on}
+                    onChange={(e) => patch(toggleStubPatch(env, envState, t.name, e.target.checked))}
+                  />
+                </Stack>
+              </Stack>
+            );
+          })}
+        </Stack>
+      )}
+      <Typography sx={{ px: 2.5, py: 1.5, typography: "s3", color: "text.subtitle", borderTop: "1px solid", borderColor: "divider" }}>
+        Marked tools run against the environment&apos;s sandboxed version; your agent should skip the real call when it sees the flag.
+      </Typography>
+    </SectionCard>
+  );
+}
+ReplaySection.propTypes = {
+  env: PropTypes.object.isRequired,
+  envState: PropTypes.object,
+  patch: PropTypes.func,
 };
 
 /**
@@ -552,7 +709,7 @@ SettingsPanel.propTypes = {
  *   · Danger zone    — reset the current sandbox, rotate all
  *                      service credentials at once.
  */
-function TwinConfigSection({ backing, envState, patch }) {
+function TwinConfigSection({ backing, envState, patch, locked = false }) {
   const { enqueueSnackbar } = useSnackbar();
   const [seedPrompt, setSeedPrompt] = useState(backing.seedPrompt || "");
   const [showJson, setShowJson] = useState(false);
@@ -573,6 +730,7 @@ function TwinConfigSection({ backing, envState, patch }) {
         seedPrompt: seedPrompt.trim(),
         seed: newSeed,
       },
+      ...envChangePatch(envState, "seed", "Seed prompt rewritten"),
     });
     enqueueSnackbar("Seed updated · the next run starts from this state", { variant: "success" });
   };
@@ -689,6 +847,7 @@ function TwinConfigSection({ backing, envState, patch }) {
           <TextField
             fullWidth multiline minRows={3}
             value={seedPrompt}
+            disabled={locked}
             onChange={(e) => setSeedPrompt(e.target.value)}
             placeholder="Describe the state each run should start with…"
             sx={{ "& .MuiInputBase-input": { typography: "s2" } }}
@@ -696,7 +855,7 @@ function TwinConfigSection({ backing, envState, patch }) {
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 1 }}>
             <Button
               size="small" variant="contained" color="primary"
-              disabled={!dirty}
+              disabled={!dirty || locked}
               onClick={saveSeed}
               sx={{ typography: "s2", fontWeight: 700 }}
             >
@@ -796,7 +955,7 @@ function TwinConfigSection({ backing, envState, patch }) {
         <DialogContent sx={{ p: 2.5, pt: 1 }} dividers>
           <Typography sx={{ typography: "s2", color: "text.secondary" }}>
             The current sandbox state is discarded and re-provisioned from the current seed prompt.
-            In-flight runs against this env will fail. Past runs remain in history.
+            In-flight runs against this environment will fail. Past runs remain in history.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ p: 2, pt: 1.5 }}>
@@ -823,6 +982,7 @@ TwinConfigSection.propTypes = {
   backing: PropTypes.object,
   envState: PropTypes.object,
   patch: PropTypes.func,
+  locked: PropTypes.bool,
 };
 
 function RestorePreflight({ restoring, env, envState, onCancel, onConfirm }) {
@@ -850,13 +1010,13 @@ function RestorePreflight({ restoring, env, envState, onCancel, onConfirm }) {
   return (
     <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth>
       <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>
-        Restore {restoring?.label}?
+        Restore {envLabelOf(env, envState, restoring?.label)}?
       </DialogTitle>
       <DialogContent>
         <Stack spacing={1.5}>
           <Typography sx={{ typography: "s2", color: "text.secondary" }}>
             Forks the environment: mints the next version with the same intent as{" "}
-            <b>{restoring?.label}</b> and pins it active. {current?.label} stays in the history.
+            <b>{envLabelOf(env, envState, restoring?.label)}</b> and pins it active. {envLabelOf(env, envState, current?.label)} stays in the history.
           </Typography>
 
           {changedKinds.length > 0 && (
@@ -886,7 +1046,7 @@ function RestorePreflight({ restoring, env, envState, onCancel, onConfirm }) {
             >
               <Iconify icon="solar:danger-triangle-bold" width={14} sx={{ color: "#CA8A04", flexShrink: 0, mt: "2px" }} />
               <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-                <b style={{ color: "#CA8A04" }}>{projectedStale.length} of {envState?.scenarios?.length || 0} scenarios</b> would need re-proving against the restored world — their current proofs were made against a version the fork does not include.
+                <b>{projectedStale.length} of {envState?.scenarios?.length || 0} scenarios</b> would need re-proving against the restored world — their current proofs were made against a version the fork does not include.
               </Typography>
             </Stack>
           )}
@@ -959,3 +1119,204 @@ ToggleSetting.propTypes = {
   label: PropTypes.string, help: PropTypes.string,
   checked: PropTypes.bool, onChange: PropTypes.func,
 };
+
+/*
+  Simulation defaults (RSI PRD) — what a new run of this environment starts
+  from: how many times each scenario repeats (1–20), how many conversations
+  run at once (up to 4 when parallel runs are on) and the model that plays
+  the simulated user. Saved on the environment as envState.runDefaults, so a
+  run and an improvement read the same numbers.
+*/
+function SimulationDefaultsSection({ env, envState, patch, locked = false }) {
+  const d = runDefaultsOf(envState);
+  const save = (next) => { if (!locked && patch) patch({ runDefaults: { ...(envState?.runDefaults || {}), ...next } }); };
+  /* Parallel runs live on envState.parallelRuns (default on) — what a run reads. */
+  const setParallel = (on) => {
+    if (locked || !patch) return;
+    patch({ parallelRuns: on, runDefaults: { ...(envState?.runDefaults || {}), conversationsAtOnce: on ? Math.max(2, d.conversationsAtOnce > 1 ? d.conversationsAtOnce : PARALLEL_MAX) : 1 } });
+  };
+  const voice = env?.surface === "voice";
+  const turnLimit = envTurnLimitOf(envState);
+  /* The caller new runs pin — chosen here, else the surface's default. */
+  const model = envState?.runDefaults?.simulatorModel || simulatorOf(env, envState).model;
+  const models = SIMULATOR_MODELS.some((m) => m.id === model)
+    ? SIMULATOR_MODELS
+    : [{ id: model, label: model, note: "The default for this channel." }, ...SIMULATOR_MODELS];
+  /* Newest first: each change, then the caller the environment started with. */
+  const changes = envState?.callerChanges || [];
+  /* Each change made the next environment version — named so the history
+     and the run headers can be matched up. */
+  const snaps = envSnapshotsOf(env, envState);
+  const madeIn = (c) => snaps.find((x) => x.kinds.includes("caller") && x.parts.caller === c.to && Date.parse(x.at || 0) >= Date.parse(c.at || 0) - 2000)?.label;
+  const callerRows = [
+    ...[...changes].reverse().map((c, i) => ({
+      key: `${c.label}-${c.at}`,
+      label: c.label,
+      title: `${c.from} → ${c.to}`,
+      sub: `${new Date(c.at).toLocaleDateString()}${madeIn(c) ? ` · made environment ${madeIn(c)}` : ""} · runs before this don't compare with runs after`,
+      current: i === 0,
+    })),
+    {
+      key: "caller-1",
+      label: "caller 1",
+      title: changes[0]?.from || model,
+      sub: "The simulated user this environment started with",
+      current: !changes.length,
+    },
+  ];
+  return (
+    <SectionCard
+      title="Simulation defaults"
+      subtitle="What every new run of this environment starts from — a run can still change them"
+    >
+      <Stack spacing={2.5} sx={{ p: 2.5 }}>
+        <Stack direction={{ xs: "column", md: "row" }} spacing={3}>
+          <NumberSetting
+            label="Repeats per scenario"
+            help={`Each scenario runs this many times, 1 to ${REPEATS_MAX}. Three tells a flaky scenario from a failing one.`}
+            value={d.repeats}
+            min={1} max={REPEATS_MAX}
+            onChange={(v) => save({ repeats: v })}
+          />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Stack direction="row" alignItems="baseline" justifyContent="space-between">
+              <Typography sx={{ typography: "s2", fontWeight: 600 }}>Conversations at once</Typography>
+              <Typography sx={{ typography: "s2", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{d.conversationsAtOnce}</Typography>
+            </Stack>
+            <Slider
+              size="small"
+              value={d.conversationsAtOnce}
+              min={1} max={PARALLEL_MAX} step={1}
+              disabled={locked || !d.parallel}
+              onChange={(_, v) => save({ conversationsAtOnce: Math.max(2, v) })}
+              sx={{ py: 1, "& .MuiSlider-thumb": { width: 12, height: 12 } }}
+            />
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+              {d.parallel
+                ? `Up to ${PARALLEL_MAX} at once while parallel runs are on.`
+                : `One at a time. Turn on parallel runs to run up to ${PARALLEL_MAX} at once.`}
+            </Typography>
+          </Box>
+        </Stack>
+        <ToggleSetting
+          label={`Run conversations in parallel — up to ${PARALLEL_MAX} at once`}
+          help={voice
+            ? "Place several calls at once. Your provider's concurrency limit still applies, and a live agent takes them all at the same time. Off, one at a time."
+            : "Run several conversations at once. Results are the same; a run finishes sooner. Off, one at a time."}
+          checked={d.parallel}
+          onChange={setParallel}
+        />
+        <NumberSetting
+          label="Turn limit"
+          help={`A conversation stops after this many agent turns and fails with “Hit the turn limit”. A scenario's own limit wins${voice ? " — a voice scenario's Max turns" : ""}. ${TURN_LIMIT_RANGE.min} to ${TURN_LIMIT_RANGE.max}.`}
+          value={turnLimit}
+          min={TURN_LIMIT_RANGE.min} max={TURN_LIMIT_RANGE.max}
+          onChange={(v) => save({ turnLimit: v })}
+        />
+        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+          <Box minWidth={0}>
+            <Typography sx={{ typography: "s2", fontWeight: 600 }}>Simulated user&apos;s model</Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+              {SIMULATOR_MODELS.find((m) => m.id === model)?.note || "The model that plays the caller in every scenario."}
+              {" Part of the environment version a run holds fixed — changing it makes the next version, and runs before and after it don't compare."}
+            </Typography>
+          </Box>
+          <Select
+            size="small"
+            value={model}
+            disabled={locked}
+            onChange={(e) => { if (!locked && patch) patch(callerChangePatch(env, envState, e.target.value)); }}
+            sx={{ minWidth: 200, typography: "s2", flexShrink: 0 }}
+          >
+            {models.map((m) => (
+              <MenuItem key={m.id} value={m.id} sx={{ typography: "s2" }}>{m.label}</MenuItem>
+            ))}
+          </Select>
+        </Stack>
+      </Stack>
+      {/* Caller history — each change is also a step in the environment's version history. */}
+      <Box sx={{ borderTop: "1px solid", borderColor: "divider" }}>
+        <Typography sx={{ px: 2.5, pt: 1.25, pb: 0.5, typography: "s3", fontWeight: 700, color: "text.subtitle" }}>
+          Simulated caller changes
+        </Typography>
+        <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+          {callerRows.map((c) => (
+            <Stack key={c.key} direction="row" alignItems="center" spacing={2} sx={{ px: 2.5, py: 1 }}>
+              <Typography sx={{ typography: "s2", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", width: 72, flexShrink: 0 }}>
+                {c.label}
+              </Typography>
+              <Box flex={1} minWidth={0}>
+                <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{c.title}</Typography>
+                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{c.sub}</Typography>
+              </Box>
+              {c.current && (
+                <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", flexShrink: 0 }}>Current</Typography>
+              )}
+            </Stack>
+          ))}
+        </Stack>
+      </Box>
+    </SectionCard>
+  );
+}
+SimulationDefaultsSection.propTypes = { env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func, locked: PropTypes.bool };
+
+/*
+  Scenarios from production (RSI PRD) — a workspace-admin setting, not an
+  environment's. Off, the production-derived sources (the Error Feed and
+  production conversations replayed word for word) are unavailable on Add
+  scenarios in every environment, with the reason. Scenarios already added
+  stay. Stored on the workspace (`state.workspaceSettings.productionScenarios`);
+  this card shows its state, links out, and lets an admin change it in place.
+*/
+function ProductionScenariosSection({ envState }) {
+  const { settings, set, isAdmin, readOnlyReason } = useWorkspaceSettings();
+  const on = productionScenariosOn(envState, settings);
+  return (
+    <SectionCard
+      title="Scenarios from production"
+      subtitle="A workspace setting — it applies to every environment"
+    >
+      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ p: 2.5 }}>
+        <Box minWidth={0}>
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Iconify icon={on ? "solar:check-circle-linear" : "solar:forbidden-circle-linear"} width={15} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+            <Typography sx={{ typography: "s2", fontWeight: 600 }}>
+              {on ? "On for this workspace" : "Off for this workspace"}
+            </Typography>
+          </Stack>
+          <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25, maxWidth: 640 }}>
+            {on
+              ? "Error Feed issues and production conversations can become scenarios. Names, phone numbers, emails, addresses, account and card numbers are replaced with fake values before a scenario is saved; call audio is never reused."
+              : "The Error Feed and production conversations are unavailable as sources on Add scenarios. Scenarios already added stay."}
+          </Typography>
+          <Typography
+            component={RouterLink}
+            to={paths.dashboard.settings.orgSettings}
+            sx={{
+              display: "inline-flex", alignItems: "center", gap: 0.25, mt: 0.5,
+              typography: "s3", fontWeight: 600, color: "text.secondary", textDecoration: "none",
+              "&:hover": { color: "text.primary", textDecoration: "underline" },
+            }}
+          >
+            Managed in workspace settings
+            <Iconify icon="solar:arrow-right-up-linear" width={12} />
+          </Typography>
+        </Box>
+        <Tooltip arrow title={isAdmin ? `Workspace admin · ${on ? "turns it off" : "turns it on"} for every environment` : readOnlyReason}>
+          <span>
+            <Button
+              size="small" variant="outlined"
+              disabled={!isAdmin}
+              onClick={() => set("productionScenarios", !on)}
+              sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", borderColor: "divider", flexShrink: 0 }}
+            >
+              {on ? "Turn off for workspace" : "Turn on for workspace"}
+            </Button>
+          </span>
+        </Tooltip>
+      </Stack>
+    </SectionCard>
+  );
+}
+ProductionScenariosSection.propTypes = { envState: PropTypes.object };

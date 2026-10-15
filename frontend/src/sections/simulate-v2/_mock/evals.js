@@ -523,3 +523,22 @@ export const simulationPreviewData = (env, envState, agentType) => {
     })),
   };
 };
+
+/* ── required evaluations and the cap (RSI PRD) ──────────────────────────── */
+
+/* The catalogue eval behind the "tool call evaluation" switch — it doesn't
+   count toward the cap. */
+export const TOOL_CALL_JUDGE_ID = "tool_correctness";
+/** Up to 8 catalogue evaluations per environment, plus the tool-call judge. */
+export const MAX_APPLIED_EVALS = 8;
+export const EVAL_CAP_NOTE = `Up to ${MAX_APPLIED_EVALS} evaluations plus the tool-call judge. Remove one to add another.`;
+export const REQUIRED_EVAL_NOTE = "A failing score fails the conversation, whatever its sub-goals say.";
+
+const idOfApplied = (e) => (typeof e === "string" ? e : e?.id);
+/** How many applied evals count toward the cap of 8. */
+export const cappedEvalCount = (applied = []) => applied.filter((e) => idOfApplied(e) !== TOOL_CALL_JUDGE_ID).length;
+/** Slots left under the cap. */
+export const evalSlotsLeft = (applied = []) => Math.max(0, MAX_APPLIED_EVALS - cappedEvalCount(applied));
+/** Required evals — a failing score fails the conversation. Bare-id records are never required. */
+export const isRequiredEval = (applied) => !!(applied && typeof applied === "object" && applied.required);
+export const requiredEvalIds = (applied = []) => applied.filter(isRequiredEval).map(idOfApplied);

@@ -1,3 +1,4 @@
+import { pyTypeOf } from "./toolArgSpec";
 /**
  * Synthesised internals — DB schema, tool handler code, check code — that
  * back the World sections on the Contract tab. Real envs carry these files
@@ -196,44 +197,66 @@ const guessArgs = (name) => {
 };
 
 /**
- * Body guesser. Picks a shape by verb (lookup / update / mutate / read)
+ * Body guesser. Picks a shape by verb (lookup / verify / mutate / update)
  * so the reader sees a plausible SQL or state mutation, not the same
- * `pass` in every file.
+ * `pass` in every file. `names` are the handler's arguments (null for
+ * `**kwargs`), so the body only ever uses what the signature declares.
  */
-const guessBody = (name, desc) => {
+const guessBody = (name, desc, names) => {
   const n = name.toLowerCase();
-  const commented = desc ? `    """${desc}."""\n` : "";
-  if (/lookup|list|search|read|screenshot/.test(n)) {
+  const commented = desc ? `    """${desc.replace(/\.$/, "")}."""\n` : "";
+  /* The call's arguments as one dict — `args`, `kwargs`, or none. */
+  const A = names == null ? "kwargs" : names.length ? "args" : "{}";
+  const argsLine = names?.length ? `    args = {${names.map((x) => `"${x}": ${x}`).join(", ")}}\n` : "";
+  const idArg = names?.find((x) => /(_id|_ref|reference)$/.test(x));
+  const head = commented + argsLine;
+  if (/verify_identity/.test(n) && names?.includes("factors") && names?.includes("account_id")) {
+    return `${commented}    checks = []\n    for factor in factors:\n        checks.append(kyc.challenge(account_id, factor))\n    if not all(c.passed for c in checks):\n        raise ToolError("kyc_failed")\n    session.mark_verified(account_id)\n    return {"verified": True, "factors_used": [c.kind for c in checks]}`;
+  }
+  if (/verify|check_otp/.test(n)) {
+    return `${head}    match = kyc.match(${A})\n    if not match.passed:\n        raise ToolError("no_match")\n    session.mark_verified(match.customer_id)\n    audit.record("${n}", ${A})\n    return {"verified": True, "customer_id": match.customer_id}`;
+  }
+  if (/lookup|list|search|read|screenshot|^get_/.test(n)) {
     const table =
-      /order/.test(n) ? "orders"
+      /refund/.test(n) ? "refunds"
+      : /return/.test(n) ? "returns"
+      : /order/.test(n) ? "orders"
       : /booking/.test(n) ? "bookings"
       : /shipment/.test(n) ? "shipments"
       : /transaction/.test(n) ? "transactions"
       : /flight/.test(n) ? "flights"
       : "rows";
-    return `${commented}    row = db.query(\n        "SELECT * FROM ${table} WHERE $filter LIMIT 1",\n        args,\n    ).one_or_none()\n    if row is None:\n        raise ToolError("not_found")\n    audit.record("${n}", args)\n    return row.to_dict()`;
+    return `${head}    row = db.query(\n        "SELECT * FROM ${table} WHERE $filter LIMIT 1",\n        ${A},\n    ).one_or_none()\n    if row is None:\n        raise ToolError("not_found")\n    audit.record("${n}", ${A})\n    return row.to_dict()`;
   }
-  if (/refund|cancel|freeze|escalate|rebook|issue_voucher|raise_dispute/.test(n)) {
-    return `${commented}    require_permission("${n}")\n    with db.tx() as tx:\n        target = tx.load(args["primary_id"])\n        target.apply("${n}", args)\n        audit.record("${n}", args, actor="agent")\n    return {"ok": True, "id": target.id}`;
+  if (/refund|cancel|freeze|escalate|rebook|issue_voucher|raise_dispute|^apply_|^create_|^send_/.test(n)) {
+    const guard = names?.includes("caller_confirmed") ? `    if not caller_confirmed:\n        raise ToolError("not_confirmed")\n` : "";
+    if (!idArg) {
+      return `${head}    require_permission("${n}")\n${guard}    audit.record("${n}", ${A}, actor="agent")\n    return {"ok": True}`;
+    }
+    return `${head}    require_permission("${n}")\n${guard}    with db.tx() as tx:\n        target = tx.load(${idArg})\n        target.apply("${n}", ${A})\n        audit.record("${n}", ${A}, actor="agent")\n    return {"ok": True, "id": target.id}`;
   }
-  if (/verify_identity/.test(n)) {
-    return `${commented}    checks = []\n    for factor in factors:\n        checks.append(kyc.challenge(account_id, factor))\n    if not all(c.passed for c in checks):\n        raise ToolError("kyc_failed")\n    session.mark_verified(account_id)\n    return {"verified": True, "factors_used": [c.kind for c in checks]}`;
-  }
-  if (/update_shipping|update_/.test(n)) {
-    return `${commented}    with db.tx() as tx:\n        target = tx.load(args["primary_id"])\n        target.update(**{k: v for k, v in args.items() if k != "primary_id"})\n        audit.record("${n}", args)\n    return {"ok": True}`;
+  if (/update_/.test(n) && idArg) {
+    return `${head}    with db.tx() as tx:\n        target = tx.load(${idArg})\n        target.update(**{k: v for k, v in ${A}.items() if k != "${idArg}"})\n        audit.record("${n}", ${A})\n    return {"ok": True}`;
   }
   if (/browser/.test(n)) {
     return `${commented}    kind = action["kind"]\n    if kind == "click":\n        page.click(action["selector"])\n    elif kind == "type":\n        page.type(action["selector"], action["text"])\n    elif kind == "scroll":\n        page.scroll(action["dy"])\n    return {"ok": True, "url": page.url}`;
   }
-  return `${commented}    audit.record("${n}", kwargs)\n    return {"ok": True}`;
+  return `${head}    audit.record("${n}", ${A})\n    return {"ok": True}`;
 };
 
+/*
+  A tool's handler. Its signature is the tool's own arguments when the agent
+  declared them (`tool.args`) — the same list the Contract tab reads — typed
+  from the shared argument spec; otherwise a guess from the name.
+*/
 export function toolImplFor(tool) {
-  const args = guessArgs(tool.name);
-  const body = guessBody(tool.name, tool.desc);
+  const sig = Array.isArray(tool.args)
+    ? tool.args.map((a) => `${a}: ${pyTypeOf(tool.name, a)}`).join(", ")
+    : guessArgs(tool.name);
+  const names = sig.startsWith("**") ? null : sig.split(/,(?![^[]*\])/).map((x) => x.split(":")[0].trim()).filter(Boolean);
   return {
     file: `tools/${tool.name}.py`,
-    code: `from env.runtime import db, audit, kyc, page, session, require_permission\nfrom env.errors import ToolError\n\n\ndef ${tool.name}(${args}) -> dict:\n${body}\n`,
+    code: `from env.runtime import db, audit, kyc, page, session, require_permission\nfrom env.errors import ToolError\n\n\ndef ${tool.name}(${sig}) -> dict:\n${guessBody(tool.name, tool.desc, names)}\n`,
   };
 }
 
@@ -245,11 +268,11 @@ const CHECK_RECIPES = {
     body: `    predicate = scenario.success_predicate\n    result = predicate.evaluate(trace, env_state)\n    return CheckResult(\n        passed=result.passed,\n        reason=result.reason or ("goal reached" if result.passed else "goal not reached"),\n    )`,
   },
   policy_adherence: {
-    desc: "Scores the trace against every rule declared on this env.",
+    desc: "Scores the trace against every rule declared on this environment.",
     body: `    violations = []\n    for rule in env.rules:\n        v = rule.violated_by(trace)\n        if v:\n            violations.append({"rule": rule.text, "step": v.step, "quote": v.quote})\n    return CheckResult(\n        passed=len(violations) == 0,\n        reason=f"{len(violations)} rule(s) violated" if violations else "clean",\n        detail={"violations": violations},\n    )`,
   },
   tone: {
-    desc: "LLM-graded — reads final utterances against the env's tone rubric.",
+    desc: "LLM-graded — reads final utterances against the environment's tone rubric.",
     body: `    utterances = trace.agent_utterances()\n    rubric = env.grading.tone_rubric\n    score = grader.score(utterances, rubric)\n    return CheckResult(\n        passed=score >= 0.7,\n        reason=grader.explain(score),\n        score=score,\n    )`,
   },
   latency: {
@@ -265,7 +288,7 @@ const CHECK_RECIPES = {
     body: `    hits = pii.scan(trace.agent_utterances())\n    return CheckResult(\n        passed=len(hits) == 0,\n        reason=f"{len(hits)} PII leak(s)" if hits else "no PII surfaced",\n        detail={"hits": hits},\n    )`,
   },
   hallucination: {
-    desc: "Cross-checks facts the agent stated against ground truth in env state.",
+    desc: "Cross-checks facts the agent stated against ground truth in the environment's state.",
     body: `    claims = extractor.extract_factual_claims(trace)\n    unsupported = [c for c in claims if not env_state.supports(c)]\n    return CheckResult(\n        passed=len(unsupported) == 0,\n        reason=f"{len(unsupported)} unsupported claim(s)" if unsupported else "grounded",\n        detail={"unsupported": unsupported},\n    )`,
   },
   ui_grounding: {

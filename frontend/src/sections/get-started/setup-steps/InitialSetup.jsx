@@ -5,17 +5,21 @@ import React, { useMemo } from "react";
 import { useAuthContext } from "src/auth/hooks";
 import SvgColor from "src/components/svg-color";
 import { menuesConstant } from "./../constant";
+import { useIntegrations } from "src/sections/simulate-v2/_mock/integrations";
 
 const InitialSetup = ({ currentLabel, setCurrentLabel, data }) => {
   const { menusList, keySelector, statusColor } = menuesConstant;
   const { user } = useAuthContext();
+  /* Workspace tools are prototype-backed — complete once both are connected. */
+  const { github, slack } = useIntegrations();
+  const status = useMemo(() => ({ ...(data || {}), tools: !!(github && slack) }), [data, github, slack]);
 
   const menus = useMemo(() => {
     const menu = JSON.parse(JSON.stringify(menusList));
     return [...menu].map((item) => {
       if (item.label === currentLabel) {
         item.status = "active";
-      } else if (data?.[keySelector[item.label]]) {
+      } else if (status?.[keySelector[item.label]]) {
         item.status = "complete";
         item.icon = "/assets/icons/navbar/ic_evaluate.svg";
       } else {
@@ -23,7 +27,7 @@ const InitialSetup = ({ currentLabel, setCurrentLabel, data }) => {
       }
       return item;
     });
-  }, [currentLabel, data, keySelector, menusList]);
+  }, [currentLabel, status, keySelector, menusList]);
 
   const handleMenuClick = (selected) => {
     setCurrentLabel(selected.label);

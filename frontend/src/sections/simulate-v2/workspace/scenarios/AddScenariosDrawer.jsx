@@ -1,16 +1,25 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, IconButton, Button } from "@mui/material";
+import { Box, Stack, Typography, IconButton, Button, Collapse } from "@mui/material";
 import Iconify from "src/components/iconify";
 import SideDrawer from "../../components/SideDrawer";
 import DatasetImport from "./DatasetImport";
 import ScriptUpload from "./ScriptUpload";
-import ProductionImport from "./ProductionImport";
+import ErrorFeedImport from "./ErrorFeedImport";
+import FailingCasesImport from "./FailingCasesImport";
+import ChatSource from "./ChatSource";
 import TwinScenarioPicker from "./TwinScenarioPicker";
 import GenerateScenarios from "./GenerateScenarios";
-import { DatasetThumb, ScriptThumb, ProductionThumb, GenerateThumb } from "./RouteThumbs";
+import LibraryPersonaPicker from "./LibraryPersonaPicker";
+import ProductionReplayImport from "./ProductionReplayImport";
+import { ChatThumb, ProductionThumb, GenerateThumb, FailingCasesThumb } from "./RouteThumbs";
 import { injectComposerScaffold } from "../../_mock/composerScaffoldBus";
+import { openBuilderChat } from "../../_mock/builderPromptBus";
+import { usesPersonaLibrary } from "../../_mock/personaScenarios";
+import { productionScenariosOn, PRODUCTION_OFF_REASON } from "../../_mock/rsiModel";
+import { useWorkspaceSettings } from "../../store";
+import { clickable, focusRing } from "../../components/clickable";
 
 /* The builder chat is the other way to add scenarios — say what's missing and
    it writes them. This is the skill chip that hands the job over. */
@@ -27,78 +36,77 @@ const ADD_IN_CHAT = {
  * Scenarios already exist by the time anyone reaches this screen — they are
  * derived from the agent when the environment is built. So these routes are
  * not how you get scenarios, they are how you add ones the derivation could
- * not know to write. Five cards across the top of the page said the opposite:
- * that nothing had happened yet and a route had to be chosen.
+ * not know to write.
+ *
+ * Four sources lead: generate more, build them from an Error Feed issue,
+ * reproduce the cases that failed in this environment's runs, or describe
+ * them in chat. Twin services, a dataset, a script and the persona library
+ * are still here, behind More sources — real routes, but not where most
+ * scenarios come from.
  *
  * Behind a button, and in a drawer, so the page leads with the scenarios you
  * have and the routes stay one click away.
  */
-/**
- * Small purple twin thumb so the "From twin services" card visually
- * belongs with the twin surface everywhere else (env creation flow,
- * timeline, gallery chip). Kept inline — the thumb is one glyph in a
- * tinted square, not enough to justify its own file next to the
- * multi-shape SVG thumbs in RouteThumbs.
- */
-function TwinThumb() {
-  return (
-    <Box
-      sx={{
-        width: 96, height: 60, borderRadius: 1.25,
-        display: "grid", placeItems: "center",
-        bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.16 : 0.08),
-      }}
-    >
-      <Iconify icon="solar:server-square-bold" width={28} sx={{ color: "#7857FC" }} />
-    </Box>
-  );
-}
-
-
 const ROUTES = [
   {
-    id: "twin",
-    label: "From twin services",
-    blurb: "Scenarios that span more than one service — Slack → Notion, Gmail → Salesforce, and more.",
-    Thumb: TwinThumb,
-  },
-  {
-    id: "production",
-    label: "From production",
-    blurb: "Turn failure clusters from the Error Feed into permanent tests.",
-    Thumb: ProductionThumb,
-  },
-  {
-    id: "dataset",
-    label: "From a dataset",
-    blurb: "Choose a dataset and the columns that matter, and turn its rows into tasks.",
-    Thumb: DatasetThumb,
-  },
-  {
-    id: "script",
-    label: "Upload a script",
-    blurb: "Drop in a call script, SOP or runbook and we pull out the scenarios it describes.",
-    Thumb: ScriptThumb,
-  },
-  {
     id: "generate",
-    label: "AI generate",
+    label: "Generate",
     blurb: "Writes new scenarios across tasks, callers, moods and call quality.",
     Thumb: GenerateThumb,
   },
+  {
+    id: "error-feed",
+    label: "From Error Feed",
+    blurb: "Pick an Error Feed issue — the failures in its traces become scenarios.",
+    Thumb: ProductionThumb,
+  },
+  {
+    id: "failing",
+    label: "From failing cases",
+    blurb: "Scenarios that failed or came out flaky in this environment's runs, written to reproduce it.",
+    Thumb: FailingCasesThumb,
+  },
+  {
+    id: "chat",
+    label: "From chat",
+    blurb: "Say what's missing and the builder chat writes it.",
+    Thumb: ChatThumb,
+  },
 ];
 
-export default function AddScenariosDrawer({ open, onClose, env, envState, selected, onAdd }) {
-  const [route, setRoute] = useState(null);
+/* Kept, but quieter: one line each under More sources. */
+const MORE_ROUTES = [
+  /* Phase 2 — a production conversation's caller turns, replayed verbatim. */
+  { id: "replay", label: "Production, word for word", icon: "solar:server-linear", hint: "Replay a production conversation's caller turns exactly as they were said" },
+  { id: "twin", label: "Twin services", icon: "solar:server-square-linear", hint: "Scenarios that span more than one service" },
+  { id: "dataset", label: "A dataset", icon: "solar:database-linear", hint: "Turn a dataset's rows into tasks" },
+  { id: "script", label: "A script", icon: "solar:document-text-linear", hint: "Pull scenarios out of a call script, SOP or runbook" },
+  { id: "personas", label: "Persona library", icon: "solar:users-group-rounded-linear", hint: "This environment's tasks for personas your team keeps" },
+];
+
+/* `?add=production` predates the Error Feed source — same place now. */
+const ROUTE_ALIASES = { production: "error-feed" };
+
+export default function AddScenariosDrawer({ open, onClose, env, envState, selected, onAdd, onBuilderPrompt, initialRoute }) {
+  const first = ROUTE_ALIASES[initialRoute] || initialRoute || null;
+  const [route, setRoute] = useState(first);
   /*
-    Route visibility depends on the env's shape. The twin route only
-    shows when the env has a twin backing — the picker's suggestions
-    are generated from the twin services and make no sense otherwise.
+    Extra routes depend on the env's shape. The twin route only shows when
+    the env has a twin backing — the picker's suggestions are generated from
+    the twin services and make no sense otherwise. Library personas are
+    callers — only for agents with someone on the other end of the line.
   */
-  const routes = ROUTES.filter((r) => {
+  const more = MORE_ROUTES.filter((r) => {
     if (r.id === "twin" && !envState?.twinBacking) return false;
+    if (r.id === "personas" && !usesPersonaLibrary(env)) return false;
     return true;
   });
+  const [moreOpen, setMoreOpen] = useState(() => more.some((r) => r.id === first));
+  /* Production-derived sources follow the workspace-admin switch in Settings. */
+  const { settings: workspaceSettings } = useWorkspaceSettings();
+  const productionOff = !productionScenariosOn(envState, workspaceSettings);
+  const PRODUCTION_ROUTES = new Set(["error-feed", "replay"]);
+  const offRoute = productionOff && PRODUCTION_ROUTES.has(route);
 
   const close = () => { setRoute(null); onClose(); };
 
@@ -107,12 +115,20 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
 
   const toggle = (id) => setRoute((r) => (r === id ? null : id));
 
-  /* Close, then pin the chip once the drawer is gone — a closing drawer hands
+  /* Close, then hand over once the drawer is gone — a closing drawer hands
      focus back to the button that opened it, which would pull the cursor
      straight out of the chat. */
-  const describeInChat = () => {
+  const openChat = () => {
     close();
     setTimeout(() => injectComposerScaffold(ADD_IN_CHAT), 260);
+  };
+  const sendToChat = (ask) => {
+    if (!onBuilderPrompt) { openChat(); return; }
+    close();
+    setTimeout(() => {
+      openBuilderChat();
+      onBuilderPrompt(`Add scenarios. ${ask}`);
+    }, 260);
   };
 
   return (
@@ -134,16 +150,6 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
               This environment already has its scenarios. Add the ones it couldn&apos;t work out from your agent on its own.
             </Typography>
           </Box>
-          <Button
-            size="small"
-            variant="contained"
-            color="primary"
-            onClick={describeInChat}
-            startIcon={<Iconify icon="solar:chat-round-line-linear" width={15} />}
-            sx={{ typography: "s2", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap" }}
-          >
-            Describe in chat
-          </Button>
           <IconButton size="small" onClick={close}>
             <Iconify icon="solar:close-circle-linear" width={18} sx={{ color: "text.subtitle" }} />
           </IconButton>
@@ -166,28 +172,60 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
             sx={{
               display: "grid",
               gap: 1.5,
-              gridTemplateColumns: `repeat(${routes.length}, 1fr)`,
-              mb: route ? 2.5 : 0,
+              gridTemplateColumns: { xs: "repeat(2, 1fr)", md: `repeat(${ROUTES.length}, 1fr)` },
               flexShrink: 0,
             }}
           >
-            {routes.map((r) => (
+            {ROUTES.map((r) => (
               <RouteCard
                 key={r.id}
-                route={r}
+                route={productionOff && PRODUCTION_ROUTES.has(r.id) ? { ...r, blurb: "Off — scenarios from production are turned off in Settings." } : r}
                 active={route === r.id}
+                off={productionOff && PRODUCTION_ROUTES.has(r.id)}
                 onClick={() => toggle(r.id)}
               />
             ))}
           </Box>
 
+          {/* More sources — a quiet disclosure, one line when open. */}
+          {more.length > 0 && (
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 1.25, mb: route ? 2.5 : 0, flexShrink: 0, minHeight: 30 }}>
+              <Button
+                size="small"
+                onClick={() => setMoreOpen((v) => !v)}
+                endIcon={<Iconify icon={moreOpen ? "solar:alt-arrow-left-linear" : "solar:alt-arrow-right-linear"} width={12} />}
+                sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", px: 0.75, ml: -0.75, flexShrink: 0 }}
+              >
+                More sources
+              </Button>
+              <Collapse in={moreOpen} orientation="horizontal" unmountOnExit>
+                <Stack direction="row" spacing={0.75}>
+                  {more.map((r) => (
+                    <MoreSource key={r.id} route={r} active={route === r.id} off={productionOff && PRODUCTION_ROUTES.has(r.id)} onClick={() => toggle(r.id)} />
+                  ))}
+                </Stack>
+              </Collapse>
+            </Stack>
+          )}
+
           {/* picker fills the remaining vertical space so the section-card
               frame reaches the bottom of the drawer instead of clipping
               right after the last row */}
-          <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", mt: more.length || !route ? 0 : 2.5 }}>
+            {offRoute && (
+              <Stack alignItems="center" spacing={1} sx={{ py: 6, px: 3, textAlign: "center", border: "1px solid", borderColor: "divider", borderRadius: 1.5 }}>
+                <Iconify icon="solar:server-linear" width={26} sx={{ color: "text.disabled" }} />
+                <Typography sx={{ typography: "s1", fontWeight: 700 }}>Scenarios from production are off</Typography>
+                <Typography sx={{ typography: "s2", color: "text.subtitle", maxWidth: 520 }}>{PRODUCTION_OFF_REASON}</Typography>
+              </Stack>
+            )}
             {route === "generate" && <GenerateScenarios env={env} envState={envState} onAdd={add} selected={selected} />}
+            {route === "error-feed" && !offRoute && <ErrorFeedImport env={env} envState={envState} onAdd={add} selected={selected} onClose={close} />}
+            {route === "replay" && !offRoute && <ProductionReplayImport env={env} envState={envState} onAdd={add} selected={selected} />}
+            {route === "failing" && <FailingCasesImport env={env} envState={envState} onAdd={add} selected={selected} />}
+            {route === "chat" && <ChatSource onSend={sendToChat} onOpenChat={openChat} />}
+            {route === "personas" && <LibraryPersonaPicker env={env} envState={envState} onAdd={add} />}
             {route === "twin" && <TwinScenarioPicker env={env} envState={envState} onAdd={add} selected={selected} />}
-            {route === "production" && <ProductionImport env={env} onAdd={add} selected={selected} />}
             {route === "dataset" && <DatasetImport env={env} onAdd={add} selected={selected} />}
             {route === "script" && <ScriptUpload env={env} onAdd={add} selected={selected} />}
           </Box>
@@ -209,12 +247,14 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
 }
 
 AddScenariosDrawer.propTypes = {
+  initialRoute: PropTypes.string,
   open: PropTypes.bool,
   onClose: PropTypes.func,
   env: PropTypes.object,
   envState: PropTypes.object,
   selected: PropTypes.array,
   onAdd: PropTypes.func,
+  onBuilderPrompt: PropTypes.func,
 };
 
 /* The coverage-depth picks' selected tint, laid over a surface as an image so
@@ -225,13 +265,14 @@ const selectedTint = (t) => {
   return `linear-gradient(${c}, ${c})`;
 };
 
-function RouteCard({ route, active, onClick }) {
+function RouteCard({ route, active, off = false, onClick }) {
   const { Thumb } = route;
   return (
     <Box
-      onClick={onClick}
-      sx={{
+      {...clickable(onClick, { pressed: active })}
+      sx={{ ...focusRing,
         borderRadius: 1.5, overflow: "hidden", height: "100%", cursor: "pointer",
+        ...(off && { opacity: 0.6 }),
         border: "1px solid",
         borderColor: active ? "text.primary" : "divider",
         bgcolor: "background.paper",
@@ -274,4 +315,32 @@ function RouteCard({ route, active, onClick }) {
     </Box>
   );
 }
-RouteCard.propTypes = { route: PropTypes.object, active: PropTypes.bool, onClick: PropTypes.func };
+RouteCard.propTypes = { route: PropTypes.object, active: PropTypes.bool, off: PropTypes.bool, onClick: PropTypes.func };
+
+/* One of the extra routes — a single line, the same selected treatment as the cards. */
+function MoreSource({ route, active, off = false, onClick }) {
+  return (
+    <Box
+      component="button"
+      type="button"
+      title={off ? PRODUCTION_OFF_REASON : route.hint}
+      onClick={onClick}
+      sx={{
+        ...(off && { opacity: 0.6 }),
+        display: "inline-flex", alignItems: "center", gap: 0.75, height: 30, px: 1.25,
+        whiteSpace: "nowrap", cursor: "pointer", font: "inherit",
+        borderRadius: 1, border: "1px solid",
+        borderColor: active ? "text.primary" : "divider",
+        bgcolor: "background.paper",
+        backgroundImage: active ? selectedTint : "none",
+        color: active ? "text.primary" : "text.secondary",
+        transition: "border-color .16s ease",
+        "&:hover": { borderColor: active ? "text.primary" : "text.subtitle", color: "text.primary" },
+      }}
+    >
+      <Iconify icon={route.icon} width={14} />
+      <Typography component="span" sx={{ typography: "s2", fontWeight: 600, color: "inherit" }}>{route.label}</Typography>
+    </Box>
+  );
+}
+MoreSource.propTypes = { route: PropTypes.object, active: PropTypes.bool, off: PropTypes.bool, onClick: PropTypes.func };

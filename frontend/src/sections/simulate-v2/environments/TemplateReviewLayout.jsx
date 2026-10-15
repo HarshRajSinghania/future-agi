@@ -1,11 +1,15 @@
 import PropTypes from "prop-types";
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Box, Stack, Typography, Button, IconButton, Tooltip,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { paths } from "src/routes/paths";
 import { SectionCard } from "../components/primitives";
 import { useEnvState } from "../store";
+import { runReadiness } from "../_mock/setupGaps";
+import useRunFitCheck from "../run/useRunFitCheck";
 import { builderRun } from "../_mock/builder";
 import AssistantConsole from "../assistant/AssistantConsole";
 import DerivedPanels from "./DerivedPanels";
@@ -47,10 +51,9 @@ const CHIPS_BY_TAB = {
     "What changed between versions?",
   ],
   contract: [
-    "Tighten the refund rule",
-    "Add a hard rule about escalations",
-    "Add an adversarial actor",
-    "Explain the reward function",
+    "When does a run end early?",
+    "Add an actor who wants something else",
+    "How is a run scored?",
   ],
   scenarios: [
     "Drop payments scenarios",
@@ -65,10 +68,13 @@ const CHIPS_BY_TAB = {
   ],
 };
 export default function TemplateReviewLayout({
-  env, onFinish, onBack, isTwin, initialTurns, externalReadAnswers,
+  env, onFinish, onBack, isTwin, initialTurns,
 }) {
+  const navigate = useNavigate();
   const { envState, patch } = useEnvState(env.id);
   const scenarioCount = envState?.scenarios?.length || 0;
+  /* Same tool-fit ask every other Run button makes. */
+  const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
 
   /*
     `initialTurns` lets the caller seed the chat with prior history —
@@ -97,12 +103,8 @@ export default function TemplateReviewLayout({
     do the derivation stages start streaming. Seeded flows carry
     prior state and skip the receipt entirely.
   */
-  /* The read-audit can be completed two ways: on this screen (the receipt
-     below), or upstream on the Connect page (ConnectReadPanel), which passes
-     its answers in as `externalReadAnswers`. In the upstream case we skip the
-     receipt here and stream the derivation straight away. */
-  const [awaitReadAck, setAwaitReadAck] = useState(!seeded && !externalReadAnswers);
-  const [readAnswers, setReadAnswers] = useState(externalReadAnswers || null);
+  const [awaitReadAck, setAwaitReadAck] = useState(!seeded);
+  const [readAnswers, setReadAnswers] = useState(null);
 
   /*
     Stream the derivation stages on mount — same shape BuildFromAgent
@@ -154,14 +156,6 @@ export default function TemplateReviewLayout({
       timers.current.forEach(clearTimeout);
       timers.current = [];
     };
-  }, []);
-
-  /* When the read-audit was completed upstream (ConnectReadPanel), the
-     receipt is skipped, so kick off the derivation streaming on mount —
-     the normal path does this from the receipt's Build handler. */
-  useEffect(() => {
-    if (externalReadAnswers && !seeded) startDerivation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /*
@@ -281,8 +275,8 @@ export default function TemplateReviewLayout({
               Env status pill sits inside the identity cluster —
               parallel to the workspace header — so the reader sees
               one grouping (name · status) that describes the same
-              thing everywhere. `Building` (amber, pulsing) while
-              derivation streams; `Live` (green, solid) once the
+              thing everywhere. `Building` (purple, pulsing) while
+              derivation streams; `Ready` (green, solid) once the
               world has landed.
             */}
             <Stack
@@ -293,23 +287,23 @@ export default function TemplateReviewLayout({
                 px: 1.25, py: 0.5, borderRadius: 1,
                 border: "1px solid",
                 borderColor: (t) => running
-                  ? (t.palette.mode === "dark" ? "rgba(202, 138, 4, 0.5)" : "rgba(202, 138, 4, 0.35)")
+                  ? (t.palette.mode === "dark" ? "rgba(120, 87, 252, 0.5)" : "rgba(120, 87, 252, 0.35)")
                   : (t.palette.mode === "dark" ? "rgba(22, 163, 74, 0.5)" : "rgba(22, 163, 74, 0.35)"),
                 bgcolor: (t) => running
-                  ? (t.palette.mode === "dark" ? "rgba(202, 138, 4, 0.14)" : "rgba(202, 138, 4, 0.08)")
+                  ? (t.palette.mode === "dark" ? "rgba(120, 87, 252, 0.14)" : "rgba(120, 87, 252, 0.08)")
                   : (t.palette.mode === "dark" ? "rgba(22, 163, 74, 0.14)" : "rgba(22, 163, 74, 0.08)"),
-                color: running ? "#CA8A04" : "#16A34A",
+                color: running ? "#7857FC" : "#16A34A",
                 flexShrink: 0,
               }}
             >
               <Box sx={{
                 width: 7, height: 7, borderRadius: "50%",
-                bgcolor: running ? "#CA8A04" : "#16A34A",
+                bgcolor: running ? "#7857FC" : "#16A34A",
                 animation: running ? "pulse 1.4s ease-in-out infinite" : undefined,
                 "@keyframes pulse": { "0%,100%": { opacity: 0.4 }, "50%": { opacity: 1 } },
               }} />
               <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-                {running ? "Building" : "Live"}
+                {running ? "Building" : "Ready"}
               </Typography>
             </Stack>
           </Stack>
@@ -318,16 +312,12 @@ export default function TemplateReviewLayout({
           </Typography>
         </Box>
         {/*
-          Setup is complete by the time we hit the review layout — the
-          builder streamed every stage and the world is standing. The
-          only meaningful action left is running a simulation, so the
-          CTA reads "Run simulation" on every flow (template, twin,
-          scratch) and the "Finish setup" label is retired.
-          Gate on evals: a run with no graders produces no verdict, so
-          the button stays disabled until the user adds at least one
-          from the Evaluations tab. While the builder is still
-          streaming we also disable it so users can't fire before the
-          setup finishes.
+          The world is standing by the time we hit the review layout, so
+          the CTA reads "Run simulation" on every flow (template, twin,
+          scratch). It runs only when the same readiness every Run button
+          checks is met (agent, where it runs, scenarios, evaluations) —
+          otherwise it opens the workspace on the tab with the gap rather
+          than running. Disabled while the builder is still streaming.
         */}
         {/*
           Refresh — de-emphasized (ghost outline, subtitle-tinted) so
@@ -352,21 +342,20 @@ export default function TemplateReviewLayout({
           </Box>
         </Tooltip>
         {(() => {
-          const evalsCount = envState?.evals?.length || 0;
-          const hasEvals = evalsCount > 0;
-          const canRun = !running && hasEvals;
-          const disabledReason = running
+          const readiness = runReadiness(envState);
+          const reason = running
             ? "Building the environment — one moment…"
-            : !hasEvals
-              ? "Add at least one evaluation on the Evaluations tab — a run with no graders can't be scored."
-              : "";
+            : readiness.ready ? "" : `${readiness.reason}. Opens the workspace there.`;
+          const go = () => (readiness.ready
+            ? checkRunFit(() => onFinish?.())
+            : navigate(paths.dashboard.simulate.environmentStep(env.id, readiness.step)));
           return (
-            <Tooltip arrow title={disabledReason}>
+            <Tooltip arrow title={reason}>
               <Box component="span">
                 <Button
                   variant="contained" color="primary"
-                  onClick={canRun ? onFinish : undefined}
-                  disabled={!canRun}
+                  onClick={go}
+                  disabled={running}
                   startIcon={<Iconify icon="solar:play-circle-linear" width={15} />}
                   sx={{ typography: "s2", fontWeight: 700 }}
                 >
@@ -409,6 +398,7 @@ export default function TemplateReviewLayout({
           />
         </SectionCard>
       </Box>
+      {runFitDialog}
     </Box>
   );
 }
@@ -419,7 +409,6 @@ TemplateReviewLayout.propTypes = {
   onBack: PropTypes.func,
   isTwin: PropTypes.bool,
   initialTurns: PropTypes.array,
-  externalReadAnswers: PropTypes.object,
 };
 
 /*
@@ -430,7 +419,7 @@ TemplateReviewLayout.propTypes = {
   rest, policy.yaml for rules, fixture for the seed tables, prompt
   for behavior, one inferred item to demonstrate the ambiguity path.
 */
-export function buildTemplateReading(env) {
+function buildTemplateReading(env) {
   if (!env) return { tools: [], rules: [], data: [], behavior: [] };
   const tools = (env.tools || []).map((t, i) => ({
     name: t.name,
@@ -454,7 +443,7 @@ export function buildTemplateReading(env) {
   return { tools, rules, data, behavior };
 }
 
-export function buildTemplateQuestions(env) {
+function buildTemplateQuestions(env) {
   if (!env) return [];
   const lastTool = (env.tools || [])[Math.max(0, (env.tools || []).length - 1)];
   const questions = [];
@@ -498,5 +487,5 @@ function mockAssistantReply(userText, scenarioCount) {
   if (/tool/.test(t)) {
     return "Noted. Tool schema updated — fit check re-ran and still passes.";
   }
-  return "Understood. Applied that to the env — preview on the right reflects the change. Ready when you are.";
+  return "Understood. Applied that to the environment — preview on the right reflects the change. Ready when you are.";
 }

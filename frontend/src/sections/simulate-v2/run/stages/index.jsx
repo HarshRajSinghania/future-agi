@@ -14,6 +14,7 @@ import Iconify from "src/components/iconify";
 import { browserAppOf } from "../../_mock/runStream";
 import BrowserApp, { deriveState, focusOf, CURSOR, urlFor } from "./BrowserApps";
 import { PersonaBadge } from "../../components/primitives";
+import { textTone } from "../../components/textTone";
 import CloneStage from "./CloneStage";
 import { endedReasonFor } from "../../_mock/endedReason";
 
@@ -249,7 +250,7 @@ function CallEnded({ task, live, voice }) {
       <Tooltip arrow title={`Reported by the pipeline as “${raw}”`}>
         <Stack direction="row" alignItems="center" spacing={0.5} sx={{ color }}>
           <Iconify icon={voice ? "solar:end-call-linear" : "solar:chat-round-check-linear"} width={13} />
-          <Typography sx={{ typography: "s3", fontWeight: 600, color: "inherit" }}>{label}</Typography>
+          <Typography sx={{ typography: "s3", fontWeight: 600, color: tone === "warn" ? "text.secondary" : "inherit" }}>{label}</Typography>
         </Stack>
       </Tooltip>
       <Box sx={{ flex: 1, borderTop: "1px solid", borderColor: "divider" }} />
@@ -432,7 +433,7 @@ export function BrowserStage({ task, stepIndex, live }) {
                     color: "#EA580C",
                   }}
                 >
-                  <Typography sx={{ typography: "s3", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                  <Typography sx={{ typography: "s3", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", color: "text.primary" }}>
                     {s.action}
                   </Typography>
                 </Box>
@@ -603,7 +604,7 @@ export function EmailStage({ task, stepIndex, live }) {
                 </Stack>
                 <Box sx={{ pb: 2.25, flex: 1, minWidth: 0 }}>
                   <Stack direction="row" alignItems="center" spacing={0.75}>
-                    <Typography sx={{ typography: "s3", fontWeight: 700, color: meta.color }}>
+                    <Typography sx={{ typography: "s3", fontWeight: 700, color: textTone(meta.color) }}>
                       {meta.label}
                     </Typography>
                     {pending && (

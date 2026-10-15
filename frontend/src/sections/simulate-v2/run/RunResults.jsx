@@ -1,40 +1,66 @@
 import PropTypes from "prop-types";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { alpha, useTheme } from "@mui/material/styles";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { alpha } from "@mui/material/styles";
 import {
-  Box, Stack, Typography, Button, IconButton, Tab, Checkbox, Tooltip, Drawer,
-  Popover, MenuItem, ListItemIcon, ListItemText,
+  Box, Stack, Typography, Button, IconButton, Tab, Tooltip, Drawer,
+  Popover, MenuItem, ListItemIcon, ListItemText, Switch,
 } from "@mui/material";
 import SideDrawer from "../components/SideDrawer";
 import { FilterPanel } from "src/components/filter-panel";
 import Iconify from "src/components/iconify";
+import { clickable, focusRing } from "../components/clickable";
 import { subTasksFor } from "../_mock/contract";
 import { CustomTabs } from "src/components/tabs/tabs";
 import { paths } from "src/routes/paths";
 import { getEval } from "../_mock/evals";
-import TurnScores from "./TurnScores";
 import {
-  SectionCard, ScorePill, StatusChip, StatusDot, PersonaBadge, EmptyState, neutralCheckboxSx,
+  SectionCard, StatusChip, EmptyState,
 } from "../components/primitives";
-import Stage from "./stages";
 import RunAnalytics from "./RunAnalyticsV2";
 import CallDrawer from "./CallDrawer";
 import VoiceDetailDrawerV2 from "src/components/VoiceDetailDrawerV2";
 import { effectiveModality } from "../_mock/rlContract";
 import { taskToVoiceData } from "../_mock/voiceCallData";
 import AddEvalsDrawer from "../workspace/evals/AddEvalsDrawer";
-import EditEvalDrawer, { canEditEval } from "../workspace/evals/EditEvalDrawer";
-import { useAppliedEvals } from "../workspace/evals/appliedEvals";
+import EditEvalDrawer from "../workspace/evals/EditEvalDrawer";
+import { canEditEval } from "../workspace/evals/canEditEval";
+import { useAppliedEvals } from "../workspace/evals/useAppliedEvals";
 import { useEnvState } from "../store";
 import useRunFitCheck from "./useRunFitCheck";
 import { protoRunId } from "../_mock/executionAdapter";
-import { runSummaries, trialSummaries, chipIdentity as computeChipIdentity } from "../_mock/comparison";
+import { runSummaries, trialSummaries } from "../_mock/comparison";
+import { textTone } from "../components/textTone";
 import { resolveEval } from "../_mock/evals";
-import TraceTable, { TraceGroupByPicker, TraceColumnsPicker, defaultTraceColumns, deriveUseCaseLabel } from "./TraceTable";
+import TraceTable, { TraceGroupByPicker, TraceColumnsPicker } from "./TraceTable";
+import { defaultTraceColumns, deriveUseCaseLabel } from "./traceTableHelpers";
 import FixMyAgentDrawer from "./fixmyagent/FixMyAgentDrawer";
-import { passRateOf } from "./taskOutcome";
+import { improvementOf, isCandidateRun, runIdentityOf } from "../_mock/runIdentity";
+import { runPinsOf } from "../_mock/envModel";
+import { REPLAY_HEADER, stubbedToolNames } from "../_mock/replay";
+import FromImprovement from "./FromImprovement";
+import RunGroupBar from "./RunGroupBar";
+import InsightsTab from "./InsightsTab";
+import { TraceSheet } from "./TraceWaterfall";
+import { runTracingOf, runIssueImprovement } from "../errorFeed/runIssueFix";
+import { startImproverSession, useIntegrations } from "../_mock/integrations";
+import { useSimStore } from "../store";
+import { envAgentKey } from "../_mock/agentRegistry";
+import { rereadFor } from "../_mock/improvementPolicy";
+import { recordOutsideChange } from "../_mock/nudgeEffects";
+import { runReportOf } from "../_mock/runReport";
+import RunSummaryChip, { HealthChip } from "./RunSummaryChip";
+import { causeOf, outcomeOfCause } from "../_mock/decoupled";
+import { regradeOf, regradeRecordOf } from "../_mock/regrade";
+import { agentVersions } from "../_mock/versions";
+import { scenarioAtVersion } from "../_mock/decoupled";
+import MeteredText from "./RunRecord";
+import ShareMenu from "./ShareMenu";
+import ImprovementRunStrip from "./ImprovementRunStrip";
+
+/* The Insights tab is hidden for now; set true to bring it back (its code is unchanged). */
+const SHOW_INSIGHTS = false;
 
 /**
  * Run results.
@@ -62,7 +88,7 @@ function rescoreTaskEvals(t, rescore) {
   return changed ? { ...t, evalResults } : t;
 }
 
-export default function RunResults({ env, runId, tasks, stats, evals, stage, seed = 7 }) {
+export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }) {
   /* Per-eval-column actions (from the column menu): a set of columns the user
      deleted, and a re-score version bump per column that regenerates just that
      column's cell values (no full simulation). */
@@ -155,7 +181,13 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
   };
   const navigate = useNavigate();
   const { envId } = useParams();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  /* Opened from an Error Feed issue's fix (View fix, the status chip): back
+     goes to that issue, named — on a reload too, while the entry lasts. */
+  const location = useLocation();
+  /* Kept for the page's life: in-page links (?improve=, tabs) push entries
+     without it. */
+  const [fromIssue] = useState(() => location.state?.fromIssue || null);
   /*
     A comparison can send scenarios straight here — "these four broke, work out
     why". Landing on the default tab with no memory of what was sent would make
@@ -168,10 +200,22 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
   const [focusStep, setFocusStep] = useState(null);
   /* Fix my agent is a drawer over whatever you were reading, not a tab you
      navigate away to — the diagnosis is about the run still on screen. */
-  const [fixOpen, setFixOpen] = useState(false);
-  const [fixOptId, setFixOptId] = useState(null);
+  /* `?improve=OPT-…` lands with the drawer open on that improvement run —
+     how the Improvements page links into one. */
+  const [fixOpen, setFixOpen] = useState(() => !!params.get("improve"));
+  const [fixOptId, setFixOptId] = useState(() => params.get("improve"));
+  /* "From Improvement run N" on this run's header links here with
+     `?improve=` — the page is already mounted, so open it on the change too. */
+  const improveParam = params.get("improve");
+  useEffect(() => {
+    if (improveParam) { setFixOptId(improveParam); setFixOpen(true); }
+  }, [improveParam]);
   const [tab, setTab] = useState(() => {
-    const t = params.get("tab") || "tasks";
+    /* Insights leads once the run is finished — this screen only shows
+       finished runs; a live one stays on the live view. */
+    const t = params.get("tab") || (SHOW_INSIGHTS ? "insights" : "tasks");
+    /* Insights is hidden for now — its links land on Scenarios. */
+    if (t === "insights" && !SHOW_INSIGHTS) return "tasks";
     /* Stale deep-links to removed tabs — the old "Self improvement runs"
        (`optimize`/`omega`), the "Verify" tab, and the now-retired "Trials"
        tab (self-improvement trials are peer runs on the Runs list) — all
@@ -180,6 +224,10 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
   });
   const [replaying, setReplaying] = useState(null);
   const [openTask, setOpenTask] = useState(null);
+  /* Which left pane the call drawer opens on — "trace" from Insights. */
+  const [openPane, setOpenPane] = useState(null);
+  /* A voice run's call drawer is Observe's; its trace opens on its own. */
+  const [traceTask, setTraceTask] = useState(null);
   /* Eval the drawer opens on when a score cell was clicked — kept across
      prev/next so stepping through calls stays on the same eval. */
   const [evalFocus, setEvalFocus] = useState(null);
@@ -194,26 +242,11 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     live in the SectionCard header where the title used to sit.
   */
   const [groupBy, setGroupBy] = useState("useCase");
-  /* Review-mode toggle. The banner is about CRITICAL failures — the
-     release-blocker subset — not the whole Failing bucket. Review
-     narrows the table to exactly those scenarios by combining a
-     status filter (Failing) with an attribute filter (Criticality =
-     Critical). Reset restores the full view. */
-  const [reviewMode, setReviewMode] = useState(null);
-  const enterReviewMode = () => {
-    setReviewMode({ groupBy, statusChip, filters });
-    setGroupByReconciled("pattern");
-    setStatusChip("failing");
-    setFilters({ critical: ["Critical"] });
-    setTab("tasks");
-  };
-  const exitReviewMode = () => {
-    if (!reviewMode) return;
-    setGroupByReconciled(reviewMode.groupBy);
-    setStatusChip(reviewMode.statusChip);
-    setFilters(reviewMode.filters || {});
-    setReviewMode(null);
-  };
+  /* Expand all lives in the toolbar: the table reports whether every group
+     is open (so the switch is right after opening groups one by one), and
+     the switch asks the table to open or close them all. */
+  const [allOpen, setAllOpen] = useState(false);
+  const [expandCommand, setExpandCommand] = useState(null);
   /*
     Column visibility for the traces table. A Set of column keys the
     user has chosen to show; essentials (Persona, Scenario) render
@@ -234,11 +267,11 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
      disabled, and switching to a failure grouping resets an incompatible
      chip back to All. */
   const failureGrouping = groupBy === "subGoal" || groupBy === "pattern";
-  const incompatibleChips = failureGrouping ? ["passing", "inconclusive"] : [];
+  const incompatibleChips = failureGrouping ? ["passing", ...NOT_COUNTED_CHIPS] : [];
   const setGroupByReconciled = (g) => {
     setGroupBy(g);
     const failView = g === "subGoal" || g === "pattern";
-    if (failView && (statusChip === "passing" || statusChip === "inconclusive")) {
+    if (failView && (statusChip === "passing" || NOT_COUNTED_CHIPS.includes(statusChip))) {
       setStatusChip("all");
     }
   };
@@ -273,6 +306,11 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
   };
 
   const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
+  const { state: simState, commit: simCommit } = useSimStore();
+  const integrations = useIntegrations();
+  /* Fix on an issue needs trace evidence — hosted agents report every call,
+     code agents need traceAI. */
+  const tracing = useMemo(() => runTracingOf(envState?.agent, integrations, env?.id), [envState?.agent, integrations, env?.id]);
 
   /*
     Which run this is. The header said "Run complete" and then printed the raw
@@ -307,43 +345,40 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     };
   }, [runId, envState.optimizations]);
 
-  /* Trials launched FROM this run — reused as full run summaries via
-     `trialSummaries` so the Trials tab can render the same columns the
-     main runs table shows (system metrics + eval scores) and route
-     Compare through the same URL. */
-  const trialsFromRun = useMemo(() => {
-    const optIds = new Set(
-      (envState.optimizations || [])
-        .filter((o) => o.fromRunId === runId)
-        .map((o) => o.id),
-    );
-    return trialSummaries(env, envState).filter((t) => optIds.has(t.selfImprovementId));
-  }, [runId, env, envState]);
+  /* "agent v3 × env v2", and the improvement that produced it — named the way
+     its row on the runs list names it. A trial is read off the same trial
+     summary that row is. */
+  const named = useMemo(() => {
+    const run = trialMeta
+      ? trialSummaries(env, envState).find((t) => t.id === runId)
+      : identity;
+    return run ? runIdentityOf(run, envState, env) : null;
+  }, [trialMeta, identity, env, envState, runId]);
 
-  const trialChips = useMemo(() => computeChipIdentity(env, envState), [env, envState]);
-  const trialEvals = useMemo(
-    () => (envState?.evals || []).map(resolveEval).filter(Boolean),
-    [envState?.evals],
+  /* Made by an improvement to try a change. Its failures are the
+     improvement's to read, so Debug failures isn't offered here. */
+  const candidate = !!trialMeta || !!named?.improvement || isCandidateRun({ ...(identity || {}), id: runId }, envState);
+
+  /*
+    The run as one record — its release verdict and execution health, what it
+    metered, and the digest it sent — read the same way the shared report and
+    the completion digest read it. Keyed on the inputs, not the summaries
+    (rebuilt every render).
+  */
+  const report = useMemo(
+    () => runReportOf({ env, envState, runId, tasks, summaries, goalOf: deriveUseCaseLabel, integrations }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, envState, runId, tasks, integrations],
   );
-  const [trialsSelected, setTrialsSelected] = useState([]);
-  const toggleTrial = (id) =>
-    setTrialsSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  const compareTrials = () => {
-    if (trialsSelected.length < 2) return;
-    const ordered = [...trialsSelected].sort((a, b) => {
-      const ai = trialsFromRun.findIndex((t) => t.id === a);
-      const bi = trialsFromRun.findIndex((t) => t.id === b);
-      return ai - bi;
-    });
-    navigate(`${paths.dashboard.simulate.simulationCompare(env.id)}?runs=${ordered.join(",")}`);
+  /* An improvement's candidate runs don't digest — a search runs dozens. */
+  const record = {
+    metering: report.metering,
+    digest: candidate ? null : report.digest,
+    destinations: identity?.digest || report.destinations,
+    sentAt: identity?.finishedAt,
   };
-  /* What this run is read against — the released version if there is one, else
-     the run before it. The comparative analyzers need something to compare
-     to and say so when there is nothing. */
-  const released = envState.releases?.[0]?.version;
-  const baselineRun = summaries.find((r) => released && r.agentVersion === released && r.id !== runId)
-    || summaries.filter((r) => r.id !== runId).slice(-1)[0]
-    || null;
+  /* Tools the agent was told to stub under the replay flag. */
+  const stubbed = stubbedToolNames(env, envState);
 
   /*
     A result you disagree with is usually a result that was graded on the wrong
@@ -356,14 +391,64 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     the button said and buries the four scenarios someone was actually chasing.
     The subset travels with the run and the run records that it was a subset.
   */
-  /* A re-run repeats the test it came from — same number of trials. */
-  const rerun = (ids) => checkRunFit(() => {
+  /*
+    A re-run repeats the test it came from — same number of trials — in one of
+    two modes (PRD v7 §4.10.8):
+      snapshot — "Re-run exact snapshot": the source run's scenario versions,
+                 environment version, pins and seed; only the agent version
+                 may change. The default for comparisons.
+      now      — "Run as configured now": picks up every edit since.
+  */
+  const sourceRun = (envState.runs || []).find((r) => r.id === runId) || null;
+  const canSnapshot = !!sourceRun?.finishedAt && !trialMeta;
+  /* A snapshot re-run plays its source's pinned versions — say how many of
+     those are older than today's text, so a diff against a fresh run isn't
+     read as the agent's doing. Only versions whose text was kept count. */
+  const snapshotNote = (() => {
+    if (!sourceRun?.snapshotOf || !sourceRun.scenarioVersions) return null;
+    const ids = sourceRun.scenarioIds?.length ? new Set(sourceRun.scenarioIds) : null;
+    const older = (envState.scenarios || []).filter((r) => (!ids || ids.has(r.id))
+      && sourceRun.scenarioVersions[r.id] && scenarioAtVersion(r, sourceRun.scenarioVersions[r.id]) !== r);
+    if (!older.length) return null;
+    const majors = [...new Set(older.map((r) => String(sourceRun.scenarioVersions[r.id]).split(".")[0]))];
+    const ordinal = (envState.runs || []).find((r) => r.id === sourceRun.snapshotOf)?.ordinal ?? "—";
+    return `${older.length} scenario${older.length === 1 ? "" : "s"} played ${older.length === 1 ? "its" : "their"} ${majors.length === 1 ? `v${majors[0]}.x` : "earlier"} text from run ${ordinal}`;
+  })();
+  const rerun = (ids, { mode = "now", agent = null } = {}) => checkRunFit(() => {
     const url = paths.dashboard.simulate.simulationRun(envId, protoRunId(envId, Date.now().toString(36)));
     const q = new URLSearchParams();
     if (ids?.length) q.set("only", ids.join(","));
-    q.set("trials", String((envState.runs || []).find((r) => r.id === runId)?.repeats || 3));
+    q.set("trials", String(sourceRun?.repeats || 3));
+    if (mode === "snapshot" && canSnapshot) {
+      q.set("snapshot", sourceRun.id);
+      q.set("agent", agent || sourceRun.agentVersion);
+      if (sourceRun.envVersion) q.set("env", sourceRun.envVersion);
+    }
     navigate(`${url}?${q.toString()}`);
   });
+  const [runRerunAnchor, setRunRerunAnchor] = useState(null);
+  /* The scenarios that didn't pass — what "Re-run N failing" replays. */
+  const failingScenarioIds = useMemo(
+    () => [...new Set(tasks.filter((t) => t.status === "failed" || t.status === "flaky").map((t) => t.scenarioId || t.id))],
+    [tasks],
+  );
+
+  /* Re-grade (AC-12.23): offered when a sub-goal this run used got a grader
+     fix, or the eval version moved, since it ran. Priced; starts on a click. */
+  const regrade = useMemo(
+    () => (trialMeta ? null : regradeOf({ env, envState, run: sourceRun, evals: (sourceRun?.evals || envState.evals || []).map(resolveEval).filter(Boolean) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, envState, sourceRun, trialMeta],
+  );
+  const startRegrade = () => {
+    if (!regrade || !sourceRun) return;
+    const rec = regradeRecordOf(regrade);
+    patch({ runs: (envState.runs || []).map((r) => (r.id === sourceRun.id ? { ...r, regradedWith: rec } : r)) });
+  };
+  const regradedChanged = tasks.filter((t) => t.regraded?.changed).length;
+
+  /* The user's own bar for pass^1 — it colours reports, nothing more. */
+  const setReportBar = (pass1) => patch({ reportBar: { ...(envState.reportBar || {}), pass1 } });
 
   const toggle = (id) =>
     setSelected((prev) => {
@@ -389,7 +474,11 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     tasks.forEach((t) => subTasksFor(t, env).forEach((sg) => s.add(sg.label)));
     return [...s].sort();
   }, [tasks, env]);
-  const STATUS_LABELS = ["Passed", "Failed", "Errored", "Not measured"];
+  const STATUS_LABELS = ["Passed", "Failed", "Errored", "Inconclusive", "Test invalid", "Error"];
+  /* Verdict · cause (§4.10.10), from the run summary. */
+  const verdicts = report.summary?.verdicts;
+  const causeOfTask = (t) => { const v = verdicts?.get(t.id); return v ? (v.na ? "N/A" : v.label) : null; };
+  const CAUSE_LABELS = [...new Set(tasks.map(causeOfTask).filter(Boolean))].sort();
   const PATTERN_LABELS = ["Critical rule broken", "Said, not done", "Evaluation failed", "Errored", "Other failure"];
   const CRITICAL_LABELS = ["Critical", "Not critical"];
 
@@ -397,9 +486,11 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     { value: "goal",     label: "Goal",            type: "enum", choices: goalOptions },
     { value: "subGoal",  label: "Sub-goal",        type: "enum", choices: subGoalOptions },
     { value: "status",   label: "Status",          type: "enum", choices: STATUS_LABELS },
+    { value: "cause",    label: "Verdict cause",   type: "enum", choices: CAUSE_LABELS },
     { value: "pattern",  label: "Failure pattern", type: "enum", choices: PATTERN_LABELS },
     { value: "critical", label: "Criticality",     type: "enum", choices: CRITICAL_LABELS },
-  ], [goalOptions, subGoalOptions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [goalOptions, subGoalOptions, CAUSE_LABELS.join("|")]);
 
   /* Per-task derivations, cached so the filter predicate doesn't
      recompute them when only the selected filter changes. */
@@ -407,7 +498,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     const out = new Map();
     tasks.forEach((t) => {
       const statusLabel = t.status === "passed" ? "Passed"
-        : t.status === "unmeasured" ? "Not measured"
+        : t.status === "unmeasured" ? STATUS_CHIPS.find((c) => c.id === statusBucket(t))?.label || "Inconclusive"
         : t.status === "error" ? "Errored"
         : "Failed";
       let patternLabel = null;
@@ -422,17 +513,22 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
         goal: deriveUseCaseLabel(t),
         subGoalLabels: new Set(subTasksFor(t, env).map((s) => s.label)),
         statusLabel,
+        causeLabel: causeOfTask(t),
         patternLabel,
         criticalLabel: t.critical ? "Critical" : "Not critical",
       });
     });
     return out;
-  }, [tasks, env]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, env, verdicts]);
 
   const shown = tasks.filter((t) => {
     /* Metric drill-down predicate — clicking a bucket on the RunMetrics
        chart. Independent of the header filters; they AND together. */
     if (bucketFilter?.match && !bucketFilter.match(t)) return false;
+    /* Pulled scenarios sit in their own group above the table — unless a
+       claim on Insights asked for them by name. */
+    if (t.pulled && !bucketFilter) return false;
 
     if (statusChip !== "all" && statusBucket(t) !== statusChip) return false;
 
@@ -441,6 +537,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     if (filters.status?.length   && !filters.status.includes(d.statusLabel)) return false;
     if (filters.pattern?.length  && !filters.pattern.includes(d.patternLabel)) return false;
     if (filters.critical?.length && !filters.critical.includes(d.criticalLabel)) return false;
+    if (filters.cause?.length && !filters.cause.includes(d.causeLabel)) return false;
     if (filters.subGoal?.length && !filters.subGoal.some((g) => d.subGoalLabels.has(g))) return false;
     return true;
   });
@@ -499,11 +596,17 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
 
   /* Counts for the status chips — from the full run so the numbers read as a
      fixed reference the chip filter narrows against, not a moving total. */
+  /* Counted within a link's filter (a sub-goal, an issue), so the chips
+     describe the rows on screen — not the whole run behind them. */
   const statusCounts = tasks.reduce((c, t) => {
+    /* Pulled scenarios are left out of every count. */
+    if (t.pulled) return c;
+    if (bucketFilter?.match && !bucketFilter.match(t)) return c;
     c.all += 1;
     c[statusBucket(t)] += 1;
     return c;
-  }, { all: 0, failing: 0, mixed: 0, inconclusive: 0, passing: 0 });
+  }, { all: 0, failing: 0, mixed: 0, inconclusive: 0, invalid: 0, error: 0, passing: 0 });
+  const pulledTasks = tasks.filter((t) => t.pulled);
 
   const applyFilters = (result) => {
     if (!result) { setFilters({}); return; }
@@ -522,15 +625,59 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     }
   };
 
-  const failedCritical = tasks.filter((t) => t.critical && t.status === "failed").length;
   /* When this run finished, as a relative label ("finished 2m ago"). Falls
      back across timestamp fields and yields null on a missing/bad date so the
      header shows nothing rather than "Invalid Date". */
   const finishedLabel = runFinishedLabel(identity);
 
-  /* The scenarios a comparison handed over, if it did. */
-  const sentIds = params.get("only")?.split(",").filter(Boolean) || [];
-  const sent = sentIds.length ? tasks.filter((t) => sentIds.includes(t.id)) : null;
+  /* ── Insights → the rest of the page ── */
+  /* A claim on Insights filters the Scenarios tab to the scenarios behind it. */
+  const filterTo = (label, ids) => {
+    const idSet = new Set(ids || []);
+    setBucketFilter({ label, match: (t) => idSet.has(t.id) });
+    setStatusChip("all");
+    setTab("tasks");
+  };
+  /* Open a scenario's trace, pinned to the span where it went wrong. */
+  const openTrace = (t) => {
+    if (!t) return;
+    if (effectiveModality(env, envState) === "voice") { setTraceTask(t); return; }
+    setFocusStep(null);
+    setEvalFocus(null);
+    setOpenPane("trace");
+    setOpenTask(t);
+  };
+  /* ?task=<scenario> (chat's "show me the trace") opens that trace once. */
+  const taskParam = params.get("task");
+  const openedFromLink = useRef(null);
+  useEffect(() => {
+    if (!taskParam || openedFromLink.current === taskParam) return;
+    const t = tasks.find((x) => x.id === taskParam || x.scenarioId === taskParam);
+    if (!t) return;
+    openedFromLink.current = taskParam;
+    openTrace(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskParam, tasks]);
+  /* Fixes already started from this run's issues, by issue. */
+  const existingFixes = useMemo(() => Object.fromEntries((envState?.optimizations || [])
+    .filter((o) => o.trigger?.source === "run-insights" && o.fromRunId === runId)
+    .map((o) => [o.trigger.issueId, o])), [envState?.optimizations, runId]);
+  /* Fix: the same improvement flow, focused on the issue — opened here. */
+  const fixIssue = (issue, cloudAgentId) => {
+    /* Re-read the agent first, as the setup dialog does: a change made
+       outside Future AGI is saved as a version and becomes the baseline. */
+    if (envState?.agent) {
+      const reread = rereadFor({ ...envState.agent, key: envState.agent.key || envAgentKey(envState.agent, env.id) }, simState);
+      recordOutsideChange(simCommit, simState, { agent: { ...envState.agent, key: envState.agent.key || envAgentKey(envState.agent, env.id) }, reread, activateEnvId: env.id });
+    }
+    const record = runIssueImprovement({
+      env, es: envState, state: simState, run: identity || { id: runId }, tasks, issue,
+    });
+    patch({ optimizations: [...(envState?.optimizations || []), record] });
+    if (cloudAgentId) startImproverSession({ agentId: cloudAgentId, envId: env.id, optId: record.id, where: "future-agi" });
+    setFixOptId(record.id);
+    setFixOpen(true);
+  };
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -540,6 +687,16 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
         direction="row" alignItems="center" spacing={2}
         sx={{ px: 3, py: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
       >
+        {fromIssue ? (
+          <Button
+            size="small"
+            onClick={() => navigate(paths.dashboard.errorFeed.detail(fromIssue))}
+            startIcon={<Iconify icon="solar:alt-arrow-left-linear" width={16} />}
+            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", fontFamily: "ui-monospace, Menlo, monospace", flexShrink: 0, minWidth: 0 }}
+          >
+            {fromIssue}
+          </Button>
+        ) : (
         <IconButton
           size="small"
           onClick={() => {
@@ -552,6 +709,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
         >
           <Iconify icon="solar:alt-arrow-left-linear" width={18} sx={{ color: "text.subtitle" }} />
         </IconButton>
+        )}
         <Box flex={1} minWidth={0}>
           <Stack direction="row" alignItems="center" spacing={1}>
             {trialMeta ? (
@@ -559,8 +717,8 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                 sx={{
                   width: 24, height: 24, borderRadius: 0.875, flexShrink: 0,
                   display: "grid", placeItems: "center",
-                  typography: "s3", fontWeight: 700, color: "#7857FC",
-                  bgcolor: (t) => alpha("#7857FC", t.palette.mode === "dark" ? 0.22 : 0.14),
+                  typography: "s3", fontWeight: 700, color: "text.secondary",
+                  bgcolor: "background.neutral",
                 }}
               >
                 <Iconify icon="solar:magic-stick-3-bold" width={13} />
@@ -570,7 +728,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                 sx={{
                   width: 24, height: 24, borderRadius: 0.875, flexShrink: 0,
                   display: "grid", placeItems: "center",
-                  typography: "s3", fontWeight: 700, color: identity.color,
+                  typography: "s3", fontWeight: 700, color: textTone(identity.color),
                   bgcolor: (t) => alpha(identity.color, t.palette.mode === "dark" ? 0.22 : 0.14),
                 }}
               >
@@ -579,9 +737,9 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
             )}
             <Typography noWrap sx={{ typography: "s1_2", fontWeight: 700 }}>
               {trialMeta
-                ? `Run ${trialMeta.trial.n} · ${trialMeta.opt.name || `Self improvement ${trialMeta.ordinal}`}`
+                ? `Run ${trialMeta.trial.n}${named ? ` · ${named.label}` : ""}`
                 : identity
-                  ? `Run ${identity.ordinal} · agent ${identity.agentVersion}`
+                  ? `Run ${identity.ordinal} · ${named.label}`
                   : "Run complete"}
             </Typography>
             {/*
@@ -591,10 +749,71 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
               buries the three that passed.
             */}
             <StatusChip status={stats.passed === 0 ? "failed" : stats.failed === 0 ? "passed" : "completed"} />
+            {/* Two indicators, apart: how the agent did (a report — pass^1,
+                pass^k — never a gate), and did our harness do its job. */}
+            <RunSummaryChip summary={report.summary} />
+            {/* The harness only earns a chip when it wasn't healthy; Insights
+                carries its full read either way. */}
+            {report.summary?.health && report.summary.health.label !== "Healthy" && <HealthChip health={report.summary.health} />}
+            {sourceRun?.snapshotOf && (
+              <Tooltip arrow title="Re-ran the exact snapshot of an earlier run: the same scenario versions, environment version, pins and seed.">
+                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", cursor: "default" }}>
+                  {`Snapshot of run ${(envState.runs || []).find((r) => r.id === sourceRun.snapshotOf)?.ordinal ?? "—"}`}
+                </Typography>
+              </Tooltip>
+            )}
+            {/* A candidate taken from a code snapshot — a commit or an uploaded archive. */}
+            {sourceRun?.candidateSource?.label && (
+              <Tooltip arrow title={sourceRun.candidateSource.detail || ""}>
+                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", cursor: "default" }}>
+                  {sourceRun.candidateSource.label}
+                </Typography>
+              </Tooltip>
+            )}
+            {snapshotNote && (
+              <Tooltip arrow title="These scenarios were edited after the source run. The snapshot replayed the versions it pinned; Run as configured now plays today's text.">
+                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", cursor: "default" }}>
+                  {`· ${snapshotNote}`}
+                </Typography>
+              </Tooltip>
+            )}
           </Stack>
           <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>
-            {env.name} · {stats.total} tasks
+            {/* A run is one agent version against one environment version,
+                each scenario played `repeats` times — the context every
+                result on this page compares within. */}
+            {env.name}
+            {named?.improvement && <>{" · "}<FromImprovement improvement={named.improvement} /></>}
+            {` · ${stats.total} scenario${stats.total === 1 ? "" : "s"}`}
+            {identity?.repeats > 1 ? ` × ${identity.repeats} repeats` : ""}
             {finishedLabel ? ` · ${finishedLabel}` : ""}
+            {/* Sealed · Live · Prompt only — a word here; its meaning on hover. */}
+            {report.summary?.proofKind?.label && (
+              <>
+                {" · "}
+                <Tooltip arrow placement="bottom-start" title={report.summary.proofKind.note || ""}>
+                  <Box component="span" sx={{ cursor: "default" }}>{report.summary.proofKind.kind === "live" ? "Live · real systems" : report.summary.proofKind.label}</Box>
+                </Tooltip>
+              </>
+            )}
+            {/* What it metered, who placed the calls, which rule graded it and
+                the replay header — one hover, not five clauses. */}
+            <Tooltip
+              arrow placement="bottom-start"
+              slotProps={{ tooltip: { sx: { maxWidth: 420 } } }}
+              title={(
+                <Box sx={{ py: 0.25, "& > div": { py: 0.125 } }}>
+                  <div>{report.metering?.line ? <MeteredText metering={report.metering} /> : "Nothing metered"}</div>
+                  <div>{`Caller ${runPinsOf(identity, env, envState).simulator}`}</div>
+                  {report.summary?.grading && <div>{report.summary.grading.rule >= 2 ? "Sub-goals decide pass or fail" : report.summary.grading.label}</div>}
+                  <div>{stubbed.length ? `Replay header on every call · stubbed: ${stubbed.join(", ")}` : `Replay header on every call (${REPLAY_HEADER})`}</div>
+                </Box>
+              )}
+            >
+              <Box component="span" sx={{ display: "inline-flex", verticalAlign: "middle", ml: 0.75, cursor: "default" }}>
+                <Iconify icon="solar:info-circle-linear" width={14} sx={{ color: "text.subtitle" }} />
+              </Box>
+            </Tooltip>
           </Typography>
         </Box>
         <Button
@@ -605,15 +824,44 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
         >
           Add evals
         </Button>
-        <Button
-          variant="outlined" size="small"
-          startIcon={<Iconify icon="solar:download-minimalistic-linear" width={15} />}
-          sx={{ color: "text.primary", borderColor: "divider", typography: "s2", fontWeight: 600 }}
-        >
-          Export
-        </Button>
-        {/* "Run again" removed — selecting rows and choosing "Run as a new
-            simulation" from the Re-run popover is the same flow. */}
+        {/* Share replaces the old Export: a read-only link, or the report as PDF. */}
+        {/* An improvement's run is shared from its improvement, not on its own. */}
+        {identity && !trialMeta && (
+          <ShareMenu env={env} envState={envState} identity={identity} report={report} />
+        )}
+        {/* Re-run the whole run, in one of the two modes (§4.10.8). Selecting
+            rows offers the same modes for just those scenarios. */}
+        {!candidate && !trialMeta && (failingScenarioIds.length ? (
+          /* What a reader re-runs after a failed run is the failures — one
+             click; the whole-run modes sit behind the caret. */
+          <Stack direction="row" sx={{ flexShrink: 0 }}>
+            <Button
+              variant="outlined" size="small"
+              onClick={() => rerun(failingScenarioIds, { mode: canSnapshot ? "snapshot" : "now" })}
+              startIcon={<Iconify icon="solar:refresh-linear" width={15} />}
+              sx={{ color: "text.primary", borderColor: "divider", typography: "s2", fontWeight: 600, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+            >
+              {`Re-run ${failingScenarioIds.length} failing`}
+            </Button>
+            <Button
+              variant="outlined" size="small" aria-label="More re-run options"
+              onClick={(e) => setRunRerunAnchor(e.currentTarget)}
+              sx={{ minWidth: 0, px: 0.75, color: "text.subtitle", borderColor: "divider", borderLeft: "none", borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+            >
+              <Iconify icon="solar:alt-arrow-down-linear" width={12} />
+            </Button>
+          </Stack>
+        ) : (
+          <Button
+            variant="outlined" size="small"
+            onClick={(e) => setRunRerunAnchor(e.currentTarget)}
+            startIcon={<Iconify icon="solar:refresh-linear" width={15} />}
+            endIcon={<Iconify icon="solar:alt-arrow-down-linear" width={12} sx={{ color: "text.subtitle" }} />}
+            sx={{ color: "text.primary", borderColor: "divider", typography: "s2", fontWeight: 600 }}
+          >
+            Re-run
+          </Button>
+        ))}
         {/*
           The primary action after a failed run is not to run it again —
           the same agent against the same graders returns the same
@@ -621,65 +869,95 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
           change the agent. Trial pages open the same drawer against the
           trial's own outcomes.
         */}
-        <Button
-          variant="contained" color="primary" size="small"
-          startIcon={<Iconify icon="solar:magnifer-linear" width={15} />}
-          onClick={() => { setFixOptId(null); setFixOpen(true); }}
-          sx={{ typography: "s2", fontWeight: 700 }}
-        >
-          Debug failures
-        </Button>
+        {candidate ? (
+          /* Reads as unavailable rather than vanishing, so the reason — and
+             the way to the improvement that owns this run — is findable. */
+          <Tooltip
+            arrow
+            title={(
+              <>
+                Candidate runs aren&apos;t analysed — open the improvement instead
+                {named?.improvement?.href && (
+                  <Box
+                    component="span"
+                    {...clickable(() => navigate(named.improvement.href), { role: "link" })}
+                    sx={{ display: "block", mt: 0.5, fontWeight: 700, cursor: "pointer", textDecoration: "underline", ...focusRing }}
+                  >
+                    {`Open ${named.improvement.name}`}
+                  </Box>
+                )}
+              </>
+            )}
+          >
+            <span>
+              <Button
+                variant="contained" color="primary" size="small" disabled
+                startIcon={<Iconify icon="solar:magnifer-linear" width={15} />}
+                sx={{ typography: "s2", fontWeight: 700 }}
+              >
+                Debug failures
+              </Button>
+            </span>
+          </Tooltip>
+        ) : (
+          <Button
+            variant="contained" color="primary" size="small"
+            startIcon={<Iconify icon="solar:magnifer-linear" width={15} />}
+            onClick={() => { setFixOptId(null); setFixOpen(true); }}
+            sx={{ typography: "s2", fontWeight: 700 }}
+          >
+            Debug failures
+          </Button>
+        )}
       </Stack>
 
-      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-        <Box sx={{ p: 2 }}>
-          {/* ── critical banner ── */}
-          {failedCritical > 0 && (
-            <Box
-              sx={{
-                p: 2, mb: 2, borderRadius: 1.25,
-                border: "1px solid", borderColor: alpha("#DC2626", 0.35),
-                bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.1 : 0.05),
-              }}
+      {/* ── the run group it was started with, if any ── */}
+      <RunGroupBar envId={envId} runId={runId} />
+
+      {/* ── re-grade: a grader got fixed since this run (AC-12.23, AC-16.11) ── */}
+      {(regrade || sourceRun?.regradedWith) && (
+        <Stack
+          direction="row" alignItems="center" spacing={1.25}
+          sx={{ px: 3, py: 0.875, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
+        >
+          <Iconify icon="solar:restart-linear" width={15} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+          <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1, minWidth: 0 }}>
+            {regrade ? (
+              <>
+                {[
+                  regrade.subGoals.length ? `${regrade.subGoals.length === 1 ? "A sub-goal" : `${regrade.subGoals.length} sub-goals`} this run used got a grader fix` : null,
+                  regrade.evalTo ? `evals moved ${regrade.evalFrom} → ${regrade.evalTo}` : null,
+                ].filter(Boolean).join(" and ")}
+                {` since it ran. Re-grading reads the stored traces and end-states again — ${regrade.scenarioIds.length} scenarios, no new calls.`}
+              </>
+            ) : (
+              `Re-graded with ${sourceRun.regradedWith.label} · ${regradedChanged} ${regradedChanged === 1 ? "verdict" : "verdicts"} changed under the newer graders.`
+            )}
+          </Typography>
+          {regrade && (
+            <Button
+              size="small" variant="outlined" onClick={startRegrade}
+              sx={{ color: "text.primary", borderColor: "divider", typography: "s2", fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}
             >
-              <Stack direction="row" alignItems="center" spacing={1.25}>
-                <Iconify icon="solar:danger-triangle-linear" width={18} sx={{ color: "#DC2626" }} />
-                <Typography sx={{ typography: "s2", flex: 1 }}>
-                  <b>{failedCritical} of {statusCounts.failing} failing {statusCounts.failing === 1 ? "scenario is" : "scenarios are"} critical.</b>{" "}
-                  {reviewMode
-                    ? "Showing only critical failing scenarios. Reset to return to the full list."
-                    : "Critical failures are release blockers — the agent broke a rule the environment enforces."}
-                </Typography>
-                {reviewMode ? (
-                  <Button
-                    size="small"
-                    onClick={exitReviewMode}
-                    startIcon={<Iconify icon="mingcute:close-line" width={14} />}
-                    sx={{ typography: "s2", fontWeight: 700, color: "#DC2626" }}
-                  >
-                    Reset view
-                  </Button>
-                ) : (
-                  <Button
-                    size="small"
-                    onClick={enterReviewMode}
-                    sx={{ typography: "s2", fontWeight: 700, color: "#DC2626" }}
-                  >
-                    Review
-                  </Button>
-                )}
-              </Stack>
-            </Box>
+              {`${regrade.label} — ≈ ${regrade.credits.toLocaleString()} credits`}
+            </Button>
           )}
+        </Stack>
+      )}
 
+      {/* A run an improvement made: kept or not, and what it did vs where it started. */}
+      <ImprovementRunStrip env={env} envState={envState} runId={runId} onOpenSearch={() => { setFixOptId(improvementOf({ id: runId }, envState)?.record?.id || null); setFixOpen(true); }} />
 
+      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <Box sx={{ p: 2, pt: 0.5 }}>
           {/* ── tabs ── */}
           <CustomTabs
             value={tab}
             onChange={(_, v) => setTab(v)}
             sx={{ borderBottom: "1px solid", borderColor: "divider", mb: 2, minHeight: 38 }}
           >
-            <Tab value="tasks" label={`Test runs (${stats.total})`} sx={{ minHeight: 38 }} />
+            {SHOW_INSIGHTS && <Tab value="insights" label="Insights" sx={{ minHeight: 38 }} />}
+            <Tab value="tasks" label={`Scenarios (${stats.total})`} sx={{ minHeight: 38 }} />
             <Tab value="analytics" label="Analytics" sx={{ minHeight: 38 }} />
           </CustomTabs>
 
@@ -715,7 +993,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                  traps the row scroll inside, and the flex column lets the
                  table area grow to fill what's left after the toolbar. */
               sx={{
-                height: "calc(100vh - 260px)",
+                height: "calc(100vh - 152px)",
                 display: "flex", flexDirection: "column",
               }}
               /*
@@ -734,8 +1012,21 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                     {selected.size} selected
                   </Typography>
                 ) : (
-                  <Stack direction="row" alignItems="center" spacing={1.25}>
+                  <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0, "& > *:not(:last-child)": { flexShrink: 0 } }}>
                     <TraceGroupByPicker value={groupBy} onChange={setGroupByReconciled} />
+                    {groupBy !== "none" && (
+                      <Stack
+                        component="label" direction="row" alignItems="center" spacing={0.5}
+                        sx={{ cursor: "pointer", pr: 0.5, userSelect: "none" }}
+                      >
+                        <Switch
+                          size="small"
+                          checked={allOpen}
+                          onChange={(e) => setExpandCommand({ open: e.target.checked, at: Date.now() })}
+                        />
+                        <Typography sx={{ typography: "s2", fontWeight: 600, whiteSpace: "nowrap" }}>Expand all</Typography>
+                      </Stack>
+                    )}
                     {/*
                       Filter button — same shape as Group by / Columns
                       so the three read as a single control row. Opens
@@ -770,28 +1061,28 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                         </>
                       )}
                     </Button>
+                    {/* The filter a link applied (a sub-goal, an issue, a count):
+                        one chip the height of the buttons, truncated — the full
+                        label on hover — so a long name never reflows the bar. */}
                     {bucketFilter && (
-                      <Stack direction="row" alignItems="center" spacing={0.75}>
-                        <Box sx={{
-                          display: "inline-flex", alignItems: "center", gap: 0.625,
-                          px: 0.875, py: 0.25, borderRadius: 0.75,
-                          bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.16 : 0.1),
-                          color: "primary.main", typography: "s3", fontWeight: 700,
-                        }}>
-                          <Iconify icon="solar:filter-linear" width={12} />
-                          Filtered · {bucketFilter.label}
-                        </Box>
-                        <Box
-                          onClick={() => setBucketFilter(null)}
+                      <Tooltip arrow title={`Filtered · ${bucketFilter.label}`}>
+                        <Stack
+                          direction="row" alignItems="center" spacing={0.75}
                           sx={{
-                            cursor: "pointer",
-                            typography: "s3", color: "text.subtitle",
-                            "&:hover": { color: "text.primary" },
+                            height: 32, pl: 1, pr: 0.5, borderRadius: 0.75, minWidth: 0, maxWidth: 360,
+                            border: "1px solid", borderColor: (t) => alpha(t.palette.primary.main, 0.4),
+                            bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.12 : 0.06),
                           }}
                         >
-                          clear
-                        </Box>
-                      </Stack>
+                          <Iconify icon="solar:filter-linear" width={13} sx={{ color: "primary.main", flexShrink: 0 }} />
+                          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, color: "primary.main", minWidth: 0 }}>
+                            {bucketFilter.label}
+                          </Typography>
+                          <IconButton size="small" aria-label="Clear filter" onClick={() => setBucketFilter(null)} sx={{ p: 0.25, flexShrink: 0 }}>
+                            <Iconify icon="eva:close-fill" width={15} sx={{ color: "text.subtitle" }} />
+                          </IconButton>
+                        </Stack>
+                      </Tooltip>
                     )}
                   </Stack>
                 )
@@ -834,19 +1125,24 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                   unmeasured tasks — with those filtered in and nothing failing,
                   `shown` is non-empty but zero groups render. Detect that and
                   show a real empty state instead of a blank table. */}
+              {/* Test invalid twice: pulled from this run, flagged for review,
+                  and left out of every count — a small group of its own. */}
+              {pulledTasks.length > 0 && !bucketFilter && (
+                <PulledGroup tasks={pulledTasks} envId={envId} />
+              )}
               {groupableShown.length === 0 ? (
                 <EmptyState
                   icon="solar:filter-linear"
                   title={failureGrouping && shown.length > 0
                     ? "Nothing to group here"
-                    : "No tasks match that filter"}
+                    : "No scenarios match that filter"}
                   body={failureGrouping && shown.length > 0
                     ? "This grouping only shows failing runs — none of the matching runs failed. Switch the status filter or group by Goal."
                     : undefined}
                 />
               ) : (
                 <TraceTable
-                  tasks={tableShown}
+                  tasks={verdicts ? tableShown.map((t) => ({ ...t, verdictCause: verdicts.get(t.id) || null })) : tableShown}
                   evals={shownEvals}
                   selected={selected}
                   groupBy={groupBy}
@@ -858,14 +1154,40 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                       shown.every((t) => prev.has(t.id)) ? new Set() : new Set(shown.map((t) => t.id)))
                   }
                   onOpen={(t) => { setEvalFocus(null); setOpenTask(t); }}
+                  onOpenTrace={openTrace}
                   onOpenEval={(t, r) => { setEvalFocus(r.name); setOpenTask(t); }}
                   onRerunEval={rerunEvalColumn}
                   onDeleteEval={deleteEvalColumn}
                   onEditEval={editEvalColumn}
                   rescoringEvalId={rescoringEval}
+                  expandCommand={expandCommand}
+                  onAllOpenChange={setAllOpen}
+                  gradingBasis={report.summary?.grading?.basis || null}
                 />
               )}
             </SectionCard>
+          )}
+
+          {SHOW_INSIGHTS && tab === "insights" && (
+            <InsightsTab
+              env={env}
+              envState={envState}
+              tasks={tasks}
+              run={identity || { id: runId }}
+              history={summaries}
+              goalOf={deriveUseCaseLabel}
+              tracing={tracing}
+              candidate={candidate}
+              existingFixes={existingFixes}
+              insights={report.insights}
+              summary={report.summary}
+              onSetBar={setReportBar}
+              record={record}
+              onFilter={filterTo}
+              onOpenTrace={openTrace}
+              onFix={fixIssue}
+              onOpenFix={(optId) => { setFixOptId(optId); setFixOpen(true); }}
+            />
           )}
 
           {tab === "analytics" && (
@@ -987,24 +1309,17 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
             Re-run {selected.size} scenario{selected.size === 1 ? "" : "s"}
           </Typography>
         </Box>
-        <MenuItem
-          onClick={() => {
+        <RerunModes
+          run={sourceRun}
+          canSnapshot={canSnapshot}
+          envLabel={sourceRun ? runIdentityOf(sourceRun, envState, env).env : null}
+          agents={agentVersions(envState).map((v) => v.label)}
+          onRun={(mode, agent) => {
             const ids = [...selected];
             setRerunAnchor(null);
-            rerun(ids);
+            rerun(ids, { mode, agent });
           }}
-          sx={{ alignItems: "flex-start", gap: 0.75, py: 1.25 }}
-        >
-          <ListItemIcon sx={{ minWidth: "0 !important", mt: "3px" }}>
-            <Iconify icon="solar:refresh-bold" width={16} sx={{ color: "text.primary" }} />
-          </ListItemIcon>
-          <ListItemText
-            primary="Run as a new simulation"
-            secondary="Makes the calls again with the current agent and env, and records a new run."
-            primaryTypographyProps={{ typography: "s2", fontWeight: 700 }}
-            secondaryTypographyProps={{ typography: "s3", color: "text.subtitle", sx: { whiteSpace: "normal" } }}
-          />
-        </MenuItem>
+        />
         <MenuItem
           onClick={() => {
             setAdhocIds([...selected]);
@@ -1025,6 +1340,32 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
         </MenuItem>
       </Popover>
 
+      {/* ── re-run the whole run ── */}
+      <Popover
+        open={!!runRerunAnchor}
+        anchorEl={runRerunAnchor}
+        onClose={() => setRunRerunAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ paper: { sx: { mt: 0.75, width: 380, borderRadius: 1.25 } } }}
+      >
+        <Box sx={{ px: 2, pt: 1.75, pb: 1 }}>
+          <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4 }}>
+            {`Re-run ${identity ? `run ${identity.ordinal}` : "this run"} · ${stats.total} scenario${stats.total === 1 ? "" : "s"}`}
+          </Typography>
+        </Box>
+        <RerunModes
+          run={sourceRun}
+          canSnapshot={canSnapshot}
+          envLabel={sourceRun ? runIdentityOf(sourceRun, envState, env).env : null}
+          agents={agentVersions(envState).map((v) => v.label)}
+          onRun={(mode, agent) => {
+            setRunRerunAnchor(null);
+            rerun(sourceRun?.partial ? sourceRun.scenarioIds : null, { mode, agent });
+          }}
+        />
+      </Popover>
+
       {/* ── trace drawer ── */}
       {/*
         Wide, because it is two panes: the call on the left and what was
@@ -1034,7 +1375,17 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
       {/* ── fix my agent ── */}
       <FixMyAgentDrawer
         open={fixOpen}
-        onClose={() => { setFixOpen(false); setFixOptId(null); }}
+        onClose={() => {
+          setFixOpen(false);
+          setFixOptId(null);
+          /* Drop ?improve so "From Improvement run N" opens it again, and Back
+             doesn't stop on the same run with the drawer shut. */
+          if (params.get("improve")) {
+            const next = new URLSearchParams(params);
+            next.delete("improve");
+            setParams(next, { replace: true, state: fromIssue ? { fromIssue } : location.state });
+          }
+        }}
         openOptimizationId={fixOptId}
         env={env}
         envState={envState}
@@ -1059,7 +1410,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
       />
 
       {(() => {
-        const closeTask = () => { setOpenTask(null); setFocusStep(null); setEvalFocus(null); };
+        const closeTask = () => { setOpenTask(null); setFocusStep(null); setEvalFocus(null); setOpenPane(null); };
         const idx = openTask ? shown.findIndex((t) => t.id === openTask.id) : -1;
         const goPrev = idx > 0 ? () => setOpenTask(shown[idx - 1]) : undefined;
         const goNext = idx > -1 && idx < shown.length - 1 ? () => setOpenTask(shown[idx + 1]) : undefined;
@@ -1069,7 +1420,22 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
            adapter, not a bespoke rebuild. Every other surface keeps the
            existing call drawer. */
         if (effectiveModality(env, envState) === "voice") {
+          const traceIdx = traceTask ? shown.findIndex((t) => t.id === traceTask.id) : -1;
           return (
+            <>
+            {/* The trace on its own — opened from Insights at the offending span. */}
+            <SideDrawer open={!!traceTask} onClose={() => setTraceTask(null)} width={{ xs: "100%", md: 980 }}>
+              {traceTask && (
+                <TraceSheet
+                  task={traceTask}
+                  env={env}
+                  envState={envState}
+                  onClose={() => setTraceTask(null)}
+                  onPrev={traceIdx > 0 ? () => setTraceTask(shown[traceIdx - 1]) : undefined}
+                  onNext={traceIdx > -1 && traceIdx < shown.length - 1 ? () => setTraceTask(shown[traceIdx + 1]) : undefined}
+                />
+              )}
+            </SideDrawer>
             <Drawer
               anchor="right"
               open={!!openTask}
@@ -1090,7 +1456,12 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
               {openTask && (
                 <VoiceDetailDrawerV2
                   key={`${openTask.id}-${evalFocus || ""}`}
-                  data={taskToVoiceData(openTask, { env, voice: true })}
+                  /* The verdict and its cause (§4.10.10) ride in the real
+                     drawer's Status chip — "fail · capability-missing". */
+                  data={{
+                    ...taskToVoiceData(openTask, { env, voice: true }),
+                    ...(verdicts?.get(openTask.id) && { status: verdicts.get(openTask.id).na ? "N/A" : verdicts.get(openTask.id).label }),
+                  }}
                   initialTab={evalFocus ? "evaluations" : undefined}
                   focusEvalName={evalFocus || undefined}
                   hideEvalRowFix
@@ -1103,6 +1474,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
                 />
               )}
             </Drawer>
+            </>
           );
         }
 
@@ -1110,15 +1482,17 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
           <SideDrawer open={!!openTask} onClose={closeTask} width={{ xs: "100%", md: 1080 }}>
             {openTask && (
               <CallDrawer
-                key={`${openTask.id}-${focusStep || ""}-${evalFocus || ""}`}
+                key={`${openTask.id}-${focusStep || ""}-${evalFocus || ""}-${openPane || ""}`}
                 task={openTask}
                 focus={focusStep || undefined}
+                initialPane={openPane || undefined}
                 focusEvalName={evalFocus || undefined}
                 env={env}
                 envState={envState}
                 patch={patch}
                 addAgentVersion={addAgentVersion}
                 runId={runId}
+                verdict={verdicts?.get(openTask.id) || null}
                 onClose={closeTask}
                 onPrev={goPrev}
                 onNext={goNext}
@@ -1133,8 +1507,81 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
 
 RunResults.propTypes = {
   env: PropTypes.object, runId: PropTypes.string, tasks: PropTypes.array,
-  stats: PropTypes.object, evals: PropTypes.array, stage: PropTypes.string,
+  stats: PropTypes.object, evals: PropTypes.array,
   seed: PropTypes.number,
+};
+
+/*
+  The two re-run modes (PRD v7 §4.10.8, closes Q29). "Re-run exact snapshot"
+  is the default for comparisons: the run's own scenario versions,
+  environment version, pins and seed — only the agent version may change, so
+  any difference is the agent's. "Run as configured now" picks up edits.
+*/
+function RerunModes({ run, canSnapshot, envLabel, agents = [], onRun }) {
+  const [agent, setAgent] = useState(run?.agentVersion || null);
+  const itemSx = { alignItems: "flex-start", gap: 0.75, py: 1.25, whiteSpace: "normal" };
+  const textProps = {
+    primaryTypographyProps: { typography: "s2", fontWeight: 700 },
+    secondaryTypographyProps: { typography: "s3", color: "text.subtitle", sx: { whiteSpace: "normal" } },
+  };
+  return (
+    <>
+      {canSnapshot && (
+        <>
+          <MenuItem onClick={() => onRun("snapshot", agent)} sx={itemSx}>
+            <ListItemIcon sx={{ minWidth: "0 !important", mt: "3px" }}>
+              <Iconify icon="solar:history-linear" width={16} sx={{ color: "text.primary" }} />
+            </ListItemIcon>
+            <ListItemText
+              primary={(
+                <>
+                  Re-run exact snapshot
+                  <Box component="span" sx={{ ml: 0.75, typography: "s3", fontWeight: 600, color: "text.subtitle" }}>default for comparisons</Box>
+                </>
+              )}
+              secondary={`Same scenario versions, environment ${envLabel || "version"}, pins and seed${run?.repeats ? `, ${run.repeats} repeats` : ""}. Only the agent version can change.`}
+              {...textProps}
+            />
+          </MenuItem>
+          {agents.length > 1 && (
+            <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 2, pb: 1.25, pl: "44px", flexWrap: "wrap", rowGap: 0.5 }}>
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Agent</Typography>
+              {agents.map((a) => (
+                <Box
+                  key={a}
+                  role="button" tabIndex={0}
+                  onClick={() => setAgent(a)}
+                  onKeyDown={(e) => { if (e.key === "Enter") setAgent(a); }}
+                  sx={{
+                    px: 0.75, height: 22, display: "inline-flex", alignItems: "center", borderRadius: 0.75, cursor: "pointer",
+                    typography: "s3", fontWeight: 600, border: "1px solid",
+                    borderColor: agent === a ? "text.primary" : "divider",
+                    color: agent === a ? "text.primary" : "text.secondary",
+                  }}
+                >
+                  {a}
+                  {a === run?.agentVersion && <Box component="span" sx={{ ml: 0.5, color: "text.subtitle", fontWeight: 400 }}>this run</Box>}
+                </Box>
+              ))}
+            </Stack>
+          )}
+        </>
+      )}
+      <MenuItem onClick={() => onRun("now", null)} sx={itemSx}>
+        <ListItemIcon sx={{ minWidth: "0 !important", mt: "3px" }}>
+          <Iconify icon="solar:refresh-linear" width={16} sx={{ color: "text.primary" }} />
+        </ListItemIcon>
+        <ListItemText
+          primary="Run as configured now"
+          secondary="Picks up every edit since — the current agent, scenarios, environment and evals, and a new seed. Compares only on the pairs that still match."
+          {...textProps}
+        />
+      </MenuItem>
+    </>
+  );
+}
+RerunModes.propTypes = {
+  run: PropTypes.object, canSnapshot: PropTypes.bool, envLabel: PropTypes.string, agents: PropTypes.array, onRun: PropTypes.func,
 };
 
 /* Map a task's raw status to one of the chip buckets. An errored episode is a
@@ -1145,17 +1592,66 @@ RunResults.propTypes = {
 function statusBucket(t) {
   if (t.status === "passed") return "passing";
   if (t.status === "flaky") return "mixed";
-  if (t.status === "unmeasured") return "inconclusive";
+  if (t.status === "unmeasured") {
+    /* Inconclusive, test invalid or error — none counts for or against the agent. */
+    const o = outcomeOfCause(causeOf(t));
+    return o === "test-invalid" ? "invalid" : o === "error" ? "error" : "inconclusive";
+  }
   return "failing";
 }
 
+/* The chips for outcomes that count neither for nor against the agent. */
+const NOT_COUNTED_CHIPS = ["inconclusive", "invalid", "error"];
+
+/* One name per status, the same on the chip and on the row. `about` says
+   what each means — Mixed only exists because scenarios are repeated. */
 const STATUS_CHIPS = [
-  { id: "all", label: "All", color: null },
-  { id: "failing", label: "Failing", color: "#DC2626" },
-  { id: "mixed", label: "Mixed", color: "#CA8A04" },
-  { id: "inconclusive", label: "Inconclusive", color: null },
-  { id: "passing", label: "Passing", color: "#16A34A" },
+  { id: "all", label: "All", color: null, about: "" },
+  { id: "failing", label: "Failing", color: "#DC2626", about: "Failed every repeat, or errored." },
+  { id: "mixed", label: "Mixed", color: "#CA8A04", about: "Passed some repeats and failed others — the agent isn't reliable here." },
+  { id: "inconclusive", label: "Inconclusive", color: null, about: "Not enough evidence to grade. Never counted as a pass; left out of pass rates." },
+  { id: "invalid", label: "Test invalid", color: null, about: "The test broke, not the agent — the simulated user left its goal, the starting state didn't load, or a judge failed. Counts neither for nor against the agent." },
+  { id: "error", label: "Error", color: null, about: "Our infrastructure or the connection failed. Counts neither for nor against the agent." },
+  { id: "passing", label: "Passing", color: "#16A34A", about: "Passed every repeat." },
 ];
+
+/*
+  Scenarios pulled from the run after testing invalid twice — listed on their
+  own above the table, each with a link to the scenario in its environment
+  to review it. Outside every count.
+*/
+function PulledGroup({ tasks, envId }) {
+  const navigate = useNavigate();
+  return (
+    <Box sx={{ borderBottom: "1px solid", borderColor: "divider", flexShrink: 0, maxHeight: 168, overflow: "auto" }}>
+      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 2.5, py: 0.875, borderBottom: "1px solid", borderColor: "divider" }}>
+        <Iconify icon="solar:flag-linear" width={13} sx={{ color: "text.subtitle" }} />
+        <Typography sx={{ fontSize: 13, fontWeight: 500, color: "text.secondary" }}>
+          {`Pulled for review (${tasks.length})`}
+        </Typography>
+        <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>· test invalid twice — left out of every count</Typography>
+      </Stack>
+      {tasks.map((t) => (
+        <Stack
+          key={t.id} direction="row" alignItems="center" spacing={1.5}
+          sx={{ px: 2.5, py: 0.625, borderBottom: "1px solid", borderColor: "divider", "&:last-of-type": { borderBottom: "none" } }}
+        >
+          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, minWidth: 0, flexShrink: 1 }}>{t.name || t.title || t.id}</Typography>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>{t.pulled.reason}</Typography>
+          <Button
+            size="small" variant="text"
+            onClick={() => navigate(`${paths.dashboard.simulate.environmentStep(envId, "scenarios")}?scenario=${encodeURIComponent(t.id)}`)}
+            endIcon={<Iconify icon="solar:arrow-right-up-linear" width={13} />}
+            sx={{ typography: "s3", fontWeight: 700, color: "text.primary", flexShrink: 0, minWidth: 0, px: 0.75 }}
+          >
+            Review
+          </Button>
+        </Stack>
+      ))}
+    </Box>
+  );
+}
+PulledGroup.propTypes = { tasks: PropTypes.array, envId: PropTypes.string };
 
 /* Outcome quick-filter — one chip per status bucket plus All. The active chip
    is filled in its status colour; the rest are quiet outlines. Each carries
@@ -1163,7 +1659,9 @@ const STATUS_CHIPS = [
 function StatusFilterChips({ value, counts, onChange, blocked = [] }) {
   return (
     <Stack direction="row" alignItems="center" spacing={0.75} sx={{ flexWrap: "wrap", rowGap: 0.75 }}>
-      {STATUS_CHIPS.map((chip) => {
+      {/* An outcome nothing ended in isn't a filter worth offering — hidden,
+          unless it's the one selected. Passing and failing always show. */}
+      {STATUS_CHIPS.filter((chip) => ["all", "failing", "passing"].includes(chip.id) || (counts[chip.id] ?? 0) > 0 || value === chip.id).map((chip) => {
         const active = value === chip.id;
         const dot = chip.color || "text.disabled";
         const count = counts[chip.id] ?? 0;
@@ -1175,7 +1673,7 @@ function StatusFilterChips({ value, counts, onChange, blocked = [] }) {
           <Tooltip
             key={chip.id}
             arrow
-            title={blockedByGrouping ? "Not available while grouping by a failure view — passing runs have no failure bucket" : ""}
+            title={blockedByGrouping ? "Not available while grouping by a failure view — passing runs have no failure bucket" : chip.about}
           >
           <Box
             role="button"
@@ -1236,517 +1734,6 @@ function runFinishedLabel(run) {
   if (s < 604800) return `finished ${Math.round(s / 86400)}d ago`;
   return `finished ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
-
-/* ── Compact run summary strip ────────────────────────────────────────────
- *
- * A single-row card that lands above the tabs. Left side is the headline
- * (pass %, absolute count, four-segment stacked bar with an inline legend).
- * Right side is a per-eval breakdown — one mini stacked bar per eval, with
- * the weakest one flagged. Height is capped low enough that it doesn't
- * push the traces table below the fold.
- * ─────────────────────────────────────────────────────────────────────── */
-function RunSummaryStrip({ tasks, evals }) {
-  const buckets = { passed: 0, failed: 0, flaky: 0, unmeasured: 0 };
-  tasks.forEach((t) => {
-    /* An errored episode is a measured failure — the run reached a verdict of
-       "this went wrong", same as Analytics and the run-overview treat it. Only
-       genuinely unmeasured episodes are "inconclusive"; folding errors in there
-       (as before) made this strip report a higher pass rate than the same run's
-       Analytics tab on the same screen. */
-    if (t.status === "error") buckets.failed += 1;
-    else if (buckets[t.status] != null) buckets[t.status] += 1;
-    else buckets.unmeasured += 1;
-  });
-  const measured = buckets.passed + buckets.failed + buckets.flaky;
-  const total = tasks.length;
-  /* The same rate every other screen shows: mean pass share over measured
-     scenarios, so a flaky scenario counts for the samples it passed. */
-  const passPct = Math.round(passRateOf(tasks) ?? 0);
-
-  const evalStats = (evals || []).map((e) => {
-    let pass = 0, fail = 0, run = 0;
-    tasks.forEach((t) => {
-      const r = (t.evalResults || []).find((x) => x.id === e.id || x.name === e.name);
-      if (!r) return;
-      run += 1;
-      if (r.passed) pass += 1; else fail += 1;
-    });
-    return { id: e.id, name: e.name, pass, fail, run, pct: run ? Math.round((pass / run) * 100) : 0 };
-  }).filter((e) => e.run > 0);
-
-  const weakest = evalStats.length
-    ? evalStats.reduce((min, e) => (e.pct < min.pct ? e : min), evalStats[0])
-    : null;
-
-  /* One-liner insight. Lead half depends on overall level, tail half calls
-     out the weakest eval with real numbers so the reader can see what
-     dragged the run down. */
-  const lead = passPct >= 80
-    ? "The agent can do the work — it just won't hold up on the hardest calls."
-    : passPct >= 50
-      ? "The agent covers the basics but stumbles on the hardest calls."
-      : "The agent misses the mark on most calls it was given.";
-  const adversarialish = weakest ? Math.max(1, Math.floor(weakest.fail * 0.6)) : 0;
-
-  /* Objectives = the evals the user added, one ring each, in the order they
-     appear on the run. Each ring is that eval's pass rate; the lowest-scoring
-     eval is flagged WEAKEST. This is the same evalStats the insight line uses,
-     so the ring and the sentence never disagree. */
-  const objectives = evalStats.map((e) => ({
-    label: e.name, pct: e.pct, passed: e.pass, measured: e.run,
-  }));
-  if (objectives.length > 1) {
-    const min = Math.min(...objectives.map((o) => o.pct));
-    const weakestObj = objectives.find((o) => o.pct === min);
-    if (weakestObj && weakestObj.pct < 100) weakestObj.weakest = true;
-  }
-
-  if (!total) return null;
-
-  return (
-    <Box
-      sx={{
-        mb: 2, borderRadius: 1.25,
-        border: "1px solid", borderColor: "divider",
-        bgcolor: "background.paper",
-      }}
-    >
-      <Stack
-        direction={{ xs: "column", md: "row" }}
-        divider={<Box sx={{
-          borderBottom: { xs: "1px solid", md: "none" },
-          borderRight: { md: "1px solid" },
-          /* Dimmer than the `divider` token: a line flanked by the paper bg on
-             both sides reads brighter than the container's edge border, so we
-             drop the opacity to make the two strokes look equal. */
-          borderColor: (t) => `${alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.07 : 0.06)} !important`,
-        }} />}
-      >
-        {/* ── Left: overall headline ── */}
-        <Box sx={{ flex: "1 1 0", minWidth: 0, px: 2.5, py: 2, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <Stack direction="row" alignItems="center" spacing={3}>
-            {/* Pass rate + caption, stacked */}
-            <Box sx={{ flexShrink: 0 }}>
-              <Stack direction="row" alignItems="baseline" spacing={0.5}>
-                <Typography sx={{ typography: "h2", fontWeight: 800, lineHeight: 1 }}>
-                  {passPct}
-                </Typography>
-                <Typography sx={{ typography: "h5", fontWeight: 700, color: "text.subtitle" }}>
-                  %
-                </Typography>
-              </Stack>
-              <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.5, fontWeight: 600, whiteSpace: "nowrap" }}>
-                passed · {buckets.passed}/{measured} measured
-              </Typography>
-            </Box>
-
-            {/* Stacked bar + inline legend */}
-            <Box sx={{ flex: 1, minWidth: 160 }}>
-              <Box sx={{
-                display: "flex", height: 7, borderRadius: 0.75, overflow: "hidden",
-                bgcolor: (t) => alpha(t.palette.text.primary, 0.06),
-              }}>
-                <SegBar count={buckets.passed} color="#16A34A" />
-                <SegBar count={buckets.flaky} color="#CA8A04" />
-                <SegBar count={buckets.failed} color="#DC2626" />
-                <SegBar count={buckets.unmeasured} hatched />
-              </Box>
-              <Stack direction="row" spacing={2} sx={{ mt: 1, flexWrap: "wrap" }}>
-                <LegendDot color="#16A34A" label={`${buckets.passed} pass`} />
-                <LegendDot color="#CA8A04" label={`${buckets.flaky} mixed`} />
-                <LegendDot color="#DC2626" label={`${buckets.failed} fail`} />
-                <LegendDot hatched label={`${buckets.unmeasured} inconclusive`} />
-              </Stack>
-            </Box>
-          </Stack>
-
-          {/* One-liner insight — the reason to look at this run. */}
-          {weakest && (
-            <Typography sx={{ typography: "s2", mt: 1.75, color: "text.primary" }}>
-              {lead}{" "}
-              <Box component="span" sx={{ fontWeight: 700 }}>{weakest.name}</Box>{" "}
-              passed only {weakest.pass} of {weakest.run}
-              {weakest.fail > 0 && `, and ${adversarialish} of those failures are adversarial callers`}.
-            </Typography>
-          )}
-        </Box>
-
-        {/* ── Right: by-objective breakdown ── */}
-        {objectives.length > 0 && (
-          <Box sx={{ flex: "1 1 0", minWidth: 0, px: 2.5, py: 2, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 1.5 }}>
-              <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                By eval
-              </Typography>
-              <Typography sx={{ typography: "s3", color: "text.disabled" }}>
-                pass rate for each eval you added
-              </Typography>
-            </Stack>
-            <Stack direction="row" spacing={2.5} sx={{ flexWrap: "wrap", rowGap: 2 }}>
-              {objectives.map((o) => (
-                <ObjectiveRing key={o.label} obj={o} />
-              ))}
-            </Stack>
-          </Box>
-        )}
-      </Stack>
-    </Box>
-  );
-}
-RunSummaryStrip.propTypes = { tasks: PropTypes.array, evals: PropTypes.array };
-
-/* A circular gauge per objective. The ring fill and the centre % say the same
-   thing, health-coloured, so it's legible at a glance without a legend. The
-   objective name and pass/total sit under it, and the weakest one is flagged. */
-function ObjectiveRing({ obj }) {
-  const theme = useTheme();
-  const health = obj.pct >= 80 ? "#16A34A" : obj.pct >= 50 ? "#CA8A04" : "#DC2626";
-  const size = 62, sw = 6, r = (size - sw) / 2, c = 2 * Math.PI * r;
-  const track = alpha(theme.palette.text.primary, theme.palette.mode === "dark" ? 0.1 : 0.08);
-
-  return (
-    <Stack alignItems="center" spacing={0.875} sx={{ width: 132, flexShrink: 0 }}>
-      <Box sx={{ position: "relative", width: size, height: size }}>
-        <Box component="svg" width={size} height={size} viewBox={`0 0 ${size} ${size}`} sx={{ display: "block", transform: "rotate(-90deg)" }}>
-          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={sw} />
-          <circle
-            cx={size / 2} cy={size / 2} r={r} fill="none"
-            stroke={health} strokeWidth={sw} strokeLinecap="round"
-            strokeDasharray={c} strokeDashoffset={c * (1 - obj.pct / 100)}
-          />
-        </Box>
-        <Box sx={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-          <Typography sx={{ typography: "s1", fontWeight: 800, color: health, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
-            {obj.pct}
-            <Box component="span" sx={{ fontSize: "0.7em", fontWeight: 700 }}>%</Box>
-          </Typography>
-        </Box>
-      </Box>
-
-      <Stack alignItems="center" spacing={0.5} sx={{ textAlign: "center", maxWidth: "100%" }}>
-        <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.primary", lineHeight: 1.3 }}>
-          {obj.label}
-        </Typography>
-        {obj.weakest && (
-          <Box sx={{
-            px: 0.5, py: 0.125, borderRadius: 0.5,
-            fontWeight: 800, letterSpacing: 0.3, fontSize: "8px", lineHeight: 1.5,
-            color: "#DC2626",
-            bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.18 : 0.1),
-          }}>
-            WEAKEST
-          </Box>
-        )}
-        <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-          {obj.passed}/{obj.measured} passed
-        </Typography>
-      </Stack>
-    </Stack>
-  );
-}
-ObjectiveRing.propTypes = { obj: PropTypes.object };
-
-function SegBar({ count, color, hatched }) {
-  if (!count) return null;
-  if (hatched) {
-    return (
-      <Box
-        sx={{
-          flex: count,
-          backgroundImage: (t) => {
-            const line = alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.28 : 0.22);
-            const base = alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.08 : 0.06);
-            return `repeating-linear-gradient(-45deg, ${line} 0, ${line} 1px, ${base} 1px, ${base} 5px)`;
-          },
-        }}
-      />
-    );
-  }
-  return <Box sx={{ flex: count, bgcolor: color }} />;
-}
-SegBar.propTypes = { count: PropTypes.number, color: PropTypes.string, hatched: PropTypes.bool };
-
-function LegendDot({ color, label, hatched }) {
-  return (
-    <Stack direction="row" alignItems="center" spacing={0.5}>
-      <Box sx={{
-        width: 8, height: 8, borderRadius: "50%",
-        bgcolor: hatched ? "text.disabled" : color,
-      }} />
-      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{label}</Typography>
-    </Stack>
-  );
-}
-LegendDot.propTypes = { color: PropTypes.string, label: PropTypes.string, hatched: PropTypes.bool };
-
-/**
- * Trials table.
- *
- * Mirrors the column set the main runs table shows — chip, name,
- * PASS %, avg duration, tokens, cost, plus one column per eval — so a
- * trial reads the same as any other run. Checkbox multi-select routes
- * to the standard compare page via `/simulationCompare?runs=...`.
- */
-function TrialsTable({ trials, chips, evals, selected, onToggle, onOpen }) {
-  const scoreOf = (t, evalId) => t.scores?.[evalId];
-  return (
-    <Box sx={{ overflowX: "auto" }}>
-      <Box sx={{ minWidth: 780 + evals.length * 84 }}>
-        {/* header */}
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: `36px minmax(220px, 1fr) 80px 96px 96px 88px ${evals.map(() => "84px").join(" ")}`,
-            columnGap: 1.5,
-            px: 2.5, py: 1.25, borderBottom: "1px solid", borderColor: "divider",
-          }}
-        >
-          <Box />
-          <ColHead>Run</ColHead>
-          <ColHead right>Pass</ColHead>
-          <ColHead right>Avg duration</ColHead>
-          <ColHead right>Tokens</ColHead>
-          <ColHead right>Cost</ColHead>
-          {evals.map((e) => (
-            <ColHead key={e.id} right>{e.name}</ColHead>
-          ))}
-        </Box>
-
-        {/* rows */}
-        <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-          {trials.map((t) => {
-            const picked = selected.includes(t.id);
-            const chip = chips.get(t.id) || { letter: t.letter, color: t.color };
-            return (
-              <Box
-                key={t.id}
-                onClick={() => onOpen(t)}
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: `36px minmax(220px, 1fr) 80px 96px 96px 88px ${evals.map(() => "84px").join(" ")}`,
-                  columnGap: 1.5, alignItems: "center",
-                  px: 2.5, py: 1.25, minHeight: 44, cursor: "pointer",
-                  borderLeft: "2px solid",
-                  borderColor: t.isWinner ? "#EA580C" : "transparent",
-                  bgcolor: picked ? (th) => alpha(th.palette.primary.main, 0.05) : "transparent",
-                  "&:hover": { bgcolor: "action.hover" },
-                }}
-              >
-                <Box
-                  onClick={(e) => { e.stopPropagation(); onToggle(t.id); }}
-                  sx={{ display: "flex", alignItems: "center" }}
-                >
-                  <Checkbox
-                    size="small" checked={picked} readOnly tabIndex={-1}
-                    sx={{ p: 0.5, pointerEvents: "none", ...neutralCheckboxSx }}
-                  />
-                </Box>
-
-                <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0 }}>
-                  <Box
-                    sx={{
-                      minWidth: 26, height: 22, px: 0.75, borderRadius: 0.75, flexShrink: 0,
-                      display: "grid", placeItems: "center",
-                      typography: "s3", fontWeight: 700,
-                      fontVariantNumeric: "tabular-nums",
-                      color: chip.color,
-                      bgcolor: (th) => alpha(chip.color, th.palette.mode === "dark" ? 0.22 : 0.14),
-                    }}
-                  >
-                    {chip.letter}
-                  </Box>
-                  {t.isWinner && (
-                    <Tooltip arrow title="Best-scoring trial of its self improvement">
-                      <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-                        <Iconify icon="solar:cup-star-bold" width={14} sx={{ color: "#EA580C" }} />
-                      </Box>
-                    </Tooltip>
-                  )}
-                  <Box minWidth={0}>
-                    <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>
-                      Run {t.trialN}
-                      <Box component="span" sx={{ color: "text.subtitle", fontWeight: 500 }}>
-                        {" "}· {t.selfImprovementName}
-                      </Box>
-                    </Typography>
-                    <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
-                      {t.trialTried}
-                    </Typography>
-                  </Box>
-                </Stack>
-
-                <Typography sx={cellNum}>{t.passRate}%</Typography>
-                <Typography sx={cellNum}>{(t.avgDurationMs / 1000).toFixed(1)}s</Typography>
-                <Typography sx={cellNum}>{t.tokens.toLocaleString()}</Typography>
-                <Typography sx={cellNum}>${t.cost.toFixed(2)}</Typography>
-                {evals.map((e) => (
-                  <Typography key={e.id} sx={cellNum}>
-                    {scoreOf(t, e.id) == null ? "—" : `${scoreOf(t, e.id)}%`}
-                  </Typography>
-                ))}
-              </Box>
-            );
-          })}
-        </Stack>
-      </Box>
-    </Box>
-  );
-}
-TrialsTable.propTypes = {
-  trials: PropTypes.array, chips: PropTypes.instanceOf(Map),
-  evals: PropTypes.array, selected: PropTypes.array,
-  onToggle: PropTypes.func, onOpen: PropTypes.func,
-};
-
-const cellNum = {
-  textAlign: "right", typography: "s2", fontWeight: 600,
-  fontVariantNumeric: "tabular-nums", color: "text.primary",
-};
-
-function ColHead({ children, right }) {
-  return (
-    <Typography sx={{
-      typography: "s3", fontWeight: 700, color: "text.subtitle",
-      textTransform: "uppercase", letterSpacing: 0.4,
-      textAlign: right ? "right" : "left",
-    }}>
-      {children}
-    </Typography>
-  );
-}
-ColHead.propTypes = { children: PropTypes.node, right: PropTypes.bool };
-
-
-/* ── trace detail ────────────────────────────────────────────────────────── */
-
-function TraceDetail({ task, stage, onClose }) {
-  const [tab, setTab] = useState("replay");
-  const failedEvals = task.evalResults.filter((r) => !r.passed);
-
-  return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <Stack
-        direction="row" alignItems="center" spacing={1.5}
-        sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
-      >
-        <StatusDot status={task.status} />
-        <Box flex={1} minWidth={0}>
-          <Typography noWrap sx={{ typography: "s1", fontWeight: 700 }}>{task.title}</Typography>
-          <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>{task.task}</Typography>
-        </Box>
-        <IconButton size="small" onClick={onClose}>
-          <Iconify icon="solar:close-circle-linear" width={19} sx={{ color: "text.subtitle" }} />
-        </IconButton>
-      </Stack>
-
-      {/* Failure explanation first — it is why the drawer was opened. */}
-      {failedEvals.length > 0 && (
-        <Box
-          sx={{
-            m: 2.5, mb: 0, p: 1.75, borderRadius: 1.25,
-            border: "1px solid", borderColor: alpha("#DC2626", 0.35),
-            bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.1 : 0.05),
-          }}
-        >
-          {failedEvals.map((r) => (
-            <Stack key={r.id} direction="row" spacing={1.25} alignItems="flex-start" sx={{ mb: 0.75, "&:last-child": { mb: 0 } }}>
-              <Iconify icon="solar:close-circle-bold" width={15} sx={{ color: "#DC2626", flexShrink: 0, mt: "2px" }} />
-              <Box>
-                <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-                  {r.name} failed ({(r.score * 100).toFixed(0)})
-                </Typography>
-                <Typography sx={{ typography: "s2", color: "text.secondary" }}>{r.reason}</Typography>
-              </Box>
-            </Stack>
-          ))}
-        </Box>
-      )}
-
-      <CustomTabs
-        value={tab}
-        onChange={(_, v) => setTab(v)}
-        sx={{ px: 2.5, borderBottom: "1px solid", borderColor: "divider", mt: 2, minHeight: 36, flexShrink: 0 }}
-      >
-        <Tab value="replay" label="Replay" sx={{ minHeight: 36 }} />
-        <Tab value="turns" label="Per turn" sx={{ minHeight: 36 }} />
-        <Tab value="steps" label={`Trajectory (${task.steps.length})`} sx={{ minHeight: 36 }} />
-        <Tab value="evals" label={`Evals (${task.evalResults.length})`} sx={{ minHeight: 36 }} />
-      </CustomTabs>
-
-      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
-        {tab === "replay" && (
-          <Stage stage={stage} task={task} stepIndex={task.steps.length - 1} live={false} />
-        )}
-
-        {tab === "turns" && <TurnScores task={task} />}
-
-        {tab === "steps" && (
-          <Stack sx={{ p: 2.5 }} spacing={0}>
-            {task.steps.map((s, i) => {
-              const isFailPoint = task.failStep === i;
-              return (
-                <Stack key={s.id} direction="row" spacing={1.75}>
-                  <Stack alignItems="center" sx={{ flexShrink: 0 }}>
-                    <Box
-                      sx={{
-                        width: 24, height: 24, borderRadius: "50%", display: "grid", placeItems: "center",
-                        bgcolor: (t) => isFailPoint
-                          ? alpha("#DC2626", t.palette.mode === "dark" ? 0.2 : 0.12)
-                          : "background.neutral",
-                        color: isFailPoint ? "#DC2626" : "text.subtitle",
-                        border: isFailPoint ? `1px solid ${alpha("#DC2626", 0.4)}` : "none",
-                        typography: "s3", fontWeight: 700,
-                      }}
-                    >
-                      {i + 1}
-                    </Box>
-                    {i < task.steps.length - 1 && (
-                      <Box sx={{ flex: 1, width: "2px", bgcolor: "divider", my: 0.5, minHeight: 16 }} />
-                    )}
-                  </Stack>
-                  <Box sx={{ pb: 2, flex: 1, minWidth: 0 }}>
-                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>
-                      {s.role ? (s.role === "agent" ? "Agent" : "Customer") : s.action || s.tool || s.cmd || s.kind}
-                    </Typography>
-                    <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-                      {s.text || s.thought || s.result || s.out || s.note}
-                    </Typography>
-                    {isFailPoint && (
-                      <Typography sx={{ typography: "s3", color: "#DC2626", fontWeight: 700, mt: 0.5 }}>
-                        ← the run diverged here
-                      </Typography>
-                    )}
-                  </Box>
-                </Stack>
-              );
-            })}
-          </Stack>
-        )}
-
-        {tab === "evals" && (
-          <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-            {task.evalResults.map((r) => (
-              <Box key={r.id} sx={{ px: 2.5, py: 1.75 }}>
-                <Stack direction="row" alignItems="center" spacing={1.25} sx={{ mb: 0.5 }}>
-                  <Iconify icon={getEval(r.id)?.icon || "solar:shield-check-linear"} width={15} sx={{ color: r.color }} />
-                  <Typography sx={{ flex: 1, typography: "s2", fontWeight: 700 }}>{r.name}</Typography>
-                  <ScorePill score={r.score} passed={r.passed} />
-                </Stack>
-                <Typography sx={{ typography: "s2", color: "text.subtitle", pl: 3.5 }}>{r.reason}</Typography>
-              </Box>
-            ))}
-          </Stack>
-        )}
-      </Box>
-
-      <Box sx={{ p: 2, borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-        <PersonaBadge persona={task.persona} />
-      </Box>
-    </Box>
-  );
-}
-TraceDetail.propTypes = { task: PropTypes.object, stage: PropTypes.string, onClose: PropTypes.func };
-
 
 /* ── deterministic replay ────────────────────────────────────────────────── */
 

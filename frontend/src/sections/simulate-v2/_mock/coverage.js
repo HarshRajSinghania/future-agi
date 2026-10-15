@@ -11,6 +11,8 @@
  * a number somebody chose.
  */
 
+import { failedAdmissionGate } from "./admissionGates";
+
 /** Failure mode is encoded in the scenario id — that is where the pack wrote it. */
 export const FAILURE_MODES = [
   { id: "core", label: "Happy path", blurb: "The routine task, done correctly." },
@@ -419,18 +421,43 @@ const QUARANTINE_REASONS = [
     },
     reason: () => "No reference outcome AND no sub-goals — solvability can't be proven.",
   },
+  {
+    /* The admission gates past the first three (§9.3b, TC-9.11): mutation
+       controls, alternate valid paths, setup can't earn credit. A check that
+       can't fail, one overfit to a single tool order, or one that counts what
+       setup wrote turns the verdict into noise — quarantined with the gate
+       and the compiler's finding. `env` lets a connect-only environment skip
+       the world-only gates. */
+    extra: true,
+    predicate: (s, env, gates) => !!failedAdmissionGate(s, env, { gates }),
+    reason: (s, env, gates) => {
+      const f = failedAdmissionGate(s, env, { gates });
+      return `${f.label} failed — ${f.reason}`;
+    },
+    gate: (s, env, gates) => failedAdmissionGate(s, env, { gates })?.gate || null,
+  },
 ];
-export const admissionOf = (scenario) => {
+export { QUARANTINE_REASONS };
+/**
+ * `env` is optional — without it every admission gate is checked.
+ * `gates: 1` reads a scenario as runs before the extra gates did (see
+ * ADMISSION_GATES_VERSION) — a finished run is never re-judged by gates that
+ * didn't exist when it ran. Version 3 (PRD v7) added exploit control and
+ * positive evidence for refusal, guardrail and transfer scenarios.
+ */
+export const ADMISSION_GATES_VERSION = 3;
+export const admissionOf = (scenario, env, { gates = ADMISSION_GATES_VERSION } = {}) => {
   for (const q of QUARANTINE_REASONS) {
-    if (q.predicate(scenario)) {
-      const reason = typeof q.reason === "function" ? q.reason(scenario) : q.reason;
-      return { admitted: false, reason };
+    if (q.extra && gates < 2) continue;
+    if (q.predicate(scenario, env, gates)) {
+      const reason = typeof q.reason === "function" ? q.reason(scenario, env, gates) : q.reason;
+      return { admitted: false, reason, gate: q.gate ? q.gate(scenario, env, gates) : null };
     }
   }
-  return { admitted: true, reason: null };
+  return { admitted: true, reason: null, gate: null };
 };
-export const admissionCounts = (scenarios) => {
+export const admissionCounts = (scenarios, env) => {
   let admitted = 0; let quarantined = 0;
-  scenarios.forEach((s) => { admissionOf(s).admitted ? (admitted += 1) : (quarantined += 1); });
+  scenarios.forEach((s) => { admissionOf(s, env).admitted ? (admitted += 1) : (quarantined += 1); });
   return { admitted, quarantined, total: scenarios.length };
 };

@@ -213,7 +213,8 @@ export default function App() {
           </WorkspaceProvider>
         </OrganizationProvider>
       </AuthProvider>
-      {REACT_QUERY_DEVTOOLS_ENABLED && (
+      {/* Not over the prototype provider pop-ups (/proto/…), where it covers their buttons. */}
+      {REACT_QUERY_DEVTOOLS_ENABLED && !window.location.pathname.startsWith("/proto/") && (
         <ReactQueryDevtools initialIsOpen={false} />
       )}
     </QueryClientProvider>

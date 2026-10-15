@@ -3,6 +3,23 @@ import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { summaryRows } from "../_mock/compareView";
+import { runIdentityOf } from "../_mock/runIdentity";
+import { textTone } from "../components/textTone";
+import { pairCountsVsBaseline, PAIR_CLASSES } from "../_mock/pairs";
+
+/* "54 compared · 4 passed → failed · 2 failed → passed · 3 new" — each run against the baseline. */
+const pairLine = (read) => {
+  if (!read) return "—";
+  const c = read.counts;
+  const outside = ["changed", "new", "not-applicable", "archived", "removed"].filter((k) => c[k])
+    .map((k) => `${c[k]} ${PAIR_CLASSES[k].short.toLowerCase()}`);
+  return [
+    `${c.exact + c.regraded + c.rechecked} compared`,
+    read.regressed && `${read.regressed} passed → failed`,
+    read.improved && `${read.improved} failed → passed`,
+    ...outside,
+  ].filter(Boolean).join(" · ");
+};
 
 /**
  * The comparison with the scenarios taken out.
@@ -13,7 +30,7 @@ import { summaryRows } from "../_mock/compareView";
  * the compared runs are present, and every one of them is read against the
  * baseline.
  */
-export default function CompareSummary({ comparison, evals }) {
+export default function CompareSummary({ comparison, evals, env, envState }) {
   const rows = summaryRows(comparison, evals);
   const { runs, baseline } = comparison;
 
@@ -33,22 +50,20 @@ export default function CompareSummary({ comparison, evals }) {
                 sx={{
                   width: 20, height: 20, borderRadius: 0.75, flexShrink: 0,
                   display: "grid", placeItems: "center", typography: "s3", fontWeight: 700,
-                  color: r.color, bgcolor: (t) => alpha(r.color, t.palette.mode === "dark" ? 0.22 : 0.14),
+                  color: textTone(r.color), bgcolor: (t) => alpha(r.color, t.palette.mode === "dark" ? 0.22 : 0.14),
                 }}
               >
                 {r.letter}
               </Box>
               <Box minWidth={0}>
                 <Typography noWrap sx={{ typography: "s2", fontWeight: 700 }}>
-                  {r.kind === "trial"
-                    ? `Run ${r.trialN}`
-                    : `agent ${r.agentVersion}`}
+                  {runIdentityOf(r, envState, env).label}
                 </Typography>
                 <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
                   {r.id === baseline.id
                     ? "baseline"
                     : r.kind === "trial"
-                      ? r.selfImprovementName
+                      ? `Run ${r.trialN} · ${r.selfImprovementName}`
                       : `Run ${r.ordinal ?? (r.index != null ? r.index + 1 : "")}`}
                 </Typography>
               </Box>
@@ -57,6 +72,26 @@ export default function CompareSummary({ comparison, evals }) {
         </Box>
 
         <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+          {/* Each run against the baseline, pair by pair: how many compared,
+              the flips among them, and what sat outside the delta. */}
+          <Box sx={{ display: "grid", gridTemplateColumns: `220px repeat(${runs.length}, 1fr)`, alignItems: "center" }}>
+            <Typography sx={{ px: 2.5, py: 1.5, typography: "s2", color: "text.secondary" }}>Pairs against the baseline</Typography>
+            {runs.map((r, i) => {
+              const read = i ? pairCountsVsBaseline(comparison, i, env, envState) : null;
+              return (
+                <Box key={r.id} sx={{ px: 2, py: 1.5 }}>
+                  <Typography sx={{ typography: "s2", fontWeight: 600, fontVariantNumeric: "tabular-nums", color: i ? "text.primary" : "text.subtitle" }}>
+                    {i ? pairLine(read) : "—"}
+                  </Typography>
+                  {read && read.label.id !== "rows" && read.interval.delta != null && (
+                    <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
+                      {`${read.interval.delta > 0 ? "+" : ""}${read.interval.delta} pts · ${read.interval.lo} to ${read.interval.hi} · ${read.label.label}`}
+                    </Typography>
+                  )}
+                </Box>
+              );
+            })}
+          </Box>
           {rows.map((line) => (
             <Box
               key={line.id}
@@ -92,4 +127,6 @@ export default function CompareSummary({ comparison, evals }) {
   );
 }
 
-CompareSummary.propTypes = { comparison: PropTypes.object, evals: PropTypes.array };
+CompareSummary.propTypes = {
+  comparison: PropTypes.object, evals: PropTypes.array, env: PropTypes.object, envState: PropTypes.object,
+};

@@ -9,6 +9,7 @@ import CompleteSetup from "./CompleteSetup";
 import RunFirstExperiment from "./RunFirstExperiment";
 import SetupObsabilityInApplication from "./SetupObsabilityInApplication";
 import InviteTeamMembers from "./InviteTeamMembers";
+import ConnectTools from "./ConnectTools";
 import { ShowComponent } from "src/components/show";
 
 const componentFilter = {
@@ -35,6 +36,10 @@ const componentFilter = {
   inviteTeamMembers: {
     bottomAction: true,
     componentKey: "invite",
+  },
+  connectTools: {
+    bottomAction: false,
+    componentKey: "tools",
   },
   complete: { bottomAction: false, componentKey: "complete" },
 };
@@ -76,6 +81,9 @@ const InitialSetupOptions = ({ currentLabel, setCurrentLabel }) => {
         </ShowComponent>
         <ShowComponent condition={componentKey === "invite"}>
           <InviteTeamMembers />
+        </ShowComponent>
+        <ShowComponent condition={componentKey === "tools"}>
+          <ConnectTools />
         </ShowComponent>
         <ShowComponent condition={componentKey === "complete"}>
           <CompleteSetup />

@@ -8,6 +8,7 @@ import Iconify from "src/components/iconify";
 import { SegmentedTabs } from "src/components/tabs/tabs";
 import { SectionCard } from "../../components/primitives";
 import { proposedScenariosForBacking, twinById } from "../../_mock/twins";
+import { clickable, focusRing } from "../../components/clickable";
 
 const TWIN_TINT = "#7857FC";
 
@@ -77,8 +78,8 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
               This route needs a clone-backed environment
             </Typography>
             <Typography sx={{ typography: "s2", color: "text.subtitle", maxWidth: 480, mx: "auto" }}>
-              Clone-aware scenarios are generated from the services your env is backed by (Slack, Notion, …).{" "}
-              Create the env from a service clone to unlock this route.
+              Clone-aware scenarios are generated from the services your environment is backed by (Slack, Notion, …).{" "}
+              Create the environment from a service clone to unlock this route.
             </Typography>
           </Box>
         </Box>
@@ -160,8 +161,8 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
               return (
                 <Stack
                   key={row.id} direction="row" alignItems="flex-start" spacing={1.5}
-                  onClick={() => !already && toggle(row.id)}
-                  sx={{
+                  {...clickable(() => !already && toggle(row.id), { role: "checkbox", checked: on || already, disabled: already })}
+                  sx={{ ...focusRing,
                     px: 2, py: 1.5, cursor: already ? "not-allowed" : "pointer",
                     opacity: already ? 0.55 : 1,
                     bgcolor: on ? (t) => alpha(TWIN_TINT, t.palette.mode === "dark" ? 0.08 : 0.04) : "transparent",
@@ -169,7 +170,7 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
                   }}
                 >
                   <Checkbox
-                    size="small" checked={on || already} disabled={already} disableRipple
+                    size="small" checked={on || already} disabled={already} disableRipple tabIndex={-1} inputProps={{ "aria-hidden": true }}
                     sx={{
                       p: 0, mt: "1px", flexShrink: 0,
                       color: "text.disabled",
@@ -238,7 +239,7 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
         <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>
           {shown.length === 0
             ? "—"
-            : `${shown.length} available for this backing · ${existingIds.size ? "already on env dimmed" : "none added yet"}`}
+            : `${shown.length} available for this backing · ${existingIds.size ? "already in the environment dimmed" : "none added yet"}`}
         </Typography>
         <Button
           size="small" variant="contained" color="primary"

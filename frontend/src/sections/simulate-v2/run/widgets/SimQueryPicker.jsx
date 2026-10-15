@@ -7,6 +7,7 @@ import {
 import { useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { METRIC_TYPE_ICONS } from "src/sections/dashboards/widgetEditorParts";
+import { clickable, focusRing } from "../../components/clickable";
 
 /**
  * The shared metric / filter / breakdown picker — same two-column popper as
@@ -67,12 +68,13 @@ export default function SimQueryPicker({ open, anchorEl, mode, categories, items
               {categories.map((cat) => (
                 <Box
                   key={cat.key}
-                  onClick={() => setCategory(cat.key)}
+                  {...clickable(() => setCategory(cat.key), { pressed: category === cat.key })}
                   sx={{
                     display: "flex", alignItems: "center", gap: 1, px: 1.5, py: 0.75,
                     cursor: "pointer", borderRadius: 1, mx: 0.5,
                     bgcolor: category === cat.key ? "action.selected" : "transparent",
                     "&:hover": { bgcolor: category === cat.key ? "action.selected" : "action.hover" },
+                    ...focusRing,
                   }}
                 >
                   <Iconify icon={cat.icon} width={16} sx={{ color: category === cat.key ? "primary.main" : "text.secondary" }} />
@@ -96,12 +98,13 @@ export default function SimQueryPicker({ open, anchorEl, mode, categories, items
               {filtered.map((opt) => (
                 <Box
                   key={opt.id}
-                  onClick={opt.disabled ? undefined : () => onSelect(opt)}
+                  {...clickable(opt.disabled ? undefined : () => onSelect(opt), { disabled: opt.disabled })}
                   sx={{
                     display: "flex", alignItems: "center", gap: 1, px: 1.5, py: 0.75,
                     cursor: opt.disabled ? "default" : "pointer",
                     opacity: opt.disabled ? 0.4 : 1,
                     "&:hover": { bgcolor: opt.disabled ? "transparent" : "action.hover" },
+                    ...focusRing,
                   }}
                 >
                   <Iconify icon={METRIC_TYPE_ICONS[opt.type] || "mdi:cog-outline"} width={15} sx={{ color: "text.disabled", flexShrink: 0 }} />
@@ -181,8 +184,8 @@ export function SimFilterValuePicker({ anchorEl, values, selected, onApply, onCl
             {shown.map((v) => (
               <Stack
                 key={v} direction="row" alignItems="center" gap={1}
-                onClick={() => toggle(v)}
-                sx={{ px: 1.5, py: 0.5, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                {...clickable(() => toggle(v), { role: "checkbox", checked: picked.has(v) })}
+                sx={{ px: 1.5, py: 0.5, cursor: "pointer", "&:hover": { bgcolor: "action.hover" }, ...focusRing }}
               >
                 <Checkbox size="small" checked={picked.has(v)} sx={{ p: 0 }} tabIndex={-1} />
                 <Typography variant="body2" noWrap sx={{ fontSize: "13px" }}>{v}</Typography>

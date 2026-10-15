@@ -6,6 +6,8 @@ import Iconify from "src/components/iconify";
 import ScenarioTable from "./ScenarioTable";
 import { relativeTime, sourceOf } from "../../_mock/scenarioProvenance";
 import { ENV_CHANGES } from "../../_mock/versions";
+import { displayEnvLabel } from "../../_mock/envModel";
+import { clickable, focusRing } from "../../components/clickable";
 
 const ENV_CHANGE_LABEL = Object.fromEntries(ENV_CHANGES.map((c) => [c.id, c.label]));
 
@@ -30,7 +32,12 @@ const HOW = {
   derived: "when the environment was built",
   template: "from a template",
   manual: "by hand",
-  "builder-chat": "via the builder chat",
+  "builder-chat": "in chat",
+  chat: "in chat",
+  generated: "generated",
+  "error-feed": "from the Error Feed",
+  "failing-case": "from failing cases",
+  "persona-library": "from the persona library",
   "dataset-import": "from a dataset",
   rebuild: "by a rebuild",
   production: "from production traces",
@@ -140,8 +147,8 @@ function BatchContainer({ batch, latest, view, tableProps, renderList, flash }) 
             button that says how many it folds away. */}
         <Stack
           direction="row" alignItems="center" spacing={0.75}
-          onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-          sx={{
+          {...clickable((e) => { e.stopPropagation(); setOpen((v) => !v); }, { expanded: open })}
+          sx={{ ...focusRing,
             px: 1.25, py: 0.5, borderRadius: 0.875, flexShrink: 0, cursor: "pointer",
             border: "1px solid", borderColor: "divider", bgcolor: "background.paper",
             transition: "border-color 120ms, background-color 120ms",
@@ -277,8 +284,8 @@ export function BatchHistoryPanel({ batches, runs = [], versions = [], total, as
             </Typography>
             {asOf && (
               <Typography
-                onClick={() => onViewAsOf(null)}
-                sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", cursor: "pointer", "&:hover": { color: "text.primary", textDecoration: "underline" } }}
+                {...clickable(() => onViewAsOf(null), { role: "link" })}
+                sx={{ ...focusRing, typography: "s3", fontWeight: 700, color: "text.secondary", cursor: "pointer", "&:hover": { color: "text.primary", textDecoration: "underline" } }}
               >
                 · Back to current
               </Typography>
@@ -303,7 +310,7 @@ export function BatchHistoryPanel({ batches, runs = [], versions = [], total, as
                   <HistoryDot diamond />
                   <Box minWidth={0} flex={1}>
                     <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{whenLabel(e.v.createdAt)}</Typography>
-                    <Typography sx={{ typography: "s2", fontWeight: 700 }}>{`Environment ${e.v.label}`}</Typography>
+                    <Typography sx={{ typography: "s2", fontWeight: 700 }}>{`Environment ${e.v.shownAs || displayEnvLabel(e.v.label, versions)}`}</Typography>
                     <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
                       {[changed.join(" · "), e.v.note].filter(Boolean).join(" — ")}
                     </Typography>
@@ -321,9 +328,9 @@ export function BatchHistoryPanel({ batches, runs = [], versions = [], total, as
                 <Stack
                   key={`run-${e.id}`}
                   direction="row" spacing={1.25}
-                  onClick={() => seen && onViewAsOf(seen.batchId)}
+                  {...clickable(seen ? () => onViewAsOf(seen.batchId) : undefined)}
                   onMouseEnter={() => setHover(`run-${e.id}`)} onMouseLeave={() => setHover(null)}
-                  sx={{ ...historyRowSx(false, connect), cursor: seen ? "pointer" : "default" }}
+                  sx={{ ...focusRing, ...historyRowSx(false, connect), cursor: seen ? "pointer" : "default" }}
                 >
                   <HistoryDot square />
                   <Box minWidth={0} flex={1}>
@@ -351,9 +358,12 @@ export function BatchHistoryPanel({ batches, runs = [], versions = [], total, as
               <Stack
                 key={e.id}
                 direction="row" spacing={1.25}
-                onClick={() => onPick(m.batchId)}
+                {...clickable(() => onPick(m.batchId), { pressed: viewing })}
                 onMouseEnter={() => setHover(e.id)} onMouseLeave={() => setHover(null)}
-                sx={{ ...historyRowSx(viewing, connect), opacity: later ? 0.45 : 1 }}
+                /* Keyboard focus reveals "View as of" the way hover does. */
+                onFocus={() => setHover(e.id)}
+                onBlur={(ev) => { if (!ev.currentTarget.contains(ev.relatedTarget)) setHover(null); }}
+                sx={{ ...focusRing, ...historyRowSx(viewing, connect), opacity: later ? 0.45 : 1 }}
               >
                 <HistoryDot active={viewing} />
                 <Box minWidth={0} flex={1}>
@@ -362,8 +372,8 @@ export function BatchHistoryPanel({ batches, runs = [], versions = [], total, as
                     {(hover === e.id || viewing) && (
                       <Typography
                         component="span"
-                        onClick={(ev) => { ev.stopPropagation(); onViewAsOf(viewing ? null : m.batchId); }}
-                        sx={{ typography: "s3", fontWeight: 700, color: viewing ? "text.primary" : "text.secondary", cursor: "pointer", "&:hover": { color: "text.primary", textDecoration: "underline" } }}
+                        {...clickable((ev) => { ev.stopPropagation(); onViewAsOf(viewing ? null : m.batchId); }, { role: "link" })}
+                        sx={{ ...focusRing, typography: "s3", fontWeight: 700, color: viewing ? "text.primary" : "text.secondary", cursor: "pointer", "&:hover": { color: "text.primary", textDecoration: "underline" } }}
                       >
                         {viewing ? "Viewing" : "View as of"}
                       </Typography>

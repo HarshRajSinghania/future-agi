@@ -13,6 +13,7 @@ import {
   VIEWS, ROW_HEIGHTS, GROUPINGS, QUICK_FILTERS, SORTS,
   filterFields, activeFilterCount,
 } from "../_mock/compareView";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * The controls above a comparison.
@@ -450,12 +451,13 @@ function DisplayPanel({ anchor, onClose, view, onView, onSaveDefault, onResetVie
           return (
             <Tooltip key={v.id} arrow title={v.blurb}>
               <Box
-                onClick={() => set({ view: v.id })}
+                {...clickable(() => set({ view: v.id }), { pressed: on })}
                 sx={{
                   flex: 1, py: 1, borderRadius: 1, cursor: "pointer", textAlign: "center",
                   bgcolor: (t) => (on ? alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.18 : 0.1) : "transparent"),
                   color: on ? "primary.main" : "text.secondary",
                   "&:hover": { bgcolor: on ? undefined : "action.hover" },
+                  ...focusRing,
                 }}
               >
                 <Iconify icon={v.icon} width={16} />
@@ -603,10 +605,14 @@ function Check({ label, checked, onChange, icon }) {
   return (
     <Stack
       direction="row" alignItems="center" spacing={1}
-      onClick={onChange}
+      onClick={(e) => { if (!(e.target instanceof HTMLInputElement)) onChange(e); }}
       sx={{ cursor: "pointer", borderRadius: 0.75, "&:hover": { bgcolor: "action.hover" } }}
     >
-      <Checkbox size="small" checked={checked} sx={{ p: 0.5, pointerEvents: "none", ...neutralCheckboxSx }} />
+      {/* The whole row toggles by mouse; the checkbox is the keyboard stop. */}
+      <Checkbox
+        size="small" checked={checked} onChange={onChange} inputProps={{ "aria-label": label }}
+        sx={{ p: 0.5, pointerEvents: "none", ...neutralCheckboxSx }}
+      />
       {icon && <Iconify icon={icon} width={14} sx={{ color: "text.subtitle" }} />}
       <Typography sx={{ typography: "s2", flex: 1 }}>{label}</Typography>
     </Stack>

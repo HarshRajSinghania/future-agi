@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, Collapse, Fade } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { textTone } from "./textTone";
+import { clickable, focusRing } from "./clickable";
 
 /**
  * What a long-running thing is doing, while it does it — and afterwards.
@@ -154,7 +156,7 @@ export default function RunTrace({
                       the part that makes waiting worth doing. */}
                   {done && s.result && (
                     <Fade in timeout={300}>
-                      <Typography sx={{ typography: "s2", color: s.tone || "text.secondary", fontWeight: 600 }}>
+                      <Typography sx={{ typography: "s2", color: textTone(s.tone || "text.secondary", "text.secondary"), fontWeight: 600 }}>
                         {s.result}
                       </Typography>
                     </Fade>
@@ -283,8 +285,8 @@ export function RunTraceLog({ label, steps, accent = "#7857FC" }) {
     <Box>
       <Stack
         direction="row" alignItems="center" spacing={1}
-        onClick={() => setOpen((o) => !o)}
-        sx={{
+        {...clickable(() => setOpen((o) => !o), { expanded: open })}
+        sx={{ ...focusRing,
           px: 2.5, py: 1.25, cursor: "pointer", borderRadius: 1,
           "&:hover": { bgcolor: "action.hover" },
         }}

@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Box,
   Button,
   Chip,
   IconButton,
+  Menu,
+  MenuItem,
   Stack,
   Tab,
   Tabs,
@@ -13,13 +15,13 @@ import {
   alpha,
 } from "@mui/material";
 import PropTypes from "prop-types";
+import { enqueueSnackbar } from "notistack";
 import { useNavigate, useParams } from "react-router-dom";
 import Iconify from "src/components/iconify";
 import {
   useErrorFeedDetail,
   useUpdateErrorFeedIssue,
-} from "src/api/errorFeed/error-feed";
-import ErrorStatusChip from "./components/ErrorStatusChip";
+} from "src/api/errorFeed/mockAdapter";
 import ErrorSeverityBadge from "./components/ErrorSeverityBadge";
 import ErrorMetadataPanel, {
   LinearTeamPicker,
@@ -30,7 +32,17 @@ import TrendsTab from "./components/TrendsTab";
 import ClusterHeadlineCard from "./components/ClusterHeadlineCard";
 import AnalyzeTab from "./components/AnalyzeTab";
 import { useErrorFeedStore } from "./store";
+import FixSheet from "src/sections/simulate-v2/errorFeed/FixSheet";
+import IssueStatusChip from "./components/IssueStatusChip";
+import useIssueRootCause from "./useIssueRootCause";
+import ReopenedBanner from "src/sections/simulate-v2/errorFeed/ReopenedBanner";
+import RegressionMemoryRow from "src/sections/simulate-v2/errorFeed/RegressionMemoryRow";
+import FixButton from "src/sections/simulate-v2/errorFeed/FixButton";
+import IssueProjectLine from "src/sections/simulate-v2/errorFeed/IssueProjectLine";
+import { useIssueFix } from "src/sections/simulate-v2/errorFeed/issueFix";
+import { fixTriageRulesOf } from "src/sections/simulate-v2/errorFeed/issueFixModel";
 import { useAnalyzeRunner } from "./useAnalyzeRunner";
+import IssueBriefButton from "./IssueBriefButton";
 
 // ── Detail page skeleton ─────────────────────────────────────────────────────
 function DetailSkeleton() {
@@ -90,10 +102,26 @@ const TABS = [
   { key: "overview", label: "Overview", icon: "mdi:view-dashboard-outline" },
   { key: "traces", label: "Traces", icon: "mdi:timeline-text-outline" },
   { key: "trends", label: "Trends", icon: "mdi:chart-line" },
-  { key: "analyze", label: "Fix", icon: "mdi:wrench-outline" },
+  /* The written analysis — "Fix" is the header action that proves a change. */
+  { key: "analyze", label: "Root cause", icon: "mdi:magnify-scan" },
 ];
 
 // ── Main view ─────────────────────────────────────────────────────────────────
+/* "ToolArgumentMismatchError" → "Tool argument mismatch" — said once, in words. */
+const errorTypeLabel = (type) => {
+  const words = String(type || "").replace(/Error$/, "").replace(/([a-z])([A-Z])/g, "$1 $2").trim().toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "";
+};
+/* "2h ago" — the same short form the list uses. */
+const agoLabel = (iso) => {
+  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+  if (!Number.isFinite(m)) return "";
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+};
+
 export default function ErrorFeedDetailView() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -104,6 +132,14 @@ export default function ErrorFeedDetailView() {
   );
   const { data: detail, isLoading } = useErrorFeedDetail(id);
   const updateIssue = useUpdateErrorFeedIssue();
+  const fixSheetOpen = useErrorFeedStore((s) => s.fixSheetOpen);
+  const setFixSheetOpen = useErrorFeedStore((s) => s.setFixSheetOpen);
+  const [triageAnchor, setTriageAnchor] = useState(null);
+  const copyText = (text, msg) => {
+    navigator.clipboard?.writeText(text).then(() => enqueueSnackbar(msg, { variant: "success" })).catch(() => {});
+  };
+  /* The sheet belongs to one issue — leaving it closes the sheet. */
+  useEffect(() => () => setFixSheetOpen(false), [id, setFixSheetOpen]);
 
   const currentError = useMemo(() => {
     if (!detail?.row) return null;
@@ -117,6 +153,15 @@ export default function ErrorFeedDetailView() {
   }, [detail]);
 
   useAnalyzeRunner(currentError?.cluster_id, currentError);
+  /* Fix needs to know which agent the issue came from. */
+  const { agent: fixAgent, status: fixStatus } = useIssueFix(currentError);
+  /* Fix and Copy for coding agent carry the same root cause. */
+  const rootCause = useIssueRootCause(currentError);
+  /* Once a fix is under way it drives the issue's status — Resolve and
+     Acknowledge say so instead of competing with it. The rail's Status
+     follows the same rules. */
+  const fixKey = fixStatus?.key || null;
+  const { resolveNote, resolveDisabled, ackNote, ackDisabled } = fixTriageRulesOf(fixKey);
 
   if (isLoading || !currentError) {
     return <DetailSkeleton />;
@@ -161,8 +206,8 @@ export default function ErrorFeedDetailView() {
             bgcolor: "background.paper",
           }}
         >
-          {/* Breadcrumb row */}
-          <Stack direction="row" alignItems="center" gap={0.5} mb={1}>
+          {/* Breadcrumb · the issue's ID, and the two utilities */}
+          <Stack direction="row" alignItems="center" gap={0.5} mb={0.75}>
             <Button
               size="small"
               variant="text"
@@ -179,39 +224,28 @@ export default function ErrorFeedDetailView() {
             >
               Error Feed
             </Button>
-            <Iconify
-              icon="mdi:chevron-right"
-              width={13}
-              sx={{ color: "text.secondary" }}
-            />
-            <Chip
-              label={currentError.error.type
-                .replace(/Error$/, "")
-                .replace(/([A-Z])/g, " $1")
-                .trim()}
-              size="small"
-              sx={{
-                height: 20,
-                fontSize: "11px",
-                borderRadius: "4px",
-                bgcolor: "action.hover",
-                color: "text.secondary",
-                "& .MuiChip-label": { px: "7px" },
-                // Static badge — kill the default Chip hover/focus tinting.
-                "&:hover": { bgcolor: "action.hover" },
-                "&:focus": { bgcolor: "action.hover" },
-              }}
-            />
+            <Iconify icon="mdi:chevron-right" width={13} sx={{ color: "text.disabled" }} />
+            <Typography
+              sx={{ fontSize: "12px", color: "text.secondary", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
+            >
+              {currentError.cluster_id}
+            </Typography>
+            <Box flex={1} />
+            <Tooltip title="Copy issue ID" arrow>
+              <IconButton size="small" onClick={() => copyText(currentError.cluster_id, "Issue ID copied")} sx={{ color: "text.secondary" }}>
+                <Iconify icon="mdi:content-copy" width={14} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Copy link" arrow>
+              <IconButton size="small" onClick={() => copyText(window.location.href, "Link copied")} sx={{ color: "text.secondary" }}>
+                <Iconify icon="mdi:link-variant" width={15} />
+              </IconButton>
+            </Tooltip>
           </Stack>
 
-          {/* Error title */}
-          <Stack
-            direction="row"
-            alignItems="flex-start"
-            justifyContent="space-between"
-            gap={2}
-          >
-            <Stack gap={0.5} flex={1} minWidth={0}>
+          {/* Title, and the three actions: triage, hand off, fix */}
+          <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={2}>
+            <Stack gap={0.75} flex={1} minWidth={0}>
               <Typography
                 typography="m3"
                 fontWeight="fontWeightSemiBold"
@@ -220,150 +254,99 @@ export default function ErrorFeedDetailView() {
               >
                 {currentError.error.name}
               </Typography>
-              <Stack
-                direction="row"
-                alignItems="center"
-                gap={1.5}
-                flexWrap="wrap"
-              >
-                <Stack direction="row" alignItems="center" gap={0.75}>
-                  <Box
-                    sx={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: "50%",
-                      bgcolor: "orange.500",
-                      flexShrink: 0,
-                    }}
-                  />
-                  <Typography typography="s2" color="text.disabled">
-                    {currentError.error.type}
-                  </Typography>
-                </Stack>
-                <ErrorStatusChip status={currentError.status} />
+              {/* status · severity · what kind · how big · how recent */}
+              <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+                {/* One status: the fix's once there is one, else the issue's own. */}
+                <IssueStatusChip issue={currentError} />
                 <ErrorSeverityBadge severity={currentError.severity} />
-                {/* Cluster badge */}
-                <Chip
-                  icon={<Iconify icon="mdi:layers-outline" width={12} />}
-                  label={`${currentError.trace_count?.toLocaleString()} traces`}
-                  size="small"
-                  sx={{
-                    height: 20,
-                    fontSize: "11px",
-                    borderRadius: "4px",
-                    bgcolor: "action.hover",
-                    color: "text.secondary",
-                    "& .MuiChip-icon": { ml: "6px", color: "text.disabled" },
-                    "& .MuiChip-label": { px: "7px" },
-                    "&:hover": { bgcolor: "action.hover" },
-                    "&:focus": { bgcolor: "action.hover" },
-                  }}
-                />
+                <Typography typography="s2" color="text.secondary" sx={{ ml: 0.5 }}>
+                  {[
+                    errorTypeLabel(currentError.error.type),
+                    currentError.trace_count != null && `${currentError.trace_count.toLocaleString()} traces`,
+                    currentError.users_affected != null && `${currentError.users_affected.toLocaleString()} users`,
+                    currentError.last_seen && `last seen ${agoLabel(currentError.last_seen)}`,
+                  ].filter(Boolean).join(" · ")}
+                </Typography>
               </Stack>
+              {/* The Observe project it comes from, and the agent that project traces. */}
+              <IssueProjectLine issue={currentError} />
             </Stack>
 
-            {/* Action buttons */}
-            <Stack
-              direction="row"
-              alignItems="center"
-              gap={0.75}
-              flexShrink={0}
-            >
-              <Tooltip title="Copy cluster ID" arrow>
-                <IconButton
-                  size="small"
-                  sx={{
-                    borderRadius: 1,
-                    border: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  <Iconify icon="mdi:content-copy" width={14} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Share" arrow>
-                <IconButton
-                  size="small"
-                  sx={{
-                    borderRadius: 1,
-                    border: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  <Iconify icon="mdi:share-variant-outline" width={14} />
-                </IconButton>
-              </Tooltip>
+            <Stack direction="row" alignItems="center" gap={0.75} flexShrink={0}>
+              {/* Triage — Resolve, Acknowledge, Ignore — in one menu; the
+                  right rail's Status says the same thing at a glance. */}
               <Button
                 size="small"
                 variant="outlined"
-                startIcon={<Iconify icon="mdi:check" width={13} />}
+                onClick={(e) => setTriageAnchor(e.currentTarget)}
+                endIcon={<Iconify icon="eva:chevron-down-fill" width={14} />}
                 disabled={updateIssue.isPending}
-                onClick={() =>
-                  updateIssue.mutate({
-                    clusterId: currentError.cluster_id,
-                    status: "resolved",
-                  })
-                }
                 sx={{
                   height: 30,
                   fontSize: "12px",
                   borderRadius: "6px",
                   textTransform: "none",
                   borderColor: "divider",
-                  color: "text.secondary",
+                  color: "text.primary",
                 }}
               >
-                Resolve
+                Triage
               </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={
-                  <Iconify icon="mdi:check-circle-outline" width={13} />
-                }
-                disabled={updateIssue.isPending}
-                onClick={() =>
-                  updateIssue.mutate({
-                    clusterId: currentError.cluster_id,
-                    status: "acknowledged",
-                  })
-                }
-                sx={{
-                  height: 30,
-                  fontSize: "12px",
-                  borderRadius: "6px",
-                  textTransform: "none",
-                  borderColor: "divider",
-                  color: "text.secondary",
-                }}
+              <Menu
+                anchorEl={triageAnchor}
+                open={!!triageAnchor}
+                onClose={() => setTriageAnchor(null)}
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                transformOrigin={{ vertical: "top", horizontal: "right" }}
+                slotProps={{ paper: { sx: { width: 280, mt: 0.5 } } }}
               >
-                Acknowledge
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<Iconify icon="mdi:eye-off-outline" width={13} />}
-                disabled={updateIssue.isPending}
-                onClick={() =>
-                  updateIssue.mutate({
-                    clusterId: currentError.cluster_id,
-                    status: "escalating",
-                  })
-                }
-                sx={{
-                  height: 30,
-                  fontSize: "12px",
-                  borderRadius: "6px",
-                  textTransform: "none",
-                  borderColor: "divider",
-                  color: "text.secondary",
-                }}
-              >
-                Ignore issue
-              </Button>
+                {[
+                  {
+                    key: "resolved",
+                    icon: "mdi:check",
+                    label: fixKey === "watching" ? "Resolve now" : "Resolve",
+                    note: resolveNote,
+                    disabled: resolveDisabled,
+                  },
+                  { key: "acknowledged", icon: "mdi:check-circle-outline", label: "Acknowledge", note: ackNote, disabled: ackDisabled },
+                  { key: "ignored", icon: "mdi:eye-off-outline", label: "Ignore issue", note: "", disabled: currentError?.status === "ignored" },
+                ].map((t) => (
+                  <MenuItem
+                    key={t.key}
+                    disabled={t.disabled}
+                    onClick={() => {
+                      setTriageAnchor(null);
+                      updateIssue.mutate({ clusterId: currentError.cluster_id, status: t.key });
+                    }}
+                    sx={{ alignItems: "flex-start", gap: 1.25, py: 1 }}
+                  >
+                    <Iconify icon={t.icon} width={15} sx={{ mt: "2px", color: "text.secondary", flexShrink: 0 }} />
+                    <Box minWidth={0}>
+                      <Typography sx={{ fontSize: "13px", fontWeight: 500 }}>{t.label}</Typography>
+                      {t.note && (
+                        <Typography sx={{ fontSize: "11.5px", color: "text.secondary", whiteSpace: "normal" }}>{t.note}</Typography>
+                      )}
+                    </Box>
+                  </MenuItem>
+                ))}
+              </Menu>
+              {/* Hand the issue to a coding agent instead. */}
+              <IssueBriefButton
+                issue={currentError}
+                agent={fixAgent}
+                sx={{ height: 30, borderRadius: "6px" }}
+              />
+              {/* Fix: prove a change in simulation, ship it as a draft. A
+                  coding agent can join from the sheet. */}
+              <FixButton issue={currentError} onOpenSheet={() => setFixSheetOpen(true)} />
             </Stack>
           </Stack>
         </Box>
+
+        {/* A fix that didn't hold — linked to the change. */}
+        <ReopenedBanner issue={currentError} onFixAgain={() => setFixSheetOpen(true)} />
+        {/* Once the fix is released: keep its scenarios as must-pass? */}
+        <RegressionMemoryRow issue={currentError} />
 
         {/* ── Tab bar ── */}
         <Box
@@ -472,6 +455,7 @@ export default function ErrorFeedDetailView() {
       {/* ── Right sidebar ── */}
       <ErrorMetadataPanel error={currentError} />
 
+      <FixSheet open={fixSheetOpen} onClose={() => setFixSheetOpen(false)} issue={currentError} rootCause={rootCause} />
       <LinearTeamPicker
         open={linearPickerOpen}
         onClose={() => setLinearPickerOpen(false)}

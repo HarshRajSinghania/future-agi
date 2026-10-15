@@ -1,4 +1,5 @@
 import { environmentVersions } from "./versions";
+import { migrateEnvVars, preflightRecord, providerOfKey } from "./secretRefs";
 
 /**
  * Environment configuration, instances and files.
@@ -15,11 +16,30 @@ import { environmentVersions } from "./versions";
  *     version history is a first-class thing you can look at.
  */
 
+/*
+  A secret is stored as a reference into the team's secret manager, never as
+  its value (AC-6.12) — `ref` on a secret row, `value` on a plain one.
+*/
 export const DEFAULT_ENV_VARS = [
-  { key: "OPENAI_API_KEY", value: "sk-proj-9f2c…a41b", secret: true, usedBy: "grader" },
+  { key: "OPENAI_API_KEY", ref: "vault://acme/sim/openai_api_key", secret: true, usedBy: "grader" },
   { key: "SEED_DATASET", value: "orders-v4", secret: false, usedBy: "environment" },
   { key: "LOG_LEVEL", value: "info", secret: false, usedBy: "environment" },
 ];
+
+/** This environment's variables — saved on envState.envVars, else the defaults. Raw secrets never survive the read. */
+export const envVarsOf = (envState) => migrateEnvVars(envState?.envVars) || DEFAULT_ENV_VARS;
+
+/**
+ * Point a secret variable at a new reference. Re-runs the access check and
+ * nothing else — no rebuild, no environment version.
+ */
+export const envVarRefPatch = (envState, key, ref) => ({
+  envVars: envVarsOf(envState).map((v) => (v.key === key ? { key: v.key, secret: true, usedBy: v.usedBy, ref } : v)),
+  secretChecks: { ...(envState?.secretChecks || {}), [`env:${key}`]: preflightRecord(ref, providerOfKey(key)) },
+});
+
+/** The last access check for a variable, if one has run. */
+export const envVarCheckOf = (envState, key) => envState?.secretChecks?.[`env:${key}`] || null;
 
 export const DEFAULT_BUILD_ARGS = [
   { key: "BASE_IMAGE", value: "python:3.12-slim" },

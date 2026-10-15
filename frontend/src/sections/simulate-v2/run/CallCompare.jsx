@@ -10,12 +10,15 @@ import Iconify from "src/components/iconify";
 import { SegmentedTabs, CustomTabs } from "src/components/tabs/tabs";
 import SideDrawer from "../components/SideDrawer";
 import { getSurface } from "../_mock/surfaces";
+import { runIdentityOf } from "../_mock/runIdentity";
 import { hashSeed } from "../_mock/runStream";
 import {
   callDetail, callDeltas, transcriptDiff, diffTally, graphDiff,
 } from "../_mock/callDetail";
 import { DomainChip } from "../components/primitives";
+import { textTone } from "../components/textTone";
 import CallGraph, { GraphLegend } from "./CallGraph";
+import { clickable, focusRing } from "../components/clickable";
 
 /**
  * One scenario, every run, in full.
@@ -188,6 +191,7 @@ export default function CallCompare({
               key={cell.runId}
               cell={cell}
               run={runs.find((r) => r.id === cell.runId)}
+              name={runIdentityOf(runs.find((r) => r.id === cell.runId), envState, env).label}
               detail={details[i]}
               baseline={i === 0 ? null : baseline}
               isBaseline={i === 0}
@@ -218,7 +222,7 @@ CallCompare.propTypes = {
 
 /* ── one run's column ────────────────────────────────────────────────────── */
 
-function RunColumn({ cell, run, detail, baseline, isBaseline, voice, diff, tab, onTab }) {
+function RunColumn({ cell, run, name, detail, baseline, isBaseline, voice, diff, tab, onTab }) {
   const [summaryOpen, setSummaryOpen] = useState(false);
 
   return (
@@ -238,14 +242,14 @@ function RunColumn({ cell, run, detail, baseline, isBaseline, voice, diff, tab, 
           sx={{
             width: 20, height: 20, borderRadius: 0.75, flexShrink: 0,
             display: "grid", placeItems: "center", typography: "s3", fontWeight: 700,
-            color: cell.color,
+            color: textTone(cell.color),
             bgcolor: (t) => alpha(cell.color, t.palette.mode === "dark" ? 0.2 : 0.12),
           }}
         >
           {cell.letter}
         </Box>
         <Typography noWrap sx={{ typography: "s1", fontWeight: 700, flex: 1, minWidth: 0 }}>
-          Run {run?.ordinal} · agent {run?.agentVersion}
+          {run?.kind === "trial" ? `Run ${run.trialN}${run.selfImprovementName ? ` · ${run.selfImprovementName}` : ""}` : `Run ${run?.ordinal}`} · {name}
         </Typography>
         {detail && !detail.measured && <DomainChip domain={detail.domain} />}
         {isBaseline && (
@@ -286,7 +290,7 @@ function RunColumn({ cell, run, detail, baseline, isBaseline, voice, diff, tab, 
               <Iconify icon="solar:shield-cross-bold" width={15} sx={{ color: detail.domain.color, flexShrink: 0, mt: "1px" }} />
               <Box minWidth={0}>
                 <Stack direction="row" alignItems="center" spacing={0.75}>
-                  <Typography sx={{ typography: "s2", fontWeight: 700, color: detail.domain.color }}>
+                  <Typography sx={{ typography: "s2", fontWeight: 700, color: textTone(detail.domain.color) }}>
                     {detail.domain.label} — not measured
                   </Typography>
                 </Stack>
@@ -378,7 +382,7 @@ function RunColumn({ cell, run, detail, baseline, isBaseline, voice, diff, tab, 
               label="User / AI"
               value={(
                 <>
-                  <Box component="span" sx={{ color: "#EA580C" }}>{detail.stats.userPct}</Box>
+                  <Box component="span" sx={{ color: "text.primary" }}>{detail.stats.userPct}</Box>
                   <Box component="span" sx={{ color: "text.disabled" }}> / </Box>
                   <Box component="span" sx={{ color: "#7857FC" }}>{detail.stats.aiPct}</Box>
                 </>
@@ -473,11 +477,12 @@ function RunColumn({ cell, run, detail, baseline, isBaseline, voice, diff, tab, 
             <SectionLabel>AI summary</SectionLabel>
             <Stack
               direction="row" alignItems="flex-start" spacing={1}
-              onClick={() => setSummaryOpen((o) => !o)}
+              {...clickable(() => setSummaryOpen((o) => !o), { expanded: summaryOpen })}
               sx={{
                 mt: 0.5, px: 1.25, py: 1, borderRadius: 1, cursor: "pointer",
                 border: "1px solid", borderColor: "divider",
                 "&:hover": { bgcolor: "action.hover" },
+                ...focusRing,
               }}
             >
               <Iconify icon="solar:magic-stick-3-linear" width={14} sx={{ color: "#7857FC", flexShrink: 0, mt: "2px" }} />
@@ -532,7 +537,7 @@ function RunColumn({ cell, run, detail, baseline, isBaseline, voice, diff, tab, 
 }
 
 RunColumn.propTypes = {
-  cell: PropTypes.object, run: PropTypes.object, detail: PropTypes.object,
+  cell: PropTypes.object, run: PropTypes.object, name: PropTypes.string, detail: PropTypes.object,
   baseline: PropTypes.object, isBaseline: PropTypes.bool, voice: PropTypes.bool,
   diff: PropTypes.bool, tab: PropTypes.string, onTab: PropTypes.func,
 };
@@ -587,7 +592,7 @@ function TranscriptPane({ detail, baseline, diff, voice }) {
           <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4 }}>
             Transcript diff
           </Typography>
-          <Count n={tally.changed} label="changed" color="#B98A3C" />
+          <Count n={tally.changed} label="changed" color="#B98A3C" textColor="text.secondary" />
           <Count n={tally.added} label="added" color="#5AA47B" />
         </Stack>
       )}
@@ -654,7 +659,7 @@ function Turn({ turn, showDiff }) {
         {accent && (
           <Typography
             sx={{
-              px: 0.625, borderRadius: 0.5, typography: "s3", fontWeight: 700, color: accent,
+              px: 0.625, borderRadius: 0.5, typography: "s3", fontWeight: 700, color: textTone(accent, "text.secondary"),
               bgcolor: (t) => alpha(accent, t.palette.mode === "dark" ? 0.2 : 0.12),
             }}
           >
@@ -685,7 +690,7 @@ Turn.propTypes = { turn: PropTypes.object, showDiff: PropTypes.bool };
 
 const STEP_TONE = {
   addressed: { color: "#16A34A", icon: "solar:check-circle-bold", label: "Addressed" },
-  partial: { color: "#CA8A04", icon: "solar:info-circle-bold", label: "Partial" },
+  partial: { color: "#CA8A04", text: "text.secondary", icon: "solar:info-circle-bold", label: "Partial" },
   missed: { color: "#DC2626", icon: "solar:close-circle-bold", label: "Missed" },
 };
 
@@ -698,14 +703,14 @@ function ChecklistPane({ detail }) {
         <Typography
           sx={{
             px: 0.875, py: 0.25, borderRadius: 0.5, typography: "s3", fontWeight: 700,
-            color: pct >= 80 ? "#16A34A" : pct >= 40 ? "#CA8A04" : "#DC2626",
+            color: pct >= 80 ? "#16A34A" : pct >= 40 ? "text.primary" : "#DC2626",
             bgcolor: (t) => alpha(pct >= 80 ? "#16A34A" : pct >= 40 ? "#CA8A04" : "#DC2626", t.palette.mode === "dark" ? 0.18 : 0.1),
           }}
         >
           {pct}% · {pass + partial}/{steps.length} steps
         </Typography>
         <Count n={pass} label="pass" color="#16A34A" dot />
-        <Count n={partial} label="partial" color="#CA8A04" dot />
+        <Count n={partial} label="partial" color="#CA8A04" textColor="text.primary" dot />
         <Count n={missed} label="missed" color="#DC2626" dot />
       </Stack>
 
@@ -731,8 +736,8 @@ function ChecklistStep({ step, total }) {
     <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden" }}>
       <Stack
         direction="row" alignItems="center" spacing={1}
-        onClick={() => setOpen((o) => !o)}
-        sx={{ px: 1.5, py: 1, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+        {...clickable(() => setOpen((o) => !o), { expanded: open })}
+        sx={{ px: 1.5, py: 1, cursor: "pointer", "&:hover": { bgcolor: "action.hover" }, ...focusRing }}
       >
         <Iconify icon={tone.icon} width={15} sx={{ color: tone.color, flexShrink: 0 }} />
         <Typography sx={{ typography: "s3", color: "text.subtitle", fontFamily: "ui-monospace, Menlo, monospace", flexShrink: 0 }}>
@@ -744,7 +749,7 @@ function ChecklistStep({ step, total }) {
         <Typography
           sx={{
             px: 0.75, py: 0.125, borderRadius: 0.5, flexShrink: 0,
-            typography: "s3", fontWeight: 700, color: tone.color, textTransform: "uppercase",
+            typography: "s3", fontWeight: 700, color: tone.text || tone.color, textTransform: "uppercase",
             bgcolor: (t) => alpha(tone.color, t.palette.mode === "dark" ? 0.18 : 0.1),
           }}
         >
@@ -911,7 +916,7 @@ function Meta({ label, value, color, mono }) {
       <Typography
         sx={{
           typography: "s3", fontWeight: 700,
-          color: color || "text.primary",
+          color: textTone(color || "text.primary"),
           fontFamily: mono ? "ui-monospace, Menlo, monospace" : undefined,
         }}
       >
@@ -937,13 +942,13 @@ function Stat({ label, value, hint }) {
 }
 Stat.propTypes = { label: PropTypes.string, value: PropTypes.node, hint: PropTypes.string };
 
-function Count({ n, label, color, dot, prefix }) {
+function Count({ n, label, color, textColor, dot, prefix }) {
   return (
     <Stack direction="row" alignItems="center" spacing={0.5}>
       {dot && <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: color, flexShrink: 0 }} />}
       <Typography
         sx={{
-          typography: "s3", fontWeight: 700, color,
+          typography: "s3", fontWeight: 700, color: textColor || color,
           ...(dot ? {} : {
             px: 0.625, py: 0.125, borderRadius: 0.5,
             bgcolor: (t) => alpha(color, t.palette.mode === "dark" ? 0.18 : 0.1),
@@ -956,7 +961,7 @@ function Count({ n, label, color, dot, prefix }) {
   );
 }
 Count.propTypes = {
-  n: PropTypes.number, label: PropTypes.string, color: PropTypes.string,
+  n: PropTypes.number, label: PropTypes.string, color: PropTypes.string, textColor: PropTypes.string,
   dot: PropTypes.bool, prefix: PropTypes.string,
 };
 

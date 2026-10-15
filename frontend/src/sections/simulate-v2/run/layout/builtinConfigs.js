@@ -105,7 +105,7 @@ const CFG = {
   expensive_tasks: {
     source: "tasks", chart: "bar", metric: "sum_cost",
     groupBy: "use_case", limit: 8,
-    info: "The eight tasks that ate the most dollars this run. A handful usually dominate the total — shortening prompts on these saves more than optimising every task.",
+    info: "The eight tasks that ate the most dollars this run. A handful usually dominate the total — shortening prompts on these saves more than tuning every task.",
   },
 };
 

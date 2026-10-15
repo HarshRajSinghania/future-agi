@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import {
   Box,
-  Button,
   CircularProgress,
   Dialog,
   DialogContent,
@@ -26,12 +25,17 @@ import {
   useErrorFeedSidebar,
   useLinearTeams,
   useUpdateErrorFeedIssue,
-} from "src/api/errorFeed/error-feed";
+} from "src/api/errorFeed/mockAdapter";
 import { useOrgMembers } from "src/api/annotation-queues/annotation-queues";
 import { useOrganization } from "src/contexts/OrganizationContext";
 import openExternal from "../openExternal";
 import { useErrorFeedStore } from "../store";
 import PropTypes from "prop-types";
+import { useIssueFix } from "src/sections/simulate-v2/errorFeed/issueFix";
+import { useAgentImprovementFlag } from "src/sections/simulate-v2/_mock/featureFlags";
+import { textTone } from "src/sections/simulate-v2/components/textTone";
+import { clickable, focusRing } from "src/sections/simulate-v2/components/clickable";
+import { fixTriageRulesOf } from "src/sections/simulate-v2/errorFeed/issueFixModel";
 
 const humanizeTime = (iso) => {
   if (!iso) return "—";
@@ -197,10 +201,24 @@ const STATUS_OPTIONS = [
     color: "#5ACE6D",
     darkColor: "#5ACE6D",
   },
+  {
+    value: "ignored",
+    label: "Ignored",
+    icon: "mdi:eye-off-outline",
+    color: "#938FA3",
+    darkColor: "#938FA3",
+  },
 ];
 
-function StatusDropdown({ clusterId, current }) {
+function StatusDropdown({ clusterId, current, fixKey }) {
   const [anchorEl, setAnchorEl] = useState(null);
+  /* The header's Triage menu rules: while a fix drives the status, Resolve
+     and Acknowledge are off here too, with the same note. */
+  const rules = fixTriageRulesOf(fixKey);
+  const ruleOf = (value) =>
+    value === "resolved" ? { disabled: rules.resolveDisabled, note: rules.resolveNote }
+      : value === "acknowledged" ? { disabled: rules.ackDisabled, note: rules.ackNote }
+        : { disabled: false, note: "" };
   const updateIssue = useUpdateErrorFeedIssue();
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
@@ -214,11 +232,16 @@ function StatusDropdown({ clusterId, current }) {
   return (
     <>
       <Box
-        onClick={(e) => {
-          e.stopPropagation();
-          setAnchorEl(e.currentTarget);
-        }}
+        {...clickable(
+          (e) => {
+            e.stopPropagation();
+            setAnchorEl(e.currentTarget);
+          },
+          { label: `Status: ${cur.label}`, expanded: Boolean(anchorEl) },
+        )}
+        aria-haspopup="menu"
         sx={{
+          ...focusRing,
           display: "inline-flex",
           alignItems: "center",
           gap: 0.5,
@@ -234,7 +257,7 @@ function StatusDropdown({ clusterId, current }) {
         }}
       >
         <Iconify icon={cur.icon} width={11} sx={{ color: cur.color }} />
-        <Typography fontSize="11px" fontWeight={600} sx={{ color: cur.color }}>
+        <Typography fontSize="11px" fontWeight={600} sx={{ color: textTone(cur.color) }}>
           {cur.label}
         </Typography>
         <Iconify
@@ -254,6 +277,7 @@ function StatusDropdown({ clusterId, current }) {
             border: "1px solid",
             borderColor: "divider",
             minWidth: 150,
+            maxWidth: 280,
             mt: 0.5,
           },
         }}
@@ -275,23 +299,32 @@ function StatusDropdown({ clusterId, current }) {
         {STATUS_OPTIONS.filter((option) => option.value !== current).map(
           (option) => {
             const statusColor = isDark ? option.darkColor : option.color;
+            const rule = ruleOf(option.value);
             return (
               <MenuItem
                 key={option.value}
+                disabled={rule.disabled}
                 onClick={() => {
                   updateIssue.mutate({ clusterId, status: option.value });
                   setAnchorEl(null);
                 }}
-                sx={{ gap: 1, fontSize: "13px", py: 0.75 }}
+                sx={{ gap: 1, fontSize: "13px", py: 0.75, ...(rule.note && { alignItems: "flex-start" }) }}
               >
                 <Iconify
                   icon={option.icon}
                   width={15}
-                  sx={{ color: statusColor }}
+                  sx={{ color: statusColor, ...(rule.note && { mt: "1px" }) }}
                 />
-                <Typography fontSize="12px" sx={{ color: statusColor }}>
-                  {option.label}
-                </Typography>
+                <Box minWidth={0}>
+                  <Typography fontSize="12px" sx={{ color: textTone(statusColor) }}>
+                    {option.label}
+                  </Typography>
+                  {rule.note && (
+                    <Typography sx={{ fontSize: "11px", color: "text.secondary", whiteSpace: "normal" }}>
+                      {rule.note}
+                    </Typography>
+                  )}
+                </Box>
               </MenuItem>
             );
           },
@@ -303,6 +336,7 @@ function StatusDropdown({ clusterId, current }) {
 StatusDropdown.propTypes = {
   clusterId: PropTypes.string,
   current: PropTypes.string,
+  fixKey: PropTypes.string,
 };
 
 // ── Severity dropdown ─────────────────────────────────────────────────────────
@@ -348,11 +382,16 @@ function SeverityDropdown({ current, onChange }) {
   return (
     <>
       <Box
-        onClick={(e) => {
-          e.stopPropagation();
-          setAnchorEl(e.currentTarget);
-        }}
+        {...clickable(
+          (e) => {
+            e.stopPropagation();
+            setAnchorEl(e.currentTarget);
+          },
+          { label: `Severity: ${cur.label}`, expanded: Boolean(anchorEl) },
+        )}
+        aria-haspopup="menu"
         sx={{
+          ...focusRing,
           display: "inline-flex",
           alignItems: "center",
           gap: 0.5,
@@ -376,7 +415,7 @@ function SeverityDropdown({ current, onChange }) {
             flexShrink: 0,
           }}
         />
-        <Typography fontSize="11px" fontWeight={600} sx={{ color: cur.color }}>
+        <Typography fontSize="11px" fontWeight={600} sx={{ color: textTone(cur.color) }}>
           {cur.label}
         </Typography>
         <Iconify
@@ -434,7 +473,7 @@ function SeverityDropdown({ current, onChange }) {
                   flexShrink: 0,
                 }}
               />
-              <Typography fontSize="12px" sx={{ color: c }}>
+              <Typography fontSize="12px" sx={{ color: textTone(c) }}>
                 {s.label}
               </Typography>
             </MenuItem>
@@ -469,11 +508,16 @@ function AssigneeDropdown({ current, onChange, members = [] }) {
   return (
     <>
       <Box
-        onClick={(e) => {
-          e.stopPropagation();
-          setAnchorEl(e.currentTarget);
-        }}
+        {...clickable(
+          (e) => {
+            e.stopPropagation();
+            setAnchorEl(e.currentTarget);
+          },
+          { label: `Assignee: ${member ? member.name || member.email : "unassigned"}`, expanded: Boolean(anchorEl) },
+        )}
+        aria-haspopup="menu"
         sx={{
+          ...focusRing,
           display: "inline-flex",
           alignItems: "center",
           gap: 0.6,
@@ -785,12 +829,6 @@ ActivityItem.propTypes = {
 };
 
 // ── Co-occurring issues ───────────────────────────────────────────────────────
-const SEV_COLOR = {
-  critical: "#DB2F2D",
-  high: "#E9690C",
-  medium: "#F5A623",
-  low: "#71717a",
-};
 
 function CoOccurringList({ issues }) {
   const theme = useTheme();
@@ -799,15 +837,15 @@ function CoOccurringList({ issues }) {
   return (
     <Stack gap={0.5}>
       {issues.map((issue) => {
-        const c = SEV_COLOR[issue.severity] || "#71717a";
         return (
           <Stack
             key={issue.id}
             direction="row"
             alignItems="center"
             gap={0.75}
-            onClick={() => navigate(paths.dashboard.errorFeed.detail(issue.id))}
+            {...clickable(() => navigate(paths.dashboard.errorFeed.detail(issue.id)), { role: "link" })}
             sx={{
+              ...focusRing,
               px: 1,
               py: 0.7,
               border: "1px solid",
@@ -923,8 +961,9 @@ export function LinearTeamPicker({ open, onClose, clusterId, traceId }) {
             </Typography>
           </Stack>
           <Box
-            onClick={onClose}
+            {...clickable(onClose, { label: "Close" })}
             sx={{
+              ...focusRing,
               cursor: "pointer",
               color: "text.disabled",
               "&:hover": { color: "text.primary" },
@@ -953,8 +992,9 @@ export function LinearTeamPicker({ open, onClose, clusterId, traceId }) {
                 direction="row"
                 alignItems="center"
                 gap={1.25}
-                onClick={() => !createIssue.isPending && handleCreate(t.id)}
+                {...clickable(() => !createIssue.isPending && handleCreate(t.id))}
                 sx={{
+                  ...focusRing,
                   px: 1.25,
                   py: 0.85,
                   border: "1px solid",
@@ -1062,8 +1102,9 @@ function ConnectorRow({ icon, color, name, subtitle, action, onAction }) {
 
       {action && (
         <Box
-          onClick={onAction}
+          {...clickable(onAction)}
           sx={{
+            ...focusRing,
             px: 0.75,
             py: 0.25,
             borderRadius: "4px",
@@ -1185,9 +1226,21 @@ const EVAL_TYPE_MAP = {
   deterministic: "deterministic",
 };
 
+/* Once a fix exists, the issue's status follows it — so the rail never says
+   Escalating while the header says Watching. Being fixed reads Acknowledged,
+   a released fix under watch reads Resolved, a fix that didn't hold
+   Escalating. Triage still changes it by hand when there's no fix. */
+const FIX_TRIAGE = {
+  fixing: "acknowledged", ready: "acknowledged", review: "acknowledged",
+  watching: "resolved", resolved: "resolved", reopened: "escalating",
+};
+
 export default function ErrorMetadataPanel({ error }) {
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
+  const improving = useAgentImprovementFlag();
+  const { status: fix } = useIssueFix(error);
+  const fixTriage = improving && fix ? FIX_TRIAGE[fix.key] : null;
   const [severity, setSeverityLocal] = useState(error?.severity ?? "high");
   const [assignee, setAssigneeLocal] = useState(error?.assignees?.[0] ?? null);
   // Use the live active org (matches the X-Organization-Id header) instead of
@@ -1270,9 +1323,15 @@ export default function ErrorMetadataPanel({ error }) {
             <FieldRow label="Status">
               <StatusDropdown
                 clusterId={error.cluster_id}
-                current={error.status}
+                current={fixTriage || error.status}
+                fixKey={fix?.key || null}
               />
             </FieldRow>
+            {fixTriage && (
+              <Typography sx={{ fontSize: "11px", color: "text.secondary", mt: -0.5, textAlign: "right" }}>
+                {`From its fix · ${fix.label}${fix.detail && fix.key === "watching" ? ` · ${fix.detail}` : ""}`}
+              </Typography>
+            )}
             <FieldRow label="Severity">
               <SeverityDropdown current={severity} onChange={setSeverity} />
             </FieldRow>
@@ -1286,8 +1345,8 @@ export default function ErrorMetadataPanel({ error }) {
           </Stack>
         </Section>
 
-        {/* ── Cluster at-a-glance ── */}
-        <Section title="Cluster">
+        {/* ── Issue at-a-glance ── */}
+        <Section title="Issue">
           <Box
             sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0.6 }}
           >
@@ -1308,7 +1367,7 @@ export default function ErrorMetadataPanel({ error }) {
                 icon: "mdi:monitor-eye",
               },
               {
-                label: "Cluster ID",
+                label: "Issue ID",
                 value: error.cluster_id,
                 icon: "mdi:identifier",
               },

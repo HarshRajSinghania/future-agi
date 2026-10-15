@@ -1,91 +1,156 @@
 import PropTypes from "prop-types";
-import { alpha } from "@mui/material/styles";
+import { useState } from "react";
 import { Box, Stack, Typography, Button, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { currentEnvVersion, currentAgentVersion } from "../_mock/versions";
+import {
+  currentEnvVersion, currentAgentVersion, pendingEnvChanges, saveEnvChangesPatch, envChangeLabel,
+} from "../_mock/versions";
 import { scenariosInEnvVersion } from "../_mock/toolFit";
+import { envLabelOf, pendingCostOf } from "../_mock/envVersionKinds";
+import { currentEnvSnapshot, snapshotPartsLine } from "../_mock/envSnapshot";
+import { referenceOf } from "../_mock/nudgeEffects";
+import useEnvViewAs from "./useEnvViewAs";
+import VersionHistoryMenu from "./VersionHistory";
 
 /**
- * What is being tested, against what.
+ * What is being tested, against what — a run is always agent version ×
+ * environment version, said the same way on every screen:
  *
- * A run is a pairing — this environment version × that agent version — and a
- * result nobody can attribute to a specific pair is not reproducible. So the
- * pairing is stated here.
+ *   Agent v2 × env v7 (68)   [Drifted · 2]
  *
- * Stated, not selected. Two dropdowns pinned under the header read as filters:
- * pick agent v3 and you would expect the workspace to show v3's world. They
- * did nothing, on eleven steps where nine of them do not change meaning by
- * version anyway — and a control that looks like it scopes the page and does
- * not is worse than no control. The choice belongs where a choice is actually
- * made, which is the moment before a run, so the pre-flight quotes the pair it
- * is about to use. Everything a result is attributed to, it carries itself:
- * every run row, every run header, every comparison chip names its version.
+ * The environment version is one snapshot of the world, scenario set,
+ * sub-goals, evals and simulated caller (envSnapshot.js); the parts behind it
+ * are in the tooltip and the version history. An agent change moves only the
+ * agent; the environment moves on an edit or an approved nudge. While a nudge
+ * is open the environment reads Drifted, and the chip opens the inbox.
  *
- * Comparing versions is not offered here either. It was a second, weaker route
- * to a screen that already exists — runs are picked and compared on the Runs
- * step, against real recorded runs rather than a summary of two — and two
- * doors to one room means the smaller one is always the disappointing one.
+ * An edit says what it will cost before it lands (AC-23.3): which version
+ * moves and what that does to comparability. While someone views an older
+ * version (?viewAs=), a slim read-only banner sits under the bar.
  */
-export default function VersionBar({ env, envState }) {
+export default function VersionBar({ env, envState, patch, locked = false }) {
   const envV = currentEnvVersion(env, envState);
-  /* Counted live from the pinned version — not the number stored when the
-     version was minted, which went stale with every batch added after it
-     (and read "undefined" on versions that never stored one). */
   const scenarioCount = scenariosInEnvVersion(envState, envV.label).length;
   const agentV = currentAgentVersion(envState);
+  const pending = pendingEnvChanges(envState);
+  const snap = currentEnvSnapshot(env, envState);
+  const cost = pendingCostOf(env, envState);
+  const shownLabel = snap?.label || envLabelOf(env, envState, envV.label);
+  const ref = referenceOf(envState);
+  const { viewAs, clearViewAs } = useEnvViewAs(env, envState);
+  const [historyAnchor, setHistoryAnchor] = useState(null);
+  const strong = (t) => <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>{t}</Box>;
 
   return (
+    <>
     <Stack
       direction="row"
       alignItems="center"
       spacing={1}
       sx={{ px: 2, py: 0.875, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0, flexWrap: "wrap", rowGap: 1 }}
     >
-      {/*
-        Env-first framing (Nikhil): the environment is the primary
-        identity. The agent version is *the current test subject*
-        running against this env — same env can host different
-        agents over time. Reading order: env is bold and stated first;
-        agent is prefixed "Test subject" and rendered lighter so it
-        reads as a rotating attribute rather than shared identity.
-      */}
       <Tooltip
         arrow
-        title={`Environment ${envV.label} — ${envV.note}. Test subject: agent ${agentV.label}. Different agents can run against this env; the env stays put.`}
+        title={(
+          <Box>
+            <Typography sx={{ typography: "s3", color: "common.white", mb: 0.5 }}>
+              An agent change moves only the agent. The environment version moves when the world, scenarios, sub-goals, evaluations or simulated caller change.
+            </Typography>
+            <Typography sx={{ typography: "s3", color: "common.white" }}>
+              <b>{agentV ? `Agent ${agentV.label}` : "No agent"}</b>{` — the test subject${ref?.label === agentV?.label && ref?.marked ? " (the reference)" : ""}`}
+            </Typography>
+            <Typography sx={{ typography: "s3", color: "common.white" }}><b>{`Environment ${shownLabel}`}</b>{snap?.summary ? ` — ${snap.summary}` : ""}</Typography>
+            {snap && (
+              <Typography sx={{ typography: "s3", color: "common.white", opacity: 0.8, mt: 0.25 }}>{snapshotPartsLine(snap)}</Typography>
+            )}
+          </Box>
+        )}
       >
-        <Stack direction="row" alignItems="center" spacing={0.75} sx={{ cursor: "default" }}>
-          <Iconify icon="solar:box-linear" width={14} sx={{ color: "text.subtitle" }} />
-          <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-            env <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>{envV.label}</Box>
-          </Typography>
-          <Typography sx={{ typography: "s3", color: "text.disabled", mx: 0.25 }}>·</Typography>
-          <Iconify icon="solar:cpu-bolt-linear" width={14} sx={{ color: "text.subtitle" }} />
-          <Typography sx={{ typography: "s3", color: "text.subtitle", fontWeight: 600 }}>
-            Test subject
-          </Typography>
-          <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-            agent <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>{agentV.label}</Box>
-          </Typography>
-        </Stack>
-      </Tooltip>
-
-      <Typography sx={{ typography: "s3", color: "text.disabled", mx: 0.5 }}>·</Typography>
-
-      <Tooltip arrow title="Scenarios belong to the environment, so the same set runs against any agent version">
-        <Typography sx={{ typography: "s3", color: "text.subtitle", cursor: "default" }}>
-          {`${scenarioCount} scenario${scenarioCount === 1 ? "" : "s"}, shared across agent versions`}
+        <Typography
+          noWrap
+          sx={{ typography: "s2", color: "text.secondary", cursor: "default", fontVariantNumeric: "tabular-nums", minWidth: 0 }}
+        >
+          <Iconify icon="solar:box-linear" width={14} sx={{ color: "text.subtitle", verticalAlign: "-2px", mr: 0.75 }} />
+          {agentV ? <>Agent {strong(agentV.label)}</> : "No agent yet"}
+          <Typography component="span" sx={{ typography: "s3", color: "text.disabled", mx: 0.5 }}>×</Typography>
+          environment {strong(shownLabel)}
+          <Box component="span" sx={{ typography: "s3", color: "text.subtitle" }}>{` · ${scenarioCount} scenario${scenarioCount === 1 ? "" : "s"}`}</Box>
         </Typography>
       </Tooltip>
 
+      {/* Drift is said once, by the chip in the environment header. */}
       <Box flex={1} />
 
+      {pending.length > 0 && (
+        <Tooltip
+          arrow
+          title={`${pending.map((c) => c.detail || envChangeLabel(c.kind)).join(" · ")}. ${cost?.comparability || ""} Runs use environment ${shownLabel} until these are saved.`}
+        >
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Typography sx={{ typography: "s3", color: "text.subtitle", cursor: "default", fontVariantNumeric: "tabular-nums" }}>
+              {`${pending.length} edit${pending.length === 1 ? "" : "s"} since environment ${shownLabel} · `}
+              <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>{cost?.text}</Box>
+            </Typography>
+            {!locked && patch && !viewAs && (
+              <Button
+                size="small"
+                onClick={() => patch(saveEnvChangesPatch(env, envState))}
+                sx={{ typography: "s3", fontWeight: 700, minWidth: 0, px: 0.75, py: 0 }}
+              >
+                {`Save as environment ${cost?.label}`}
+              </Button>
+            )}
+          </Stack>
+        </Tooltip>
+      )}
 
+      <Button
+        size="small"
+        onClick={(e) => setHistoryAnchor(e.currentTarget)}
+        startIcon={<Iconify icon="solar:history-linear" width={14} />}
+        sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0, px: 0.75, py: 0 }}
+      >
+        History
+      </Button>
+      <VersionHistoryMenu
+        anchor={historyAnchor}
+        onClose={() => setHistoryAnchor(null)}
+        env={env}
+        envState={envState}
+        patch={patch}
+        readOnly={locked}
+      />
     </Stack>
+
+    {/* Viewing another version — read-only, held in the URL, one way back. */}
+    {viewAs && (
+      <Stack
+        direction="row" alignItems="center" spacing={1}
+        sx={{ px: 2, py: 0.5, borderBottom: "1px solid", borderColor: "divider", bgcolor: "background.neutral", flexShrink: 0 }}
+      >
+        <Iconify icon="solar:eye-linear" width={13} sx={{ color: "text.subtitle" }} />
+        <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+          Viewing as{" "}
+          <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>{`environment ${envLabelOf(env, envState, viewAs)}`}</Box>
+          {" "}— read-only.
+        </Typography>
+        <Button
+          size="small"
+          onClick={clearViewAs}
+          sx={{ typography: "s3", fontWeight: 700, minWidth: 0, px: 0.75, py: 0 }}
+        >
+          Back to current
+        </Button>
+      </Stack>
+    )}
+    </>
   );
 }
 
 VersionBar.propTypes = {
   env: PropTypes.object,
   envState: PropTypes.object,
+  patch: PropTypes.func,
+  locked: PropTypes.bool,
 };
 

@@ -10,7 +10,7 @@ import {
 import PropTypes from "prop-types";
 import { AgGridReact } from "ag-grid-react";
 import { useAgThemeWith } from "src/hooks/use-ag-theme";
-import { useErrorFeedTraces } from "src/api/errorFeed/error-feed";
+import { isMockClusterId, useErrorFeedTraces } from "src/api/errorFeed/mockAdapter";
 import { useGetProjectDetails } from "src/api/project/project-detail";
 import { useVoiceCallDetail } from "src/sections/agents/helper";
 import { PROJECT_SOURCE } from "src/utils/constants";
@@ -83,7 +83,8 @@ function scoreColors(pct, isDark) {
   if (pct >= 50)
     return {
       backgroundColor: "rgba(245,166,35,0.12)",
-      color: isDark ? "#E8A13A" : "#c47d00",
+      // Amber stays on the cell fill; the number reads in the theme text colour.
+      color: null,
     };
   return {
     backgroundColor: "rgba(219,47,45,0.10)",
@@ -125,7 +126,7 @@ function ScoreCellRenderer({ value }) {
         paddingInline: 12,
         fontWeight: 500,
         fontSize: 13,
-        color,
+        color: color ?? theme.palette.text.primary,
       }}
     >
       {pct}%
@@ -257,7 +258,9 @@ TracesGrid.propTypes = {
 // ── Main TracesTab ─────────────────────────────────────────────────────────────
 export default function TracesTab({ error }) {
   const clusterId = error?.cluster_id;
-  const projectId = error?.project_id;
+  /* A prototype issue's project doesn't exist on the backend — don't ask it
+     for the project or its saved views (each answers 400 with a toast). */
+  const projectId = isMockClusterId(clusterId) ? null : error?.project_id;
   const { data, isLoading } = useErrorFeedTraces(clusterId, { limit: 200 });
   const [drawerTraceId, setDrawerTraceId] = useState(null);
 
@@ -319,7 +322,7 @@ export default function TracesTab({ error }) {
         <Typography fontSize="11px" color="text.disabled" mt={1}>
           {isLoading
             ? "Loading traces…"
-            : `Showing ${rows.length} of ${total.toLocaleString()} total traces in this cluster`}
+            : `Showing ${rows.length} of ${total.toLocaleString()} total traces in this issue`}
         </Typography>
       </Box>
 

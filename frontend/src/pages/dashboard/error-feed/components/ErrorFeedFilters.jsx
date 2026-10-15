@@ -17,7 +17,7 @@ import Iconify from "src/components/iconify";
 import {
   useObserveProjectList,
   useUpdateErrorFeedIssue,
-} from "src/api/errorFeed/error-feed";
+} from "src/api/errorFeed/mockAdapter";
 import { useErrorFeedStore } from "../store";
 import PropTypes from "prop-types";
 
@@ -27,6 +27,7 @@ const STATUS_OPTIONS = [
   { value: "acknowledged", label: "Acknowledged" },
   { value: "for_review", label: "For review" },
   { value: "resolved", label: "Resolved" },
+  { value: "ignored", label: "Ignored" },
 ];
 
 const SEVERITY_OPTIONS = [
@@ -46,7 +47,7 @@ const TIME_RANGE_OPTIONS = [
 ];
 
 const FIX_LAYER_OPTIONS = [
-  { value: "", label: "All Fix Layers" },
+  { value: "", label: "All layers" },
   { value: "Prompt", label: "Prompt" },
   { value: "Tools", label: "Tools" },
   { value: "Orchestration", label: "Orchestration" },

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Box, Typography } from "@mui/material";
 import { paths } from "src/routes/paths";
 import { useSimStore } from "src/sections/simulate-v2/store";
+import { protoRunId } from "src/sections/simulate-v2/_mock/executionAdapter";
 import TemplateReviewLayout from "src/sections/simulate-v2/environments/TemplateReviewLayout";
 
 /**
@@ -16,7 +17,7 @@ import TemplateReviewLayout from "src/sections/simulate-v2/environments/Template
  * tabs and the Finish setup button, which routes to the workspace.
  *
  * The alternative ScratchBuildingView (rich narrative + pipeline
- * timeline + DerivingAnimation on the right, no tabs) was ported over
+ * timeline and a deriving animation on the right, no tabs) was ported over
  * but pulled from this route on request — the tabs-at-the-top
  * variation reads better here.
  */
@@ -46,12 +47,12 @@ export default function ScratchBuildPage() {
         isTwin={false}
         onBack={() => navigate(paths.dashboard.simulate.environments)}
         onFinish={() => {
-          /* "Run simulation" fires a real run — same as the template
-             flow. Mint a run id and route to the live run view, which
-             records the run into envState.runs on completion so the
-             Runs tab lands populated instead of empty. */
-          const runId = `run-${Date.now().toString(36)}`;
-          navigate(paths.dashboard.simulate.simulationRun(env.id, runId));
+          /* Only reached once the layout's readiness check passes (agent,
+             where it runs, scenarios, evaluations) and the tool fit is
+             asked — otherwise it opens the workspace on the gap. Same run
+             id shape and default repeats as the workspace header. */
+          const runId = protoRunId(env.id, Date.now().toString(36));
+          navigate(`${paths.dashboard.simulate.simulationRun(env.id, runId)}?trials=3`);
         }}
       />
     </>

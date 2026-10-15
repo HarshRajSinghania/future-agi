@@ -2,7 +2,7 @@ import PropTypes from "prop-types";
 import { Box, IconButton, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { PersonaBadge } from "../../components/primitives";
-import BlockerFlag from "./BlockerFlag";
+import { clickable, focusRing } from "../../components/clickable";
 
 /*
   One compact scenario row, used by the add-scenario pickers. Lives in its
@@ -16,12 +16,12 @@ export default function ScenarioRow({ row, index, onRemove, selectable, checked,
       direction="row"
       alignItems="center"
       spacing={2}
-      sx={{
+      sx={{ ...focusRing,
         px: 2.5, py: 1.5,
         cursor: selectable ? "pointer" : "default",
         "&:hover": selectable ? { bgcolor: "action.hover" } : {},
       }}
-      onClick={selectable ? onToggle : undefined}
+      {...clickable(selectable ? onToggle : undefined, { role: "checkbox", checked })}
     >
       {selectable ? (
         <Iconify
@@ -36,10 +36,7 @@ export default function ScenarioRow({ row, index, onRemove, selectable, checked,
       )}
 
       <Box sx={{ flex: 1.4, minWidth: 0 }}>
-        <Stack direction="row" alignItems="center" spacing={0.75}>
-          <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{row.title}</Typography>
-          <BlockerFlag row={row} />
-        </Stack>
+        <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{row.title}</Typography>
         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{row.task}</Typography>
       </Box>
 

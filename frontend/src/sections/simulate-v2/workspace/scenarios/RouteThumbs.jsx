@@ -201,6 +201,36 @@ export function ProductionThumb() {
   );
 }
 
+/** From failing cases — a run's results, the failed row being picked. */
+export function FailingCasesThumb() {
+  const c = usePalette();
+  const red = "#DC2626";
+  return (
+    <Card c={c}>
+      <text x="26" y="25" fontFamily={FONT} fontSize="7.5" fontWeight="700" fill={c.text}>Run 3</text>
+      <text x="52" y="25" fontFamily={FONT} fontSize="6" fill={c.muted}>agent v3</text>
+      <rect x="122" y="17" width="28" height="10" rx="5" fill={c.line} />
+      <text x="127" y="24.5" fontFamily={FONT} fontSize="6" fill={c.muted}>2 failed</text>
+      <line x1="26" y1="33" x2="150" y2="33" stroke={c.line} strokeWidth="1" />
+
+      {/* passed */}
+      <circle cx="30" cy="42" r="3" fill="none" stroke={c.solid} strokeWidth="1" />
+      <rect x="38" y="39.5" width="70" height="5" rx="2.5" fill={c.line} />
+
+      {/* failed — being picked */}
+      <rect x="22" y="49" width="132" height="14" rx="3" fill={c.tint} />
+      <path d="M27.8 53.8l4.4 4.4M32.2 53.8l-4.4 4.4" stroke={red} strokeWidth="1.3" strokeLinecap="round" />
+      <rect x="38" y="53.5" width="58" height="5" rx="2.5" fill={c.accent} opacity="0.55" />
+      <text x="146" y="58.5" textAnchor="end" fontFamily={MONO} fontSize="5.5" fill={c.accent} fontWeight="700">→ +1</text>
+
+      {/* flaky */}
+      <circle cx="30" cy="72" r="3" fill="none" stroke={c.muted} strokeWidth="1" strokeDasharray="2 1.5" />
+      <rect x="38" y="69.5" width="48" height="5" rx="2.5" fill={c.line} />
+      <text x="146" y="74" textAnchor="end" fontFamily={MONO} fontSize="5.5" fill={c.muted}>1/3</text>
+    </Card>
+  );
+}
+
 /** From your agent — its tools, and the weak spot we aim at. */
 export function AgentThumb() {
   const c = usePalette();
@@ -240,5 +270,29 @@ export function PickRouteIllustration() {
       <circle cx="122" cy="72" r="16" fill={c.accent} opacity="0.12" />
       <path d="M115 72h14M122 65v14" stroke={c.accent} strokeWidth="2" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/** From the persona library — callers with their traits, two picked. */
+export function PersonasThumb() {
+  const c = usePalette();
+  const rows = [
+    { y: 21, on: true, name: "Polite senior", w: 18 },
+    { y: 41, on: true, name: "In a rush", w: 24 },
+    { y: 61, on: false, name: "VIP owner", w: 20 },
+  ];
+  return (
+    <Card c={c}>
+      {rows.map((r) => (
+        <g key={r.y}>
+          {r.on && <rect x="22" y={r.y - 3} width="132" height="18" rx="3" fill={c.tint} />}
+          <rect x="27" y={r.y + 2.5} width="7" height="7" rx="1.5" fill={r.on ? c.accent : "none"} stroke={r.on ? c.accent : c.solid} strokeWidth="1" />
+          <circle cx="44" cy={r.y + 6} r="4.5" fill={r.on ? c.accent : c.line} opacity={r.on ? 0.5 : 1} />
+          <text x="52" y={r.y + 8.5} fontFamily={FONT} fontSize="6.5" fontWeight="700" fill={r.on ? c.text : c.muted}>{r.name}</text>
+          <rect x="104" y={r.y + 2} width={r.w} height="8" rx="4" fill="none" stroke={r.on ? c.accent : c.line} strokeWidth="0.75" opacity={r.on ? 0.7 : 1} />
+          <rect x={108 + r.w} y={r.y + 2} width="14" height="8" rx="4" fill="none" stroke={r.on ? c.accent : c.line} strokeWidth="0.75" opacity={r.on ? 0.7 : 1} />
+        </g>
+      ))}
+    </Card>
   );
 }

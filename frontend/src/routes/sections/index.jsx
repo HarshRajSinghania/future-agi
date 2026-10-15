@@ -19,6 +19,14 @@ import { isValidationDone } from "src/sections/oss-first-run/ossFlowState";
 
 const OAuthConsent = lazyWithRetry(() => import("src/pages/mcp/OAuthConsent"));
 const SharedView = lazyWithRetry(() => import("src/pages/shared/SharedView"));
+/* Prototype stand-ins for GitHub's install page and Slack's consent page —
+   opened as pop-up windows by the integration connect flows. */
+const GithubInstallWindow = lazyWithRetry(
+  () => import("src/sections/simulate-v2/integrations/windows/GithubInstallWindow"),
+);
+const SlackAuthorizeWindow = lazyWithRetry(
+  () => import("src/sections/simulate-v2/integrations/windows/SlackAuthorizeWindow"),
+);
 const OssSetupView = lazyWithRetry(
   () => import("src/sections/oss-first-run/OssSetupView"),
 );
@@ -63,6 +71,24 @@ export default function Router() {
     {
       path: "/sos",
       element: <SOSLoginPage />,
+    },
+
+    // Prototype provider windows (standalone, no dashboard layout)
+    {
+      path: "/proto/github-install",
+      element: (
+        <Suspense fallback={<SplashScreen />}>
+          <GithubInstallWindow />
+        </Suspense>
+      ),
+    },
+    {
+      path: "/proto/slack-authorize",
+      element: (
+        <Suspense fallback={<SplashScreen />}>
+          <SlackAuthorizeWindow />
+        </Suspense>
+      ),
     },
 
     // MCP OAuth consent (standalone, no dashboard layout, requires auth)

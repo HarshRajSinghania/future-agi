@@ -1,0 +1,286 @@
+import PropTypes from "prop-types";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Box, Button, Card, Chip, Menu, MenuItem, Select, Stack, Switch, Typography } from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import Iconify from "src/components/iconify";
+import { paths } from "src/routes/paths";
+import {
+  SLACK_CHANNELS, SLACK_EVENTS, approveSlackRequest, cancelSlackRequest, resolveApproval, uninstallSlack, updateSlack, useIntegrations,
+} from "../_mock/integrations";
+import BrandMark from "./BrandMark";
+import SlackInstallDialog from "./SlackInstallDialog";
+import SlackMessage from "./SlackMessage";
+import { StatusPill } from "./GithubIntegrationPage";
+import { DemoLabel } from "../agents/AgentBits";
+
+/* What each kind of message looks like when it lands. */
+const SAMPLES = {
+  run_finished: { title: "Customer Support Line · run 4 finished", lines: ["64 of 68 scenarios passed (94%) · 3 failed · 1 not measured", "Agent v4 · environment v1"], actions: ["View run"] },
+  regression: { title: "Regression · Returns & refunds agent v4 is down 12 pts", lines: ["Refund scenarios dropped from 96% to 84% against v3 in Customer Support Line", "7 scenarios that passed on v3 now fail"], actions: ["Compare runs", "View failures"] },
+  release_blocker: { title: "Must-pass scenario failing · Refunds above $200 need supervisor approval", lines: ["Failed on agent v4 in Customer Support Line — the agent issued a $240 refund without escalating"], actions: ["View scenario", "Open run"] },
+  pr: { title: "Fix PR opened · acme-inc/support-voice-agent #142", lines: ["Escalate refunds above $200 before issuing them", "2 files · simulation 84% → 97%"], actions: ["View pull request", "Open run"] },
+  version: { title: "Support voice agent · v5 saved from a push", lines: ["a3f91c2 Hand chargebacks to a human — priya.s", "2 environments keep running their current version until someone switches."], actions: ["Compare with the previous version", "Switch an environment to v5"] },
+  error_feed: { title: "New issue · Agent promised a delivery date it couldn't confirm", lines: ["23 production calls in the last hour · Customer Support Line"], actions: ["Open issue"] },
+  alert: { title: "Alert · p95 latency above 2s", lines: ["Customer Support Line · last 15 minutes"], actions: ["View alert"] },
+  approval: { title: "Approve a fix for Returns & refunds agent?", lines: ["Escalate refunds above $200 — fixes 7 failing scenarios (84% → 97%)", "2 files in acme-inc/support-voice-agent"], actions: ["Approve & open PR", "Decline", "Review in Future AGI"], approvalId: "sample" },
+};
+
+/** Settings → Integrations → Slack. */
+export default function SlackIntegrationPage() {
+  const navigate = useNavigate();
+  const { slack, slackLog, approvals, slackRequest, slackRemoved } = useIntegrations();
+  const [installOpen, setInstallOpen] = useState(false);
+  const [menu, setMenu] = useState(null);
+  const [preview, setPreview] = useState("regression");
+
+  const setRule = (id, channel) => updateSlack({ rules: { ...slack.rules, [id]: channel } });
+  const sample = { ...SAMPLES[preview], at: new Date().toISOString(), channel: preview === "approval" ? slack?.approvals?.channel : (slack?.rules?.[preview] || slack?.defaultChannel || "#agent-quality") };
+
+  return (
+    <Box>
+      <Button
+        size="small" variant="outlined"
+        startIcon={<Iconify icon="formkit:left" width={16} height={16} />}
+        onClick={() => navigate(paths.dashboard.settings.integrations)}
+        sx={{ mb: 2 }}
+      >
+        Back to Integrations
+      </Button>
+
+      <Card sx={{ mb: 3, p: 3 }}>
+        <Stack direction="row" alignItems="center" spacing={2}>
+          <BrandMark brand="slack" size={48} />
+          <Box flex={1} minWidth={0}>
+            <Typography sx={{ typography: "m2", fontWeight: "fontWeightSemiBold" }}>Slack</Typography>
+            <Typography sx={{ typography: "s1", color: "text.secondary" }}>
+              {slack
+                ? `Added to ${slack.workspace} · default channel ${slack.defaultChannel}`
+                : "Tell the team when quality moves, and approve fixes without leaving Slack."}
+            </Typography>
+            <Stack direction="row" spacing={0.75} sx={{ mt: 1 }}>
+              {["Notifications", "Approvals", "Alert destination"].map((t) => (
+                <Chip key={t} label={t} size="small" variant="outlined" sx={{ height: 22, typography: "s3" }} />
+              ))}
+            </Stack>
+          </Box>
+          {slack ? (
+            <>
+              <StatusPill on />
+              <Button size="small" aria-label="More actions" onClick={(e) => setMenu(e.currentTarget)} sx={{ minWidth: 0, color: "text.secondary" }}>
+                <Iconify icon="solar:menu-dots-bold" />
+              </Button>
+              <Menu anchorEl={menu} open={!!menu} onClose={() => setMenu(null)}>
+                <MenuItem onClick={() => { setMenu(null); uninstallSlack({ inSlack: true }); }} sx={{ typography: "s2" }}><DemoLabel />Simulate: removed in Slack</MenuItem>
+                <MenuItem onClick={() => { setMenu(null); uninstallSlack(); }} sx={{ color: "error.main", typography: "s2" }}>Remove from Slack</MenuItem>
+              </Menu>
+            </>
+          ) : (
+            <Stack alignItems="flex-end" spacing={0.5}>
+              <Button
+                variant="contained" color="primary" size="small" onClick={() => setInstallOpen(true)}
+                startIcon={<Iconify icon="logos:slack-icon" width={14} />}
+                sx={{ typography: "s2", fontWeight: 700 }}
+              >
+                Add to Slack
+              </Button>
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Opens Slack · you pick the workspace there</Typography>
+            </Stack>
+          )}
+        </Stack>
+      </Card>
+
+      {/* Removed from Slack's side (app_uninstalled / tokens_revoked). */}
+      {!slack && slackRemoved && !slackRequest && (
+        <Notice icon="solar:link-broken-linear" title={`Future AGI was removed from ${slackRemoved.workspace} in Slack`}>
+          Notifications and approvals stopped. Add it again to pick up where you left off.
+        </Notice>
+      )}
+
+      {/* The workspace's admins approve apps before anyone can add them. */}
+      {!slack && slackRequest?.status === "pending" && (
+        <Notice
+          icon="solar:clock-circle-linear" iconColor="#CA8A04" title={`Waiting for an admin of ${slackRequest.workspace} to approve`}
+          action={(
+            <>
+              <Button size="small" onClick={cancelSlackRequest} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>Withdraw</Button>
+              <Button size="small" variant="outlined" onClick={approveSlackRequest} sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
+                Admin approved (prototype)
+              </Button>
+            </>
+          )}
+        >
+          Slack sent your request to the workspace admins and will message you when one decides.
+        </Notice>
+      )}
+      {!slack && slackRequest?.status === "approved" && (
+        <Notice
+          icon="solar:check-circle-bold" iconColor="#16A34A" title={`An admin of ${slackRequest.workspace} approved Future AGI`}
+          action={(
+            <Button size="small" variant="contained" color="primary" onClick={() => setInstallOpen(slackRequest.workspace)} sx={{ typography: "s3", fontWeight: 700 }}>
+              Finish adding
+            </Button>
+          )}
+        >
+          Add it to the workspace now — it takes one more click on Slack.
+        </Notice>
+      )}
+
+      {!slack && (
+        <Box sx={{ display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", lg: "1fr 420px" }, alignItems: "start" }}>
+          <Card sx={{ p: 3 }}>
+            <Typography sx={{ typography: "s1", fontWeight: 700, mb: 2 }}>What connecting Slack unlocks</Typography>
+            <Stack spacing={2}>
+              {[
+                { icon: "solar:bell-linear", title: "Know when quality moves", body: "A run finishes, a version regresses, a must-pass scenario fails — the people who care hear about it in their channel." },
+                { icon: "solar:shield-check-linear", title: "Approve fixes where you are", body: "When a fix is ready, the reviewer approves it in Slack and the pull request opens. Decline, and nothing changes." },
+                { icon: "solar:siren-linear", title: "Alerts to a channel, not a webhook URL", body: "Pick a channel for any alert rule instead of pasting a webhook." },
+              ].map((c) => (
+                <Stack key={c.title} direction="row" spacing={1.5}>
+                  <Box sx={{ width: 32, height: 32, borderRadius: 1, flexShrink: 0, display: "grid", placeItems: "center", bgcolor: (t) => alpha(t.palette.text.primary, 0.05), color: "text.secondary" }}>
+                    <Iconify icon={c.icon} width={16} />
+                  </Box>
+                  <Box>
+                    <Typography sx={{ typography: "s2", fontWeight: 700 }}>{c.title}</Typography>
+                    <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>{c.body}</Typography>
+                  </Box>
+                </Stack>
+              ))}
+            </Stack>
+          </Card>
+          <Card sx={{ p: 2 }}>
+            <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, mb: 1 }}>What your team sees</Typography>
+            <SlackMessage msg={{ ...SAMPLES.approval, at: new Date().toISOString(), channel: "#agent-quality" }} />
+          </Card>
+        </Box>
+      )}
+
+      {slack && (
+        <Box sx={{ display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", lg: "1fr 420px" }, alignItems: "start" }}>
+          <Stack spacing={3}>
+            <Card>
+              <Box sx={{ px: 3, pt: 2.5, pb: 1.5 }}>
+                <Typography sx={{ typography: "s1", fontWeight: 700 }}>Notifications</Typography>
+                <Typography sx={{ typography: "s2", color: "text.secondary" }}>Choose what gets posted and where. Hover a row to preview it.</Typography>
+              </Box>
+              {SLACK_EVENTS.map((e) => {
+                const ch = slack.rules && e.id in slack.rules ? slack.rules[e.id] : (e.on ? slack.defaultChannel : null);
+                return (
+                  <Stack
+                    key={e.id} direction="row" alignItems="center" spacing={1.5}
+                    onMouseEnter={() => setPreview(e.id)}
+                    sx={{ px: 3, py: 1.25, borderTop: "1px solid", borderColor: "divider", bgcolor: preview === e.id ? "action.hover" : "transparent" }}
+                  >
+                    <Switch size="small" checked={!!ch} onChange={(ev) => setRule(e.id, ev.target.checked ? slack.defaultChannel : null)} />
+                    <Box flex={1} minWidth={0}>
+                      <Typography sx={{ typography: "s2", fontWeight: 600 }}>{e.label}</Typography>
+                      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{e.blurb}</Typography>
+                    </Box>
+                    <Select
+                      size="small" value={ch || ""} disabled={!ch}
+                      onChange={(ev) => setRule(e.id, ev.target.value)}
+                      displayEmpty
+                      renderValue={(v) => v || "Off"}
+                      sx={{ minWidth: 160, height: 30, typography: "s2" }}
+                    >
+                      {SLACK_CHANNELS.map((c) => <MenuItem key={c} value={c} sx={{ typography: "s2" }}>{c}</MenuItem>)}
+                    </Select>
+                  </Stack>
+                );
+              })}
+            </Card>
+
+            <Card onMouseEnter={() => setPreview("approval")}>
+              <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, py: 2.5 }}>
+                <Box flex={1} minWidth={0}>
+                  <Typography sx={{ typography: "s1", fontWeight: 700 }}>Approve fixes from Slack</Typography>
+                  <Typography sx={{ typography: "s2", color: "text.secondary" }}>
+                    Optional — your own rule, off by default. When a fix is ready, ask for approval in a channel. Approving opens the pull request; declining leaves the agent untouched.
+                  </Typography>
+                </Box>
+                <Switch checked={!!slack.approvals?.enabled} onChange={(e) => updateSlack({ approvals: { ...slack.approvals, enabled: e.target.checked } })} />
+              </Stack>
+              {slack.approvals?.enabled && (
+                <Stack direction="row" spacing={2} sx={{ px: 3, pb: 2.5 }}>
+                  <Box flex={1}>
+                    <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", mb: 0.5 }}>Ask in</Typography>
+                    <Select size="small" fullWidth value={slack.approvals.channel} onChange={(e) => updateSlack({ approvals: { ...slack.approvals, channel: e.target.value } })} sx={{ typography: "s2" }}>
+                      {SLACK_CHANNELS.map((c) => <MenuItem key={c} value={c} sx={{ typography: "s2" }}>{c}</MenuItem>)}
+                    </Select>
+                  </Box>
+                  <Box flex={1}>
+                    <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", mb: 0.5 }}>Who can approve</Typography>
+                    <Select size="small" fullWidth value={slack.approvals.who} onChange={(e) => updateSlack({ approvals: { ...slack.approvals, who: e.target.value } })} sx={{ typography: "s2" }}>
+                      <MenuItem value="channel" sx={{ typography: "s2" }}>Anyone in the channel</MenuItem>
+                      <MenuItem value="admins" sx={{ typography: "s2" }}>Workspace admins only</MenuItem>
+                      <MenuItem value="owner" sx={{ typography: "s2" }}>The agent&apos;s owner</MenuItem>
+                    </Select>
+                  </Box>
+                </Stack>
+              )}
+            </Card>
+          </Stack>
+
+          <Stack spacing={3} sx={{ position: { lg: "sticky" }, top: { lg: 16 } }}>
+            <Card sx={{ p: 2 }}>
+              <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, mb: 1 }}>Preview</Typography>
+              <SlackMessage msg={sample} />
+            </Card>
+            <Card>
+              <Box sx={{ px: 2, pt: 2, pb: 1 }}>
+                <Typography sx={{ typography: "s2", fontWeight: 700 }}>Recent messages</Typography>
+                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>What Future AGI posted. Approvals can be answered here too.</Typography>
+              </Box>
+              {slackLog.length === 0 ? (
+                <Typography sx={{ px: 2, pb: 2, typography: "s2", color: "text.subtitle" }}>Nothing posted yet — finish a simulation run or open a fix.</Typography>
+              ) : (
+                <Stack spacing={1} sx={{ px: 2, pb: 2, maxHeight: 520, overflowY: "auto" }}>
+                  {slackLog.map((m) => {
+                    const a = m.approvalId ? approvals.find((x) => x.id === m.approvalId) : null;
+                    const state = a && a.status !== "pending" ? (a.status === "approved" ? `Approved by ${a.by} — pull request opened` : `Declined by ${a.by}`) : null;
+                    return (
+                      <SlackMessage
+                        key={m.id} msg={m} actionState={state}
+                        onAction={a && a.status === "pending" ? (label) => {
+                          if (label.startsWith("Approve")) resolveApproval(a.id, "approved");
+                          else if (label === "Decline") resolveApproval(a.id, "declined");
+                          else if (m.links?.[label]) navigate(m.links[label]);
+                        } : m.links && Object.keys(m.links).length ? (label) => {
+                          /* Buttons lead back to what the message is about. */
+                          if (m.links[label]) navigate(m.links[label]);
+                        } : undefined}
+                      />
+                    );
+                  })}
+                </Stack>
+              )}
+            </Card>
+          </Stack>
+        </Box>
+      )}
+
+      <SlackInstallDialog
+        open={!!installOpen} onClose={() => setInstallOpen(false)}
+        workspace={typeof installOpen === "string" ? installOpen : undefined}
+      />
+    </Box>
+  );
+}
+
+function Notice({ icon, iconColor = "text.secondary", title, action, children }) {
+  return (
+    <Card sx={{ mb: 3, px: 3, py: 2 }}>
+      <Stack direction="row" alignItems="center" spacing={1.5}>
+        <Iconify icon={icon} width={18} sx={{ color: iconColor, flexShrink: 0 }} />
+        <Box flex={1} minWidth={0}>
+          <Typography sx={{ typography: "s2", fontWeight: 700 }}>{title}</Typography>
+          <Typography sx={{ typography: "s2", color: "text.secondary" }}>{children}</Typography>
+        </Box>
+        {action}
+      </Stack>
+    </Card>
+  );
+}
+Notice.propTypes = { icon: PropTypes.string, iconColor: PropTypes.string, title: PropTypes.string, action: PropTypes.node, children: PropTypes.node };
+
+SlackIntegrationPage.propTypes = {};

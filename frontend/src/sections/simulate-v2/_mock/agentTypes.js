@@ -75,7 +75,7 @@ export const AGENT_TYPES = [
           map: {
             vapi: { label: "Assistant ID", placeholder: "asst_9f2c…" },
             retell: { label: "Agent ID", placeholder: "agent_9f2c…" },
-            bland: { label: "Pathway ID", placeholder: "pathway_9f2c…" },
+            bland: { label: "Agent ID", placeholder: "agent_9f2c…" },
             elevenlabs: { label: "Agent ID", placeholder: "agent_9f2c…" },
             livekit: { label: "Agent name", placeholder: "returns-line-agent" },
           },
