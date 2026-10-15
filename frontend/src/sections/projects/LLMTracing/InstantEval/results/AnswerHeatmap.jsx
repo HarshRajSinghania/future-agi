@@ -9,7 +9,7 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha, keyframes, useTheme } from "@mui/material/styles";
-import { ERROR_ANSWER } from "src/sections/projects/LLMTracing/InstantEval/useInstantEval";
+import { ERROR_ANSWER } from "../useInstantEval";
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const HOUR_TICKS = new Set([0, 3, 6, 9, 12, 15, 18, 21]);

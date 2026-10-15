@@ -48761,6 +48761,8 @@ export const tracerAnalyseRunsCreateBodyConfigSampleSizeMax = 1000;
 
 export const tracerAnalyseRunsCreateBodyScopeLabelMax = 300;
 
+export const tracerAnalyseRunsCreateBodyScopePresetMax = 16;
+
 export const tracerAnalyseRunsCreateBodyScopeWindowItemMax = 64;
 
 export const tracerAnalyseRunsCreateBodyScopeWindowMax = 2;
@@ -48829,6 +48831,10 @@ export const TracerAnalyseRunsCreateBody = zod.object({
       label: zod
         .string()
         .max(tracerAnalyseRunsCreateBodyScopeLabelMax)
+        .optional(),
+      preset: zod
+        .string()
+        .max(tracerAnalyseRunsCreateBodyScopePresetMax)
         .optional(),
       window: zod
         .array(

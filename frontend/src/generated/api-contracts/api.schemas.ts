@@ -23616,6 +23616,8 @@ export interface AnalyseScopeApi {
   filters?: AnalyseScopeApiFiltersItem[];
   /** @maxLength 300 */
   label?: string;
+  /** @maxLength 16 */
+  preset?: string;
   /** @maxItems 2 */
   window?: string[];
 }

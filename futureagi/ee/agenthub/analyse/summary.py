@@ -175,7 +175,7 @@ def write_summary(
         points.append({
             "text": text,
             "category_ids": [c for c in point.get("category_ids", []) if c in ids],
-            "refs": [{"ref": r, "unit_id": examples[r - 1]["unit"]["key"]} for r in refs],
+            "refs": [{"ref": r, "unit_id": examples[r - 1]["unit"]["unit_id"]} for r in refs],
         })
         if len(points) >= MAX_POINTS:
             break
@@ -190,7 +190,7 @@ def write_summary(
         example = examples[ref - 1]
         highlights.append({
             "ref": ref,
-            "unit_id": example["unit"]["key"],
+            "unit_id": example["unit"]["unit_id"],
             "category_id": example["category"]["id"],
             "category_name": example["category"]["name"],
             "summary": example["unit"]["summary"],
@@ -203,7 +203,7 @@ def write_summary(
         "key_points": points,
         "highlights": highlights,
         "examples": [
-            {"ref": i, "unit_id": e["unit"]["key"], "category_id": e["category"]["id"]}
+            {"ref": i, "unit_id": e["unit"]["unit_id"], "category_id": e["category"]["id"]}
             for i, e in enumerate(examples, start=1)
         ],
         "dropped_points": dropped,

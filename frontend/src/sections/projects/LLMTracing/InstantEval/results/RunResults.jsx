@@ -12,15 +12,15 @@ import {
 import { alpha, useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
-import { ANSWER_TYPES } from "src/sections/projects/LLMTracing/InstantEval/instantEvalPayloads";
+import { ANSWER_TYPES } from "../instantEvalPayloads";
 import {
   createContinuousTask,
   explainErrorGroups,
   findContinuousTask,
-} from "src/sections/projects/LLMTracing/InstantEval/useInstantEval";
+} from "../useInstantEval";
 import AnswerBehaviour from "./AnswerBehaviour";
 import AnswerHeatmap from "./AnswerHeatmap";
-import { tracePageLink, traceViewLink } from "./analyseScope";
+import { tracePageLink, traceViewLink } from "./scopeLinks";
 
 // Discover needs at least this many traces to propose categories.
 const MIN_BREAKDOWN = 10;

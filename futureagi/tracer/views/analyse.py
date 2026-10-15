@@ -78,6 +78,8 @@ class AnalysePopulationItemSerializer(serializers.Serializer):
 class AnalyseScopeSerializer(serializers.Serializer):
     filters = serializers.ListField(child=serializers.JSONField(), required=False)
     label = serializers.CharField(max_length=300, required=False, allow_blank=True)
+    # A relative window ("24h", "7d", "30d") is re-anchored to now on rerun.
+    preset = serializers.CharField(max_length=16, required=False, allow_blank=True)
     window = serializers.ListField(
         child=serializers.CharField(max_length=64), required=False, max_length=2
     )

@@ -85642,6 +85642,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "string",
           maxLength: 300,
         },
+        preset: {
+          title: "Preset",
+          type: "string",
+          maxLength: 16,
+        },
         window: {
           type: "array",
           items: {
