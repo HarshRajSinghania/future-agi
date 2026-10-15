@@ -27,6 +27,7 @@ import {
 } from "src/sections/projects/LLMTracing/InstantEval/instantEvalPayloads";
 import { useJevAvailability } from "src/sections/projects/LLMTracing/InstantEval/useJevAvailability";
 import {
+  buildAnswerFilter,
   useInstantEvalHistory,
   useInstantEvalRun,
   useInstantEvals,
@@ -307,6 +308,7 @@ function ScopeBar({ scope, onPreset, onRemoveFilter, count }) {
           key={`${filter.column_id}-${index}`}
           size="small"
           label={describeFilter(filter)}
+          title={describeFilter(filter)}
           onDelete={() => onRemoveFilter(filter)}
           sx={{ maxWidth: 360 }}
         />
@@ -521,6 +523,7 @@ export default function AnalyseView() {
     navigate(`${location.pathname}?${params.toString()}`, { replace: true });
   };
   const [composerKey, setComposerKey] = useState(0);
+  const [discoverFocus, setDiscoverFocus] = useState(null);
   const runApi = useInstantEvalRun(observeId);
   const { run, start, rerun, view, reset } = runApi;
   const saved = useInstantEvals(observeId, { enabled: jev.available });
@@ -601,7 +604,24 @@ export default function AnalyseView() {
 
   const newQuestion = () => {
     reset();
+    setDiscoverFocus(null);
     setComposerKey((key) => key + 1);
+  };
+
+  // A second level of categories: Discover again, scoped to the traces that
+  // got this answer in this run.
+  const breakDown = (item, label) => {
+    setScope({
+      filters: [...(run.scopeFilters || []), buildAnswerFilter(item, [label])],
+      label: "Same window as this run",
+      preset: "trace",
+    });
+    setDiscoverFocus(
+      `What distinct kinds of "${label}" are there, and how do they differ?`,
+    );
+    reset();
+    setComposerKey((key) => key + 1);
+    setMode("discover");
   };
 
   const showComposer = run.phase === "idle" || run.phase === "failed";
@@ -681,6 +701,7 @@ export default function AnalyseView() {
                   scopeLoading={count.isLoading}
                   onRun={startRun}
                   disabled={!jev.available}
+                  initialFocus={discoverFocus}
                 />
               ) : showComposer ? (
                 <Composer
@@ -706,6 +727,7 @@ export default function AnalyseView() {
                     projectId={observeId}
                     run={run}
                     navigate={navigate}
+                    onBreakDown={breakDown}
                   />
                 </>
               )}

@@ -204,8 +204,9 @@ export default function DiscoverComposer({
   scopeLoading,
   onRun,
   disabled,
+  initialFocus,
 }) {
-  const [focus, setFocus] = useState(GOALS[0].focus);
+  const [focus, setFocus] = useState(initialFocus || GOALS[0].focus);
   const [state, setState] = useState({ step: "goal" });
   const [limit, setLimit] = useState(TRACE_LIMIT_OPTIONS[2]);
   const [touched, setTouched] = useState(false);
@@ -530,4 +531,5 @@ DiscoverComposer.propTypes = {
   scopeLoading: PropTypes.bool,
   onRun: PropTypes.func.isRequired,
   disabled: PropTypes.bool,
+  initialFocus: PropTypes.string,
 };

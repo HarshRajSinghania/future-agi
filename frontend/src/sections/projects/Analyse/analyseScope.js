@@ -71,6 +71,9 @@ const OP_LABEL = {
 
 export function describeFilter(item) {
   const config = item?.filter_config || {};
+  // Answer filters lead with the answer; the question can be long.
+  if (config.col_type === "EVAL_METRIC")
+    return `${[].concat(config.filter_value ?? []).join(" or ")} · ${item.display_name || "answer"}`;
   const value = Array.isArray(config.filter_value)
     ? config.filter_value.join(", ")
     : `${config.filter_value ?? ""}`;

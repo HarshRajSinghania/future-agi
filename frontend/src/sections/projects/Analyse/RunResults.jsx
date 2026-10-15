@@ -22,6 +22,9 @@ import AnswerBehaviour from "./AnswerBehaviour";
 import AnswerHeatmap from "./AnswerHeatmap";
 import { tracePageLink, traceViewLink } from "./analyseScope";
 
+// Discover needs at least this many traces to propose categories.
+const MIN_BREAKDOWN = 10;
+
 // Categorical hues for category answers; the first is the brand accent.
 const CATEGORY_COLORS = [
   "#7857FC",
@@ -70,7 +73,15 @@ const duration = (from, to) => {
     : `${seconds}s`;
 };
 
-function AnswerBars({ item, counts, selected, onSelect, onShow, theme }) {
+function AnswerBars({
+  item,
+  counts,
+  selected,
+  onSelect,
+  onShow,
+  onBreakDown,
+  theme,
+}) {
   const total = item.labels.reduce(
     (sum, label) => sum + (counts?.[label] || 0),
     0,
@@ -169,6 +180,24 @@ function AnswerBars({ item, counts, selected, onSelect, onShow, theme }) {
                 Show these {count} in the Trace view
               </Button>
             )}
+            {active && onBreakDown && count >= MIN_BREAKDOWN && (
+              <Button
+                size="small"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onBreakDown(label);
+                }}
+                startIcon={<Iconify icon="mdi:file-tree-outline" width={14} />}
+                sx={{
+                  mt: 0.25,
+                  textTransform: "none",
+                  px: 0.5,
+                  display: "flex",
+                }}
+              >
+                Break down these {count} into categories
+              </Button>
+            )}
           </Box>
         );
       })}
@@ -182,6 +211,7 @@ AnswerBars.propTypes = {
   selected: PropTypes.string,
   onSelect: PropTypes.func.isRequired,
   onShow: PropTypes.func.isRequired,
+  onBreakDown: PropTypes.func,
   theme: PropTypes.object.isRequired,
 };
 
@@ -352,7 +382,7 @@ KeepAnswering.propTypes = {
   navigate: PropTypes.func.isRequired,
 };
 
-export default function RunResults({ projectId, run, navigate }) {
+export default function RunResults({ projectId, run, navigate, onBreakDown }) {
   const theme = useTheme();
   const [questionIndex, setQuestionIndex] = useState(0);
   const [mode, setMode] = useState("count");
@@ -532,6 +562,11 @@ export default function RunResults({ projectId, run, navigate }) {
               selected={label}
               onSelect={setSelectedLabel}
               onShow={(value) => showInTraceView([value])}
+              onBreakDown={
+                onBreakDown && run.phase === "done"
+                  ? (value) => onBreakDown(item, value)
+                  : undefined
+              }
               theme={theme}
             />
             {item.definitions?.[label] && (
@@ -603,4 +638,5 @@ RunResults.propTypes = {
   projectId: PropTypes.string.isRequired,
   run: PropTypes.object.isRequired,
   navigate: PropTypes.func.isRequired,
+  onBreakDown: PropTypes.func,
 };
