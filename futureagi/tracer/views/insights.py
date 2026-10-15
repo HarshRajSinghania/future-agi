@@ -52,6 +52,8 @@ ACTIVE_RUN_WINDOW = timedelta(hours=2)
 DRAFTS_PER_HOUR = 60
 MAX_POPULATION = 20000
 UNITS_PAGE = 50
+MAX_CONTENT_UNITS = 20
+ASKS_PER_HOUR = 120
 
 
 # ─── Request serializers ─────────────────────────────────────────────────────
@@ -139,6 +141,19 @@ class InsightUnitsQuerySerializer(serializers.Serializer):
     unit_ids = serializers.CharField(max_length=4000, required=False, allow_blank=True)
     offset = serializers.IntegerField(min_value=0, required=False, default=0)
     limit = serializers.IntegerField(min_value=1, max_value=200, required=False, default=UNITS_PAGE)
+    # The unit's full text (what the model read), for showing its evidence in
+    # place. Only for small pages.
+    include_content = serializers.BooleanField(required=False, default=False)
+
+
+class InsightAskMessageSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=["user", "assistant"])
+    content = serializers.CharField(max_length=4000, allow_blank=True)
+
+
+class InsightAskSerializer(serializers.Serializer):
+    question = serializers.CharField(max_length=500)
+    history = InsightAskMessageSerializer(many=True, required=False, max_length=20)
 
 
 # ─── Response serializers ────────────────────────────────────────────────────
@@ -241,6 +256,7 @@ class InsightUnitItemSerializer(serializers.Serializer):
     metrics = serializers.JSONField()
     category_id = serializers.CharField(allow_blank=True)
     sub_category_id = serializers.CharField(allow_blank=True)
+    content = serializers.CharField(allow_blank=True, required=False)
 
 
 class InsightUnitsResultSerializer(serializers.Serializer):
@@ -717,6 +733,7 @@ class InsightRunUnitsView(APIView):
             units = units.filter(unit_id__in=wanted)
         total = units.count()
         offset, limit = params.get("offset", 0), params.get("limit", UNITS_PAGE)
+        with_content = params.get("include_content") and limit <= MAX_CONTENT_UNITS
         page = units.order_by("time", "id")[offset : offset + limit]
         return self._gm.success_response(
             {
@@ -734,9 +751,77 @@ class InsightRunUnitsView(APIView):
                         "metrics": u.metrics or {},
                         "category_id": u.category_id,
                         "sub_category_id": u.sub_category_id,
+                        **({"content": u.content} if with_content else {}),
                     }
                     for u in page
                 ],
                 "total": total,
             }
         )
+
+
+class InsightAskEvidenceSerializer(serializers.Serializer):
+    unit_id = serializers.CharField()
+    quote = serializers.CharField(allow_blank=True)
+    evidence_id = serializers.CharField(required=False, allow_blank=True)
+
+
+class InsightAskParagraphSerializer(serializers.Serializer):
+    text = serializers.CharField()
+    unit_ids = serializers.ListField(child=serializers.CharField())
+    category_ids = serializers.ListField(child=serializers.CharField())
+    evidence = InsightAskEvidenceSerializer(many=True)
+
+
+class InsightAskResultSerializer(serializers.Serializer):
+    answer = InsightAskParagraphSerializer(many=True)
+    follow_ups = serializers.ListField(child=serializers.CharField())
+    dropped = serializers.IntegerField()
+
+
+class InsightAskResponseSerializer(serializers.Serializer):
+    status = serializers.BooleanField(default=True)
+    result = InsightAskResultSerializer()
+
+
+class InsightRunAskView(APIView):
+    permission_classes = [IsAuthenticated]
+    _gm = GeneralMethods()
+
+    @validated_request(
+        request_serializer=InsightAskSerializer,
+        responses={200: InsightAskResponseSerializer, **ERROR_RESPONSES},
+    )
+    def post(self, request, run_id):
+        """Answer a follow-up question about a completed report, citing its examples."""
+        from ee.agenthub.insights import report
+        from ee.agenthub.insights.llm import InsightModelError, Spend
+        from ee.agenthub.insights.pipeline import _unit_dict
+
+        org = _org(request)
+        run = InsightRun.objects.filter(id=run_id, organization=org, deleted=False).first()
+        if run is None:
+            return self._gm.not_found("Report run not found")
+        if run.status != "completed" or not (run.result or {}).get("categories"):
+            return self._gm.bad_request("The report is not ready yet.")
+        denied = _gate(self._gm, org)
+        if denied:
+            return denied
+        if not _spend("ask", org.id, ASKS_PER_HOUR):
+            return _rate_limited(self._gm)
+        data = request.validated_data
+        rows = list(InsightUnit.objects.filter(run=run, status="done", included=True))
+        units = [_unit_dict(u) for u in rows]
+        contents = {str(u.pk): u.content or "" for u in rows}
+        spend = Spend()
+        try:
+            answer = report.answer(
+                run, run.result, units, contents, data["question"],
+                [dict(m) for m in data.get("history") or []], spend,
+            )
+        except InsightModelError as exc:
+            return self._gm.custom_error_response(
+                status.HTTP_503_SERVICE_UNAVAILABLE, str(exc), code="model_unavailable"
+            )
+        InsightRun.objects.filter(id=run.id).update(cost_usd=(run.cost_usd or 0) + spend.cost_usd)
+        return self._gm.success_response(answer)

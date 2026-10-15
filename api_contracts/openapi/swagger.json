@@ -62902,6 +62902,91 @@
                 }
             ]
         },
+        "/tracer/insights/runs/{run_id}/ask/": {
+            "post": {
+                "operationId": "tracer_insights_runs_ask_create",
+                "description": "Answer a follow-up question about a completed report, citing its examples.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/InsightAsk"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightAskResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "run_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/tracer/insights/runs/{run_id}/units/": {
             "get": {
                 "operationId": "tracer_insights_runs_units_list",
@@ -62944,6 +63029,13 @@
                         "default": 50,
                         "maximum": 200,
                         "minimum": 1
+                    },
+                    {
+                        "name": "include_content",
+                        "in": "query",
+                        "required": false,
+                        "type": "boolean",
+                        "default": false
                     }
                 ],
                 "responses": {
@@ -63043,6 +63135,7 @@
                         "type": "string",
                         "enum": [
                             "traces",
+                            "spans",
                             "sessions",
                             "users"
                         ]
@@ -160552,6 +160645,149 @@
                 }
             }
         },
+        "InsightAskMessage": {
+            "required": [
+                "role",
+                "content"
+            ],
+            "type": "object",
+            "properties": {
+                "role": {
+                    "title": "Role",
+                    "type": "string",
+                    "enum": [
+                        "user",
+                        "assistant"
+                    ]
+                },
+                "content": {
+                    "title": "Content",
+                    "type": "string",
+                    "maxLength": 4000
+                }
+            }
+        },
+        "InsightAsk": {
+            "required": [
+                "question"
+            ],
+            "type": "object",
+            "properties": {
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 1
+                },
+                "history": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAskMessage"
+                    }
+                }
+            }
+        },
+        "InsightAskEvidence": {
+            "required": [
+                "unit_id",
+                "quote"
+            ],
+            "type": "object",
+            "properties": {
+                "unit_id": {
+                    "title": "Unit id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "quote": {
+                    "title": "Quote",
+                    "type": "string"
+                },
+                "evidence_id": {
+                    "title": "Evidence id",
+                    "type": "string"
+                }
+            }
+        },
+        "InsightAskParagraph": {
+            "required": [
+                "text",
+                "unit_ids",
+                "category_ids",
+                "evidence"
+            ],
+            "type": "object",
+            "properties": {
+                "text": {
+                    "title": "Text",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "unit_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "category_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAskEvidence"
+                    }
+                }
+            }
+        },
+        "InsightAskResult": {
+            "required": [
+                "answer",
+                "follow_ups",
+                "dropped"
+            ],
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAskParagraph"
+                    }
+                },
+                "follow_ups": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "dropped": {
+                    "title": "Dropped",
+                    "type": "integer"
+                }
+            }
+        },
+        "InsightAskResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightAskResult"
+                }
+            }
+        },
         "InsightUnitItem": {
             "required": [
                 "unit_id",
@@ -160619,6 +160855,10 @@
                 "sub_category_id": {
                     "title": "Sub category id",
                     "type": "string"
+                },
+                "content": {
+                    "title": "Content",
+                    "type": "string"
                 }
             }
         },
@@ -160680,6 +160920,10 @@
                     "type": "number",
                     "x-nullable": true
                 },
+                "status": {
+                    "title": "Status",
+                    "type": "string"
+                },
                 "counts": {
                     "title": "Counts",
                     "type": "object",
@@ -160734,6 +160978,11 @@
                     "title": "Sessions",
                     "type": "integer"
                 },
+                "trace_id": {
+                    "title": "Trace id",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "answers": {
                     "title": "Answers",
                     "type": "object",
@@ -160775,6 +161024,10 @@
                 },
                 "answered": {
                     "title": "Answered",
+                    "type": "integer"
+                },
+                "pending": {
+                    "title": "Pending",
                     "type": "integer"
                 }
             }

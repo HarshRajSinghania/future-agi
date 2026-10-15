@@ -154,28 +154,49 @@ def write_summary(
         + "\n\nExamples:\n"
         + "\n".join(example_lines)
         + "\n\nReturn {\"title\": \"the report question, phrased crisply\", "
-        f"\"key_points\": [up to {MAX_POINTS} findings: {{\"text\": \"one or two sentences "
-        "with a number and a recommended action, citing examples as #n\", "
-        "\"category_ids\": [\"...\"]}], \"highlights\": [up to "
-        f"{MAX_HIGHLIGHTS} {{\"ref\": n, \"reason\": \"why this example matters, one line\"}}]}}. "
-        "Lead with the biggest or most actionable finding."
+        f"\"findings\": [up to {MAX_POINTS} {{\"headline\": \"at most 140 characters, leads "
+        "with the number, names the mechanism\", \"detail\": \"one or two sentences on how it "
+        "happens, citing examples as #n\", \"action\": \"imperative fix, at most 120 "
+        "characters\", \"severity\": \"high|medium|low\", \"category_ids\": [\"...\"]}}], "
+        f"\"highlights\": [up to {MAX_HIGHLIGHTS} {{\"ref\": n, \"title\": \"at most 90 "
+        "characters, what happened\", \"reason\": \"why this example matters, one line\"}}]}}. "
+        "Lead with the biggest or most actionable finding. Be specific: name the task, tool, "
+        "policy or behaviour, never 'some users had issues'."
     )
-    raw = chat_json(_SYSTEM, prompt, tier=THINKING, max_tokens=1600, temperature=0.3, spend=spend)
+    raw = chat_json(_SYSTEM, prompt, tier=THINKING, max_tokens=2200, temperature=0.3, spend=spend)
     numbers = allowed_numbers(result, examples)
     ids = {c["id"] for c in categories}
-    points, dropped = [], 0
-    for point in raw.get("key_points", []) if isinstance(raw, dict) else []:
-        text = " ".join(str(point.get("text", "")).split()) if isinstance(point, dict) else ""
+    points, findings, dropped = [], [], 0
+    raw_points = (raw.get("findings") or raw.get("key_points") or []) if isinstance(raw, dict) else []
+    for point in raw_points:
+        if not isinstance(point, dict):
+            continue
+        headline = " ".join(str(point.get("headline", "")).split())
+        detail = " ".join(str(point.get("detail", "")).split())
+        action = " ".join(str(point.get("action", "")).split())
+        if not headline:  # older shape: one "text" field
+            headline = " ".join(str(point.get("text", "")).split())
+        text = " ".join(p for p in (headline, detail) if p)
         if not text:
             continue
         if not verified(text, numbers):
             dropped += 1
             continue
-        refs = sorted({int(r) for r in re.findall(r"#(\d+)", text) if 0 < int(r) <= len(examples)})
-        points.append({
-            "text": text,
-            "category_ids": [c for c in point.get("category_ids", []) if c in ids],
-            "refs": [{"ref": r, "unit_id": examples[r - 1]["unit"]["unit_id"]} for r in refs],
+        refs = sorted({
+            int(r) for r in re.findall(r"#(\d+)", f"{text} {action}")
+            if 0 < int(r) <= len(examples)
+        })
+        ref_items = [{"ref": r, "unit_id": examples[r - 1]["unit"]["unit_id"]} for r in refs]
+        category_ids = [c for c in point.get("category_ids", []) if c in ids]
+        points.append({"text": text, "category_ids": category_ids, "refs": ref_items})
+        findings.append({
+            "headline": re.sub(r"\s*\(?#\d+(?:,\s*#\d+)*\)?", "", headline).strip(),
+            "detail": detail,
+            "action": action,
+            "severity": point.get("severity") if point.get("severity") in ("high", "medium", "low") else "medium",
+            "category_ids": category_ids,
+            "refs": ref_items,
+            "evidence": [],
         })
         if len(points) >= MAX_POINTS:
             break
@@ -194,6 +215,8 @@ def write_summary(
             "category_id": example["category"]["id"],
             "category_name": example["category"]["name"],
             "summary": example["unit"]["summary"],
+            "title": " ".join(str(entry.get("title", "")).split())[:120]
+            or example["unit"]["summary"][:90],
             "reason": " ".join(str(entry.get("reason", "")).split())[:240],
         })
         if len(highlights) >= MAX_HIGHLIGHTS:
@@ -201,6 +224,7 @@ def write_summary(
     return {
         "title": " ".join(str(raw.get("title", "")).split())[:200] if isinstance(raw, dict) else "",
         "key_points": points,
+        "findings": findings,
         "highlights": highlights,
         "examples": [
             {"ref": i, "unit_id": e["unit"]["unit_id"], "category_id": e["category"]["id"]}

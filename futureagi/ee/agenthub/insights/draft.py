@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+from ee.agenthub.insights import agent as insight_agent
 from ee.agenthub.insights.facets import clean_attributes, extract, included, lens_for
 from ee.agenthub.insights.llm import THINKING, Spend, chat_json
 from ee.agenthub.insights.units import load_units
@@ -72,6 +73,29 @@ def preview(
     loaded = load_units(unit, project_id, unit_ids[:3])
     attributes = clean_attributes(attributes)
     spend = Spend()
+    if insight_agent.enabled():
+        context = insight_agent.run_context(
+            {"lens": lens_key, "question": question, "agent_description": agent_description,
+             "instructions": instructions, "attributes": attributes},
+            unit, "preview",
+        )
+        read = insight_agent.read_units(
+            context, [(t.unit_id, t.content) for t in loaded.values()], attributes, spend
+        )
+        out = []
+        for text in loaded.values():
+            facets = read.get(text.unit_id, {}).get("facets")
+            if facets is None:
+                continue
+            out.append({
+                "unit_id": text.unit_id,
+                "label": text.label,
+                "excerpt": text.excerpt,
+                "user_id": text.user_id,
+                "facets": facets,
+                "included": included(facets, lens_key, attributes),
+            })
+        return out
 
     def one(text):
         facets = extract(

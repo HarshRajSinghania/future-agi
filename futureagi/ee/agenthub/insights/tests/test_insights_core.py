@@ -232,3 +232,91 @@ class TestSampling:
         assert len(picked) == 5
         assert sample_evenly(population, 1) == [population[-1]]
         assert sample_evenly(population[:3], 10) == population[:3]
+
+
+class TestRunChanges:
+    def _result(self, counts, total, failure=0.5):
+        return {
+            "totals": {"count": total, "failure_rate": failure, "unresolved_rate": 0.2, "error_rate": 0.0},
+            "categories": [
+                {"id": cid, "name": cid.upper(), "level": 1, "stats": {"count": n}}
+                for cid, n in counts.items()
+            ],
+        }
+
+    def test_a_category_that_grew_a_lot_is_a_significant_change(self):
+        from ee.agenthub.insights.stats import compare_runs
+
+        before = self._result({"a": 10, "b": 90}, 100)
+        after = self._result({"a": 45, "b": 55}, 100, failure=0.5)
+        changes = compare_runs(after, before)
+        by_id = {c["category_id"]: c for c in changes["categories"]}
+        assert by_id["a"]["significant"] and by_id["a"]["delta"] == pytest.approx(0.35)
+        assert changes["categories"][0]["category_id"] in ("a", "b")
+        assert not changes["metrics"][0]["significant"]  # failure rate unchanged
+
+    def test_new_categories_are_flagged_and_noise_is_not_significant(self):
+        from ee.agenthub.insights.stats import compare_runs
+
+        before = self._result({"a": 50, "b": 50}, 100)
+        after = self._result({"a": 48, "b": 47, "new": 5}, 100)
+        changes = compare_runs(after, before)
+        assert changes["new_category_ids"] == ["new"]
+        assert not any(c["significant"] for c in changes["categories"] if c["category_id"] != "new")
+
+
+class TestAgentOutputIsCheckedHere:
+    content = "[Turn 1] User: Where is order HP-1?\nAssistant: Could you share your order number?"
+
+    def test_only_quotes_that_occur_in_the_text_are_kept_with_offsets(self):
+        from ee.agenthub.insights.agent import verified_evidence
+
+        kept, dropped = verified_evidence(
+            [{"quote": "Could you share your  order number?"}, {"quote": "made up line"}],
+            self.content, "7",
+        )
+        assert dropped == 1
+        assert kept[0]["quote"] == "Could you share your order number?"
+        assert self.content[kept[0]["start"]:kept[0]["end"]] == kept[0]["quote"]
+        assert kept[0]["evidence_id"].startswith("7:")
+
+    def test_findings_with_unknown_numbers_or_units_are_dropped_and_refs_numbered(self):
+        from ee.agenthub.insights.report import from_agent
+
+        result = {
+            "totals": {"count": 40, "users": 30, "sessions": 40},
+            "population_size": 108, "sample_size": 108,
+            "categories": [{
+                "id": "a", "name": "Re-asks order number", "level": 2, "description": "",
+                "stats": {"count": 10, "users": 9, "sessions": 10, "turns": 30, "share": 0.25,
+                          "failure_rate": 1.0, "unresolved_rate": 0.9, "error_rate": 0.0, "outcomes": {}},
+                "notable": [],
+            }],
+        }
+        units = [{"key": "7", "unit_id": "sess-7", "summary": "s", "category_id": "t", "sub_category_id": "a",
+                  "facets": {}, "time": ""}]
+        reply = {
+            "title": "Where does it fail?",
+            "findings": [
+                {"headline": "Re-asks the order number in 10 conversations (25%)", "detail": "It forgets turn 1.",
+                 "action": "Keep the order number in context", "category_ids": ["a", "zz"], "unit_keys": ["7", "999"],
+                 "evidence": [{"unit_key": "7", "quote": "Could you share your order number?"},
+                              {"unit_key": "7", "quote": "not in the text"}], "severity": "high"},
+                {"headline": "Grew 73% this week", "detail": "", "unit_keys": ["7"]},
+            ],
+            "highlights": [{"unit_key": "7", "title": "Asked again for HP-1", "reason": "r", "quote": "Where is order HP-1?"},
+                           {"unit_key": "nope", "title": "x"}],
+            "category_insights": [{"category_id": "a", "root_cause": "Lookup state is lost", "fix": "f",
+                                   "evidence": [{"unit_key": "7", "quote": "Where is order HP-1?"}]}],
+        }
+        out = from_agent(reply, result, units, {"7": self.content})
+        assert [f["headline"] for f in out["findings"]] == ["Re-asks the order number in 10 conversations (25%)"]
+        finding = out["findings"][0]
+        assert finding["category_ids"] == ["a"]
+        assert finding["refs"] == [{"ref": 1, "unit_id": "sess-7"}]
+        assert [e["quote"] for e in finding["evidence"]] == ["Could you share your order number?"]
+        assert out["dropped_points"] == 1
+        assert [h["ref"] for h in out["highlights"]] == [1]
+        assert out["highlights"][0]["quote"] == "Where is order HP-1?"
+        assert out["category_insights"]["a"]["root_cause"] == "Lookup state is lost"
+        assert out["key_points"][0]["text"].startswith("Re-asks the order number")

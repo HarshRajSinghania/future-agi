@@ -56124,6 +56124,57 @@ export const TracerInsightsRunsReadResponse = zod.object({
 });
 
 /**
+ * Answer a follow-up question about a completed report, citing its examples.
+ */
+export const TracerInsightsRunsAskCreateParams = zod.object({
+  run_id: zod.string(),
+});
+
+export const tracerInsightsRunsAskCreateBodyQuestionMax = 500;
+
+export const tracerInsightsRunsAskCreateBodyHistoryItemContentMax = 4000;
+
+export const TracerInsightsRunsAskCreateBody = zod.object({
+  question: zod.string().min(1).max(tracerInsightsRunsAskCreateBodyQuestionMax),
+  history: zod
+    .array(
+      zod.object({
+        role: zod.enum(["user", "assistant"]),
+        content: zod
+          .string()
+          .max(tracerInsightsRunsAskCreateBodyHistoryItemContentMax),
+      }),
+    )
+    .optional(),
+});
+
+export const tracerInsightsRunsAskCreateResponseStatusDefault = true;
+
+export const TracerInsightsRunsAskCreateResponse = zod.object({
+  status: zod
+    .boolean()
+    .default(tracerInsightsRunsAskCreateResponseStatusDefault),
+  result: zod.object({
+    answer: zod.array(
+      zod.object({
+        text: zod.string().min(1),
+        unit_ids: zod.array(zod.string().min(1)),
+        category_ids: zod.array(zod.string().min(1)),
+        evidence: zod.array(
+          zod.object({
+            unit_id: zod.string().min(1),
+            quote: zod.string(),
+            evidence_id: zod.string().optional(),
+          }),
+        ),
+      }),
+    ),
+    follow_ups: zod.array(zod.string().min(1)),
+    dropped: zod.number(),
+  }),
+});
+
+/**
  * Analysed units of a run, optionally one category's, oldest first.
  */
 export const TracerInsightsRunsUnitsListParams = zod.object({
@@ -56141,6 +56192,8 @@ export const tracerInsightsRunsUnitsListQueryOffsetMin = 0;
 
 export const tracerInsightsRunsUnitsListQueryLimitDefault = 50;
 export const tracerInsightsRunsUnitsListQueryLimitMax = 200;
+
+export const tracerInsightsRunsUnitsListQueryIncludeContentDefault = false;
 
 export const TracerInsightsRunsUnitsListQueryParams = zod.object({
   category_id: zod
@@ -56164,6 +56217,9 @@ export const TracerInsightsRunsUnitsListQueryParams = zod.object({
     .min(1)
     .max(tracerInsightsRunsUnitsListQueryLimitMax)
     .default(tracerInsightsRunsUnitsListQueryLimitDefault),
+  include_content: zod
+    .boolean()
+    .default(tracerInsightsRunsUnitsListQueryIncludeContentDefault),
 });
 
 export const tracerInsightsRunsUnitsListResponseStatusDefault = true;
@@ -56187,6 +56243,7 @@ export const TracerInsightsRunsUnitsListResponse = zod.object({
         metrics: zod.object({}).passthrough(),
         category_id: zod.string(),
         sub_category_id: zod.string(),
+        content: zod.string().optional(),
       }),
     ),
     total: zod.number(),
@@ -56201,7 +56258,7 @@ export const tracerInstantEvalAnswersListQueryConfigIdsMax = 2000;
 export const TracerInstantEvalAnswersListQueryParams = zod.object({
   project_id: zod.string().uuid(),
   eval_task_id: zod.string().uuid(),
-  unit: zod.enum(["traces", "sessions", "users"]),
+  unit: zod.enum(["traces", "spans", "sessions", "users"]),
   config_ids: zod
     .string()
     .max(tracerInstantEvalAnswersListQueryConfigIdsMax)
@@ -56225,12 +56282,14 @@ export const TracerInstantEvalAnswersListResponse = zod.object({
         user_id: zod.string(),
         end_user_id: zod.string(),
         sessions: zod.number().optional(),
+        trace_id: zod.string().optional(),
         answers: zod.record(
           zod.string(),
           zod.object({
             answer: zod.string().min(1),
             explanation: zod.string(),
             confidence: zod.number().optional(),
+            status: zod.string().optional(),
             counts: zod.record(zod.string(), zod.number()).optional(),
           }),
         ),
@@ -56238,6 +56297,7 @@ export const TracerInstantEvalAnswersListResponse = zod.object({
     ),
     counts: zod.record(zod.string(), zod.record(zod.string(), zod.number())),
     answered: zod.number(),
+    pending: zod.number().optional(),
   }),
 });
 

@@ -633,6 +633,8 @@ import type {
   HuggingFaceDatasetListResponseApi,
   ImagineAnalysisResponseApi,
   ImportAnnotationsApi,
+  InsightAskApi,
+  InsightAskResponseApi,
   InsightConfigListResponseApi,
   InsightConfigPatchApi,
   InsightConfigResponseApi,
@@ -72662,6 +72664,98 @@ export const tracerInsightsRunsRead = async (
     {
       ...options,
       method: "GET",
+    },
+  );
+};
+
+export type tracerInsightsRunsAskCreateResponse200 = {
+  data: InsightAskResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsRunsAskCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsRunsAskCreateResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsRunsAskCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsRunsAskCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsRunsAskCreateResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsRunsAskCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsRunsAskCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsRunsAskCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsRunsAskCreateResponseSuccess =
+  tracerInsightsRunsAskCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsRunsAskCreateResponseError = (
+  | tracerInsightsRunsAskCreateResponse400
+  | tracerInsightsRunsAskCreateResponse402
+  | tracerInsightsRunsAskCreateResponse403
+  | tracerInsightsRunsAskCreateResponse404
+  | tracerInsightsRunsAskCreateResponse429
+  | tracerInsightsRunsAskCreateResponse500
+  | tracerInsightsRunsAskCreateResponse503
+  | tracerInsightsRunsAskCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsRunsAskCreateResponse =
+  | tracerInsightsRunsAskCreateResponseSuccess
+  | tracerInsightsRunsAskCreateResponseError;
+
+export const getTracerInsightsRunsAskCreateUrl = (runId: string) => {
+  return `/tracer/insights/runs/${runId}/ask/`;
+};
+
+/**
+ * Answer a follow-up question about a completed report, citing its examples.
+ */
+export const tracerInsightsRunsAskCreate = async (
+  runId: string,
+  insightAskApi: InsightAskApi,
+  options?: RequestInit,
+): Promise<tracerInsightsRunsAskCreateResponse> => {
+  return apiMutator<tracerInsightsRunsAskCreateResponse>(
+    getTracerInsightsRunsAskCreateUrl(runId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(insightAskApi),
     },
   );
 };

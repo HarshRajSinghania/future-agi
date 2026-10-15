@@ -17,11 +17,11 @@ import structlog
 from django.db import transaction
 from django.utils import timezone
 
-from ee.agenthub.insights import clustering
+from ee.agenthub.insights import agent as insight_agent
+from ee.agenthub.insights import clustering, report
 from ee.agenthub.insights.facets import clean_attributes, extract, included, lens_for
 from ee.agenthub.insights.llm import FAST, THINKING, InsightModelError, Spend, model_for
-from ee.agenthub.insights.stats import measure
-from ee.agenthub.insights.summary import write_summary
+from ee.agenthub.insights.stats import compare_runs, measure
 from ee.agenthub.insights.units import load_units
 
 logger = structlog.get_logger(__name__)
@@ -198,8 +198,11 @@ def extract_batch(run_id: str, unit_pks: list[int]) -> dict:
             unit.error = str(exc)
         return unit
 
-    with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as pool:
-        finished = list(pool.map(one, units))
+    if insight_agent.enabled():
+        finished = _read_with_agent(run, units, attributes, spend)
+    else:
+        with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as pool:
+            finished = list(pool.map(one, units))
     InsightUnit.objects.bulk_update(
         finished,
         ["facets", "summary", "lens_answer", "topic", "included", "status", "error"],
@@ -217,6 +220,30 @@ def extract_batch(run_id: str, unit_pks: list[int]) -> dict:
         locked.cost_usd = (locked.cost_usd or 0) + spend.cost_usd
         locked.save(update_fields=["progress", "cost_usd", "updated_at"])
     return {"done": len(finished), "failed": sum(1 for u in finished if u.status == "failed")}
+
+
+def _read_with_agent(run, units, attributes, spend) -> list:
+    """One agent call reads the batch; a unit it couldn't read fails alone.
+    An unreachable agent raises, so Temporal retries the batch."""
+    lens_key = run.settings.get("lens", "usage")
+    context = insight_agent.run_context(run.settings, run.unit, run.id)
+    results = insight_agent.read_units(
+        context, [(str(u.pk), u.content) for u in units], attributes, spend
+    )
+    for unit in units:
+        result = results.get(str(unit.pk), {})
+        if result.get("error"):
+            unit.status = "failed"
+            unit.error = result["error"]
+            continue
+        facets = result["facets"]
+        unit.facets = facets
+        unit.summary = facets["summary"]
+        unit.lens_answer = facets["lens_answer"]
+        unit.topic = facets["topic"]
+        unit.included = included(facets, lens_key, attributes)
+        unit.status = "done"
+    return units
 
 
 def retry_failed(run_id: str) -> list[int]:
@@ -241,6 +268,17 @@ def _context(run) -> str:
 def _item_text(unit) -> str:
     topic = unit.topic.strip()
     return f"{topic}. {unit.lens_answer}" if topic else unit.lens_answer
+
+
+def _namer(run, spend):
+    if not insight_agent.enabled():
+        return None
+    context = insight_agent.run_context(run.settings, run.unit, run.id)
+
+    def name(clusters, target):
+        return insight_agent.name_taxonomy(context, clusters, target, spend)
+
+    return name
 
 
 def organise(run_id: str) -> dict:
@@ -269,7 +307,9 @@ def organise(run_id: str) -> dict:
         leftovers = [i for i in items if assigned.get(i.key) == clustering.NONE]
         sub_of = {k: v for k, v in assigned.items() if v != clustering.NONE}
         if len(leftovers) >= max(5, 0.08 * len(items)):
-            new_tops, new_subs, info = clustering.discover(leftovers, context=context, spend=spend)
+            new_tops, new_subs, info = clustering.discover(
+                leftovers, context=context, spend=spend, namer=_namer(run, spend)
+            )
             emerging = {
                 "id": clustering._new_id(),
                 "name": "Emerging",
@@ -312,7 +352,9 @@ def organise(run_id: str) -> dict:
                     sub_of[item.key] = "unmatched"
         info.update({"mode": "classify", "leftovers": len(leftovers)})
     else:
-        top_nodes, sub_nodes, info = clustering.discover(items, context=context, spend=spend)
+        top_nodes, sub_nodes, info = clustering.discover(
+            items, context=context, spend=spend, namer=_namer(run, spend)
+        )
         tops = [t.as_dict() for t in top_nodes]
         subs = [s.as_dict() for s in sub_nodes]
         parent_of = {s.id: s.parent_id for s in sub_nodes}
@@ -349,6 +391,29 @@ def _unit_dict(unit) -> dict:
     }
 
 
+def _previous_result(run) -> dict | None:
+    """The last completed run of the same report before this one."""
+    InsightRun, _ = _models()
+    row = (
+        InsightRun.objects.filter(
+            config_id=run.config_id,
+            status="completed",
+            deleted=False,
+            created_at__lt=run.created_at,
+        )
+        .order_by("-created_at")
+        .values("id", "result", "finished_at")
+        .first()
+    )
+    if not row or not (row["result"] or {}).get("categories"):
+        return None
+    return {
+        "id": row["id"],
+        "result": row["result"],
+        "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+    }
+
+
 def finish(run_id: str) -> dict:
     InsightRun, InsightUnit = _models()
     run = InsightRun.objects.get(id=run_id)
@@ -373,23 +438,37 @@ def finish(run_id: str) -> dict:
     result["excluded"] = InsightUnit.objects.filter(run=run, status="done", included=False).count()
     result["failed"] = InsightUnit.objects.filter(run=run, status="failed").count()
     result["skipped"] = InsightUnit.objects.filter(run=run, status="skipped").count()
+    previous = _previous_result(run)
+    if previous:
+        changes = compare_runs(result, previous["result"])
+        if changes:
+            changes.update({
+                "previous_run_id": str(previous["id"]),
+                "previous_finished_at": previous["finished_at"],
+            })
+            result["changes"] = changes
     set_progress(run, "writing")
     spend = Spend()
-    by_category: dict[str, list[dict]] = {}
-    for unit in units:
-        by_category.setdefault(unit["sub_category_id"], []).append(unit)
-        by_category.setdefault(unit["category_id"], []).append(unit)
+    contents = dict(
+        InsightUnit.objects.filter(run=run, status="done", included=True)
+        .values_list("pk", "content")
+    )
+    contents = {str(k): v or "" for k, v in contents.items()}
+    if not run.settings.get("question"):
+        run.settings = {**run.settings, "question": lens_for(s.get("lens", "usage")).title}
     try:
-        result["summary"] = write_summary(
-            question=s.get("question") or lens_for(s.get("lens", "usage")).title,
-            unit=run.unit,
-            agent_description=s.get("agent_description", ""),
-            result=result,
-            units_by_category=by_category,
-            spend=spend,
-        )
+        summary = report.write(run, result, units, contents, spend)
+        insights = summary.pop("category_insights", {}) or {}
+        for category in result["categories"]:
+            if category["id"] in insights:
+                category["insight"] = insights[category["id"]]
+        result["summary"] = summary
     except InsightModelError:
-        result["summary"] = {"title": "", "key_points": [], "highlights": [], "examples": [], "error": "unavailable"}
+        result["summary"] = {
+            "title": "", "findings": [], "key_points": [], "highlights": [], "examples": [],
+            "error": "unavailable",
+        }
+    result["engine"] = insight_agent.engine()
     run.result = result
     run.cost_usd = (run.cost_usd or 0) + spend.cost_usd
     run.status = "completed"

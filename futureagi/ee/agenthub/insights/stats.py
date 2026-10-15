@@ -199,3 +199,65 @@ def measure(units: list[dict], tops: list[dict], subs: list[dict], attributes: l
             notable.get(category["id"], []), key=lambda t: t["q"]
         )
     return {"categories": categories, "totals": describe(units, attributes)}
+
+
+CHANGE_MIN_DELTA = 0.05
+_CHANGE_METRICS = {
+    "failure_rate": "Had an agent failure",
+    "unresolved_rate": "Ended unresolved",
+    "error_rate": "Hit an error",
+}
+
+
+def compare_runs(current: dict, previous: dict) -> dict | None:
+    """How a run's categories and headline rates moved since the previous
+    run of the same report. Shares are compared with Fisher's exact test on
+    the counts and corrected together (BH); a change is called significant
+    only when q < 0.1 and it moved at least five points."""
+    total = (current.get("totals") or {}).get("count") or 0
+    prev_total = (previous.get("totals") or {}).get("count") or 0
+    if not total or not prev_total:
+        return None
+    before = {c["id"]: c for c in previous.get("categories") or []}
+    rows, pvalues = [], []
+    for category in current.get("categories") or []:
+        old = before.get(category["id"])
+        count = category["stats"]["count"]
+        prev_count = old["stats"]["count"] if old else 0
+        p = fisher_exact(
+            [[count, total - count], [prev_count, prev_total - prev_count]]
+        ).pvalue
+        rows.append({
+            "category_id": category["id"],
+            "name": category["name"],
+            "level": category.get("level"),
+            "share": count / total,
+            "previous_share": prev_count / prev_total,
+            "delta": count / total - prev_count / prev_total,
+            "count": count,
+            "previous_count": prev_count,
+            "is_new": old is None,
+        })
+        pvalues.append(p)
+    metrics = []
+    totals, prev_totals = current["totals"], previous["totals"]
+    for key, label in _CHANGE_METRICS.items():
+        value, prev = totals.get(key), prev_totals.get(key)
+        if value is None or prev is None:
+            continue
+        hits, prev_hits = round(value * total), round(prev * prev_total)
+        metrics.append({"metric": key, "label": label, "value": value, "previous": prev,
+                        "delta": value - prev})
+        pvalues.append(
+            fisher_exact([[hits, total - hits], [prev_hits, prev_total - prev_hits]]).pvalue
+        )
+    adjusted = benjamini_hochberg(pvalues) if pvalues else []
+    for item, q in zip(rows + metrics, adjusted, strict=True):
+        item["q"] = q
+        item["significant"] = q < Q_THRESHOLD and abs(item["delta"]) >= CHANGE_MIN_DELTA
+    rows.sort(key=lambda r: (not r["significant"], -abs(r["delta"])))
+    return {
+        "categories": rows,
+        "new_category_ids": [r["category_id"] for r in rows if r["is_new"]],
+        "metrics": metrics,
+    }

@@ -26097,6 +26097,55 @@ export interface InsightRunResponseApi {
   result: InsightRunDetailApi;
 }
 
+export type InsightAskMessageApiRole =
+  (typeof InsightAskMessageApiRole)[keyof typeof InsightAskMessageApiRole];
+
+export const InsightAskMessageApiRole = {
+  user: "user",
+  assistant: "assistant",
+} as const;
+
+export interface InsightAskMessageApi {
+  role: InsightAskMessageApiRole;
+  /** @maxLength 4000 */
+  content: string;
+}
+
+export interface InsightAskApi {
+  /**
+   * @minLength 1
+   * @maxLength 500
+   */
+  question: string;
+  history?: InsightAskMessageApi[];
+}
+
+export interface InsightAskEvidenceApi {
+  /** @minLength 1 */
+  unit_id: string;
+  quote: string;
+  evidence_id?: string;
+}
+
+export interface InsightAskParagraphApi {
+  /** @minLength 1 */
+  text: string;
+  unit_ids: string[];
+  category_ids: string[];
+  evidence: InsightAskEvidenceApi[];
+}
+
+export interface InsightAskResultApi {
+  answer: InsightAskParagraphApi[];
+  follow_ups: string[];
+  dropped: number;
+}
+
+export interface InsightAskResponseApi {
+  status?: boolean;
+  result: InsightAskResultApi;
+}
+
 export type InsightUnitItemApiFacets = { [key: string]: unknown };
 
 export type InsightUnitItemApiMetrics = { [key: string]: unknown };
@@ -26115,6 +26164,7 @@ export interface InsightUnitItemApi {
   metrics: InsightUnitItemApiMetrics;
   category_id: string;
   sub_category_id: string;
+  content?: string;
 }
 
 export interface InsightUnitsResultApi {
@@ -26134,6 +26184,7 @@ export interface InstantEvalAnswerApi {
   answer: string;
   explanation: string;
   confidence?: number;
+  status?: string;
   counts?: InstantEvalAnswerApiCounts;
 }
 
@@ -26151,6 +26202,7 @@ export interface InstantEvalAnswerRowApi {
   user_id: string;
   end_user_id: string;
   sessions?: number;
+  trace_id?: string;
   answers: InstantEvalAnswerRowApiAnswers;
 }
 
@@ -26164,6 +26216,7 @@ export interface InstantEvalAnswersResultApi {
   rows: InstantEvalAnswerRowApi[];
   counts: InstantEvalAnswersResultApiCounts;
   answered: number;
+  pending?: number;
 }
 
 export interface InstantEvalAnswersResponseApi {
@@ -36114,6 +36167,7 @@ export type TracerInsightsRunsUnitsListParams = {
    * @maximum 200
    */
   limit?: number;
+  include_content?: boolean;
 };
 
 export type TracerInstantEvalAnswersListParams = {
@@ -36131,6 +36185,7 @@ export type TracerInstantEvalAnswersListUnit =
 
 export const TracerInstantEvalAnswersListUnit = {
   traces: "traces",
+  spans: "spans",
   sessions: "sessions",
   users: "users",
 } as const;

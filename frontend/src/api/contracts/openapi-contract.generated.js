@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1067,
+  endpointCount: 1068,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -35054,6 +35054,46 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    "/tracer/insights/runs/{run_id}/ask/": {
+      post: {
+        operationId: "tracer_insights_runs_ask_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InsightAsk",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightAskResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
     "/tracer/insights/runs/{run_id}/units/": {
       get: {
         operationId: "tracer_insights_runs_units_list",
@@ -35097,6 +35137,13 @@ export const OPENAPI_CONTRACT = Object.freeze({
               minimum: 1,
               maximum: 200,
               default: 50,
+            },
+          },
+          include_content: {
+            required: false,
+            schema: {
+              type: "boolean",
+              default: false,
             },
           },
         },
@@ -35156,7 +35203,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
             required: true,
             schema: {
               type: "string",
-              enum: ["traces", "sessions", "users"],
+              enum: ["traces", "spans", "sessions", "users"],
             },
           },
           config_ids: {
@@ -64486,6 +64533,38 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Annotator id",
           type: "string",
           format: "uuid",
+        },
+      },
+    },
+    InsightAsk: {
+      required: ["question"],
+      type: "object",
+      properties: {
+        question: {
+          title: "Question",
+          type: "string",
+          maxLength: 500,
+          minLength: 1,
+        },
+        history: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightAskMessage",
+          },
+        },
+      },
+    },
+    InsightAskResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightAskResult",
         },
       },
     },
@@ -94512,6 +94591,45 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InsightAskMessage: {
+      required: ["role", "content"],
+      type: "object",
+      properties: {
+        role: {
+          title: "Role",
+          type: "string",
+          enum: ["user", "assistant"],
+        },
+        content: {
+          title: "Content",
+          type: "string",
+          maxLength: 4000,
+        },
+      },
+    },
+    InsightAskResult: {
+      required: ["answer", "follow_ups", "dropped"],
+      type: "object",
+      properties: {
+        answer: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightAskParagraph",
+          },
+        },
+        follow_ups: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        dropped: {
+          title: "Dropped",
+          type: "integer",
+        },
+      },
+    },
     InsightConfigListResult: {
       required: ["configs"],
       type: "object",
@@ -94961,6 +95079,10 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         answered: {
           title: "Answered",
+          type: "integer",
+        },
+        pending: {
+          title: "Pending",
           type: "integer",
         },
       },
@@ -111224,6 +111346,37 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InsightAskParagraph: {
+      required: ["text", "unit_ids", "category_ids", "evidence"],
+      type: "object",
+      properties: {
+        text: {
+          title: "Text",
+          type: "string",
+          minLength: 1,
+        },
+        unit_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        category_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        evidence: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightAskEvidence",
+          },
+        },
+      },
+    },
     InsightRunSummary: {
       required: [
         "id",
@@ -111391,6 +111544,10 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Sub category id",
           type: "string",
         },
+        content: {
+          title: "Content",
+          type: "string",
+        },
       },
     },
     InstantEvalAnswerRow: {
@@ -111437,6 +111594,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
         sessions: {
           title: "Sessions",
           type: "integer",
+        },
+        trace_id: {
+          title: "Trace id",
+          type: "string",
+          "x-nullable": true,
         },
         answers: {
           title: "Answers",
@@ -118560,6 +118722,25 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InsightAskEvidence: {
+      required: ["unit_id", "quote"],
+      type: "object",
+      properties: {
+        unit_id: {
+          title: "Unit id",
+          type: "string",
+          minLength: 1,
+        },
+        quote: {
+          title: "Quote",
+          type: "string",
+        },
+        evidence_id: {
+          title: "Evidence id",
+          type: "string",
+        },
+      },
+    },
     InstantEvalAnswer: {
       required: ["answer", "explanation"],
       type: "object",
@@ -118579,6 +118760,10 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Confidence",
           type: "number",
           "x-nullable": true,
+        },
+        status: {
+          title: "Status",
+          type: "string",
         },
         counts: {
           title: "Counts",

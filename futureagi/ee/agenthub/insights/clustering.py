@@ -184,7 +184,7 @@ _ORGANISE_SYSTEM = (
 
 def organise(subs: list[Node], context: str, spend: Spend) -> list[Node]:
     """Group subcategories under 3-7 top-level categories (thinking model)."""
-    target = max(3 if len(subs) >= 6 else 2, min(7, round(len(subs) / 2.5)))
+    target = top_target(len(subs))
     listing = "\n".join(
         f'- id "{s.id}": {s.name} ({len(s.members)} items): {s.description}'
         for s in subs
@@ -231,8 +231,90 @@ def organise(subs: list[Node], context: str, spend: Spend) -> list[Node]:
     return tops
 
 
-def discover(items: list[Item], *, context: str, spend: Spend) -> tuple[list[Node], list[Node], dict]:
-    """Return (top-level categories, subcategories, info) for the items."""
+def top_target(n_subs: int) -> int:
+    return max(3 if n_subs >= 6 else 2, min(7, round(n_subs / 2.5)))
+
+
+def naming_payload(groups: list[list[int]], items: list[Item], vectors: np.ndarray) -> list[dict]:
+    """Per cluster: a naming sample, held-out members for the namer's
+    verifier, and the nearest items outside it (for contrastive names)."""
+    rng = np.random.default_rng(SEED)
+    centroids = [vectors[g].mean(axis=0) for g in groups]
+    clusters = []
+    for index, members in enumerate(groups):
+        shuffled = list(rng.permutation(members))
+        sample = shuffled[:NAMING_INSIDE]
+        holdout = shuffled[NAMING_INSIDE : NAMING_INSIDE + 8]
+        others = [i for g, group in enumerate(groups) if g != index for i in group]
+        nearest = sorted(others, key=lambda i: -float(vectors[i] @ centroids[index]))[
+            :NAMING_OUTSIDE
+        ]
+        clusters.append({
+            "id": f"c{index}",
+            "size": len(members),
+            "sample": [{"key": items[i].key, "text": items[i].text} for i in sample],
+            "holdout": [{"key": items[i].key, "text": items[i].text} for i in holdout],
+            "nearest_outside": [{"key": items[i].key, "text": items[i].text} for i in nearest],
+        })
+    return clusters
+
+
+def _named_by(namer, groups, items, vectors) -> tuple[list[tuple[str, str]], list[dict], list[dict]]:
+    """Names from an external namer (the Insights agent), in group order,
+    plus its proposed top-level grouping and audit."""
+    clusters = naming_payload(groups, items, vectors)
+    reply = namer(clusters, top_target(len(groups))) or {}
+    by_id = {str(s.get("id")): s for s in reply.get("subs") or [] if isinstance(s, dict)}
+    names = []
+    for index in range(len(groups)):
+        sub = by_id.get(f"c{index}", {})
+        name = " ".join(str(sub.get("name", "")).split())[:80] or f"Group {index + 1}"
+        names.append((name, " ".join(str(sub.get("description", "")).split())[:400]))
+    audit = [
+        {"cluster": sid, **(sub.get("audit") or {})} for sid, sub in by_id.items()
+        if isinstance(sub.get("audit"), dict)
+    ]
+    return names, [t for t in reply.get("tops") or [] if isinstance(t, dict)], audit
+
+
+def _tops_from(proposal: list[dict], subs: list[Node], cluster_to_sub: dict[str, Node]) -> list[Node]:
+    tops: list[Node] = []
+    placed: set[str] = set()
+    for entry in proposal:
+        children = [
+            cluster_to_sub[c] for c in entry.get("children", [])
+            if c in cluster_to_sub and cluster_to_sub[c].id not in placed
+        ]
+        if not children:
+            continue
+        top = Node(
+            id=_new_id(),
+            name=" ".join(str(entry.get("name", "")).split())[:80] or "Other",
+            description=" ".join(str(entry.get("description", "")).split())[:400],
+            level=1,
+        )
+        for child in children:
+            child.parent_id = top.id
+            top.members.extend(child.members)
+            placed.add(child.id)
+        tops.append(top)
+    leftovers = [s for s in subs if s.id not in placed]
+    if leftovers:
+        other = Node(id=_new_id(), name="Other", description="Smaller themes.", level=1)
+        for sub in leftovers:
+            sub.parent_id = other.id
+            other.members.extend(sub.members)
+        tops.append(other)
+    return tops
+
+
+def discover(
+    items: list[Item], *, context: str, spend: Spend, namer=None
+) -> tuple[list[Node], list[Node], dict]:
+    """Return (top-level categories, subcategories, info) for the items.
+
+    ``namer(clusters, target_top_count)`` names and organises the clusters
+    (the Insights agent); without one, the built-in model calls do it."""
     if not items:
         return [], [], {"method": "none", "k": 0}
     vectors, method = vectorise([item.text for item in items])
@@ -240,18 +322,28 @@ def discover(items: list[Item], *, context: str, spend: Spend) -> tuple[list[Nod
     k = base_cluster_count(n)
     labels = kmeans(vectors, k, min_size=3 if n < 300 else 5)
     groups = [list(np.where(labels == c)[0]) for c in range(int(labels.max()) + 1)]
-    names = _name_all(groups, items, vectors, context, spend)
+    proposal, audit = None, []
+    if namer is not None:
+        names, proposal, audit = _named_by(namer, groups, items, vectors)
+    else:
+        names = _name_all(groups, items, vectors, context, spend)
     subs: list[Node] = []
     by_name: dict[str, Node] = {}
-    for group, (name, description) in zip(groups, names, strict=True):
+    cluster_to_sub: dict[str, Node] = {}
+    for index, (group, (name, description)) in enumerate(zip(groups, names, strict=True)):
         members = [items[i].key for i in group]
         existing = by_name.get(name.lower())
         if existing:  # two clusters the model saw as one theme
             existing.members.extend(members)
+            cluster_to_sub[f"c{index}"] = existing
             continue
         node = Node(id=_new_id(), name=name, description=description, level=2, members=members)
         by_name[name.lower()] = node
+        cluster_to_sub[f"c{index}"] = node
         subs.append(node)
+    info = {"method": method, "k": len(groups), "namer": "agent" if namer else "builtin"}
+    if audit:
+        info["audit"] = audit
     if len(subs) <= 3:
         tops = []
         for sub in subs:
@@ -261,9 +353,11 @@ def discover(items: list[Item], *, context: str, spend: Spend) -> tuple[list[Nod
             )
             sub.parent_id = top.id
             tops.append(top)
+    elif proposal:
+        tops = _tops_from(proposal, subs, cluster_to_sub)
     else:
         tops = organise(subs, context, spend)
-    return tops, subs, {"method": method, "k": len(groups)}
+    return tops, subs, info
 
 
 _CLASSIFY_SYSTEM = (

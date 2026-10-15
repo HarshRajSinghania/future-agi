@@ -35,6 +35,7 @@ from tracer.views.insights import (
     InsightConfigListView,
     InsightDraftView,
     InsightPreviewView,
+    InsightRunAskView,
     InsightRunCreateView,
     InsightRunDetailView,
     InsightRunUnitsView,
@@ -244,6 +245,11 @@ urlpatterns = [
         "insights/runs/<uuid:run_id>/units/",
         InsightRunUnitsView.as_view(),
         name="insight-run-units",
+    ),
+    path(
+        "insights/runs/<uuid:run_id>/ask/",
+        InsightRunAskView.as_view(),
+        name="insight-run-ask",
     ),
     path(
         "instant-eval/user-sessions/",
