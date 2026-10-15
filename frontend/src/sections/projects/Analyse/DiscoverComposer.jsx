@@ -204,6 +204,7 @@ export default function DiscoverComposer({
   scopeTraces,
   scopeCount,
   scopeLoading,
+  scopeError,
   onRun,
   disabled,
   initialFocus,
@@ -457,7 +458,7 @@ export default function DiscoverComposer({
     );
   }
 
-  const tooFew = !scopeLoading && available < MIN_SAMPLE;
+  const tooFew = !scopeLoading && !scopeError && available < MIN_SAMPLE;
   return (
     <Box
       sx={{
@@ -507,7 +508,7 @@ export default function DiscoverComposer({
         <Button
           variant="contained"
           size="large"
-          disabled={disabled || scopeLoading || tooFew}
+          disabled={disabled || scopeLoading || scopeError || tooFew}
           onClick={discover}
           startIcon={<Iconify icon="mdi:creation-outline" width={18} />}
           sx={{ textTransform: "none" }}
@@ -515,15 +516,17 @@ export default function DiscoverComposer({
           Discover categories
         </Button>
         <Typography variant="caption" color="text.secondary">
-          {scopeLoading
-            ? "Counting traces…"
-            : tooFew
-              ? `Discover needs at least ${MIN_SAMPLE} traces in scope.`
-              : `Reads ${sampleSize} of the ${
-                  scopeCount?.isLowerBound
-                    ? `newest ${available.toLocaleString()}`
-                    : available.toLocaleString()
-                } traces in scope.`}
+          {scopeError
+            ? "Couldn't read the traces in scope. Retry from the scope bar above."
+            : scopeLoading
+              ? "Counting traces…"
+              : tooFew
+                ? `Discover needs at least ${MIN_SAMPLE} traces in scope.`
+                : `Reads ${sampleSize} of the ${
+                    scopeCount?.isLowerBound
+                      ? `newest ${available.toLocaleString()}`
+                      : available.toLocaleString()
+                  } traces in scope.`}
         </Typography>
       </Stack>
     </Box>
@@ -535,6 +538,7 @@ DiscoverComposer.propTypes = {
   scopeTraces: PropTypes.array,
   scopeCount: PropTypes.object,
   scopeLoading: PropTypes.bool,
+  scopeError: PropTypes.bool,
   onRun: PropTypes.func.isRequired,
   disabled: PropTypes.bool,
   initialFocus: PropTypes.string,

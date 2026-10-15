@@ -313,13 +313,26 @@ function ScopeBar({ scope, onPreset, onRemoveFilter, count }) {
           sx={{ maxWidth: 360 }}
         />
       ))}
-      <Typography variant="caption" color="text.secondary">
-        {count.isLoading
-          ? "Counting traces…"
-          : count.data
-            ? `${formatScopeTotal(count.data)} trace${count.data.total === 1 && !count.data.isLowerBound ? "" : "s"} in scope`
-            : ""}
-      </Typography>
+      {count.isError && !count.isFetching ? (
+        <Typography variant="caption" color="error.main">
+          Couldn&apos;t read the traces in scope.{" "}
+          <Button
+            size="small"
+            onClick={() => count.refetch()}
+            sx={{ textTransform: "none", minWidth: 0, p: 0, ml: 0.5 }}
+          >
+            Retry
+          </Button>
+        </Typography>
+      ) : (
+        <Typography variant="caption" color="text.secondary">
+          {count.isLoading || (count.isError && count.isFetching)
+            ? "Counting traces…"
+            : count.data
+              ? `${formatScopeTotal(count.data)} trace${count.data.total === 1 && !count.data.isLowerBound ? "" : "s"} in scope`
+              : ""}
+        </Typography>
+      )}
     </Stack>
   );
 }
@@ -727,7 +740,8 @@ export default function AnalyseView() {
                   projectId={observeId}
                   scopeTraces={count.data?.traces}
                   scopeCount={count.data}
-                  scopeLoading={count.isLoading}
+                  scopeLoading={count.isLoading || count.isFetching}
+                  scopeError={count.isError && !count.isFetching}
                   onRun={startRun}
                   disabled={!jev.available}
                   initialFocus={discoverFocus}
