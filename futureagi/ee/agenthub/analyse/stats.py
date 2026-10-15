@@ -128,7 +128,7 @@ def _tests_for(category_id: str, inside: list[dict], outside: list[dict], attrib
         if attribute["type"] == "boolean":
             key = attribute["key"]
             binaries[f"attr:{key}"] = (
-                f"had {key.replace('_', ' ')}",
+                key.replace("_", " "),
                 lambda u, key=key: bool(u["facets"].get("attributes", {}).get(key)),
             )
     for metric, (label, fn) in binaries.items():
@@ -152,11 +152,14 @@ def _tests_for(category_id: str, inside: list[dict], outside: list[dict], attrib
             continue
         p = mannwhitneyu(a, b, alternative="two-sided").pvalue
         delta = cliffs_delta(a, b)
+        inside_median, rest_median = statistics.median(a), statistics.median(b)
         tests.append({
             "category_id": category_id, "metric": metric, "label": label, "kind": "median",
-            "value": statistics.median(a), "rest": statistics.median(b),
-            "lift": (statistics.median(a) + 1e-9) / (statistics.median(b) + 1e-9),
-            "p": p, "large": abs(delta) >= MIN_DELTA,
+            "value": inside_median, "rest": rest_median,
+            "lift": (inside_median + 1e-9) / (rest_median + 1e-9),
+            # The finding is stated as "median X vs Y", so equal medians can't
+            # be a finding even when the distributions differ.
+            "p": p, "large": abs(delta) >= MIN_DELTA and inside_median != rest_median,
         })
     return tests
 

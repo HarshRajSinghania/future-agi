@@ -60,6 +60,21 @@ class TestStatistics:
         assert {"failure", "unresolved", "negative"} <= metrics
         assert result["totals"]["count"] == 60
 
+    def test_equal_medians_are_never_a_finding(self):
+        # Inside: turns 2,2,2,9...; elsewhere: 1,2,2,2... Distributions differ,
+        # medians don't, so "turns 2 vs 2" must not be reported.
+        inside = [unit(i, category="a", sub="a1") for i in range(30)]
+        outside = [unit(100 + i, category="b", sub="b1") for i in range(30)]
+        for i, u in enumerate(inside):
+            u["metrics"]["turns"] = 9 if i < 14 else 2
+        for i, u in enumerate(outside):
+            u["metrics"]["turns"] = 1 if i < 14 else 2
+        tops = [{"id": "a", "level": 1}, {"id": "b", "level": 1}]
+        subs = [{"id": "a1", "level": 2, "parent_id": "a"}, {"id": "b1", "level": 2, "parent_id": "b"}]
+        result = measure(inside + outside, tops, subs, [])
+        turns = [n for c in result["categories"] for n in c["notable"] if n["metric"] == "turns"]
+        assert turns == []
+
     def test_small_or_equal_groups_produce_no_claims(self):
         units = [unit(i, category="a" if i % 2 else "b", sub="a1" if i % 2 else "b1")
                  for i in range(10)]
