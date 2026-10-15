@@ -121,6 +121,7 @@ describe("EvalCreatePage with a Jev model", () => {
           expect.objectContaining({
             model: "jev-latest",
             output_type: "percentage",
+            choice_scores: null,
             jev_mapping: expect.objectContaining({
               question_type: "score",
               score: { levels: ["Unresolved", "Resolved"] },

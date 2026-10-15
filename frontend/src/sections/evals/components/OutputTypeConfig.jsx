@@ -140,9 +140,12 @@ const OutputTypeConfig = ({
               onChange={(e) => {
                 const val = e.target.value;
                 onOutputTypeChange(val);
-                // Auto-add a default row if switching to scoring/deterministic with no choices
+                // Auto-add a default row if switching to scoring/deterministic
+                // with no choices. Jev scores use ordered levels, and Jev
+                // rejects choice scores on a rubric, so skip the row there.
                 if (
-                  (val === "percentage" || val === "deterministic") &&
+                  (val === "deterministic" ||
+                    (val === "percentage" && !isJevModel)) &&
                   Object.keys(choiceScores || {}).length === 0
                 ) {
                   onChoiceScoresChange({ "Choice 1": 0.5 });
