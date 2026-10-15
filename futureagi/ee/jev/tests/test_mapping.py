@@ -67,7 +67,9 @@ def test_r08_c2_choice_scores_reordered_by_jsonb_keep_authored_order():
 )
 def test_r08_c2_reject_label_set_mismatch(labels):
     with pytest.raises(JevMappingError, match="JEV_CHOICE_LABELS_INVALID"):
-        mapping("choices", {"Yes": 1, "No": 0}, jev_mapping={"choice": {"labels": labels}})
+        mapping(
+            "choices", {"Yes": 1, "No": 0}, jev_mapping={"choice": {"labels": labels}}
+        )
 
 
 @pytest.mark.parametrize(

@@ -289,7 +289,10 @@ def test_r03_ui_draft_switched_to_llm_judge_saves_with_jev(auth_client):
                 "multi_choice": False,
                 "check_internet": False,
                 "messages": [
-                    {"role": "system", "content": "Did the agent resolve {{conversation}}?"}
+                    {
+                        "role": "system",
+                        "content": "Did the agent resolve {{conversation}}?",
+                    }
                 ],
                 "few_shot_examples": [],
                 "template_format": "mustache",
