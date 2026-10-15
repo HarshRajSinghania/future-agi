@@ -21,7 +21,13 @@ import { useNavigate, useParams } from "react-router";
 import { useSnackbar } from "notistack";
 import { useFeatureLocked, CAPABILITY } from "src/hooks/useCapabilities";
 import { useErrorLocalizationAvailable } from "src/hooks/useErrorLocalization";
-import { FAGI_MODEL_VALUES } from "./ModelSelector";
+import { FAGI_MODEL_VALUES, JEV_MODEL_VALUES } from "./ModelSelector";
+import JevOutputConfig from "./JevOutputConfig";
+import {
+  buildJevMapping,
+  getJevValidationErrors,
+  hasExtraJevMessages,
+} from "../utils/jevMapping";
 
 import { useCreateEval } from "../hooks/useCreateEval";
 import { useUpdateEval } from "../hooks/useEvalDetail";
@@ -157,6 +163,7 @@ const EvalCreatePage = () => {
   // Fail closed while capabilities load (both flags true) so we never flash
   // Turing models or agent evals as available before the fetch resolves.
   const { locked: fagiLocked } = useFeatureLocked(CAPABILITY.TURING_MODELS);
+  const { locked: jevLocked } = useFeatureLocked(CAPABILITY.JEV_MODELS);
   const { locked: agentEvalLocked, isLoading: capabilitiesLoading } =
     useFeatureLocked(CAPABILITY.AGENTIC_EVAL);
   const errorLocalizerAvailable = useErrorLocalizationAvailable();
@@ -182,6 +189,9 @@ const EvalCreatePage = () => {
   const [model, setModel] = useState("turing_large");
   const [openModelMenuSignal, setOpenModelMenuSignal] = useState(0);
   const [outputType, setOutputType] = useState("pass_fail");
+  // Jev question details (criteria, choice descriptions, score levels). The
+  // output category locks after save, so they must be editable here.
+  const [jevMapping, setJevMapping] = useState({});
   const [passThreshold, setPassThreshold] = useState(0.5);
   const [choiceScores, setChoiceScores] = useState({});
   const [multiChoice, setMultiChoice] = useState(false);
@@ -330,6 +340,7 @@ const EvalCreatePage = () => {
               d.template_format || config.template_format || "mustache",
             );
             if (config.messages) setMessages(config.messages);
+            setJevMapping(config.jev_mapping || {});
             if (config.few_shot_examples) {
               setFewShotExamples(config.few_shot_examples || []);
             }
@@ -372,6 +383,28 @@ const EvalCreatePage = () => {
   // Auto-save config to draft (debounced, skip initial load)
   const autoSaveTimer = useRef(null);
   const autoSaveSkipFirst = useRef(!!urlDraftId); // skip first trigger when loading existing draft
+  const isJevModel = JEV_MODEL_VALUES.has(model);
+  const jevErrors = isJevModel
+    ? getJevValidationErrors({
+        mapping: buildJevMapping(outputType, choiceScores, jevMapping),
+        config: {
+          check_internet: checkInternet,
+          few_shot_examples: fewShotExamples,
+          ...(evalType === "agent"
+            ? {
+                agent_mode: agentMode,
+                tools: buildToolsPayload(connectorIds),
+                knowledge_bases: knowledgeBaseIds,
+                data_injection: buildDataInjection(contextOptions),
+              }
+            : {}),
+        },
+        multiChoice,
+        choiceScores,
+        messages: evalType === "llm" ? messages : [],
+      })
+    : [];
+
   const buildUpdatePayload = useCallback(() => {
     const dataInjection = buildDataInjection(contextOptions);
 
@@ -414,6 +447,11 @@ const EvalCreatePage = () => {
           ? fewShotExamples.map((ds) => ({ id: ds.id, name: ds.name }))
           : undefined,
       template_format: templateFormat,
+      // Without it the server would keep the draft's earlier mapping, which
+      // no longer matches the output type once the user changes it.
+      ...(isJevModel
+        ? { jev_mapping: buildJevMapping(outputType, choiceScores, jevMapping) }
+        : {}),
     };
   }, [
     evalType,
@@ -436,6 +474,8 @@ const EvalCreatePage = () => {
     messages,
     fewShotExamples,
     templateFormat,
+    jevMapping,
+    isJevModel,
   ]);
 
   useEffect(() => {
@@ -1117,6 +1157,19 @@ const EvalCreatePage = () => {
                       onPassThresholdChange={setPassThreshold}
                       multiChoice={multiChoice}
                       onMultiChoiceChange={setMultiChoice}
+                      isJevModel={isJevModel}
+                    />
+                  )}
+
+                  {isJevModel && evalType !== "code" && (
+                    <JevOutputConfig
+                      outputType={outputType}
+                      choiceScores={choiceScores}
+                      mapping={jevMapping}
+                      onChange={setJevMapping}
+                      errors={jevErrors}
+                      hasExtraMessages={hasExtraJevMessages(messages)}
+                      locked={jevLocked}
                     />
                   )}
 
