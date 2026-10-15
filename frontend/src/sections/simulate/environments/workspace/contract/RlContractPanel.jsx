@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import PropTypes from "prop-types";
 import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography } from "@mui/material";
-import Iconify from "src/components/iconify";
 import { episodeContract } from "src/api/simulate-environments/_fixtures/rlContract";
 import SectionCard from "../../components/SectionCard";
 import CapabilityGraph from "../overview/CapabilityGraph";
@@ -134,20 +133,12 @@ export default function RlContractPanel({ env, envState, patch, locked = false, 
           </Box>
         </Box>
         {env.endConditions?.seed && (
-          <Stack
-            direction="row"
-            spacing={1.75}
-            sx={{ px: 2.5, py: 1.75, borderTop: "1px solid", borderColor: "divider" }}
-            alignItems="flex-start"
-          >
-            <Iconify icon="solar:dice-linear" width={16} sx={{ color: "text.subtitle", flexShrink: 0, mt: "1px" }} />
-            <Box>
-              <Typography sx={{ typography: "s2", fontWeight: 700, overflowWrap: "anywhere", userSelect: "text" }}>
-                {episode.seed.title || CONTRACT_COPY.seedTitle}
-              </Typography>
-              <Typography sx={{ typography: "s2", color: "text.secondary" }}>{episode.seed.note}</Typography>
-            </Box>
-          </Stack>
+          <Box sx={{ px: 2.5, py: 1.75, borderTop: "1px solid", borderColor: "divider" }}>
+            <Typography sx={{ typography: "s2", fontWeight: 700, overflowWrap: "anywhere", userSelect: "text" }}>
+              {episode.seed.title || CONTRACT_COPY.seedTitle}
+            </Typography>
+            <Typography sx={{ typography: "s2", color: "text.secondary" }}>{episode.seed.note}</Typography>
+          </Box>
         )}
       </SectionCard>
 
