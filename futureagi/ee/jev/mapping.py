@@ -35,10 +35,10 @@ def validate_jev_mapping(template_like, *, output, choice_scores, multi_choice, 
         _reject("JEV_MULTI_CHOICE_UNSUPPORTED", "multi_choice")
     if config.get("few_shot_examples") or config.get("ground_truth_few_shot"):
         _reject("JEV_FEW_SHOT_UNSUPPORTED", "few_shot_examples")
-    if (
-        config.get("agent_mode", "agent" if eval_type == "AgentEvaluator" else "quick")
-        != "quick"
-    ):
+    # agent_mode only drives AgentEvaluator. An LLM-judge template keeps the
+    # key from its agent-type draft (the create page starts on the Agents
+    # tab), and it has no effect there.
+    if eval_type == "AgentEvaluator" and config.get("agent_mode", "agent") != "quick":
         _reject("JEV_AGENT_MODE_UNSUPPORTED", "agent_mode")
     incompatible = {}
     for keys, code, field in [

@@ -259,6 +259,49 @@ def test_r03_api_auth_client_save_and_c19_readback(
     assert detail.data["result"]["jev_mapping"]["revision"] == "jev-map-v1"
 
 
+@pytest.mark.django_db
+def test_r03_ui_draft_switched_to_llm_judge_saves_with_jev(auth_client):
+    """The create page drafts an agent eval, then saves the user's LLM judge."""
+    with patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False):
+        draft = auth_client.post(
+            "/model-hub/eval-templates/create-v2/",
+            # EvalCreatePage's draft request.
+            {
+                "is_draft": True,
+                "eval_type": "agent",
+                "output_type": "pass_fail",
+                "model": "turing_large",
+                "pass_threshold": 0.5,
+            },
+            format="json",
+        )
+        assert draft.status_code == 200, draft.data
+        template_id = draft.data["result"]["id"]
+        response = auth_client.put(
+            f"/model-hub/eval-templates/{template_id}/update/",
+            {
+                "eval_type": "llm",
+                "instructions": "Did the agent resolve {{conversation}}?",
+                "model": "jev-latest",
+                "output_type": "pass_fail",
+                "pass_threshold": 0.5,
+                "choice_scores": None,
+                "multi_choice": False,
+                "check_internet": False,
+                "messages": [
+                    {"role": "system", "content": "Did the agent resolve {{conversation}}?"}
+                ],
+                "few_shot_examples": [],
+                "template_format": "mustache",
+            },
+            format="json",
+        )
+    assert response.status_code == 200, response.data
+    template = EvalTemplate.objects.get(id=template_id)
+    assert template.config["agent_mode"] == "agent"
+    assert template.config["jev_mapping"]["question_type"] == "noul"
+
+
 def test_r02_c19_detail_and_version_readback_under_denial():
     from django.utils import timezone
 

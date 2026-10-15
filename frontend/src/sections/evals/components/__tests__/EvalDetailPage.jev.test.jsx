@@ -326,6 +326,21 @@ describe("Jev editor save and test contract", () => {
     },
   );
 
+  it("ignores agent_mode left on an LLM judge drafted from the Agents tab", async () => {
+    mocks.data = {
+      ...mocks.data,
+      eval_type: "llm",
+      config: { ...mocks.data.config, agent_mode: "agent" },
+    };
+    render(<EvalDetailPage />);
+    await edit();
+    expect(
+      screen.queryByText(/Agent mode \(agent\) is not supported/),
+    ).not.toBeInTheDocument();
+    expect(save()).toBeEnabled();
+    expect(test()).toBeEnabled();
+  });
+
   it("requires explicit confirmation for extra messages and preserves them in the payload", async () => {
     mocks.data.config.messages = [
       { role: "system", content: "Check {{input}}" },

@@ -805,6 +805,9 @@ const EvalDetailPage = () => {
         mapping: jevPayload.jev_mapping,
         config: {
           ...effectiveConfig,
+          // Only agent evals use agent_mode; an LLM judge drafted on the
+          // Agents tab keeps a stale "agent" value that the backend ignores.
+          agent_mode: undefined,
           check_internet: checkInternet,
           few_shot_examples: fewShotExamples,
           ...(evalType === "agent"

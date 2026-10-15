@@ -123,6 +123,13 @@ def test_r10_c5_to_c17_incompatible_fields(config, code):
         mapping(**config)
 
 
+def test_r10_c7_agent_mode_left_on_llm_judge_is_ignored():
+    # The create page drafts an agent-type template, so an LLM-judge template
+    # saved from the UI still carries agent_mode="agent".
+    result = mapping(eval_type_id="CustomPromptEvaluator", agent_mode="agent")
+    assert result.to_dict()["question_type"] == "noul"
+
+
 def test_r10_c6_c8_c9_c13_compatible_reductions():
     result = mapping(
         eval_type_id="AgentEvaluator",
@@ -133,7 +140,7 @@ def test_r10_c6_c8_c9_c13_compatible_reductions():
         messages=[{"role": "user", "content": "context"}],
         jev_mapping={"include_messages": True},
     )
-    assert result.question_type == "noul"
+    assert result.to_dict()["question_type"] == "noul"
 
 
 @pytest.mark.parametrize(
