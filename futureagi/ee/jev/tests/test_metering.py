@@ -136,3 +136,47 @@ def test_r17_dataset_runner_emits_jev_properties():
         usage_event_id("run-1", 2),
     ]
     assert events[-1].properties["output_tokens"] == 6
+
+
+def test_billing_event_type_relabels_only_jev_runs():
+    from sdk.utils.helpers import _get_billing_event_type
+
+    legacy = "turing_large_evaluator"
+    assert _get_billing_event_type(legacy, "jev-latest") == "jev_evaluator"
+    assert _get_billing_event_type(legacy, None, "jev-1.13.0") == "jev_evaluator"
+    assert _get_billing_event_type(legacy, None, evaluator=instance()) == (
+        "jev_evaluator"
+    )
+    assert _get_billing_event_type(legacy, "gpt-4o", evaluator=object()) == legacy
+    assert _get_billing_event_type(legacy) == legacy
+
+
+def test_tracer_eval_billing_labels_jev_by_model_used():
+    """A trace eval whose config leaves the model to the template still bills
+    as jev_evaluator, from the model the engine actually ran."""
+    from tracer.utils.eval import _emit_eval_billing
+
+    result = SimpleNamespace(
+        model_used="jev-1.13.0",
+        cost={"total_cost": 0.0000173},
+        token_usage={"prompt_tokens": 412, "completion_tokens": 6},
+    )
+    with (
+        patch("ee.usage.services.config.BillingConfig.get") as billing,
+        patch("ee.usage.services.emitter.emit") as emit,
+    ):
+        billing.return_value.get_eval_per_run_fee.return_value = 0.0005
+        billing.return_value.calculate_ai_credits.return_value = 0.0621
+        _emit_eval_billing(
+            org_id="org",
+            api_call_type="turing_large_evaluator",
+            source_id="eval",
+            target_type="span",
+            result=result,
+            custom_eval_config=SimpleNamespace(model=None),
+            ws_id=None,
+            api_call_log_row=None,
+        )
+    event = emit.call_args.args[0]
+    assert event.event_type == "jev_evaluator"
+    assert event.amount == 0.0621

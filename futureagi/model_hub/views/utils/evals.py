@@ -20,7 +20,7 @@ from model_hub.views.eval_runner import (
     _extract_column_id_and_path,
     process_mapping,
 )
-from sdk.utils.helpers import _get_api_call_type
+from sdk.utils.helpers import _get_api_call_type, _get_billing_event_type
 from tfc.constants.api_calls import APICallStatusChoices
 from tfc.middleware.workspace_context import get_current_organization
 from tfc.temporal import temporal_activity
@@ -528,7 +528,9 @@ def run_eval_func(
                 emit(
                     UsageEvent(
                         org_id=str(org.id),
-                        event_type=api_call_type,
+                        event_type=_get_billing_event_type(
+                            api_call_type, model, evaluator=eval_instance
+                        ),
                         amount=credits,
                         properties={
                             "source": source,

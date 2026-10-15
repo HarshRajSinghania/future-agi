@@ -23,7 +23,7 @@ from model_hub.models.choices import StatusType
 from model_hub.models.evals_metric import EvalTemplate
 from model_hub.utils.eval_input_validation import is_empty_value
 from model_hub.utils.eval_mapping import require_mapping_paths
-from sdk.utils.helpers import _get_api_call_type
+from sdk.utils.helpers import _get_api_call_type, _get_billing_event_type
 from tfc.constants.api_calls import APICallStatusChoices
 from tfc.temporal import temporal_activity
 from tfc.utils.case import to_camel_case, to_snake_case
@@ -1026,7 +1026,11 @@ def _emit_eval_billing(
         emit(
             UsageEvent(
                 org_id=org_id,
-                event_type=api_call_type,
+                event_type=_get_billing_event_type(
+                    api_call_type,
+                    getattr(result, "model_used", None),
+                    getattr(custom_eval_config, "model", None),
+                ),
                 amount=credits,
                 properties={
                     "source": "tracer" if not feedback_id else "feedback",
@@ -1194,7 +1198,11 @@ def _run_evaluation(
                 emit(
                     UsageEvent(
                         org_id=str(observation_span.project.organization_id),
-                        event_type=api_call_type,
+                        event_type=_get_billing_event_type(
+                            api_call_type,
+                            custom_eval_config.model,
+                            evaluator=eval_instance,
+                        ),
                         amount=credits,
                         properties={
                             "source": "tracer" if not feedback_id else "feedback",

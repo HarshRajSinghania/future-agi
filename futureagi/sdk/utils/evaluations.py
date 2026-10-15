@@ -8,7 +8,7 @@ from agentic_eval.core_evals.fi_evals import *  # noqa: F403
 from model_hub.models.evals_metric import EvalTemplate
 from model_hub.models.evaluation import Evaluation, StatusChoices
 from model_hub.tasks.user_evaluation import trigger_error_localization_for_standalone
-from sdk.utils.helpers import _get_api_call_type
+from sdk.utils.helpers import _get_api_call_type, _get_billing_event_type
 from tracer.utils.inline_evals import trigger_inline_eval
 from tfc.constants.api_calls import APICallStatusChoices
 try:
@@ -294,7 +294,9 @@ def _run_eval(eval_template, inputs, model, user, workspace, eval_config=None):
                 emit(
                     UsageEvent(
                         org_id=str(user.organization.id),
-                        event_type=api_call_type,
+                        event_type=_get_billing_event_type(
+                            api_call_type, model, getattr(result, "model_used", None)
+                        ),
                         amount=credits,
                         properties={
                             "source": "standalone_v2",

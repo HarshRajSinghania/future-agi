@@ -35,3 +35,25 @@ def _get_api_call_type(model: str):
     except Exception as e:
         logger.exception(f"Error getting api call type: {e}")
         return APICallTypeChoices.TURING_LARGE_EVALUATOR.value
+
+
+def _get_billing_event_type(api_call_type: str, *models, evaluator=None) -> str:
+    """Event type for the billing UsageEvent of an eval run.
+
+    Jev runs bill as jev_evaluator. api_call_type still drives the legacy
+    APICallType/Pricing rows, which have no Jev entry, so callers keep it there.
+    """
+    from tfc.ee_gates import is_jev_model
+
+    is_jev = any(is_jev_model(model) for model in models)
+    if not is_jev and evaluator is not None:
+        try:
+            from ee.evals.llm.jev_evaluator.evaluator import JevEvaluator
+        except ImportError:
+            JevEvaluator = None
+        is_jev = JevEvaluator is not None and isinstance(evaluator, JevEvaluator)
+    if not is_jev:
+        return api_call_type
+    from ee.usage.schemas.event_types import BillingEventType
+
+    return BillingEventType.JEV_EVALUATOR.value
