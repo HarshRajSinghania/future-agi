@@ -822,6 +822,13 @@ CODE_EXECUTOR_LOCAL_FALLBACK = os.getenv(
     "CODE_EXECUTOR_LOCAL_FALLBACK", "false"
 ).lower() in ("true", "1", "yes")
 
+# How Jev evaluators reach TypeSafe, always on the org's own key. "gateway"
+# (default) sends them to the AgentCC gateway's /v1/systemone on
+# AGENTCC_INTERNAL_API_KEY, carrying the org's key for that call. "direct"
+# calls TypeSafe from the backend, for local dev without a gateway. Any other
+# value means "gateway".
+JEV_TRANSPORT = os.getenv("JEV_TRANSPORT", "gateway").strip().lower()
+
 # Hosted simulation runner (plan §9): when enabled, eligible runs are dispatched
 # to the simulation-runner worker which executes the released SDK, instead of the
 # native in-backend simulation path. Default off — no regression.

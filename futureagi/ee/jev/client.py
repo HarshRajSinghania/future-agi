@@ -1,17 +1,40 @@
-"""Bounded typed requests to TypeSafe's System One API with the org's own key."""
+"""Bounded typed requests to TypeSafe's System One API with the org's own key.
 
+By default they go through the AgentCC gateway's /v1/systemone: the backend
+authenticates with its internal key and hands the gateway the org's TypeSafe
+key in x-agentcc-provider-key for that one call. JEV_TRANSPORT=direct calls
+TypeSafe from the backend instead, for local dev without a gateway.
+"""
+
+import os
 import random
+import re
 import threading
 import time
 from functools import lru_cache
 
+import structlog
 from django.conf import settings
 
 from ee.jev.mapping import JevMappingError, check_input_size
 from tfc.ee_gates import is_jev_model
 
+logger = structlog.get_logger(__name__)
+
 TYPESAFE_BASE_URL = "https://api.typesafe.ai"
+PROVIDER_KEY_HEADER = "x-agentcc-provider-key"
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+# Gateway error codes are snake_case identifiers; anything else is not read.
+_GATEWAY_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# The gateway refused to carry the org's key, so the call never reached
+# TypeSafe. These are deployment faults; no retry can fix them.
+_GATEWAY_REFUSALS = frozenset(
+    {
+        "byok_required",
+        "decision_provider_not_configured",
+        "provider_key_header_not_allowed",
+    }
+)
 
 
 class JevGatewayError(RuntimeError):
@@ -37,6 +60,62 @@ def _provider_error(status, retry_after=None):
     return JevGatewayError("JEV_PROVIDER_ERROR", status in (500, 502, 503), retry_after)
 
 
+def _gateway_error(status, code=None, retry_after=None, upstream_status=None):
+    """Map a gateway error to a typed, body-free error: its code first, then
+    its status. The gateway itself never retries."""
+    if code == "provider_key_rejected":
+        # TypeSafe rejected the org's key; retrying cannot help.
+        return JevGatewayError("JEV_KEY_INVALID")
+    if code in _GATEWAY_REFUSALS:
+        return JevGatewayError()
+    if status == 429:
+        return JevGatewayError("JEV_RATE_LIMITED", True, retry_after)
+    if status == 504:
+        return JevGatewayError("JEV_TIMEOUT", True, retry_after)
+    if code == "upstream_invalid_response":
+        # TypeSafe answered 200, so the org's key was billed; a retry would bill
+        # it again. The same answer is final on the direct transport.
+        return JevGatewayError()
+    if status == 502 and upstream_status is not None:
+        # TypeSafe answered with a status the gateway does not map (500, 501,
+        # 415, a redirect...): retry only what the direct transport retries.
+        # A 502 without one is the gateway getting no answer, and is retried.
+        return JevGatewayError(
+            "JEV_PROVIDER_ERROR", upstream_status in (500, 502, 503), retry_after
+        )
+    # 400, 402, 404, 413 and 422 are final, and so is any status the gateway
+    # does not map: a 401 is the gateway refusing the internal key, not the
+    # org's, and a retry after a gateway 500 could bill the org's key twice.
+    return JevGatewayError("JEV_PROVIDER_ERROR", status in (502, 503), retry_after)
+
+
+def _gateway_code(response):
+    """The code from the gateway's error envelope. The message is never read:
+    it may carry TypeSafe's text about the request."""
+    if len(response.content) > _MAX_RESPONSE_BYTES:
+        return None
+    try:
+        error = response.json().get("error")
+    except (ValueError, AttributeError):
+        return None
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if isinstance(code, str) and _GATEWAY_CODE.fullmatch(code) else None
+
+
+def _upstream_status(response):
+    """The status TypeSafe answered with, when the gateway got an answer."""
+    value = response.headers.get("x-agentcc-upstream-status", "")
+    return int(value) if value.isdigit() and len(value) == 3 else None
+
+
+def _internal_api_key():
+    return str(
+        getattr(settings, "AGENTCC_INTERNAL_API_KEY", "")
+        or os.environ.get("AGENTCC_INTERNAL_API_KEY")
+        or ""
+    ).strip()
+
+
 class JevSystemOneClient:
     def __init__(
         self, *, api_key=None, sleep=time.sleep, clock=time.monotonic, jitter=None
@@ -47,31 +126,84 @@ class JevSystemOneClient:
         self.attempt = 0
         self.attempts = []
 
+    def _gateway_url(self):
+        from agentcc.services.gateway_client import resolve_gateway_internal_url
+
+        base_url = resolve_gateway_internal_url()
+        # Only whether the internal key is set: an error raised here keeps
+        # this frame, and so its locals, for Sentry.
+        internal_key_set = bool(_internal_api_key())
+        if not (base_url and internal_key_set):
+            # Never fall back to calling TypeSafe directly: that would take the
+            # org's key off the gateway without anyone choosing it.
+            logger.error(
+                "jev_gateway_not_configured",
+                gateway_url_set=bool(base_url),
+                internal_key_set=internal_key_set,
+            )
+            raise JevGatewayError()
+        return base_url.rstrip("/") + "/v1/systemone"
+
+    def _headers(self, gateway):
+        if not gateway:
+            return {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+        return {
+            "Authorization": f"Bearer {_internal_api_key()}",
+            # The org's own key, for this one call. The gateway never uses an
+            # operator key for an internal-key decision call.
+            PROVIDER_KEY_HEADER: self.api_key,
+            "Content-Type": "application/json",
+        }
+
     def _request(self, payload, timeout):
         import httpx
 
         if not self.api_key:
             raise JevGatewayError("JEV_KEY_MISSING")
-        base_url = getattr(settings, "TYPESAFE_BASE_URL", "") or TYPESAFE_BASE_URL
+        # Only an explicit "direct" leaves the gateway.
+        gateway = getattr(settings, "JEV_TRANSPORT", "gateway") != "direct"
+        if gateway:
+            url = self._gateway_url()
+            body = {**payload, "model": "typesafe/" + payload["model"]}
+        else:
+            base_url = getattr(settings, "TYPESAFE_BASE_URL", "") or TYPESAFE_BASE_URL
+            url, body = base_url.rstrip("/") + "/v1/systemone", payload
         try:
+            # The headers are built in the call and never bound to a name: the
+            # errors raised below keep this frame, and Sentry reports a
+            # frame's locals, where its scrubber knows only some key names.
             response = httpx.post(
-                base_url.rstrip("/") + "/v1/systemone",
-                json=payload,
+                url,
+                json=body,
                 timeout=timeout,
                 follow_redirects=False,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers=self._headers(gateway),
             )
         except httpx.TimeoutException:
             raise JevGatewayError("JEV_TIMEOUT", True) from None
         except httpx.HTTPError:
             raise JevGatewayError("JEV_PROVIDER_ERROR", True) from None
         if response.status_code != 200:
-            raise _provider_error(
-                response.status_code, response.headers.get("Retry-After")
-            )
+            retry_after = response.headers.get("Retry-After")
+            if gateway:
+                code = _gateway_code(response)
+                upstream_status = _upstream_status(response)
+                # Only the gateway's status and code: never its message, the
+                # body or a header. A refusal by the gateway itself (a rotated
+                # internal key, a gateway without /v1/systemone) shows here.
+                logger.warning(
+                    "jev_gateway_error",
+                    status=response.status_code,
+                    code=code,
+                    upstream_status=upstream_status,
+                )
+                raise _gateway_error(
+                    response.status_code, code, retry_after, upstream_status
+                )
+            raise _provider_error(response.status_code, retry_after)
         if len(response.content) > _MAX_RESPONSE_BYTES:
             raise JevGatewayError()
         return response.json()
