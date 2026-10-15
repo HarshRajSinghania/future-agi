@@ -2835,6 +2835,64 @@ _TRACE_PUBLIC_FIELDS = frozenset(
     {"input", "output", "name", "error", "tags", "metadata", "external_id"}
 )
 _SESSION_PUBLIC_FIELDS = frozenset({"name", "bookmarked"})
+# ``transcript``: the whole conversation as ordered "User:/Assistant:" turns,
+# so one evaluator can read a session end to end. Clipped on turn boundaries
+# (first turns and the latest kept) to stay inside judge input limits.
+SESSION_TRANSCRIPT_FIELD = "transcript"
+_TRANSCRIPT_MAX_CHARS = 60000
+_TRANSCRIPT_TURN_CHARS = 4000
+
+
+def _transcript_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        candidate = value
+    else:
+        text = str(value)
+        stripped = text.strip()
+        if stripped[:1] not in "[{":
+            return text
+        try:
+            candidate = json.loads(stripped)
+        except ValueError:
+            return text
+    if isinstance(candidate, dict):
+        for key in ("content", "text", "message", "output", "input", "query"):
+            if isinstance(candidate.get(key), str):
+                return candidate[key]
+        candidate = candidate.get("messages", candidate)
+    if isinstance(candidate, list):
+        for message in reversed(candidate):
+            if isinstance(message, dict) and message.get("role") in ("user", "human"):
+                content = message.get("content")
+                return content if isinstance(content, str) else json.dumps(content)
+    return json.dumps(candidate) if not isinstance(candidate, str) else candidate
+
+
+def render_session_transcript(traces) -> str:
+    """Ordered turns of a session's traces as plain text for a judge."""
+
+    def clip(text):
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= _TRANSCRIPT_TURN_CHARS else text[: _TRANSCRIPT_TURN_CHARS - 1] + "…"
+
+    turns = [
+        f"[Turn {i}] User: {clip(_transcript_text(getattr(t, 'input', None)))}\n"
+        f"Assistant: {clip(_transcript_text(getattr(t, 'output', None)))}"
+        for i, t in enumerate(traces, start=1)
+    ]
+    text = "\n\n".join(turns)
+    if len(text) <= _TRANSCRIPT_MAX_CHARS:
+        return text
+    head, tail, used = turns[:2], [], sum(len(t) for t in turns[:2])
+    for turn in reversed(turns[2:]):
+        if used + len(turn) > _TRANSCRIPT_MAX_CHARS:
+            break
+        tail.insert(0, turn)
+        used += len(turn)
+    skipped = len(turns) - len(head) - len(tail)
+    return "\n\n".join(head + [f"[… {skipped} turns omitted …]"] + tail)
 
 # Span model fields that are stored as dedicated DB columns (not inside
 # ``span_attributes``).  The eval mapping picker can expose these via
@@ -3149,6 +3207,16 @@ def _resolve_session_path(trace_session: TraceSession, path: str):
         walked = _walk_dotted_path(value, rest)
         return walked if walked is not None else _MISSING
 
+    if head == SESSION_TRANSCRIPT_FIELD and not rest:
+        from tracer.services.clickhouse.v2.eval_loader import _read_source
+
+        if _read_source() == "clickhouse":
+            return render_session_transcript(_session_traces_ch(trace_session))
+        head, rest = "traces", ""
+        transcript_requested = True
+    else:
+        transcript_requested = False
+
     if head == "traces":
         # Match the trace-listing UI's ordering (``list_traces_of_session``
         # in ``tracer/views/trace.py``): earliest root span's ``start_time``,
@@ -3203,6 +3271,8 @@ def _resolve_session_path(trace_session: TraceSession, path: str):
                 .annotate(_root_start=Coalesce(Subquery(root_start), "created_at"))
                 .order_by("_root_start", "id")
             )
+        if transcript_requested:
+            return render_session_transcript(traces)
         return _resolve_collection_path(traces, rest, _resolve_trace_path)
 
     return _MISSING

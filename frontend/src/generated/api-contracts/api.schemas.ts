@@ -23365,48 +23365,62 @@ export interface DeploymentRegistrationResponseApi {
   instance_secret: string;
 }
 
-export interface AnalyseDiscoverRequestApi {
-  project_id: string;
-  /**
-   * @minItems 10
-   * @maxItems 150
-   */
-  trace_ids: string[];
-  /** @maxLength 500 */
-  focus?: string;
+export type AnalyseRunSummaryApiDistributionItem = { [key: string]: unknown };
+
+export type AnalyseRunSummaryApiScope = { [key: string]: unknown };
+
+export interface AnalyseRunSummaryApi {
+  id: string;
+  /** @minLength 1 */
+  status: string;
+  /** @minLength 1 */
+  stage: string;
+  created_at: string;
+  finished_at: string;
+  population_size: number;
+  sample_size: number;
+  analysed_count: number;
+  /** @minLength 1 */
+  taxonomy_mode: string;
+  distribution: AnalyseRunSummaryApiDistributionItem[];
+  scope: AnalyseRunSummaryApiScope;
 }
 
-export interface AnalyseDiscoverExampleApi {
-  /** @minLength 1 */
-  trace_id: string;
-  /** @minLength 1 */
-  quote: string;
-}
+export type AnalyseConfigItemApiAttributesItem = { [key: string]: unknown };
 
-export interface AnalyseDiscoverCategoryApi {
-  /** @minLength 1 */
-  label: string;
-  /** @minLength 1 */
-  definition: string;
-  examples: AnalyseDiscoverExampleApi[];
-  sample_count: number;
-}
+export type AnalyseConfigItemApiScope = { [key: string]: unknown };
 
-export interface AnalyseDiscoverProposalApi {
+export type AnalyseConfigItemApiTaxonomy = { [key: string]: unknown };
+
+export interface AnalyseConfigItemApi {
+  id: string;
+  /** @minLength 1 */
+  name: string;
+  /** @minLength 1 */
+  unit: string;
+  /** @minLength 1 */
+  lens: string;
   /** @minLength 1 */
   question: string;
-  categories: AnalyseDiscoverCategoryApi[];
+  agent_description: string;
+  instructions: string;
+  attributes: AnalyseConfigItemApiAttributesItem[];
   sample_size: number;
-  unassigned: number;
-  /** @minLength 1 */
-  model: string;
-  cost_usd: number;
-  dropped_quotes: number;
+  scope: AnalyseConfigItemApiScope;
+  has_taxonomy: boolean;
+  taxonomy: AnalyseConfigItemApiTaxonomy;
+  created_at: string;
+  latest_run: AnalyseRunSummaryApi;
+  runs?: AnalyseRunSummaryApi[];
 }
 
-export interface AnalyseDiscoverResponseApi {
+export interface AnalyseConfigListResultApi {
+  configs: AnalyseConfigItemApi[];
+}
+
+export interface AnalyseConfigListResponseApi {
   status?: boolean;
-  result: AnalyseDiscoverProposalApi;
+  result: AnalyseConfigListResultApi;
 }
 
 export type ApiErrorResponseApiType =
@@ -23440,6 +23454,279 @@ export interface ApiErrorResponseApi {
   error?: string;
   attr?: string;
   details?: ApiErrorResponseApiDetails;
+}
+
+export interface AnalyseConfigResponseApi {
+  status?: boolean;
+  result: AnalyseConfigItemApi;
+}
+
+export interface AnalyseConfigPatchApi {
+  /**
+   * @minLength 1
+   * @maxLength 255
+   */
+  name?: string;
+  reset_taxonomy?: boolean;
+}
+
+export type AnalyseDraftApiUnit =
+  (typeof AnalyseDraftApiUnit)[keyof typeof AnalyseDraftApiUnit];
+
+export const AnalyseDraftApiUnit = {
+  traces: "traces",
+  sessions: "sessions",
+  users: "users",
+} as const;
+
+export type AnalyseDraftApiLens =
+  (typeof AnalyseDraftApiLens)[keyof typeof AnalyseDraftApiLens];
+
+export const AnalyseDraftApiLens = {
+  usage: "usage",
+  failures: "failures",
+  experience: "experience",
+  personas: "personas",
+  custom: "custom",
+} as const;
+
+export interface AnalyseDraftApi {
+  project_id: string;
+  unit: AnalyseDraftApiUnit;
+  lens: AnalyseDraftApiLens;
+  /** @maxLength 500 */
+  goal?: string;
+  /** @maxLength 500 */
+  agent_description?: string;
+  /**
+   * @minItems 1
+   * @maxItems 5
+   */
+  sample_ids: string[];
+}
+
+export type AnalyseDraftResultApiAttributesItem = { [key: string]: unknown };
+
+export interface AnalyseDraftResultApi {
+  /** @minLength 1 */
+  name: string;
+  /** @minLength 1 */
+  question: string;
+  agent_description: string;
+  instructions: string;
+  attributes: AnalyseDraftResultApiAttributesItem[];
+  examples_read: number;
+}
+
+export interface AnalyseDraftResponseApi {
+  status?: boolean;
+  result: AnalyseDraftResultApi;
+}
+
+export type AnalyseConfigInputApiUnit =
+  (typeof AnalyseConfigInputApiUnit)[keyof typeof AnalyseConfigInputApiUnit];
+
+export const AnalyseConfigInputApiUnit = {
+  traces: "traces",
+  sessions: "sessions",
+  users: "users",
+} as const;
+
+export type AnalyseConfigInputApiLens =
+  (typeof AnalyseConfigInputApiLens)[keyof typeof AnalyseConfigInputApiLens];
+
+export const AnalyseConfigInputApiLens = {
+  usage: "usage",
+  failures: "failures",
+  experience: "experience",
+  personas: "personas",
+  custom: "custom",
+} as const;
+
+export type AnalyseAttributeApiType =
+  (typeof AnalyseAttributeApiType)[keyof typeof AnalyseAttributeApiType];
+
+export const AnalyseAttributeApiType = {
+  boolean: "boolean",
+  number: "number",
+  string: "string",
+} as const;
+
+export interface AnalyseAttributeApi {
+  /**
+   * @minLength 1
+   * @maxLength 60
+   */
+  key: string;
+  type: AnalyseAttributeApiType;
+  /** @maxLength 300 */
+  description?: string;
+  filter_by?: boolean;
+}
+
+export interface AnalyseConfigInputApi {
+  /**
+   * @minLength 1
+   * @maxLength 255
+   */
+  name: string;
+  unit: AnalyseConfigInputApiUnit;
+  lens: AnalyseConfigInputApiLens;
+  /**
+   * @minLength 1
+   * @maxLength 500
+   */
+  question: string;
+  /** @maxLength 500 */
+  agent_description?: string;
+  /** @maxLength 1000 */
+  instructions?: string;
+  attributes?: AnalyseAttributeApi[];
+  /**
+   * @minimum 10
+   * @maximum 1000
+   */
+  sample_size?: number;
+}
+
+export interface AnalysePreviewApi {
+  project_id: string;
+  config: AnalyseConfigInputApi;
+  /**
+   * @minItems 1
+   * @maxItems 3
+   */
+  unit_ids: string[];
+}
+
+export type AnalysePreviewResultApiUnitsItem = { [key: string]: unknown };
+
+export interface AnalysePreviewResultApi {
+  units: AnalysePreviewResultApiUnitsItem[];
+}
+
+export interface AnalysePreviewResponseApi {
+  status?: boolean;
+  result: AnalysePreviewResultApi;
+}
+
+export type AnalyseScopeApiFiltersItem = { [key: string]: unknown };
+
+export interface AnalyseScopeApi {
+  filters?: AnalyseScopeApiFiltersItem[];
+  /** @maxLength 300 */
+  label?: string;
+  /** @maxItems 2 */
+  window?: string[];
+}
+
+export interface AnalysePopulationItemApi {
+  /**
+   * @minLength 1
+   * @maxLength 255
+   */
+  id: string;
+  /** @maxLength 64 */
+  time?: string;
+  /** @maxLength 255 */
+  user_id?: string;
+}
+
+export interface AnalyseRunCreateApi {
+  project_id: string;
+  config_id?: string;
+  config?: AnalyseConfigInputApi;
+  scope?: AnalyseScopeApi;
+  population: AnalysePopulationItemApi[];
+  /**
+   * @minimum 10
+   * @maximum 1000
+   */
+  sample_size?: number;
+}
+
+export interface AnalyseRunCreatedResultApi {
+  run_id: string;
+  config_id: string;
+}
+
+export interface AnalyseRunCreatedResponseApi {
+  status?: boolean;
+  result: AnalyseRunCreatedResultApi;
+}
+
+export type AnalyseRunDetailApiProgress = { [key: string]: unknown };
+
+export type AnalyseRunDetailApiScope = { [key: string]: unknown };
+
+export type AnalyseRunDetailApiSettings = { [key: string]: unknown };
+
+export type AnalyseRunDetailApiResult = { [key: string]: unknown };
+
+export type AnalyseRunDetailApiModelsUsed = { [key: string]: unknown };
+
+export interface AnalyseRunDetailApi {
+  id: string;
+  config_id: string;
+  project_id: string;
+  /** @minLength 1 */
+  status: string;
+  /** @minLength 1 */
+  stage: string;
+  progress: AnalyseRunDetailApiProgress;
+  /** @minLength 1 */
+  unit: string;
+  scope: AnalyseRunDetailApiScope;
+  settings: AnalyseRunDetailApiSettings;
+  population_size: number;
+  sample_size: number;
+  analysed_count: number;
+  /** @minLength 1 */
+  taxonomy_mode: string;
+  result: AnalyseRunDetailApiResult;
+  models_used: AnalyseRunDetailApiModelsUsed;
+  cost_usd: number;
+  error: string;
+  created_at: string;
+  started_at: string;
+  finished_at: string;
+  previous_run_id: string;
+  next_run_id: string;
+}
+
+export interface AnalyseRunResponseApi {
+  status?: boolean;
+  result: AnalyseRunDetailApi;
+}
+
+export type AnalyseUnitItemApiFacets = { [key: string]: unknown };
+
+export type AnalyseUnitItemApiMetrics = { [key: string]: unknown };
+
+export interface AnalyseUnitItemApi {
+  /** @minLength 1 */
+  unit_id: string;
+  label: string;
+  user_id: string;
+  session_id: string;
+  time: string;
+  excerpt: string;
+  summary: string;
+  lens_answer: string;
+  facets: AnalyseUnitItemApiFacets;
+  metrics: AnalyseUnitItemApiMetrics;
+  category_id: string;
+  sub_category_id: string;
+}
+
+export interface AnalyseUnitsResultApi {
+  units: AnalyseUnitItemApi[];
+  total: number;
+}
+
+export interface AnalyseUnitsResponseApi {
+  status?: boolean;
+  result: AnalyseUnitsResultApi;
 }
 
 export interface BulkAnnotationAnnotationRequestApi {
@@ -25836,6 +26123,85 @@ export interface TriggerAnalysisApi {
   trace_id: string;
   project_id: string;
   widgets: WidgetAnalysisApi[];
+}
+
+export type InstantEvalAnswerApiCounts = { [key: string]: number };
+
+export interface InstantEvalAnswerApi {
+  /** @minLength 1 */
+  answer: string;
+  explanation: string;
+  confidence?: number;
+  counts?: InstantEvalAnswerApiCounts;
+}
+
+export type InstantEvalAnswerRowApiAnswers = {
+  [key: string]: InstantEvalAnswerApi;
+};
+
+export interface InstantEvalAnswerRowApi {
+  /** @minLength 1 */
+  id: string;
+  label: string;
+  excerpt: string;
+  /** @minLength 1 */
+  time: string;
+  user_id: string;
+  end_user_id: string;
+  sessions?: number;
+  answers: InstantEvalAnswerRowApiAnswers;
+}
+
+export type InstantEvalAnswersResultApiCounts = {
+  [key: string]: { [key: string]: number };
+};
+
+export interface InstantEvalAnswersResultApi {
+  /** @minLength 1 */
+  unit: string;
+  rows: InstantEvalAnswerRowApi[];
+  counts: InstantEvalAnswersResultApiCounts;
+  answered: number;
+}
+
+export interface InstantEvalAnswersResponseApi {
+  status?: boolean;
+  result: InstantEvalAnswersResultApi;
+}
+
+export interface InstantEvalUserSessionsApi {
+  project_id: string;
+  /**
+   * @minItems 1
+   * @maxItems 500
+   */
+  end_user_ids: string[];
+  /** @maxItems 2 */
+  window?: string[];
+  /**
+   * @minimum 1
+   * @maximum 20
+   */
+  per_user?: number;
+}
+
+export interface InstantEvalUserSessionApi {
+  /** @minLength 1 */
+  session_id: string;
+  /** @minLength 1 */
+  end_user_id: string;
+  /** @minLength 1 */
+  start_time: string;
+}
+
+export interface InstantEvalUserSessionsResultApi {
+  sessions: InstantEvalUserSessionApi[];
+  users: number;
+}
+
+export interface InstantEvalUserSessionsResponseApi {
+  status?: boolean;
+  result: InstantEvalUserSessionsResultApi;
 }
 
 export type UpdateInvestigationAttemptRequestApiAction =
@@ -35168,6 +35534,34 @@ export const SimulateV3TestExecutionCallsGroupBy = {
   status: "status",
 } as const;
 
+export type TracerAnalyseConfigsListParams = {
+  project_id: string;
+};
+
+export type TracerAnalyseRunsUnitsListParams = {
+  /**
+   * @maxLength 64
+   */
+  category_id?: string;
+  /**
+   * @maxLength 64
+   */
+  sub_category_id?: string;
+  /**
+   * @maxLength 4000
+   */
+  unit_ids?: string;
+  /**
+   * @minimum 0
+   */
+  offset?: number;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  limit?: number;
+};
+
 export type TracerChartsFetchGraphParams = {
   /**
    * @minLength 1
@@ -35719,6 +36113,25 @@ export type TracerImagineAnalysisListParams = {
    */
   trace_id: string;
 };
+
+export type TracerInstantEvalAnswersListParams = {
+  project_id: string;
+  eval_task_id: string;
+  unit: TracerInstantEvalAnswersListUnit;
+  /**
+   * @maxLength 2000
+   */
+  config_ids?: string;
+};
+
+export type TracerInstantEvalAnswersListUnit =
+  (typeof TracerInstantEvalAnswersListUnit)[keyof typeof TracerInstantEvalAnswersListUnit];
+
+export const TracerInstantEvalAnswersListUnit = {
+  traces: "traces",
+  sessions: "sessions",
+  users: "users",
+} as const;
 
 export type TracerObservabilityProviderListParams = {
   /**

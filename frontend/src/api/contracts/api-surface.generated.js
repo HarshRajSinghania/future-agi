@@ -5,7 +5,7 @@
 export const API_SURFACE_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1059,
+  endpointCount: 1067,
   groups: {
     accounts: {
       "/accounts/2fa/recovery-codes/": ["get"],
@@ -1029,7 +1029,13 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/telemetry/register/": ["post"],
     },
     tracer: {
-      "/tracer/analyse/discover/": ["post"],
+      "/tracer/analyse/configs/": ["get"],
+      "/tracer/analyse/configs/{config_id}/": ["delete", "get", "patch"],
+      "/tracer/analyse/draft/": ["post"],
+      "/tracer/analyse/preview/": ["post"],
+      "/tracer/analyse/runs/": ["post"],
+      "/tracer/analyse/runs/{run_id}/": ["get"],
+      "/tracer/analyse/runs/{run_id}/units/": ["get"],
       "/tracer/bulk-annotation/": ["post"],
       "/tracer/charts/fetch_graph/": ["get"],
       "/tracer/custom-eval-config/": ["get", "post"],
@@ -1084,6 +1090,8 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/tracer/feed/issues/{cluster_id}/trends/": ["get"],
       "/tracer/get-annotation-labels/": ["get"],
       "/tracer/imagine-analysis/": ["get", "post"],
+      "/tracer/instant-eval/answers/": ["get"],
+      "/tracer/instant-eval/user-sessions/": ["post"],
       "/tracer/internal/error-feed-v2/attempts/{attempt_id}/": ["patch"],
       "/tracer/internal/error-feed-v2/attempts/{attempt_id}/conversation-evidence/":
         ["post"],
@@ -2298,7 +2306,13 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/simulate/v3/test-executions/{test_execution_id}/export/": ["post"],
   "/telemetry/heartbeat/": ["post"],
   "/telemetry/register/": ["post"],
-  "/tracer/analyse/discover/": ["post"],
+  "/tracer/analyse/configs/": ["get"],
+  "/tracer/analyse/configs/{config_id}/": ["delete", "get", "patch"],
+  "/tracer/analyse/draft/": ["post"],
+  "/tracer/analyse/preview/": ["post"],
+  "/tracer/analyse/runs/": ["post"],
+  "/tracer/analyse/runs/{run_id}/": ["get"],
+  "/tracer/analyse/runs/{run_id}/units/": ["get"],
   "/tracer/bulk-annotation/": ["post"],
   "/tracer/charts/fetch_graph/": ["get"],
   "/tracer/custom-eval-config/": ["get", "post"],
@@ -2353,6 +2367,8 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/tracer/feed/issues/{cluster_id}/trends/": ["get"],
   "/tracer/get-annotation-labels/": ["get"],
   "/tracer/imagine-analysis/": ["get", "post"],
+  "/tracer/instant-eval/answers/": ["get"],
+  "/tracer/instant-eval/user-sessions/": ["post"],
   "/tracer/internal/error-feed-v2/attempts/{attempt_id}/": ["patch"],
   "/tracer/internal/error-feed-v2/attempts/{attempt_id}/conversation-evidence/":
     ["post"],

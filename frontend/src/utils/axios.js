@@ -1370,7 +1370,19 @@ export const endpoints = {
       `${apiPath("/tracer/observation-span/retrieve_loading/")}?observation_span_id=${id}`,
     getTracesForObserveProject: () =>
       apiPath("/tracer/trace/list_traces_of_session/"),
-    analyseDiscover: () => apiPath("/tracer/analyse/discover/"),
+    analyseConfigs: () => apiPath("/tracer/analyse/configs/"),
+    analyseConfig: (configId) =>
+      apiPath("/tracer/analyse/configs/{config_id}/", { config_id: configId }),
+    analyseDraft: () => apiPath("/tracer/analyse/draft/"),
+    analysePreview: () => apiPath("/tracer/analyse/preview/"),
+    analyseRuns: () => apiPath("/tracer/analyse/runs/"),
+    analyseRun: (runId) =>
+      apiPath("/tracer/analyse/runs/{run_id}/", { run_id: runId }),
+    analyseRunUnits: (runId) =>
+      apiPath("/tracer/analyse/runs/{run_id}/units/", { run_id: runId }),
+    instantEvalAnswers: () => apiPath("/tracer/instant-eval/answers/"),
+    instantEvalUserSessions: () =>
+      apiPath("/tracer/instant-eval/user-sessions/"),
     getAgentGraph: () => apiPath("/tracer/trace/agent_graph/"),
     getTraceForObserveExport: apiPath("/tracer/trace/get_trace_export_data/"),
     getSpansForObserveProject: () =>

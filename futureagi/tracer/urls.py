@@ -1,7 +1,15 @@
 from django.urls import path  # type: ignore
 from rest_framework.routers import DefaultRouter
 
-from tracer.views.analyse import AnalyseDiscoverView
+from tracer.views.analyse import (
+    AnalyseConfigDetailView,
+    AnalyseConfigListView,
+    AnalyseDraftView,
+    AnalysePreviewView,
+    AnalyseRunCreateView,
+    AnalyseRunDetailView,
+    AnalyseRunUnitsView,
+)
 from tracer.views.annotation import (
     BulkAnnotationView,
     GetAnnotationLabelsView,
@@ -20,9 +28,9 @@ from tracer.views.feed import (
     CreateLinearIssueView,
     FeedDeepAnalysisView,
     FeedDetailView,
-    FeedRedirectView,
     FeedListView,
     FeedOverviewView,
+    FeedRedirectView,
     FeedRootCauseView,
     FeedSidebarView,
     FeedStatsView,
@@ -31,6 +39,10 @@ from tracer.views.feed import (
     LinearTeamsView,
 )
 from tracer.views.imagine_analysis import ImagineAnalysisView
+from tracer.views.instant_eval import (
+    InstantEvalAnswersView,
+    InstantEvalUserSessionsView,
+)
 from tracer.views.monitor import UserAlertMonitorLogView, UserAlertMonitorView
 from tracer.views.observability_provider import ObservabilityProviderViewSet
 from tracer.views.observation_span import ObservationSpanView
@@ -211,9 +223,37 @@ urlpatterns = [
     # Imagine analysis — trigger + poll for dynamic analysis results
     path("imagine-analysis/", ImagineAnalysisView.as_view(), name="imagine-analysis"),
     path(
-        "analyse/discover/",
-        AnalyseDiscoverView.as_view(),
-        name="analyse-discover",
+        "analyse/configs/",
+        AnalyseConfigListView.as_view(),
+        name="analyse-configs",
+    ),
+    path(
+        "analyse/configs/<uuid:config_id>/",
+        AnalyseConfigDetailView.as_view(),
+        name="analyse-config-detail",
+    ),
+    path("analyse/draft/", AnalyseDraftView.as_view(), name="analyse-draft"),
+    path("analyse/preview/", AnalysePreviewView.as_view(), name="analyse-preview"),
+    path("analyse/runs/", AnalyseRunCreateView.as_view(), name="analyse-runs"),
+    path(
+        "analyse/runs/<uuid:run_id>/",
+        AnalyseRunDetailView.as_view(),
+        name="analyse-run-detail",
+    ),
+    path(
+        "analyse/runs/<uuid:run_id>/units/",
+        AnalyseRunUnitsView.as_view(),
+        name="analyse-run-units",
+    ),
+    path(
+        "instant-eval/user-sessions/",
+        InstantEvalUserSessionsView.as_view(),
+        name="instant-eval-user-sessions",
+    ),
+    path(
+        "instant-eval/answers/",
+        InstantEvalAnswersView.as_view(),
+        name="instant-eval-answers",
     ),
     # Agent graph — explicit path because @action doesn't register reliably with Granian reload
     path(
