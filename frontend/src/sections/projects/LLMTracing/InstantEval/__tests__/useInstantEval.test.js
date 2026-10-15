@@ -151,6 +151,7 @@ describe("filters and saved questions", () => {
       question: "Refund promised?",
       answerType: "yes_no",
       labels: ["Yes", "No"],
+      definitions: {},
       reads: "input_output",
     });
   });

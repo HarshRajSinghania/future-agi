@@ -5,7 +5,7 @@
 export const API_SURFACE_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1058,
+  endpointCount: 1059,
   groups: {
     accounts: {
       "/accounts/2fa/recovery-codes/": ["get"],
@@ -1029,6 +1029,7 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/telemetry/register/": ["post"],
     },
     tracer: {
+      "/tracer/analyse/discover/": ["post"],
       "/tracer/bulk-annotation/": ["post"],
       "/tracer/charts/fetch_graph/": ["get"],
       "/tracer/custom-eval-config/": ["get", "post"],
@@ -2297,6 +2298,7 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/simulate/v3/test-executions/{test_execution_id}/export/": ["post"],
   "/telemetry/heartbeat/": ["post"],
   "/telemetry/register/": ["post"],
+  "/tracer/analyse/discover/": ["post"],
   "/tracer/bulk-annotation/": ["post"],
   "/tracer/charts/fetch_graph/": ["get"],
   "/tracer/custom-eval-config/": ["get", "post"],

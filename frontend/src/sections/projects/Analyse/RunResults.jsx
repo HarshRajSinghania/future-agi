@@ -18,6 +18,7 @@ import {
   explainErrorGroups,
   findContinuousTask,
 } from "src/sections/projects/LLMTracing/InstantEval/useInstantEval";
+import AnswerBehaviour from "./AnswerBehaviour";
 import AnswerHeatmap from "./AnswerHeatmap";
 import { tracePageLink, traceViewLink } from "./analyseScope";
 
@@ -515,14 +516,28 @@ export default function RunResults({ projectId, run, navigate }) {
             alignItems: "start",
           }}
         >
-          <AnswerBars
-            item={item}
-            counts={counts}
-            selected={label}
-            onSelect={setSelectedLabel}
-            onShow={(value) => showInTraceView([value])}
-            theme={theme}
-          />
+          <Stack spacing={1.5}>
+            <AnswerBars
+              item={item}
+              counts={counts}
+              selected={label}
+              onSelect={setSelectedLabel}
+              onShow={(value) => showInTraceView([value])}
+              theme={theme}
+            />
+            {item.definitions?.[label] && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ px: 1, display: "block" }}
+              >
+                <Box component="span" sx={{ fontWeight: 600 }}>
+                  {label}:
+                </Box>{" "}
+                {item.definitions[label]}
+              </Typography>
+            )}
+          </Stack>
           <AnswerHeatmap
             traces={traces}
             configId={item.configId}
@@ -548,6 +563,15 @@ export default function RunResults({ projectId, run, navigate }) {
           />
         </Box>
       </Box>
+
+      {run.phase === "done" && (
+        <AnswerBehaviour
+          traces={traces}
+          item={item}
+          selected={label}
+          onSelect={setSelectedLabel}
+        />
+      )}
 
       <Examples
         traces={traces}

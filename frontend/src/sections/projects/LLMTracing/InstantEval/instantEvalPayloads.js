@@ -46,6 +46,20 @@ export const answerLabels = ({ answerType, categories }) =>
     ? cleanCategories(categories)
     : YES_NO_LABELS;
 
+// Category definitions are Jev's decision rule for each label (sent as the
+// choice criteria). Labels without one are left for Jev to read literally.
+export const MAX_DEFINITION_LENGTH = 2000;
+
+export const cleanDefinitions = (definitions = {}, labels = []) =>
+  Object.fromEntries(
+    labels
+      .map((label) => [
+        label,
+        `${definitions?.[label] ?? ""}`.trim().slice(0, MAX_DEFINITION_LENGTH),
+      ])
+      .filter(([, definition]) => definition),
+  );
+
 export function validateInstantEval({ question, answerType, categories }) {
   const text = (question || "").trim();
   if (!text) return "Write the question Jev should answer for each trace.";
@@ -93,6 +107,7 @@ export function buildTemplatePayload({
   question,
   answerType,
   categories,
+  definitions,
   reads,
   now,
 }) {
@@ -116,7 +131,9 @@ export function buildTemplatePayload({
     description: question.trim(),
     tags: [INSTANT_EVAL_TAG],
     template_format: "mustache",
-    jev_mapping: buildJevMapping("deterministic", choiceScores),
+    jev_mapping: buildJevMapping("deterministic", choiceScores, {
+      choice: { descriptions: cleanDefinitions(definitions, labels) },
+    }),
   };
 }
 

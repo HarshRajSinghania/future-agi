@@ -48353,6 +48353,56 @@ export const TelemetryRegisterCreateResponse = zod.object({
   instance_secret: zod.string().min(1),
 });
 
+/**
+ * Propose a single-choice question and categories for a trace sample.
+ */
+export const tracerAnalyseDiscoverCreateBodyTraceIdsItemMax = 255;
+
+export const tracerAnalyseDiscoverCreateBodyTraceIdsMin = 10;
+export const tracerAnalyseDiscoverCreateBodyTraceIdsMax = 150;
+
+export const tracerAnalyseDiscoverCreateBodyFocusMax = 500;
+
+export const TracerAnalyseDiscoverCreateBody = zod.object({
+  project_id: zod.string().uuid(),
+  trace_ids: zod
+    .array(
+      zod.string().min(1).max(tracerAnalyseDiscoverCreateBodyTraceIdsItemMax),
+    )
+    .min(tracerAnalyseDiscoverCreateBodyTraceIdsMin)
+    .max(tracerAnalyseDiscoverCreateBodyTraceIdsMax),
+  focus: zod.string().max(tracerAnalyseDiscoverCreateBodyFocusMax).optional(),
+});
+
+export const tracerAnalyseDiscoverCreateResponseStatusDefault = true;
+
+export const TracerAnalyseDiscoverCreateResponse = zod.object({
+  status: zod
+    .boolean()
+    .default(tracerAnalyseDiscoverCreateResponseStatusDefault),
+  result: zod.object({
+    question: zod.string().min(1),
+    categories: zod.array(
+      zod.object({
+        label: zod.string().min(1),
+        definition: zod.string().min(1),
+        examples: zod.array(
+          zod.object({
+            trace_id: zod.string().min(1),
+            quote: zod.string().min(1),
+          }),
+        ),
+        sample_count: zod.number(),
+      }),
+    ),
+    sample_size: zod.number(),
+    unassigned: zod.number(),
+    model: zod.string().min(1),
+    cost_usd: zod.number(),
+    dropped_quotes: zod.number(),
+  }),
+});
+
 export const tracerBulkAnnotationCreateBodyRecordsItemAnnotationsDefault = [];
 export const tracerBulkAnnotationCreateBodyRecordsItemNotesDefault = [];
 

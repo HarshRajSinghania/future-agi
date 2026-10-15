@@ -7,6 +7,7 @@ import {
   answerLabels,
   buildEvalMapping,
   buildTemplatePayload,
+  cleanDefinitions,
 } from "./instantEvalPayloads";
 
 const POLL_MS = 2000;
@@ -95,6 +96,7 @@ export function itemFromConfig(config) {
     question: meta.question,
     answerType: meta.answer_type,
     labels: meta.labels || [],
+    definitions: meta.definitions || {},
     reads: meta.reads,
   };
 }
@@ -110,6 +112,11 @@ const configName = (question, taken) => {
 
 const sameLabels = (a = [], b = []) =>
   a.length === b.length && a.every((label, index) => label === b[index]);
+
+const sameDefinitions = (a = {}, b = {}) => {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  return [...keys].every((key) => (a[key] || "") === (b[key] || ""));
+};
 
 async function listProjectConfigs(projectId) {
   const response = await axios.get(endpoints.project.getEvalTaskConfig(), {
@@ -133,12 +140,14 @@ async function resolveEvaluators({ projectId, questions, reads }) {
     questions.map(async (question, index) => {
       const text = question.question.trim();
       const labels = answerLabels(question);
+      const definitions = cleanDefinitions(question.definitions, labels);
       const reuse = existing.find(
         (item) =>
           item.question.toLowerCase() === text.toLowerCase() &&
           item.answerType === question.answerType &&
           item.reads === reads &&
-          sameLabels(item.labels, labels),
+          sameLabels(item.labels, labels) &&
+          sameDefinitions(item.definitions, definitions),
       );
       if (reuse) return reuse;
       const template = await axios.post(
@@ -167,6 +176,7 @@ async function resolveEvaluators({ projectId, questions, reads }) {
               question: text,
               answer_type: question.answerType,
               labels,
+              ...(Object.keys(definitions).length ? { definitions } : {}),
               reads,
             },
           },
@@ -179,6 +189,7 @@ async function resolveEvaluators({ projectId, questions, reads }) {
         question: text,
         answerType: question.answerType,
         labels,
+        definitions,
         reads,
       };
     }),
@@ -315,12 +326,26 @@ async function fetchRunRows({ projectId, scopeFilters, limit }) {
   return result(response)?.table || [];
 }
 
+const numberOrNull = (value) => {
+  const number = Number(value);
+  return value === null ||
+    value === undefined ||
+    value === "" ||
+    Number.isNaN(number)
+    ? null
+    : number;
+};
+
 export function summarizeRows(rows, items) {
   const traces = rows
     .map((row) => ({
       traceId: row.trace_id,
       time: row.start_time || row.created_at,
       input: typeof row.input === "string" ? row.input : "",
+      status: row.status,
+      latency: numberOrNull(row.latency),
+      cost: numberOrNull(row.cost),
+      tokens: numberOrNull(row.total_tokens),
       answers: Object.fromEntries(
         items.map((item) => [
           item.configId,

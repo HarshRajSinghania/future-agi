@@ -58219,6 +58219,78 @@
             },
             "parameters": []
         },
+        "/tracer/analyse/discover/": {
+            "post": {
+                "operationId": "tracer_analyse_discover_create",
+                "description": "Propose a single-choice question and categories for a trace sample.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/AnalyseDiscoverRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/AnalyseDiscoverResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
         "/tracer/bulk-annotation/": {
             "post": {
                 "operationId": "tracer_bulk-annotation_create",
@@ -158908,6 +158980,147 @@
                         "oss",
                         "enterprise"
                     ]
+                }
+            }
+        },
+        "AnalyseDiscoverRequest": {
+            "required": [
+                "project_id",
+                "trace_ids"
+            ],
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "trace_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 255,
+                        "minLength": 1
+                    },
+                    "maxItems": 150,
+                    "minItems": 10
+                },
+                "focus": {
+                    "title": "Focus",
+                    "type": "string",
+                    "maxLength": 500
+                }
+            }
+        },
+        "AnalyseDiscoverExample": {
+            "required": [
+                "trace_id",
+                "quote"
+            ],
+            "type": "object",
+            "properties": {
+                "trace_id": {
+                    "title": "Trace id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "quote": {
+                    "title": "Quote",
+                    "type": "string",
+                    "minLength": 1
+                }
+            }
+        },
+        "AnalyseDiscoverCategory": {
+            "required": [
+                "label",
+                "definition",
+                "examples",
+                "sample_count"
+            ],
+            "type": "object",
+            "properties": {
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "definition": {
+                    "title": "Definition",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "examples": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/AnalyseDiscoverExample"
+                    }
+                },
+                "sample_count": {
+                    "title": "Sample count",
+                    "type": "integer"
+                }
+            }
+        },
+        "AnalyseDiscoverProposal": {
+            "required": [
+                "question",
+                "categories",
+                "sample_size",
+                "unassigned",
+                "model",
+                "cost_usd",
+                "dropped_quotes"
+            ],
+            "type": "object",
+            "properties": {
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/AnalyseDiscoverCategory"
+                    }
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer"
+                },
+                "unassigned": {
+                    "title": "Unassigned",
+                    "type": "integer"
+                },
+                "model": {
+                    "title": "Model",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "cost_usd": {
+                    "title": "Cost usd",
+                    "type": "number"
+                },
+                "dropped_quotes": {
+                    "title": "Dropped quotes",
+                    "type": "integer"
+                }
+            }
+        },
+        "AnalyseDiscoverResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/AnalyseDiscoverProposal"
                 }
             }
         }

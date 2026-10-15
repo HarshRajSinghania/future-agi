@@ -1,6 +1,7 @@
 from django.urls import path  # type: ignore
 from rest_framework.routers import DefaultRouter
 
+from tracer.views.analyse import AnalyseDiscoverView
 from tracer.views.annotation import (
     BulkAnnotationView,
     GetAnnotationLabelsView,
@@ -209,6 +210,11 @@ urlpatterns = [
     ),
     # Imagine analysis — trigger + poll for dynamic analysis results
     path("imagine-analysis/", ImagineAnalysisView.as_view(), name="imagine-analysis"),
+    path(
+        "analyse/discover/",
+        AnalyseDiscoverView.as_view(),
+        name="analyse-discover",
+    ),
     # Agent graph — explicit path because @action doesn't register reliably with Granian reload
     path(
         "trace/agent_graph/",

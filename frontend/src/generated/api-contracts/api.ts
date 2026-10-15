@@ -192,6 +192,8 @@ import type {
   AgentccWebhooksList200,
   AgentccWebhooksListParams,
   AllActiveTestsApi,
+  AnalyseDiscoverRequestApi,
+  AnalyseDiscoverResponseApi,
   AnnotationActionMessageResponseApi,
   AnnotationLabelCreateResponseApi,
   AnnotationLabelRestoreResponseApi,
@@ -67406,6 +67408,88 @@ export const telemetryRegisterCreate = async (
       method: "POST",
       headers: { "Content-Type": "application/json", ...options?.headers },
       body: JSON.stringify(deploymentRegistrationApi),
+    },
+  );
+};
+
+export type tracerAnalyseDiscoverCreateResponse200 = {
+  data: AnalyseDiscoverResponseApi;
+  status: 200;
+};
+
+export type tracerAnalyseDiscoverCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerAnalyseDiscoverCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerAnalyseDiscoverCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerAnalyseDiscoverCreateResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerAnalyseDiscoverCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerAnalyseDiscoverCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerAnalyseDiscoverCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 429 | 500 | 503>;
+};
+
+export type tracerAnalyseDiscoverCreateResponseSuccess =
+  tracerAnalyseDiscoverCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerAnalyseDiscoverCreateResponseError = (
+  | tracerAnalyseDiscoverCreateResponse400
+  | tracerAnalyseDiscoverCreateResponse403
+  | tracerAnalyseDiscoverCreateResponse404
+  | tracerAnalyseDiscoverCreateResponse429
+  | tracerAnalyseDiscoverCreateResponse500
+  | tracerAnalyseDiscoverCreateResponse503
+  | tracerAnalyseDiscoverCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerAnalyseDiscoverCreateResponse =
+  | tracerAnalyseDiscoverCreateResponseSuccess
+  | tracerAnalyseDiscoverCreateResponseError;
+
+export const getTracerAnalyseDiscoverCreateUrl = () => {
+  return `/tracer/analyse/discover/`;
+};
+
+/**
+ * Propose a single-choice question and categories for a trace sample.
+ */
+export const tracerAnalyseDiscoverCreate = async (
+  analyseDiscoverRequestApi: AnalyseDiscoverRequestApi,
+  options?: RequestInit,
+): Promise<tracerAnalyseDiscoverCreateResponse> => {
+  return apiMutator<tracerAnalyseDiscoverCreateResponse>(
+    getTracerAnalyseDiscoverCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(analyseDiscoverRequestApi),
     },
   );
 };

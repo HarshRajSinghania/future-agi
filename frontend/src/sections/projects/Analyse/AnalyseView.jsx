@@ -11,6 +11,8 @@ import {
   MenuItem,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
@@ -29,6 +31,7 @@ import {
   useInstantEvalRun,
   useInstantEvals,
 } from "src/sections/projects/LLMTracing/InstantEval/useInstantEval";
+import DiscoverComposer from "./DiscoverComposer";
 import RunResults from "./RunResults";
 import {
   DATE_PRESETS,
@@ -89,6 +92,7 @@ const formatWhen = (value) =>
 // reading as many traces as a run can take: anything beyond that shows as
 // "500+", which is all the composer needs to know.
 const COUNT_PAGE_SIZE = Math.max(...TRACE_LIMIT_OPTIONS);
+const MODE_PARAM = "mode";
 
 function useScopeCount(projectId, filters) {
   return useQuery({
@@ -114,6 +118,11 @@ function useScopeCount(projectId, filters) {
         isLowerBound:
           metadata.total_rows_is_lower_bound === true ||
           metadata.has_more === true,
+        // Discover samples from these, so it reads exactly the scope's traces.
+        traces: (response?.data?.result?.table || []).map((row) => ({
+          traceId: row.trace_id,
+          time: row.start_time || row.created_at,
+        })),
       };
     },
     meta: { errorHandled: true },
@@ -502,6 +511,15 @@ export default function AnalyseView() {
   const navigate = useNavigate();
   const jev = useJevAvailability();
   const [scope, setScope] = useState(() => readScope(location.search));
+  const mode =
+    new URLSearchParams(location.search).get(MODE_PARAM) === "discover"
+      ? "discover"
+      : "ask";
+  const setMode = (next) => {
+    const params = new URLSearchParams(location.search);
+    params.set(MODE_PARAM, next);
+    navigate(`${location.pathname}?${params.toString()}`, { replace: true });
+  };
   const [composerKey, setComposerKey] = useState(0);
   const runApi = useInstantEvalRun(observeId);
   const { run, start, rerun, view, reset } = runApi;
@@ -609,6 +627,39 @@ export default function AnalyseView() {
           ) : (
             <>
               {showComposer && (
+                <ToggleButtonGroup
+                  exclusive
+                  size="small"
+                  value={mode}
+                  onChange={(_, next) => next && setMode(next)}
+                  aria-label="Analyse mode"
+                  sx={{ alignSelf: "flex-start" }}
+                >
+                  <ToggleButton
+                    value="ask"
+                    sx={{ textTransform: "none", px: 2 }}
+                  >
+                    <Iconify
+                      icon="mdi:comment-question-outline"
+                      width={16}
+                      sx={{ mr: 0.75 }}
+                    />
+                    Ask a question
+                  </ToggleButton>
+                  <ToggleButton
+                    value="discover"
+                    sx={{ textTransform: "none", px: 2 }}
+                  >
+                    <Iconify
+                      icon="mdi:shape-outline"
+                      width={16}
+                      sx={{ mr: 0.75 }}
+                    />
+                    Discover categories
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              )}
+              {showComposer && (
                 <ScopeBar
                   scope={scope}
                   onPreset={setPreset}
@@ -621,7 +672,17 @@ export default function AnalyseView() {
                   {run.error}
                 </Alert>
               )}
-              {showComposer ? (
+              {showComposer && mode === "discover" ? (
+                <DiscoverComposer
+                  key={`discover-${composerKey}`}
+                  projectId={observeId}
+                  scopeTraces={count.data?.traces}
+                  scopeCount={count.data}
+                  scopeLoading={count.isLoading}
+                  onRun={startRun}
+                  disabled={!jev.available}
+                />
+              ) : showComposer ? (
                 <Composer
                   key={composerKey}
                   onRun={startRun}

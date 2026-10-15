@@ -23365,6 +23365,83 @@ export interface DeploymentRegistrationResponseApi {
   instance_secret: string;
 }
 
+export interface AnalyseDiscoverRequestApi {
+  project_id: string;
+  /**
+   * @minItems 10
+   * @maxItems 150
+   */
+  trace_ids: string[];
+  /** @maxLength 500 */
+  focus?: string;
+}
+
+export interface AnalyseDiscoverExampleApi {
+  /** @minLength 1 */
+  trace_id: string;
+  /** @minLength 1 */
+  quote: string;
+}
+
+export interface AnalyseDiscoverCategoryApi {
+  /** @minLength 1 */
+  label: string;
+  /** @minLength 1 */
+  definition: string;
+  examples: AnalyseDiscoverExampleApi[];
+  sample_count: number;
+}
+
+export interface AnalyseDiscoverProposalApi {
+  /** @minLength 1 */
+  question: string;
+  categories: AnalyseDiscoverCategoryApi[];
+  sample_size: number;
+  unassigned: number;
+  /** @minLength 1 */
+  model: string;
+  cost_usd: number;
+  dropped_quotes: number;
+}
+
+export interface AnalyseDiscoverResponseApi {
+  status?: boolean;
+  result: AnalyseDiscoverProposalApi;
+}
+
+export type ApiErrorResponseApiType =
+  (typeof ApiErrorResponseApiType)[keyof typeof ApiErrorResponseApiType];
+
+export const ApiErrorResponseApiType = {
+  validation_error: "validation_error",
+  authentication_error: "authentication_error",
+  payment_required: "payment_required",
+  entitlement_error: "entitlement_error",
+  permission_error: "permission_error",
+  not_found: "not_found",
+  conflict: "conflict",
+  client_error: "client_error",
+  rate_limit: "rate_limit",
+  server_error: "server_error",
+  service_unavailable: "service_unavailable",
+  timeout: "timeout",
+  api_error: "api_error",
+} as const;
+
+export type ApiErrorResponseApiDetails = { [key: string]: string[] };
+
+export interface ApiErrorResponseApi {
+  status?: boolean;
+  type?: ApiErrorResponseApiType;
+  code?: string;
+  detail?: string;
+  result?: string;
+  message?: string;
+  error?: string;
+  attr?: string;
+  details?: ApiErrorResponseApiDetails;
+}
+
 export interface BulkAnnotationAnnotationRequestApi {
   annotation_label_id: string;
   value?: string;
@@ -23413,39 +23490,6 @@ export interface BulkAnnotationResponseResultApi {
 export interface BulkAnnotationResponseApi {
   status?: boolean;
   result: BulkAnnotationResponseResultApi;
-}
-
-export type ApiErrorResponseApiType =
-  (typeof ApiErrorResponseApiType)[keyof typeof ApiErrorResponseApiType];
-
-export const ApiErrorResponseApiType = {
-  validation_error: "validation_error",
-  authentication_error: "authentication_error",
-  payment_required: "payment_required",
-  entitlement_error: "entitlement_error",
-  permission_error: "permission_error",
-  not_found: "not_found",
-  conflict: "conflict",
-  client_error: "client_error",
-  rate_limit: "rate_limit",
-  server_error: "server_error",
-  service_unavailable: "service_unavailable",
-  timeout: "timeout",
-  api_error: "api_error",
-} as const;
-
-export type ApiErrorResponseApiDetails = { [key: string]: string[] };
-
-export interface ApiErrorResponseApi {
-  status?: boolean;
-  type?: ApiErrorResponseApiType;
-  code?: string;
-  detail?: string;
-  result?: string;
-  message?: string;
-  error?: string;
-  attr?: string;
-  details?: ApiErrorResponseApiDetails;
 }
 
 export type FetchGraphResponseApiResultMetricStatistic =

@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1058,
+  endpointCount: 1059,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -32147,6 +32147,43 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    "/tracer/analyse/discover/": {
+      post: {
+        operationId: "tracer_analyse_discover_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/AnalyseDiscoverRequest",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/AnalyseDiscoverResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
     "/tracer/bulk-annotation/": {
       post: {
         operationId: "tracer_bulk-annotation_create",
@@ -50011,6 +50048,46 @@ export const OPENAPI_CONTRACT = Object.freeze({
         total_active: {
           title: "Total active",
           type: "integer",
+        },
+      },
+    },
+    AnalyseDiscoverRequest: {
+      required: ["project_id", "trace_ids"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        trace_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            maxLength: 255,
+            minLength: 1,
+          },
+          maxItems: 150,
+          minItems: 10,
+        },
+        focus: {
+          title: "Focus",
+          type: "string",
+          maxLength: 500,
+        },
+      },
+    },
+    AnalyseDiscoverResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/AnalyseDiscoverProposal",
         },
       },
     },
@@ -84637,6 +84714,52 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    AnalyseDiscoverProposal: {
+      required: [
+        "question",
+        "categories",
+        "sample_size",
+        "unassigned",
+        "model",
+        "cost_usd",
+        "dropped_quotes",
+      ],
+      type: "object",
+      properties: {
+        question: {
+          title: "Question",
+          type: "string",
+          minLength: 1,
+        },
+        categories: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/AnalyseDiscoverCategory",
+          },
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+        },
+        unassigned: {
+          title: "Unassigned",
+          type: "integer",
+        },
+        model: {
+          title: "Model",
+          type: "string",
+          minLength: 1,
+        },
+        cost_usd: {
+          title: "Cost usd",
+          type: "number",
+        },
+        dropped_quotes: {
+          title: "Dropped quotes",
+          type: "integer",
+        },
+      },
+    },
     AnnotationActionMessageResult: {
       required: ["message"],
       type: "object",
@@ -105088,6 +105211,32 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    AnalyseDiscoverCategory: {
+      required: ["label", "definition", "examples", "sample_count"],
+      type: "object",
+      properties: {
+        label: {
+          title: "Label",
+          type: "string",
+          minLength: 1,
+        },
+        definition: {
+          title: "Definition",
+          type: "string",
+          minLength: 1,
+        },
+        examples: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/AnalyseDiscoverExample",
+          },
+        },
+        sample_count: {
+          title: "Sample count",
+          type: "integer",
+        },
+      },
+    },
     AnnotationSummaryHeader: {
       type: "object",
       properties: {
@@ -116108,6 +116257,22 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         metadata: {
           $ref: "#/definitions/AgentPromptOptimiserIndividualResultMetadata",
+        },
+      },
+    },
+    AnalyseDiscoverExample: {
+      required: ["trace_id", "quote"],
+      type: "object",
+      properties: {
+        trace_id: {
+          title: "Trace id",
+          type: "string",
+          minLength: 1,
+        },
+        quote: {
+          title: "Quote",
+          type: "string",
+          minLength: 1,
         },
       },
     },
