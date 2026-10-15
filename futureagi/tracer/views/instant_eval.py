@@ -74,7 +74,7 @@ class InstantEvalUserSessionsResponseSerializer(serializers.Serializer):
 class InstantEvalAnswersQuerySerializer(serializers.Serializer):
     project_id = serializers.UUIDField()
     eval_task_id = serializers.UUIDField()
-    unit = serializers.ChoiceField(choices=["traces", "sessions", "users"])
+    unit = serializers.ChoiceField(choices=["traces", "spans", "sessions", "users"])
     config_ids = serializers.CharField(max_length=2000, required=False, allow_blank=True)
 
 
@@ -82,6 +82,7 @@ class InstantEvalAnswerSerializer(serializers.Serializer):
     answer = serializers.CharField(allow_null=True)
     explanation = serializers.CharField(allow_blank=True, allow_null=True)
     confidence = serializers.FloatField(allow_null=True, required=False)
+    status = serializers.CharField(required=False, allow_blank=True)
     counts = serializers.DictField(child=serializers.IntegerField(), required=False)
 
 
@@ -93,6 +94,7 @@ class InstantEvalAnswerRowSerializer(serializers.Serializer):
     user_id = serializers.CharField(allow_blank=True, allow_null=True)
     end_user_id = serializers.CharField(allow_blank=True, allow_null=True)
     sessions = serializers.IntegerField(required=False)
+    trace_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     answers = serializers.DictField(child=InstantEvalAnswerSerializer())
 
 
@@ -101,6 +103,7 @@ class InstantEvalAnswersResultSerializer(serializers.Serializer):
     rows = InstantEvalAnswerRowSerializer(many=True)
     counts = serializers.DictField(child=serializers.DictField(child=serializers.IntegerField()))
     answered = serializers.IntegerField()
+    pending = serializers.IntegerField(required=False)
 
 
 class InstantEvalAnswersResponseSerializer(serializers.Serializer):
@@ -130,8 +133,14 @@ def _clip(text: str) -> str:
     return text if len(text) <= EXCERPT_CHARS else text[: EXCERPT_CHARS - 1] + "…"
 
 
+IN_FLIGHT = frozenset({"pending", "running"})
+
+
 def answer_of(log) -> str | None:
-    """The label an Instant eval gave, or an error/skipped marker."""
+    """The label an Instant eval gave, an error/skipped marker, or None while
+    the row is still queued or being read."""
+    if getattr(log, "status", None) in IN_FLIGHT:
+        return None
     if log.error:
         return ERROR_ANSWER
     if log.skipped_reason:
@@ -222,6 +231,31 @@ def _trace_display(project_id: str, trace_ids: list[str]) -> dict[str, dict]:
     return out
 
 
+def _span_display(project_id: str, span_ids: list[str]) -> dict[str, dict]:
+    from ee.agenthub.insights.units import _message_text, _user_labels
+    from tracer.services.clickhouse.v2 import get_reader
+
+    if not span_ids:
+        return {}
+    with get_reader() as reader:
+        spans = reader.list_by_ids(span_ids, include_heavy=False, project_id=project_id)
+    out: dict[str, dict] = {}
+    for span in spans:
+        attrs = span.attrs_string or {}
+        kind = str(getattr(span, "observation_type", "") or "span").lower()
+        text = _clip(_message_text(attrs.get("input.value") or span.input))
+        out[str(span.id)] = {
+            "time": _iso(span.start_time),
+            "end_user_id": str(span.end_user_id) if span.end_user_id else None,
+            "excerpt": f"{kind} · {span.name}: {text}" if text else f"{kind} · {span.name}",
+            "trace_id": str(span.trace_id),
+        }
+    labels = _user_labels(e["end_user_id"] for e in out.values())
+    for entry in out.values():
+        entry["user_id"] = labels.get(entry["end_user_id"] or "", "")
+    return out
+
+
 def _tally(rows: list[dict], config_ids: list[str]) -> dict[str, dict[str, int]]:
     counts: dict[str, Counter] = {c: Counter() for c in config_ids}
     for row in rows:
@@ -254,10 +288,14 @@ def _user_rollup(session_rows: list[dict]) -> list[dict]:
                 if config_id in r["answers"] and r["answers"][config_id]["answer"]
             )
             top = [label for label, _ in labels.most_common() if not label.startswith("__")]
+            in_flight = any(
+                r["answers"].get(config_id, {}).get("status") in IN_FLIGHT for r in rows
+            )
             answers[config_id] = {
                 "answer": top[0] if top else (next(iter(labels), None)),
                 "explanation": "",
                 "counts": dict(labels),
+                "status": "running" if in_flight else "completed",
             }
         users.append(
             {
@@ -348,7 +386,9 @@ class InstantEvalAnswersView(APIView):
             return self._gm.not_found("Eval task not found")
         config_ids = [c for c in (params.get("config_ids") or "").split(",") if c][:10]
         unit = params["unit"]
-        key = "trace_id" if unit == "traces" else "trace_session_id"
+        key = {"traces": "trace_id", "spans": "observation_span_id"}.get(
+            unit, "trace_session_id"
+        )
         latest = _latest_logs(str(task.id), config_ids, key)
         answers: dict[str, dict] = defaultdict(dict)
         for (row_id, config_id), log in latest.items():
@@ -356,14 +396,12 @@ class InstantEvalAnswersView(APIView):
                 "answer": answer_of(log),
                 "explanation": (log.eval_explanation or "")[:2000],
                 "confidence": confidence_of(log),
+                "status": log.status,
             }
         row_ids = list(answers)[:MAX_ANSWER_ROWS]
         try:
-            display = (
-                _trace_display(str(project.id), row_ids)
-                if unit == "traces"
-                else _session_display(str(project.id), row_ids)
-            )
+            reader_for = {"traces": _trace_display, "spans": _span_display}
+            display = reader_for.get(unit, _session_display)(str(project.id), row_ids)
         except Exception:
             logger.exception("instant_eval_answers_display_failed")
             display = {}
@@ -378,6 +416,7 @@ class InstantEvalAnswersView(APIView):
                     "time": shown.get("time"),
                     "user_id": shown.get("user_id", ""),
                     "end_user_id": shown.get("end_user_id"),
+                    "trace_id": shown.get("trace_id"),
                     "answers": answers[row_id],
                 }
             )
@@ -385,11 +424,20 @@ class InstantEvalAnswersView(APIView):
             rows = _user_rollup(rows)
         else:
             rows.sort(key=lambda r: r["time"] or "", reverse=True)
+        settled = sum(
+            1
+            for row in rows
+            if all(
+                a.get("status") not in IN_FLIGHT
+                for a in row["answers"].values()
+            )
+        )
         return self._gm.success_response(
             {
                 "unit": unit,
                 "rows": rows,
                 "counts": _tally(rows, config_ids),
-                "answered": len(rows),
+                "answered": settled,
+                "pending": len(rows) - settled,
             }
         )

@@ -100,7 +100,7 @@ def test_session_answers_come_back_per_session_newest_first(
     assert [r["id"] for r in result["rows"]] == list(reversed(sessions))
     answers = {r["id"]: r["answers"][str(question.id)] for r in result["rows"]}
     assert answers[sessions[0]]["answer"] == "Yes"
-    assert answers[sessions[1]] == {"answer": "No", "explanation": "", "confidence": 0.4}
+    assert answers[sessions[1]] == {"answer": "No", "explanation": "", "confidence": 0.4, "status": "completed"}
     assert answers[sessions[2]]["answer"] == instant_eval.ERROR_ANSWER
     assert result["counts"][str(question.id)] == {"Yes": 1, "No": 1, "__error__": 1}
 

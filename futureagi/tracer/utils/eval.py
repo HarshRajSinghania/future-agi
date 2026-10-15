@@ -2870,6 +2870,109 @@ def _transcript_text(value) -> str:
     return json.dumps(candidate) if not isinstance(candidate, str) else candidate
 
 
+# ``trace_tree``: every span of a trace in start order, indented under its
+# parent, with its kind, name, model, latency, error and clipped input/output,
+# so a judge can read tool calls, retrieval and intermediate LLM calls rather
+# than only the root's input and output. ``transcript_full`` on a session is
+# the same for each of its traces, turn by turn.
+TRACE_TREE_FIELD = "trace_tree"
+SESSION_FULL_TRANSCRIPT_FIELD = "transcript_full"
+_TREE_MAX_CHARS = 60000
+_TREE_FIELD_CHARS = 1500
+_TREE_KEEP_ENDS = 12
+
+
+def _span_text(value) -> str:
+    text = _transcript_text(value)
+    return " ".join(str(text or "").split())
+
+
+def _clip_text(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _span_block(span, depth: int, number: int, field_chars: int) -> str:
+    indent = "  " * depth
+    kind = str(getattr(span, "observation_type", "") or "span").lower()
+    head = f"{indent}[{number}] {kind} · {getattr(span, 'name', '') or 'unnamed'}"
+    model = getattr(span, "model", None)
+    if model:
+        head += f" · {model}"
+    latency = getattr(span, "latency_ms", None)
+    if latency:
+        head += f" · {int(latency)} ms"
+    status = str(getattr(span, "status", "") or "").upper()
+    if status == "ERROR":
+        message = _clip_text(_span_text(getattr(span, "status_message", "")), 300)
+        head += f" · ERROR{': ' + message if message else ''}"
+    lines = [head]
+    for label, attr in (("in", "input"), ("out", "output")):
+        text = _span_text(getattr(span, attr, None))
+        if text:
+            lines.append(f"{indent}  {label}: {_clip_text(text, field_chars)}")
+    return "\n".join(lines)
+
+
+def render_trace_tree(spans, *, max_chars: int = _TREE_MAX_CHARS) -> str:
+    """A trace's spans as an indented outline for a judge, within budget."""
+    if not spans:
+        return ""
+    by_id = {str(s.id): s for s in spans}
+    depths: dict[str, int] = {}
+
+    def depth(span) -> int:
+        seen, node, d = set(), span, 0
+        while True:
+            parent = str(getattr(node, "parent_span_id", "") or "")
+            if not parent or parent not in by_id or parent in seen:
+                return d
+            seen.add(parent)
+            node, d = by_id[parent], d + 1
+
+    field_chars = _TREE_FIELD_CHARS
+    blocks = []
+    for number, span in enumerate(spans, start=1):
+        sid = str(span.id)
+        depths[sid] = depth(span)
+        blocks.append((span, _span_block(span, depths[sid], number, field_chars)))
+    text = "\n".join(b for _, b in blocks)
+    if len(text) <= max_chars:
+        return text
+    # Over budget: keep the ends, every errored span, and shrink fields.
+    keep = set(range(min(_TREE_KEEP_ENDS, len(blocks)))) | set(
+        range(max(0, len(blocks) - _TREE_KEEP_ENDS), len(blocks))
+    )
+    keep |= {
+        i for i, (span, _) in enumerate(blocks)
+        if str(getattr(span, "status", "") or "").upper() == "ERROR"
+    }
+    field_chars = 600
+    out, skipped = [], 0
+    for i, (span, _) in enumerate(blocks):
+        if i in keep:
+            if skipped:
+                out.append(f"[… {skipped} spans omitted …]")
+                skipped = 0
+            out.append(_span_block(span, depths[str(span.id)], i + 1, field_chars))
+        else:
+            skipped += 1
+    if skipped:
+        out.append(f"[… {skipped} spans omitted …]")
+    return _clip_text("\n".join(out), max_chars)
+
+
+def render_session_full_transcript(traces, spans_of) -> str:
+    """Every turn of a session as its full span outline."""
+    if not traces:
+        return ""
+    per_turn = max(4000, _TREE_MAX_CHARS // max(1, len(traces)))
+    turns = [
+        f"[Turn {i}]\n{render_trace_tree(spans_of(t), max_chars=per_turn)}"
+        for i, t in enumerate(traces, start=1)
+    ]
+    return _clip_text("\n\n".join(turns), _TREE_MAX_CHARS)
+
+
 def render_session_transcript(traces) -> str:
     """Ordered turns of a session's traces as plain text for a judge."""
 
@@ -3105,6 +3208,9 @@ def _resolve_trace_path(trace: Trace, path: str):
             _ordered_trace_spans(trace), rest, _resolve_span_path
         )
 
+    if head == TRACE_TREE_FIELD and not rest:
+        return render_trace_tree(_ordered_trace_spans(trace))
+
     return _MISSING
 
 
@@ -3191,6 +3297,12 @@ def _session_traces_ch(trace_session) -> list:
     return traces
 
 
+def _render_session(field: str, traces) -> str:
+    if field == SESSION_FULL_TRANSCRIPT_FIELD:
+        return render_session_full_transcript(traces, _ordered_trace_spans)
+    return render_session_transcript(traces)
+
+
 def _resolve_session_path(trace_session: TraceSession, path: str):
     """Walk a path against a session; supports ``traces.<n>.spans.<m>.<field>``."""
     if not path:
@@ -3207,15 +3319,16 @@ def _resolve_session_path(trace_session: TraceSession, path: str):
         walked = _walk_dotted_path(value, rest)
         return walked if walked is not None else _MISSING
 
-    if head == SESSION_TRANSCRIPT_FIELD and not rest:
+    # Transcripts read the session's ordered traces; outside ClickHouse mode
+    # they reuse the ``traces`` branch below to get the same ordering.
+    transcript_requested = None
+    if head in (SESSION_TRANSCRIPT_FIELD, SESSION_FULL_TRANSCRIPT_FIELD) and not rest:
         from tracer.services.clickhouse.v2.eval_loader import _read_source
 
         if _read_source() == "clickhouse":
-            return render_session_transcript(_session_traces_ch(trace_session))
+            return _render_session(head, _session_traces_ch(trace_session))
+        transcript_requested = head
         head, rest = "traces", ""
-        transcript_requested = True
-    else:
-        transcript_requested = False
 
     if head == "traces":
         # Match the trace-listing UI's ordering (``list_traces_of_session``
@@ -3272,7 +3385,7 @@ def _resolve_session_path(trace_session: TraceSession, path: str):
                 .order_by("_root_start", "id")
             )
         if transcript_requested:
-            return render_session_transcript(traces)
+            return _render_session(transcript_requested, traces)
         return _resolve_collection_path(traces, rest, _resolve_trace_path)
 
     return _MISSING

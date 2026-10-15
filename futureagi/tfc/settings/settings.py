@@ -1486,3 +1486,7 @@ CH25_EVAL_LOGGER_TABLE = os.getenv("CH25_EVAL_LOGGER_TABLE", "tracer_eval_logger
 # Default is "postgres" so cutover is opt-in. Flip to "clickhouse" only after
 # the backfill + validator pass and a soak period.
 EVAL_SPAN_READ_SOURCE = os.getenv("EVAL_SPAN_READ_SOURCE", "postgres").lower()
+
+# Concurrent Jev calls per worker process (ee/jev/client.py). Instant eval
+# drains up to 32 rows at once, so a worker that serves it wants at least that.
+JEV_MAX_CONCURRENT = int(os.getenv("JEV_MAX_CONCURRENT", "8"))
