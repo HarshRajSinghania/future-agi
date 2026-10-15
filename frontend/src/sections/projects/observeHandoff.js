@@ -1,13 +1,13 @@
 import { UNITS } from "./observePopulation";
 
 // Hand-offs between Instant eval (a question answered for every row in a
-// view) and Analyse (a report that finds the patterns). Small context rides in
+// view) and Insights (a report that finds the patterns). Small context rides in
 // the URL; row ids, which can run to thousands, ride in session storage under
 // a short key so links stay short and survive a reload of the target page.
 
 const PREFIX = "observe-handoff:";
-export const ANALYSE_NEW_PARAM = "new";
-export const ANALYSE_SEED_PARAM = "seed";
+export const INSIGHTS_NEW_PARAM = "new";
+export const INSIGHTS_SEED_PARAM = "seed";
 export const ASK_PARAM = "ask";
 
 const makeKey = () =>
@@ -34,7 +34,7 @@ export function readHandoff(key) {
 }
 
 /**
- * Open the "New report" flow in the Analyse tab.
+ * Open the "New report" flow in the Insights tab.
  *
  * seed: {
  *   unit: "traces" | "sessions" | "users",
@@ -45,10 +45,10 @@ export function readHandoff(key) {
  *   source?: string                      // "Instant eval: <question>"
  * }
  */
-export function analyseReportLink(projectId, seed) {
-  const params = new URLSearchParams({ [ANALYSE_NEW_PARAM]: "1" });
-  params.set(ANALYSE_SEED_PARAM, stashHandoff(seed));
-  return `/dashboard/observe/${projectId}/analyse?${params.toString()}`;
+export function insightsReportLink(projectId, seed) {
+  const params = new URLSearchParams({ [INSIGHTS_NEW_PARAM]: "1" });
+  params.set(INSIGHTS_SEED_PARAM, stashHandoff(seed));
+  return `/dashboard/observe/${projectId}/insights?${params.toString()}`;
 }
 
 /**

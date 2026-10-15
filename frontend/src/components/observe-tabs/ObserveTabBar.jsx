@@ -49,8 +49,8 @@ const FIXED_TABS = [
   { key: "users", label: "Users", icon: "mdi:account-outline", shortcut: "3" },
   // Letter shortcut so the digit shortcuts of saved views don't shift.
   {
-    key: "analyse",
-    label: "Analyse",
+    key: "insights",
+    label: "Insights",
     icon: "mdi:creation-outline",
     shortcut: "A",
   },
@@ -248,12 +248,12 @@ const ObserveTabBar = ({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === "a" || e.key === "A") {
-        // Already on Analyse: keep its mode and any proposal under review.
+        // Already on Insights: keep its mode and any proposal under review.
         if (
-          activeTab !== "analyse" &&
-          visibleFixedTabs.some((t) => t.key === "analyse")
+          activeTab !== "insights" &&
+          visibleFixedTabs.some((t) => t.key === "insights")
         )
-          onTabChange("analyse");
+          onTabChange("insights");
         return;
       }
       const num = parseInt(e.key, 10);
@@ -357,8 +357,8 @@ const ObserveTabBar = ({
               shortcut={tab.shortcut}
               isActive={activeTab === tab.key}
               onClick={(key) =>
-                // Re-clicking Analyse would reset its URL (mode, scope).
-                !(key === "analyse" && activeTab === "analyse") &&
+                // Re-clicking Insights would reset its URL (mode, scope).
+                !(key === "insights" && activeTab === "insights") &&
                 onTabChange(key)
               }
             />
@@ -424,9 +424,9 @@ const ObserveTabBar = ({
           </DndContext>
         </Box>
 
-        {/* Create view button — pinned after scrollable area. Analyse has no
+        {/* Create view button — pinned after scrollable area. Insights has no
             list config to save as a view. */}
-        {activeTab !== "analyse" && (
+        {activeTab !== "insights" && (
           <CustomTooltip
             show
             title="Create new view"

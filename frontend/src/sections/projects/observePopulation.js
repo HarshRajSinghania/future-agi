@@ -1,6 +1,6 @@
 import { endpoints, readQuery } from "src/utils/axios";
 
-// What Instant eval and Analyse run over: the rows a Traces, Sessions or
+// What Instant eval and Insights run over: the rows a Traces, Sessions or
 // Users view is showing. Each unit is read through the same list endpoint and
 // filters as its grid, newest first, so "these traces" means exactly the rows
 // on screen.

@@ -145,7 +145,7 @@ import axios, { endpoints } from "src/utils/axios";
 
 import { PROJECT_SOURCE } from "src/utils/constants";
 import { OBSERVE_LIST_REFRESH_EVENT } from "../observeEvents";
-import { analyseReportLink } from "../observeHandoff";
+import { insightsReportLink } from "../observeHandoff";
 import { useInstantEvalLauncher } from "./InstantEval/useInstantEvalLauncher";
 import { scopeLabel } from "./InstantEval/instantEvalUnits";
 import { tracePageLink } from "./InstantEval/results/scopeLinks";
@@ -2911,7 +2911,7 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
     navigate,
   ]);
 
-  // Instant eval and Analyse ask about exactly the traces the grid shows: its
+  // Instant eval and Insights ask about exactly the traces the grid shows: its
   // date window, filters, chips and toggles, as its list request sends them.
   const traceViewScope = useMemo(
     () => ({
@@ -2935,9 +2935,9 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
     enabled: Boolean(observeId),
     navigate,
   });
-  const openAnalyse = useCallback(() => {
+  const openInsights = useCallback(() => {
     navigate(
-      analyseReportLink(observeId, {
+      insightsReportLink(observeId, {
         unit: "traces",
         filters: traceViewScope.filters,
         label: scopeLabel(traceViewScope),
@@ -4518,15 +4518,15 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
                 setExcludeSimulationCalls(excludeSimulationCalls ? null : true)
               }
               onAddEvals={handleAddEvals}
-              // Instant eval and Analyse are per project and per trace: not in
+              // Instant eval and Insights are per project and per trace: not in
               // the cross-project user view, and not from the Spans tab.
               onInstantEval={
                 observeId && selectedTab !== "spans"
                   ? instantEval.openDrawer
                   : undefined
               }
-              onAnalyse={
-                observeId && selectedTab !== "spans" ? openAnalyse : undefined
+              onInsights={
+                observeId && selectedTab !== "spans" ? openInsights : undefined
               }
             />
             {/* FilterChips moved above graph section */}

@@ -34,7 +34,7 @@ const DATE_OPTIONS = [
   { key: "Custom", label: "Custom range" },
 ];
 
-// Views whose rows Instant eval and Analyse can ask about.
+// Views whose rows Instant eval and Insights can ask about.
 const ASK_MODES = new Set(["traces", "sessions", "users"]);
 
 const ObserveToolbar = ({
@@ -125,9 +125,9 @@ const ObserveToolbar = ({
   onApplyCompareExtraFilters,
   // Add Evals — opens prefilled task-create draft
   onAddEvals,
-  // Instant eval drawer and Analyse hand-off for the rows in view
+  // Instant eval drawer and Insights hand-off for the rows in view
   onInstantEval,
-  onAnalyse,
+  onInsights,
   // Spans view — swaps "Trace Name" filter label to "Span Name"
   isSpansView = false,
 }) => {
@@ -551,7 +551,7 @@ const ObserveToolbar = ({
           />
 
           {/* Instant eval asks Jev a question about every row in this view;
-              Analyse opens a new report scoped to it. Both need a project
+              Insights opens a new report scoped to it. Both need a project
               (the views only pass handlers when they have one) and are not
               offered for spans or in compare mode. */}
           {onInstantEval && showAskActions && (
@@ -567,17 +567,17 @@ const ObserveToolbar = ({
               Instant eval
             </Button>
           )}
-          {onAnalyse && showAskActions && (
+          {onInsights && showAskActions && (
             <Button
               variant="outlined"
               size="small"
               startIcon={<Iconify icon="mdi:chart-box-outline" width={16} />}
-              onClick={onAnalyse}
+              onClick={onInsights}
               sx={{
                 ...pillSx,
               }}
             >
-              Analyse
+              Insights
             </Button>
           )}
 
@@ -655,7 +655,7 @@ ObserveToolbar.propTypes = {
   bulkActions: PropTypes.array,
   onAddEvals: PropTypes.func,
   onInstantEval: PropTypes.func,
-  onAnalyse: PropTypes.func,
+  onInsights: PropTypes.func,
   isSimulator: PropTypes.bool,
   excludeSimulationCalls: PropTypes.bool,
   onToggleSimulationCalls: PropTypes.func,

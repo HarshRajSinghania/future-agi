@@ -24,22 +24,22 @@ const renderToolbar = (props) =>
     />,
   );
 
-describe("ObserveToolbar Instant eval and Analyse", () => {
+describe("ObserveToolbar Instant eval and Insights", () => {
   it.each(["traces", "sessions", "users"])(
     "offers both on the %s view",
     (mode) => {
       const onInstantEval = vi.fn();
-      const onAnalyse = vi.fn();
-      renderToolbar({ mode, onInstantEval, onAnalyse });
+      const onInsights = vi.fn();
+      renderToolbar({ mode, onInstantEval, onInsights });
       fireEvent.click(screen.getByRole("button", { name: "Instant eval" }));
-      fireEvent.click(screen.getByRole("button", { name: "Analyse" }));
+      fireEvent.click(screen.getByRole("button", { name: "Insights" }));
       expect(onInstantEval).toHaveBeenCalledTimes(1);
-      expect(onAnalyse).toHaveBeenCalledTimes(1);
+      expect(onInsights).toHaveBeenCalledTimes(1);
     },
   );
 
   it("hides both for spans, in compare mode and without handlers", () => {
-    const handlers = { onInstantEval: vi.fn(), onAnalyse: vi.fn() };
+    const handlers = { onInstantEval: vi.fn(), onInsights: vi.fn() };
     const { unmount } = renderToolbar({
       mode: "traces",
       isSpansView: true,
@@ -52,10 +52,10 @@ describe("ObserveToolbar Instant eval and Analyse", () => {
       isCompareActive: true,
       ...handlers,
     });
-    expect(screen.queryByRole("button", { name: "Analyse" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Insights" })).toBeNull();
     compare.unmount();
     renderToolbar({ mode: "users" });
     expect(screen.queryByRole("button", { name: "Instant eval" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Analyse" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Insights" })).toBeNull();
   });
 });

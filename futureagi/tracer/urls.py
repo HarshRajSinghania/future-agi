@@ -1,15 +1,6 @@
 from django.urls import path  # type: ignore
 from rest_framework.routers import DefaultRouter
 
-from tracer.views.analyse import (
-    AnalyseConfigDetailView,
-    AnalyseConfigListView,
-    AnalyseDraftView,
-    AnalysePreviewView,
-    AnalyseRunCreateView,
-    AnalyseRunDetailView,
-    AnalyseRunUnitsView,
-)
 from tracer.views.annotation import (
     BulkAnnotationView,
     GetAnnotationLabelsView,
@@ -39,6 +30,15 @@ from tracer.views.feed import (
     LinearTeamsView,
 )
 from tracer.views.imagine_analysis import ImagineAnalysisView
+from tracer.views.insights import (
+    InsightConfigDetailView,
+    InsightConfigListView,
+    InsightDraftView,
+    InsightPreviewView,
+    InsightRunCreateView,
+    InsightRunDetailView,
+    InsightRunUnitsView,
+)
 from tracer.views.instant_eval import (
     InstantEvalAnswersView,
     InstantEvalUserSessionsView,
@@ -223,27 +223,27 @@ urlpatterns = [
     # Imagine analysis — trigger + poll for dynamic analysis results
     path("imagine-analysis/", ImagineAnalysisView.as_view(), name="imagine-analysis"),
     path(
-        "analyse/configs/",
-        AnalyseConfigListView.as_view(),
-        name="analyse-configs",
+        "insights/configs/",
+        InsightConfigListView.as_view(),
+        name="insight-configs",
     ),
     path(
-        "analyse/configs/<uuid:config_id>/",
-        AnalyseConfigDetailView.as_view(),
-        name="analyse-config-detail",
+        "insights/configs/<uuid:config_id>/",
+        InsightConfigDetailView.as_view(),
+        name="insight-config-detail",
     ),
-    path("analyse/draft/", AnalyseDraftView.as_view(), name="analyse-draft"),
-    path("analyse/preview/", AnalysePreviewView.as_view(), name="analyse-preview"),
-    path("analyse/runs/", AnalyseRunCreateView.as_view(), name="analyse-runs"),
+    path("insights/draft/", InsightDraftView.as_view(), name="insight-draft"),
+    path("insights/preview/", InsightPreviewView.as_view(), name="insight-preview"),
+    path("insights/runs/", InsightRunCreateView.as_view(), name="insight-runs"),
     path(
-        "analyse/runs/<uuid:run_id>/",
-        AnalyseRunDetailView.as_view(),
-        name="analyse-run-detail",
+        "insights/runs/<uuid:run_id>/",
+        InsightRunDetailView.as_view(),
+        name="insight-run-detail",
     ),
     path(
-        "analyse/runs/<uuid:run_id>/units/",
-        AnalyseRunUnitsView.as_view(),
-        name="analyse-run-units",
+        "insights/runs/<uuid:run_id>/units/",
+        InsightRunUnitsView.as_view(),
+        name="insight-run-units",
     ),
     path(
         "instant-eval/user-sessions/",

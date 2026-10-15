@@ -1370,16 +1370,16 @@ export const endpoints = {
       `${apiPath("/tracer/observation-span/retrieve_loading/")}?observation_span_id=${id}`,
     getTracesForObserveProject: () =>
       apiPath("/tracer/trace/list_traces_of_session/"),
-    analyseConfigs: () => apiPath("/tracer/analyse/configs/"),
-    analyseConfig: (configId) =>
-      apiPath("/tracer/analyse/configs/{config_id}/", { config_id: configId }),
-    analyseDraft: () => apiPath("/tracer/analyse/draft/"),
-    analysePreview: () => apiPath("/tracer/analyse/preview/"),
-    analyseRuns: () => apiPath("/tracer/analyse/runs/"),
-    analyseRun: (runId) =>
-      apiPath("/tracer/analyse/runs/{run_id}/", { run_id: runId }),
-    analyseRunUnits: (runId) =>
-      apiPath("/tracer/analyse/runs/{run_id}/units/", { run_id: runId }),
+    insightsConfigs: () => apiPath("/tracer/insights/configs/"),
+    insightsConfig: (configId) =>
+      apiPath("/tracer/insights/configs/{config_id}/", { config_id: configId }),
+    insightsDraft: () => apiPath("/tracer/insights/draft/"),
+    insightsPreview: () => apiPath("/tracer/insights/preview/"),
+    insightsRuns: () => apiPath("/tracer/insights/runs/"),
+    insightsRun: (runId) =>
+      apiPath("/tracer/insights/runs/{run_id}/", { run_id: runId }),
+    insightsRunUnits: (runId) =>
+      apiPath("/tracer/insights/runs/{run_id}/units/", { run_id: runId }),
     instantEvalAnswers: () => apiPath("/tracer/instant-eval/answers/"),
     instantEvalUserSessions: () =>
       apiPath("/tracer/instant-eval/user-sessions/"),

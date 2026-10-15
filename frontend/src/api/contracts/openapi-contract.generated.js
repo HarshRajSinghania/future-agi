@@ -32147,399 +32147,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    "/tracer/analyse/configs/": {
-      get: {
-        operationId: "tracer_analyse_configs_list",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: null,
-        queryParameters: {
-          project_id: {
-            required: true,
-            schema: {
-              type: "string",
-              format: "uuid",
-            },
-          },
-        },
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseConfigListResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/tracer/analyse/configs/{config_id}/": {
-      get: {
-        operationId: "tracer_analyse_configs_read",
-        runtimeRequestValidation: false,
-        runtimeResponseValidation: true,
-        requestBody: null,
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseConfigResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-      patch: {
-        operationId: "tracer_analyse_configs_partial_update",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: {
-          $ref: "#/definitions/AnalyseConfigPatch",
-        },
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseConfigResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-      delete: {
-        operationId: "tracer_analyse_configs_delete",
-        runtimeRequestValidation: false,
-        runtimeResponseValidation: true,
-        requestBody: null,
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseConfigResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/tracer/analyse/draft/": {
-      post: {
-        operationId: "tracer_analyse_draft_create",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: {
-          $ref: "#/definitions/AnalyseDraft",
-        },
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseDraftResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/tracer/analyse/preview/": {
-      post: {
-        operationId: "tracer_analyse_preview_create",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: {
-          $ref: "#/definitions/AnalysePreview",
-        },
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalysePreviewResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/tracer/analyse/runs/": {
-      post: {
-        operationId: "tracer_analyse_runs_create",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: {
-          $ref: "#/definitions/AnalyseRunCreate",
-        },
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseRunCreatedResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/tracer/analyse/runs/{run_id}/": {
-      get: {
-        operationId: "tracer_analyse_runs_read",
-        runtimeRequestValidation: false,
-        runtimeResponseValidation: true,
-        requestBody: null,
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseRunResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/tracer/analyse/runs/{run_id}/units/": {
-      get: {
-        operationId: "tracer_analyse_runs_units_list",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: null,
-        queryParameters: {
-          category_id: {
-            required: false,
-            schema: {
-              type: "string",
-              maxLength: 64,
-            },
-          },
-          sub_category_id: {
-            required: false,
-            schema: {
-              type: "string",
-              maxLength: 64,
-            },
-          },
-          unit_ids: {
-            required: false,
-            schema: {
-              type: "string",
-              maxLength: 4000,
-            },
-          },
-          offset: {
-            required: false,
-            schema: {
-              type: "integer",
-              minimum: 0,
-              default: 0,
-            },
-          },
-          limit: {
-            required: false,
-            schema: {
-              type: "integer",
-              minimum: 1,
-              maximum: 200,
-              default: 50,
-            },
-          },
-        },
-        responses: {
-          200: {
-            $ref: "#/definitions/AnalyseUnitsResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          402: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          429: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
     "/tracer/bulk-annotation/": {
       post: {
         operationId: "tracer_bulk-annotation_create",
@@ -35123,6 +34730,399 @@ export const OPENAPI_CONTRACT = Object.freeze({
             $ref: "#/definitions/ApiErrorResponse",
           },
           500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/insights/configs/": {
+      get: {
+        operationId: "tracer_insights_configs_list",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          project_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightConfigListResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/insights/configs/{config_id}/": {
+      get: {
+        operationId: "tracer_insights_configs_read",
+        runtimeRequestValidation: false,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightConfigResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+      patch: {
+        operationId: "tracer_insights_configs_partial_update",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InsightConfigPatch",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightConfigResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+      delete: {
+        operationId: "tracer_insights_configs_delete",
+        runtimeRequestValidation: false,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightConfigResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/insights/draft/": {
+      post: {
+        operationId: "tracer_insights_draft_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InsightDraft",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightDraftResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/insights/preview/": {
+      post: {
+        operationId: "tracer_insights_preview_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InsightPreview",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightPreviewResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/insights/runs/": {
+      post: {
+        operationId: "tracer_insights_runs_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InsightRunCreate",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightRunCreatedResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/insights/runs/{run_id}/": {
+      get: {
+        operationId: "tracer_insights_runs_read",
+        runtimeRequestValidation: false,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightRunResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/insights/runs/{run_id}/units/": {
+      get: {
+        operationId: "tracer_insights_runs_units_list",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          category_id: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 64,
+            },
+          },
+          sub_category_id: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 64,
+            },
+          },
+          unit_ids: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 4000,
+            },
+          },
+          offset: {
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 0,
+              default: 0,
+            },
+          },
+          limit: {
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 1,
+              maximum: 200,
+              default: 50,
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightUnitsResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
             $ref: "#/definitions/ApiErrorResponse",
           },
           default: {
@@ -50502,219 +50502,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    AnalyseConfigListResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/AnalyseConfigListResult",
-        },
-      },
-    },
-    AnalyseConfigPatch: {
-      type: "object",
-      properties: {
-        name: {
-          title: "Name",
-          type: "string",
-          maxLength: 255,
-          minLength: 1,
-        },
-        reset_taxonomy: {
-          title: "Reset taxonomy",
-          type: "boolean",
-          default: false,
-        },
-      },
-    },
-    AnalyseConfigResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/AnalyseConfigItem",
-        },
-      },
-    },
-    AnalyseDraft: {
-      required: ["project_id", "unit", "lens", "sample_ids"],
-      type: "object",
-      properties: {
-        project_id: {
-          title: "Project id",
-          type: "string",
-          format: "uuid",
-        },
-        unit: {
-          title: "Unit",
-          type: "string",
-          enum: ["traces", "sessions", "users"],
-        },
-        lens: {
-          title: "Lens",
-          type: "string",
-          enum: ["usage", "failures", "experience", "personas", "custom"],
-        },
-        goal: {
-          title: "Goal",
-          type: "string",
-          maxLength: 500,
-        },
-        agent_description: {
-          title: "Agent description",
-          type: "string",
-          maxLength: 500,
-        },
-        sample_ids: {
-          type: "array",
-          items: {
-            type: "string",
-            maxLength: 255,
-            minLength: 1,
-          },
-          maxItems: 5,
-          minItems: 1,
-        },
-      },
-    },
-    AnalyseDraftResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/AnalyseDraftResult",
-        },
-      },
-    },
-    AnalysePreview: {
-      required: ["project_id", "config", "unit_ids"],
-      type: "object",
-      properties: {
-        project_id: {
-          title: "Project id",
-          type: "string",
-          format: "uuid",
-        },
-        config: {
-          $ref: "#/definitions/AnalyseConfigInput",
-        },
-        unit_ids: {
-          type: "array",
-          items: {
-            type: "string",
-            maxLength: 255,
-            minLength: 1,
-          },
-          maxItems: 3,
-          minItems: 1,
-        },
-      },
-    },
-    AnalysePreviewResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/AnalysePreviewResult",
-        },
-      },
-    },
-    AnalyseRunCreate: {
-      required: ["project_id", "population"],
-      type: "object",
-      properties: {
-        project_id: {
-          title: "Project id",
-          type: "string",
-          format: "uuid",
-        },
-        config_id: {
-          title: "Config id",
-          type: "string",
-          format: "uuid",
-        },
-        config: {
-          $ref: "#/definitions/AnalyseConfigInput",
-        },
-        scope: {
-          $ref: "#/definitions/AnalyseScope",
-        },
-        population: {
-          type: "array",
-          items: {
-            $ref: "#/definitions/AnalysePopulationItem",
-          },
-        },
-        sample_size: {
-          title: "Sample size",
-          type: "integer",
-          maximum: 1000,
-          minimum: 10,
-        },
-      },
-    },
-    AnalyseRunCreatedResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/AnalyseRunCreatedResult",
-        },
-      },
-    },
-    AnalyseRunResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/AnalyseRunDetail",
-        },
-      },
-    },
-    AnalyseUnitsResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/AnalyseUnitsResult",
-        },
-      },
-    },
     AnnotationActionMessageResponse: {
       required: ["result"],
       type: "object",
@@ -64699,6 +64486,219 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Annotator id",
           type: "string",
           format: "uuid",
+        },
+      },
+    },
+    InsightConfigListResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightConfigListResult",
+        },
+      },
+    },
+    InsightConfigPatch: {
+      type: "object",
+      properties: {
+        name: {
+          title: "Name",
+          type: "string",
+          maxLength: 255,
+          minLength: 1,
+        },
+        reset_taxonomy: {
+          title: "Reset taxonomy",
+          type: "boolean",
+          default: false,
+        },
+      },
+    },
+    InsightConfigResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightConfigItem",
+        },
+      },
+    },
+    InsightDraft: {
+      required: ["project_id", "unit", "lens", "sample_ids"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          enum: ["traces", "sessions", "users"],
+        },
+        lens: {
+          title: "Lens",
+          type: "string",
+          enum: ["usage", "failures", "experience", "personas", "custom"],
+        },
+        goal: {
+          title: "Goal",
+          type: "string",
+          maxLength: 500,
+        },
+        agent_description: {
+          title: "Agent description",
+          type: "string",
+          maxLength: 500,
+        },
+        sample_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            maxLength: 255,
+            minLength: 1,
+          },
+          maxItems: 5,
+          minItems: 1,
+        },
+      },
+    },
+    InsightDraftResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightDraftResult",
+        },
+      },
+    },
+    InsightPreview: {
+      required: ["project_id", "config", "unit_ids"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        config: {
+          $ref: "#/definitions/InsightConfigInput",
+        },
+        unit_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            maxLength: 255,
+            minLength: 1,
+          },
+          maxItems: 3,
+          minItems: 1,
+        },
+      },
+    },
+    InsightPreviewResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightPreviewResult",
+        },
+      },
+    },
+    InsightRunCreate: {
+      required: ["project_id", "population"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        config_id: {
+          title: "Config id",
+          type: "string",
+          format: "uuid",
+        },
+        config: {
+          $ref: "#/definitions/InsightConfigInput",
+        },
+        scope: {
+          $ref: "#/definitions/InsightScope",
+        },
+        population: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightPopulationItem",
+          },
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          maximum: 1000,
+          minimum: 10,
+        },
+      },
+    },
+    InsightRunCreatedResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightRunCreatedResult",
+        },
+      },
+    },
+    InsightRunResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightRunDetail",
+        },
+      },
+    },
+    InsightUnitsResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightUnitsResult",
         },
       },
     },
@@ -85401,428 +85401,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    AnalyseConfigListResult: {
-      required: ["configs"],
-      type: "object",
-      properties: {
-        configs: {
-          type: "array",
-          items: {
-            $ref: "#/definitions/AnalyseConfigItem",
-          },
-        },
-      },
-    },
-    AnalyseConfigItem: {
-      required: [
-        "id",
-        "name",
-        "unit",
-        "lens",
-        "question",
-        "agent_description",
-        "instructions",
-        "attributes",
-        "sample_size",
-        "scope",
-        "has_taxonomy",
-        "taxonomy",
-        "created_at",
-        "latest_run",
-      ],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          format: "uuid",
-        },
-        name: {
-          title: "Name",
-          type: "string",
-          minLength: 1,
-        },
-        unit: {
-          title: "Unit",
-          type: "string",
-          minLength: 1,
-        },
-        lens: {
-          title: "Lens",
-          type: "string",
-          minLength: 1,
-        },
-        question: {
-          title: "Question",
-          type: "string",
-          minLength: 1,
-        },
-        agent_description: {
-          title: "Agent description",
-          type: "string",
-        },
-        instructions: {
-          title: "Instructions",
-          type: "string",
-        },
-        attributes: {
-          type: "array",
-          items: {
-            type: "object",
-          },
-        },
-        sample_size: {
-          title: "Sample size",
-          type: "integer",
-        },
-        scope: {
-          title: "Scope",
-          type: "object",
-        },
-        has_taxonomy: {
-          title: "Has taxonomy",
-          type: "boolean",
-        },
-        taxonomy: {
-          title: "Taxonomy",
-          type: "object",
-        },
-        created_at: {
-          title: "Created at",
-          type: "string",
-          format: "date-time",
-        },
-        latest_run: {
-          $ref: "#/definitions/AnalyseRunSummary",
-        },
-        runs: {
-          type: "array",
-          items: {
-            $ref: "#/definitions/AnalyseRunSummary",
-          },
-        },
-      },
-    },
-    AnalyseDraftResult: {
-      required: [
-        "name",
-        "question",
-        "agent_description",
-        "instructions",
-        "attributes",
-        "examples_read",
-      ],
-      type: "object",
-      properties: {
-        name: {
-          title: "Name",
-          type: "string",
-          minLength: 1,
-        },
-        question: {
-          title: "Question",
-          type: "string",
-          minLength: 1,
-        },
-        agent_description: {
-          title: "Agent description",
-          type: "string",
-        },
-        instructions: {
-          title: "Instructions",
-          type: "string",
-        },
-        attributes: {
-          type: "array",
-          items: {
-            type: "object",
-          },
-        },
-        examples_read: {
-          title: "Examples read",
-          type: "integer",
-        },
-      },
-    },
-    AnalyseConfigInput: {
-      required: ["name", "unit", "lens", "question"],
-      type: "object",
-      properties: {
-        name: {
-          title: "Name",
-          type: "string",
-          maxLength: 255,
-          minLength: 1,
-        },
-        unit: {
-          title: "Unit",
-          type: "string",
-          enum: ["traces", "sessions", "users"],
-        },
-        lens: {
-          title: "Lens",
-          type: "string",
-          enum: ["usage", "failures", "experience", "personas", "custom"],
-        },
-        question: {
-          title: "Question",
-          type: "string",
-          maxLength: 500,
-          minLength: 1,
-        },
-        agent_description: {
-          title: "Agent description",
-          type: "string",
-          maxLength: 500,
-        },
-        instructions: {
-          title: "Instructions",
-          type: "string",
-          maxLength: 1000,
-        },
-        attributes: {
-          type: "array",
-          items: {
-            $ref: "#/definitions/AnalyseAttribute",
-          },
-        },
-        sample_size: {
-          title: "Sample size",
-          type: "integer",
-          maximum: 1000,
-          minimum: 10,
-        },
-      },
-    },
-    AnalysePreviewResult: {
-      required: ["units"],
-      type: "object",
-      properties: {
-        units: {
-          type: "array",
-          items: {
-            type: "object",
-          },
-        },
-      },
-    },
-    AnalysePopulationItem: {
-      required: ["id"],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          maxLength: 255,
-          minLength: 1,
-        },
-        time: {
-          title: "Time",
-          type: "string",
-          maxLength: 64,
-        },
-        user_id: {
-          title: "User id",
-          type: "string",
-          maxLength: 255,
-        },
-      },
-    },
-    AnalyseScope: {
-      type: "object",
-      properties: {
-        filters: {
-          type: "array",
-          items: {
-            type: "object",
-          },
-        },
-        label: {
-          title: "Label",
-          type: "string",
-          maxLength: 300,
-        },
-        preset: {
-          title: "Preset",
-          type: "string",
-          maxLength: 16,
-        },
-        window: {
-          type: "array",
-          items: {
-            type: "string",
-            maxLength: 64,
-            minLength: 1,
-          },
-          maxItems: 2,
-        },
-      },
-    },
-    AnalyseRunCreatedResult: {
-      required: ["run_id", "config_id"],
-      type: "object",
-      properties: {
-        run_id: {
-          title: "Run id",
-          type: "string",
-          format: "uuid",
-        },
-        config_id: {
-          title: "Config id",
-          type: "string",
-          format: "uuid",
-        },
-      },
-    },
-    AnalyseRunDetail: {
-      required: [
-        "id",
-        "config_id",
-        "project_id",
-        "status",
-        "stage",
-        "progress",
-        "unit",
-        "scope",
-        "settings",
-        "population_size",
-        "sample_size",
-        "analysed_count",
-        "taxonomy_mode",
-        "result",
-        "models_used",
-        "cost_usd",
-        "error",
-        "created_at",
-        "started_at",
-        "finished_at",
-        "previous_run_id",
-        "next_run_id",
-      ],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          format: "uuid",
-        },
-        config_id: {
-          title: "Config id",
-          type: "string",
-          format: "uuid",
-        },
-        project_id: {
-          title: "Project id",
-          type: "string",
-          format: "uuid",
-        },
-        status: {
-          title: "Status",
-          type: "string",
-          minLength: 1,
-        },
-        stage: {
-          title: "Stage",
-          type: "string",
-          minLength: 1,
-        },
-        progress: {
-          title: "Progress",
-          type: "object",
-        },
-        unit: {
-          title: "Unit",
-          type: "string",
-          minLength: 1,
-        },
-        scope: {
-          title: "Scope",
-          type: "object",
-        },
-        settings: {
-          title: "Settings",
-          type: "object",
-        },
-        population_size: {
-          title: "Population size",
-          type: "integer",
-        },
-        sample_size: {
-          title: "Sample size",
-          type: "integer",
-        },
-        analysed_count: {
-          title: "Analysed count",
-          type: "integer",
-        },
-        taxonomy_mode: {
-          title: "Taxonomy mode",
-          type: "string",
-          minLength: 1,
-        },
-        result: {
-          title: "Result",
-          type: "object",
-        },
-        models_used: {
-          title: "Models used",
-          type: "object",
-        },
-        cost_usd: {
-          title: "Cost usd",
-          type: "number",
-        },
-        error: {
-          title: "Error",
-          type: "string",
-        },
-        created_at: {
-          title: "Created at",
-          type: "string",
-          format: "date-time",
-        },
-        started_at: {
-          title: "Started at",
-          type: "string",
-          format: "date-time",
-          "x-nullable": true,
-        },
-        finished_at: {
-          title: "Finished at",
-          type: "string",
-          format: "date-time",
-          "x-nullable": true,
-        },
-        previous_run_id: {
-          title: "Previous run id",
-          type: "string",
-          format: "uuid",
-          "x-nullable": true,
-        },
-        next_run_id: {
-          title: "Next run id",
-          type: "string",
-          format: "uuid",
-          "x-nullable": true,
-        },
-      },
-    },
-    AnalyseUnitsResult: {
-      required: ["units", "total"],
-      type: "object",
-      properties: {
-        units: {
-          type: "array",
-          items: {
-            $ref: "#/definitions/AnalyseUnitItem",
-          },
-        },
-        total: {
-          title: "Total",
-          type: "integer",
-        },
-      },
-    },
     AnnotationActionMessageResult: {
       required: ["message"],
       type: "object",
@@ -94931,6 +94509,428 @@ export const OPENAPI_CONTRACT = Object.freeze({
         score_source: {
           title: "Score source",
           type: "string",
+        },
+      },
+    },
+    InsightConfigListResult: {
+      required: ["configs"],
+      type: "object",
+      properties: {
+        configs: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightConfigItem",
+          },
+        },
+      },
+    },
+    InsightConfigItem: {
+      required: [
+        "id",
+        "name",
+        "unit",
+        "lens",
+        "question",
+        "agent_description",
+        "instructions",
+        "attributes",
+        "sample_size",
+        "scope",
+        "has_taxonomy",
+        "taxonomy",
+        "created_at",
+        "latest_run",
+      ],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        name: {
+          title: "Name",
+          type: "string",
+          minLength: 1,
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          minLength: 1,
+        },
+        lens: {
+          title: "Lens",
+          type: "string",
+          minLength: 1,
+        },
+        question: {
+          title: "Question",
+          type: "string",
+          minLength: 1,
+        },
+        agent_description: {
+          title: "Agent description",
+          type: "string",
+        },
+        instructions: {
+          title: "Instructions",
+          type: "string",
+        },
+        attributes: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+        },
+        scope: {
+          title: "Scope",
+          type: "object",
+        },
+        has_taxonomy: {
+          title: "Has taxonomy",
+          type: "boolean",
+        },
+        taxonomy: {
+          title: "Taxonomy",
+          type: "object",
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          format: "date-time",
+        },
+        latest_run: {
+          $ref: "#/definitions/InsightRunSummary",
+        },
+        runs: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightRunSummary",
+          },
+        },
+      },
+    },
+    InsightDraftResult: {
+      required: [
+        "name",
+        "question",
+        "agent_description",
+        "instructions",
+        "attributes",
+        "examples_read",
+      ],
+      type: "object",
+      properties: {
+        name: {
+          title: "Name",
+          type: "string",
+          minLength: 1,
+        },
+        question: {
+          title: "Question",
+          type: "string",
+          minLength: 1,
+        },
+        agent_description: {
+          title: "Agent description",
+          type: "string",
+        },
+        instructions: {
+          title: "Instructions",
+          type: "string",
+        },
+        attributes: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+        },
+        examples_read: {
+          title: "Examples read",
+          type: "integer",
+        },
+      },
+    },
+    InsightConfigInput: {
+      required: ["name", "unit", "lens", "question"],
+      type: "object",
+      properties: {
+        name: {
+          title: "Name",
+          type: "string",
+          maxLength: 255,
+          minLength: 1,
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          enum: ["traces", "sessions", "users"],
+        },
+        lens: {
+          title: "Lens",
+          type: "string",
+          enum: ["usage", "failures", "experience", "personas", "custom"],
+        },
+        question: {
+          title: "Question",
+          type: "string",
+          maxLength: 500,
+          minLength: 1,
+        },
+        agent_description: {
+          title: "Agent description",
+          type: "string",
+          maxLength: 500,
+        },
+        instructions: {
+          title: "Instructions",
+          type: "string",
+          maxLength: 1000,
+        },
+        attributes: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightAttribute",
+          },
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          maximum: 1000,
+          minimum: 10,
+        },
+      },
+    },
+    InsightPreviewResult: {
+      required: ["units"],
+      type: "object",
+      properties: {
+        units: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+        },
+      },
+    },
+    InsightPopulationItem: {
+      required: ["id"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          maxLength: 255,
+          minLength: 1,
+        },
+        time: {
+          title: "Time",
+          type: "string",
+          maxLength: 64,
+        },
+        user_id: {
+          title: "User id",
+          type: "string",
+          maxLength: 255,
+        },
+      },
+    },
+    InsightScope: {
+      type: "object",
+      properties: {
+        filters: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          maxLength: 300,
+        },
+        preset: {
+          title: "Preset",
+          type: "string",
+          maxLength: 16,
+        },
+        window: {
+          type: "array",
+          items: {
+            type: "string",
+            maxLength: 64,
+            minLength: 1,
+          },
+          maxItems: 2,
+        },
+      },
+    },
+    InsightRunCreatedResult: {
+      required: ["run_id", "config_id"],
+      type: "object",
+      properties: {
+        run_id: {
+          title: "Run id",
+          type: "string",
+          format: "uuid",
+        },
+        config_id: {
+          title: "Config id",
+          type: "string",
+          format: "uuid",
+        },
+      },
+    },
+    InsightRunDetail: {
+      required: [
+        "id",
+        "config_id",
+        "project_id",
+        "status",
+        "stage",
+        "progress",
+        "unit",
+        "scope",
+        "settings",
+        "population_size",
+        "sample_size",
+        "analysed_count",
+        "taxonomy_mode",
+        "result",
+        "models_used",
+        "cost_usd",
+        "error",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "previous_run_id",
+        "next_run_id",
+      ],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        config_id: {
+          title: "Config id",
+          type: "string",
+          format: "uuid",
+        },
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          minLength: 1,
+        },
+        stage: {
+          title: "Stage",
+          type: "string",
+          minLength: 1,
+        },
+        progress: {
+          title: "Progress",
+          type: "object",
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          minLength: 1,
+        },
+        scope: {
+          title: "Scope",
+          type: "object",
+        },
+        settings: {
+          title: "Settings",
+          type: "object",
+        },
+        population_size: {
+          title: "Population size",
+          type: "integer",
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+        },
+        analysed_count: {
+          title: "Analysed count",
+          type: "integer",
+        },
+        taxonomy_mode: {
+          title: "Taxonomy mode",
+          type: "string",
+          minLength: 1,
+        },
+        result: {
+          title: "Result",
+          type: "object",
+        },
+        models_used: {
+          title: "Models used",
+          type: "object",
+        },
+        cost_usd: {
+          title: "Cost usd",
+          type: "number",
+        },
+        error: {
+          title: "Error",
+          type: "string",
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          format: "date-time",
+        },
+        started_at: {
+          title: "Started at",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        finished_at: {
+          title: "Finished at",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        previous_run_id: {
+          title: "Previous run id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        next_run_id: {
+          title: "Next run id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+      },
+    },
+    InsightUnitsResult: {
+      required: ["units", "total"],
+      type: "object",
+      properties: {
+        units: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InsightUnitItem",
+          },
+        },
+        total: {
+          title: "Total",
+          type: "integer",
         },
       },
     },
@@ -106321,175 +106321,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    AnalyseRunSummary: {
-      required: [
-        "id",
-        "status",
-        "stage",
-        "created_at",
-        "finished_at",
-        "population_size",
-        "sample_size",
-        "analysed_count",
-        "taxonomy_mode",
-        "distribution",
-        "scope",
-      ],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          format: "uuid",
-        },
-        status: {
-          title: "Status",
-          type: "string",
-          minLength: 1,
-        },
-        stage: {
-          title: "Stage",
-          type: "string",
-          minLength: 1,
-        },
-        created_at: {
-          title: "Created at",
-          type: "string",
-          format: "date-time",
-        },
-        finished_at: {
-          title: "Finished at",
-          type: "string",
-          format: "date-time",
-          "x-nullable": true,
-        },
-        population_size: {
-          title: "Population size",
-          type: "integer",
-        },
-        sample_size: {
-          title: "Sample size",
-          type: "integer",
-        },
-        analysed_count: {
-          title: "Analysed count",
-          type: "integer",
-        },
-        taxonomy_mode: {
-          title: "Taxonomy mode",
-          type: "string",
-          minLength: 1,
-        },
-        distribution: {
-          type: "array",
-          items: {
-            type: "object",
-          },
-        },
-        scope: {
-          title: "Scope",
-          type: "object",
-        },
-      },
-      "x-nullable": true,
-    },
-    AnalyseAttribute: {
-      required: ["key", "type"],
-      type: "object",
-      properties: {
-        key: {
-          title: "Key",
-          type: "string",
-          maxLength: 60,
-          minLength: 1,
-        },
-        type: {
-          title: "Type",
-          type: "string",
-          enum: ["boolean", "number", "string"],
-        },
-        description: {
-          title: "Description",
-          type: "string",
-          maxLength: 300,
-        },
-        filter_by: {
-          title: "Filter by",
-          type: "boolean",
-          default: false,
-        },
-      },
-    },
-    AnalyseUnitItem: {
-      required: [
-        "unit_id",
-        "label",
-        "user_id",
-        "session_id",
-        "time",
-        "excerpt",
-        "summary",
-        "lens_answer",
-        "facets",
-        "metrics",
-        "category_id",
-        "sub_category_id",
-      ],
-      type: "object",
-      properties: {
-        unit_id: {
-          title: "Unit id",
-          type: "string",
-          minLength: 1,
-        },
-        label: {
-          title: "Label",
-          type: "string",
-        },
-        user_id: {
-          title: "User id",
-          type: "string",
-        },
-        session_id: {
-          title: "Session id",
-          type: "string",
-        },
-        time: {
-          title: "Time",
-          type: "string",
-          format: "date-time",
-          "x-nullable": true,
-        },
-        excerpt: {
-          title: "Excerpt",
-          type: "string",
-        },
-        summary: {
-          title: "Summary",
-          type: "string",
-        },
-        lens_answer: {
-          title: "Lens answer",
-          type: "string",
-        },
-        facets: {
-          title: "Facets",
-          type: "object",
-        },
-        metrics: {
-          title: "Metrics",
-          type: "object",
-        },
-        category_id: {
-          title: "Category id",
-          type: "string",
-        },
-        sub_category_id: {
-          title: "Sub category id",
-          type: "string",
-        },
-      },
-    },
     AnnotationSummaryHeader: {
       type: "object",
       properties: {
@@ -111390,6 +111221,175 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Error",
           type: "string",
           "x-nullable": true,
+        },
+      },
+    },
+    InsightRunSummary: {
+      required: [
+        "id",
+        "status",
+        "stage",
+        "created_at",
+        "finished_at",
+        "population_size",
+        "sample_size",
+        "analysed_count",
+        "taxonomy_mode",
+        "distribution",
+        "scope",
+      ],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          minLength: 1,
+        },
+        stage: {
+          title: "Stage",
+          type: "string",
+          minLength: 1,
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          format: "date-time",
+        },
+        finished_at: {
+          title: "Finished at",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        population_size: {
+          title: "Population size",
+          type: "integer",
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+        },
+        analysed_count: {
+          title: "Analysed count",
+          type: "integer",
+        },
+        taxonomy_mode: {
+          title: "Taxonomy mode",
+          type: "string",
+          minLength: 1,
+        },
+        distribution: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+        },
+        scope: {
+          title: "Scope",
+          type: "object",
+        },
+      },
+      "x-nullable": true,
+    },
+    InsightAttribute: {
+      required: ["key", "type"],
+      type: "object",
+      properties: {
+        key: {
+          title: "Key",
+          type: "string",
+          maxLength: 60,
+          minLength: 1,
+        },
+        type: {
+          title: "Type",
+          type: "string",
+          enum: ["boolean", "number", "string"],
+        },
+        description: {
+          title: "Description",
+          type: "string",
+          maxLength: 300,
+        },
+        filter_by: {
+          title: "Filter by",
+          type: "boolean",
+          default: false,
+        },
+      },
+    },
+    InsightUnitItem: {
+      required: [
+        "unit_id",
+        "label",
+        "user_id",
+        "session_id",
+        "time",
+        "excerpt",
+        "summary",
+        "lens_answer",
+        "facets",
+        "metrics",
+        "category_id",
+        "sub_category_id",
+      ],
+      type: "object",
+      properties: {
+        unit_id: {
+          title: "Unit id",
+          type: "string",
+          minLength: 1,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+        },
+        user_id: {
+          title: "User id",
+          type: "string",
+        },
+        session_id: {
+          title: "Session id",
+          type: "string",
+        },
+        time: {
+          title: "Time",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        excerpt: {
+          title: "Excerpt",
+          type: "string",
+        },
+        summary: {
+          title: "Summary",
+          type: "string",
+        },
+        lens_answer: {
+          title: "Lens answer",
+          type: "string",
+        },
+        facets: {
+          title: "Facets",
+          type: "object",
+        },
+        metrics: {
+          title: "Metrics",
+          type: "object",
+        },
+        category_id: {
+          title: "Category id",
+          type: "string",
+        },
+        sub_category_id: {
+          title: "Sub category id",
+          type: "string",
         },
       },
     },

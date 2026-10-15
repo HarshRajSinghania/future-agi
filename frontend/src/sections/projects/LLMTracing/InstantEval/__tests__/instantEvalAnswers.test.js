@@ -11,7 +11,7 @@ import usersResponse from "./fixtures/answers-users.json";
 import {
   ERROR_ANSWER,
   SKIPPED_ANSWER,
-  analyseSeedFromAnswers,
+  insightsSeedFromAnswers,
   answeredCount,
   filterRows,
   isUnsure,
@@ -157,10 +157,10 @@ describe("answeredCount", () => {
   });
 });
 
-describe("analyseSeedFromAnswers", () => {
-  it("hands the sessions that got one answer to Analyse", () => {
+describe("insightsSeedFromAnswers", () => {
+  it("hands the sessions that got one answer to Insights", () => {
     expect(
-      analyseSeedFromAnswers({
+      insightsSeedFromAnswers({
         unit: "sessions",
         item: ITEM,
         answer: "No",
@@ -188,7 +188,7 @@ describe("analyseSeedFromAnswers", () => {
   });
 
   it("hands users over by end-user id", () => {
-    const seed = analyseSeedFromAnswers({
+    const seed = insightsSeedFromAnswers({
       unit: "users",
       item: ITEM,
       answer: "No",

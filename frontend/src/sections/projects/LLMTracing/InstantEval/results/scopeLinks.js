@@ -34,7 +34,7 @@ export const presetScope = (preset, otherFilters = [], now = new Date()) => {
   };
 };
 
-// The Trace view hands its exact scope over in the URL; without one, Analyse
+// The Trace view hands its exact scope over in the URL; without one, Insights
 // looks at the past seven days of the project.
 export function readScope(search) {
   try {

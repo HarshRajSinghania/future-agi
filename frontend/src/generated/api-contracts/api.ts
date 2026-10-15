@@ -192,17 +192,6 @@ import type {
   AgentccWebhooksList200,
   AgentccWebhooksListParams,
   AllActiveTestsApi,
-  AnalyseConfigListResponseApi,
-  AnalyseConfigPatchApi,
-  AnalyseConfigResponseApi,
-  AnalyseDraftApi,
-  AnalyseDraftResponseApi,
-  AnalysePreviewApi,
-  AnalysePreviewResponseApi,
-  AnalyseRunCreateApi,
-  AnalyseRunCreatedResponseApi,
-  AnalyseRunResponseApi,
-  AnalyseUnitsResponseApi,
   AnnotationActionMessageResponseApi,
   AnnotationLabelCreateResponseApi,
   AnnotationLabelRestoreResponseApi,
@@ -644,6 +633,17 @@ import type {
   HuggingFaceDatasetListResponseApi,
   ImagineAnalysisResponseApi,
   ImportAnnotationsApi,
+  InsightConfigListResponseApi,
+  InsightConfigPatchApi,
+  InsightConfigResponseApi,
+  InsightDraftApi,
+  InsightDraftResponseApi,
+  InsightPreviewApi,
+  InsightPreviewResponseApi,
+  InsightRunCreateApi,
+  InsightRunCreatedResponseApi,
+  InsightRunResponseApi,
+  InsightUnitsResponseApi,
   InstantEvalAnswersResponseApi,
   InstantEvalUserSessionsApi,
   InstantEvalUserSessionsResponseApi,
@@ -1276,8 +1276,6 @@ import type {
   TraceVoiceCallDetailResponseApi,
   TraceVoiceCallListQueryApi,
   TraceVoiceCallListResponseApi,
-  TracerAnalyseConfigsListParams,
-  TracerAnalyseRunsUnitsListParams,
   TracerChartsFetchGraphParams,
   TracerCustomEvalConfigList200,
   TracerCustomEvalConfigListCustomEvalConfigs200,
@@ -1314,6 +1312,8 @@ import type {
   TracerFeedIssuesTrendsListParams,
   TracerGetAnnotationLabelsListParams,
   TracerImagineAnalysisListParams,
+  TracerInsightsConfigsListParams,
+  TracerInsightsRunsUnitsListParams,
   TracerInstantEvalAnswersListParams,
   TracerObservabilityProviderList200,
   TracerObservabilityProviderListParams,
@@ -67427,854 +67427,6 @@ export const telemetryRegisterCreate = async (
   );
 };
 
-export type tracerAnalyseConfigsListResponse200 = {
-  data: AnalyseConfigListResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseConfigsListResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseConfigsListResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseConfigsListResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseConfigsListResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseConfigsListResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseConfigsListResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseConfigsListResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseConfigsListResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseConfigsListResponseSuccess =
-  tracerAnalyseConfigsListResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseConfigsListResponseError = (
-  | tracerAnalyseConfigsListResponse400
-  | tracerAnalyseConfigsListResponse402
-  | tracerAnalyseConfigsListResponse403
-  | tracerAnalyseConfigsListResponse404
-  | tracerAnalyseConfigsListResponse429
-  | tracerAnalyseConfigsListResponse500
-  | tracerAnalyseConfigsListResponse503
-  | tracerAnalyseConfigsListResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseConfigsListResponse =
-  | tracerAnalyseConfigsListResponseSuccess
-  | tracerAnalyseConfigsListResponseError;
-
-export const getTracerAnalyseConfigsListUrl = (
-  params: TracerAnalyseConfigsListParams,
-) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
-      value
-        .filter((item) => item !== undefined && item !== null)
-        .forEach((item) => normalizedParams.append(key, item.toString()));
-    } else if (value !== undefined && value !== null) {
-      normalizedParams.append(key, value.toString());
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0
-    ? `/tracer/analyse/configs/?${stringifiedParams}`
-    : `/tracer/analyse/configs/`;
-};
-
-/**
- * Saved Analyse reports of a project, newest first, with their latest run.
- */
-export const tracerAnalyseConfigsList = async (
-  params: TracerAnalyseConfigsListParams,
-  options?: RequestInit,
-): Promise<tracerAnalyseConfigsListResponse> => {
-  return apiMutator<tracerAnalyseConfigsListResponse>(
-    getTracerAnalyseConfigsListUrl(params),
-    {
-      ...options,
-      method: "GET",
-    },
-  );
-};
-
-export type tracerAnalyseConfigsReadResponse200 = {
-  data: AnalyseConfigResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseConfigsReadResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseConfigsReadResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseConfigsReadResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseConfigsReadResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseConfigsReadResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseConfigsReadResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseConfigsReadResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseConfigsReadResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseConfigsReadResponseSuccess =
-  tracerAnalyseConfigsReadResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseConfigsReadResponseError = (
-  | tracerAnalyseConfigsReadResponse400
-  | tracerAnalyseConfigsReadResponse402
-  | tracerAnalyseConfigsReadResponse403
-  | tracerAnalyseConfigsReadResponse404
-  | tracerAnalyseConfigsReadResponse429
-  | tracerAnalyseConfigsReadResponse500
-  | tracerAnalyseConfigsReadResponse503
-  | tracerAnalyseConfigsReadResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseConfigsReadResponse =
-  | tracerAnalyseConfigsReadResponseSuccess
-  | tracerAnalyseConfigsReadResponseError;
-
-export const getTracerAnalyseConfigsReadUrl = (configId: string) => {
-  return `/tracer/analyse/configs/${configId}/`;
-};
-
-/**
- * One saved report with every run, for the trend chart and run pager.
- */
-export const tracerAnalyseConfigsRead = async (
-  configId: string,
-  options?: RequestInit,
-): Promise<tracerAnalyseConfigsReadResponse> => {
-  return apiMutator<tracerAnalyseConfigsReadResponse>(
-    getTracerAnalyseConfigsReadUrl(configId),
-    {
-      ...options,
-      method: "GET",
-    },
-  );
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse200 = {
-  data: AnalyseConfigResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponseSuccess =
-  tracerAnalyseConfigsPartialUpdateResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseConfigsPartialUpdateResponseError = (
-  | tracerAnalyseConfigsPartialUpdateResponse400
-  | tracerAnalyseConfigsPartialUpdateResponse402
-  | tracerAnalyseConfigsPartialUpdateResponse403
-  | tracerAnalyseConfigsPartialUpdateResponse404
-  | tracerAnalyseConfigsPartialUpdateResponse429
-  | tracerAnalyseConfigsPartialUpdateResponse500
-  | tracerAnalyseConfigsPartialUpdateResponse503
-  | tracerAnalyseConfigsPartialUpdateResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseConfigsPartialUpdateResponse =
-  | tracerAnalyseConfigsPartialUpdateResponseSuccess
-  | tracerAnalyseConfigsPartialUpdateResponseError;
-
-export const getTracerAnalyseConfigsPartialUpdateUrl = (configId: string) => {
-  return `/tracer/analyse/configs/${configId}/`;
-};
-
-/**
- * Rename a report, or forget its saved categories so the next run discovers afresh.
- */
-export const tracerAnalyseConfigsPartialUpdate = async (
-  configId: string,
-  analyseConfigPatchApi: AnalyseConfigPatchApi,
-  options?: RequestInit,
-): Promise<tracerAnalyseConfigsPartialUpdateResponse> => {
-  return apiMutator<tracerAnalyseConfigsPartialUpdateResponse>(
-    getTracerAnalyseConfigsPartialUpdateUrl(configId),
-    {
-      ...options,
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      body: JSON.stringify(analyseConfigPatchApi),
-    },
-  );
-};
-
-export type tracerAnalyseConfigsDeleteResponse200 = {
-  data: AnalyseConfigResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseConfigsDeleteResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseConfigsDeleteResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseConfigsDeleteResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseConfigsDeleteResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseConfigsDeleteResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseConfigsDeleteResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseConfigsDeleteResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseConfigsDeleteResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseConfigsDeleteResponseSuccess =
-  tracerAnalyseConfigsDeleteResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseConfigsDeleteResponseError = (
-  | tracerAnalyseConfigsDeleteResponse400
-  | tracerAnalyseConfigsDeleteResponse402
-  | tracerAnalyseConfigsDeleteResponse403
-  | tracerAnalyseConfigsDeleteResponse404
-  | tracerAnalyseConfigsDeleteResponse429
-  | tracerAnalyseConfigsDeleteResponse500
-  | tracerAnalyseConfigsDeleteResponse503
-  | tracerAnalyseConfigsDeleteResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseConfigsDeleteResponse =
-  | tracerAnalyseConfigsDeleteResponseSuccess
-  | tracerAnalyseConfigsDeleteResponseError;
-
-export const getTracerAnalyseConfigsDeleteUrl = (configId: string) => {
-  return `/tracer/analyse/configs/${configId}/`;
-};
-
-/**
- * Delete a saved report and hide its runs.
- */
-export const tracerAnalyseConfigsDelete = async (
-  configId: string,
-  options?: RequestInit,
-): Promise<tracerAnalyseConfigsDeleteResponse> => {
-  return apiMutator<tracerAnalyseConfigsDeleteResponse>(
-    getTracerAnalyseConfigsDeleteUrl(configId),
-    {
-      ...options,
-      method: "DELETE",
-    },
-  );
-};
-
-export type tracerAnalyseDraftCreateResponse200 = {
-  data: AnalyseDraftResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseDraftCreateResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseDraftCreateResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseDraftCreateResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseDraftCreateResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseDraftCreateResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseDraftCreateResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseDraftCreateResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseDraftCreateResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseDraftCreateResponseSuccess =
-  tracerAnalyseDraftCreateResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseDraftCreateResponseError = (
-  | tracerAnalyseDraftCreateResponse400
-  | tracerAnalyseDraftCreateResponse402
-  | tracerAnalyseDraftCreateResponse403
-  | tracerAnalyseDraftCreateResponse404
-  | tracerAnalyseDraftCreateResponse429
-  | tracerAnalyseDraftCreateResponse500
-  | tracerAnalyseDraftCreateResponse503
-  | tracerAnalyseDraftCreateResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseDraftCreateResponse =
-  | tracerAnalyseDraftCreateResponseSuccess
-  | tracerAnalyseDraftCreateResponseError;
-
-export const getTracerAnalyseDraftCreateUrl = () => {
-  return `/tracer/analyse/draft/`;
-};
-
-/**
- * Read a few real units and draft a report setup for the team's goal.
- */
-export const tracerAnalyseDraftCreate = async (
-  analyseDraftApi: AnalyseDraftApi,
-  options?: RequestInit,
-): Promise<tracerAnalyseDraftCreateResponse> => {
-  return apiMutator<tracerAnalyseDraftCreateResponse>(
-    getTracerAnalyseDraftCreateUrl(),
-    {
-      ...options,
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      body: JSON.stringify(analyseDraftApi),
-    },
-  );
-};
-
-export type tracerAnalysePreviewCreateResponse200 = {
-  data: AnalysePreviewResponseApi;
-  status: 200;
-};
-
-export type tracerAnalysePreviewCreateResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalysePreviewCreateResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalysePreviewCreateResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalysePreviewCreateResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalysePreviewCreateResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalysePreviewCreateResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalysePreviewCreateResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalysePreviewCreateResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalysePreviewCreateResponseSuccess =
-  tracerAnalysePreviewCreateResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalysePreviewCreateResponseError = (
-  | tracerAnalysePreviewCreateResponse400
-  | tracerAnalysePreviewCreateResponse402
-  | tracerAnalysePreviewCreateResponse403
-  | tracerAnalysePreviewCreateResponse404
-  | tracerAnalysePreviewCreateResponse429
-  | tracerAnalysePreviewCreateResponse500
-  | tracerAnalysePreviewCreateResponse503
-  | tracerAnalysePreviewCreateResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalysePreviewCreateResponse =
-  | tracerAnalysePreviewCreateResponseSuccess
-  | tracerAnalysePreviewCreateResponseError;
-
-export const getTracerAnalysePreviewCreateUrl = () => {
-  return `/tracer/analyse/preview/`;
-};
-
-/**
- * Show what the report will read from up to three units before running it.
- */
-export const tracerAnalysePreviewCreate = async (
-  analysePreviewApi: AnalysePreviewApi,
-  options?: RequestInit,
-): Promise<tracerAnalysePreviewCreateResponse> => {
-  return apiMutator<tracerAnalysePreviewCreateResponse>(
-    getTracerAnalysePreviewCreateUrl(),
-    {
-      ...options,
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      body: JSON.stringify(analysePreviewApi),
-    },
-  );
-};
-
-export type tracerAnalyseRunsCreateResponse200 = {
-  data: AnalyseRunCreatedResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseRunsCreateResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseRunsCreateResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseRunsCreateResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseRunsCreateResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseRunsCreateResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseRunsCreateResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseRunsCreateResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseRunsCreateResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseRunsCreateResponseSuccess =
-  tracerAnalyseRunsCreateResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseRunsCreateResponseError = (
-  | tracerAnalyseRunsCreateResponse400
-  | tracerAnalyseRunsCreateResponse402
-  | tracerAnalyseRunsCreateResponse403
-  | tracerAnalyseRunsCreateResponse404
-  | tracerAnalyseRunsCreateResponse429
-  | tracerAnalyseRunsCreateResponse500
-  | tracerAnalyseRunsCreateResponse503
-  | tracerAnalyseRunsCreateResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseRunsCreateResponse =
-  | tracerAnalyseRunsCreateResponseSuccess
-  | tracerAnalyseRunsCreateResponseError;
-
-export const getTracerAnalyseRunsCreateUrl = () => {
-  return `/tracer/analyse/runs/`;
-};
-
-/**
- * Start a report run over a sampled population; creates the report when new.
- */
-export const tracerAnalyseRunsCreate = async (
-  analyseRunCreateApi: AnalyseRunCreateApi,
-  options?: RequestInit,
-): Promise<tracerAnalyseRunsCreateResponse> => {
-  return apiMutator<tracerAnalyseRunsCreateResponse>(
-    getTracerAnalyseRunsCreateUrl(),
-    {
-      ...options,
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      body: JSON.stringify(analyseRunCreateApi),
-    },
-  );
-};
-
-export type tracerAnalyseRunsReadResponse200 = {
-  data: AnalyseRunResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseRunsReadResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseRunsReadResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseRunsReadResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseRunsReadResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseRunsReadResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseRunsReadResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseRunsReadResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseRunsReadResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseRunsReadResponseSuccess =
-  tracerAnalyseRunsReadResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseRunsReadResponseError = (
-  | tracerAnalyseRunsReadResponse400
-  | tracerAnalyseRunsReadResponse402
-  | tracerAnalyseRunsReadResponse403
-  | tracerAnalyseRunsReadResponse404
-  | tracerAnalyseRunsReadResponse429
-  | tracerAnalyseRunsReadResponse500
-  | tracerAnalyseRunsReadResponse503
-  | tracerAnalyseRunsReadResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseRunsReadResponse =
-  | tracerAnalyseRunsReadResponseSuccess
-  | tracerAnalyseRunsReadResponseError;
-
-export const getTracerAnalyseRunsReadUrl = (runId: string) => {
-  return `/tracer/analyse/runs/${runId}/`;
-};
-
-/**
- * A run's progress while it works, and its full report once complete.
- */
-export const tracerAnalyseRunsRead = async (
-  runId: string,
-  options?: RequestInit,
-): Promise<tracerAnalyseRunsReadResponse> => {
-  return apiMutator<tracerAnalyseRunsReadResponse>(
-    getTracerAnalyseRunsReadUrl(runId),
-    {
-      ...options,
-      method: "GET",
-    },
-  );
-};
-
-export type tracerAnalyseRunsUnitsListResponse200 = {
-  data: AnalyseUnitsResponseApi;
-  status: 200;
-};
-
-export type tracerAnalyseRunsUnitsListResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerAnalyseRunsUnitsListResponse402 = {
-  data: ApiErrorResponseApi;
-  status: 402;
-};
-
-export type tracerAnalyseRunsUnitsListResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerAnalyseRunsUnitsListResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerAnalyseRunsUnitsListResponse429 = {
-  data: ApiErrorResponseApi;
-  status: 429;
-};
-
-export type tracerAnalyseRunsUnitsListResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerAnalyseRunsUnitsListResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerAnalyseRunsUnitsListResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<
-    HTTPStatusCodes,
-    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
-  >;
-};
-
-export type tracerAnalyseRunsUnitsListResponseSuccess =
-  tracerAnalyseRunsUnitsListResponse200 & {
-    headers: Headers;
-  };
-export type tracerAnalyseRunsUnitsListResponseError = (
-  | tracerAnalyseRunsUnitsListResponse400
-  | tracerAnalyseRunsUnitsListResponse402
-  | tracerAnalyseRunsUnitsListResponse403
-  | tracerAnalyseRunsUnitsListResponse404
-  | tracerAnalyseRunsUnitsListResponse429
-  | tracerAnalyseRunsUnitsListResponse500
-  | tracerAnalyseRunsUnitsListResponse503
-  | tracerAnalyseRunsUnitsListResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerAnalyseRunsUnitsListResponse =
-  | tracerAnalyseRunsUnitsListResponseSuccess
-  | tracerAnalyseRunsUnitsListResponseError;
-
-export const getTracerAnalyseRunsUnitsListUrl = (
-  runId: string,
-  params?: TracerAnalyseRunsUnitsListParams,
-) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
-      value
-        .filter((item) => item !== undefined && item !== null)
-        .forEach((item) => normalizedParams.append(key, item.toString()));
-    } else if (value !== undefined && value !== null) {
-      normalizedParams.append(key, value.toString());
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0
-    ? `/tracer/analyse/runs/${runId}/units/?${stringifiedParams}`
-    : `/tracer/analyse/runs/${runId}/units/`;
-};
-
-/**
- * Analysed units of a run, optionally one category's, oldest first.
- */
-export const tracerAnalyseRunsUnitsList = async (
-  runId: string,
-  params?: TracerAnalyseRunsUnitsListParams,
-  options?: RequestInit,
-): Promise<tracerAnalyseRunsUnitsListResponse> => {
-  return apiMutator<tracerAnalyseRunsUnitsListResponse>(
-    getTracerAnalyseRunsUnitsListUrl(runId, params),
-    {
-      ...options,
-      method: "GET",
-    },
-  );
-};
-
 export type tracerBulkAnnotationCreateResponse200 = {
   data: BulkAnnotationResponseApi;
   status: 200;
@@ -72771,6 +71923,854 @@ export const tracerImagineAnalysisCreate = async (
       method: "POST",
       headers: { "Content-Type": "application/json", ...options?.headers },
       body: JSON.stringify(triggerAnalysisApi),
+    },
+  );
+};
+
+export type tracerInsightsConfigsListResponse200 = {
+  data: InsightConfigListResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsConfigsListResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsConfigsListResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsConfigsListResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsConfigsListResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsConfigsListResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsConfigsListResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsConfigsListResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsConfigsListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsConfigsListResponseSuccess =
+  tracerInsightsConfigsListResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsConfigsListResponseError = (
+  | tracerInsightsConfigsListResponse400
+  | tracerInsightsConfigsListResponse402
+  | tracerInsightsConfigsListResponse403
+  | tracerInsightsConfigsListResponse404
+  | tracerInsightsConfigsListResponse429
+  | tracerInsightsConfigsListResponse500
+  | tracerInsightsConfigsListResponse503
+  | tracerInsightsConfigsListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsConfigsListResponse =
+  | tracerInsightsConfigsListResponseSuccess
+  | tracerInsightsConfigsListResponseError;
+
+export const getTracerInsightsConfigsListUrl = (
+  params: TracerInsightsConfigsListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/tracer/insights/configs/?${stringifiedParams}`
+    : `/tracer/insights/configs/`;
+};
+
+/**
+ * Saved Insights reports of a project, newest first, with their latest run.
+ */
+export const tracerInsightsConfigsList = async (
+  params: TracerInsightsConfigsListParams,
+  options?: RequestInit,
+): Promise<tracerInsightsConfigsListResponse> => {
+  return apiMutator<tracerInsightsConfigsListResponse>(
+    getTracerInsightsConfigsListUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type tracerInsightsConfigsReadResponse200 = {
+  data: InsightConfigResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsConfigsReadResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsConfigsReadResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsConfigsReadResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsConfigsReadResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsConfigsReadResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsConfigsReadResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsConfigsReadResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsConfigsReadResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsConfigsReadResponseSuccess =
+  tracerInsightsConfigsReadResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsConfigsReadResponseError = (
+  | tracerInsightsConfigsReadResponse400
+  | tracerInsightsConfigsReadResponse402
+  | tracerInsightsConfigsReadResponse403
+  | tracerInsightsConfigsReadResponse404
+  | tracerInsightsConfigsReadResponse429
+  | tracerInsightsConfigsReadResponse500
+  | tracerInsightsConfigsReadResponse503
+  | tracerInsightsConfigsReadResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsConfigsReadResponse =
+  | tracerInsightsConfigsReadResponseSuccess
+  | tracerInsightsConfigsReadResponseError;
+
+export const getTracerInsightsConfigsReadUrl = (configId: string) => {
+  return `/tracer/insights/configs/${configId}/`;
+};
+
+/**
+ * One saved report with every run, for the trend chart and run pager.
+ */
+export const tracerInsightsConfigsRead = async (
+  configId: string,
+  options?: RequestInit,
+): Promise<tracerInsightsConfigsReadResponse> => {
+  return apiMutator<tracerInsightsConfigsReadResponse>(
+    getTracerInsightsConfigsReadUrl(configId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse200 = {
+  data: InsightConfigResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponseSuccess =
+  tracerInsightsConfigsPartialUpdateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsConfigsPartialUpdateResponseError = (
+  | tracerInsightsConfigsPartialUpdateResponse400
+  | tracerInsightsConfigsPartialUpdateResponse402
+  | tracerInsightsConfigsPartialUpdateResponse403
+  | tracerInsightsConfigsPartialUpdateResponse404
+  | tracerInsightsConfigsPartialUpdateResponse429
+  | tracerInsightsConfigsPartialUpdateResponse500
+  | tracerInsightsConfigsPartialUpdateResponse503
+  | tracerInsightsConfigsPartialUpdateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsConfigsPartialUpdateResponse =
+  | tracerInsightsConfigsPartialUpdateResponseSuccess
+  | tracerInsightsConfigsPartialUpdateResponseError;
+
+export const getTracerInsightsConfigsPartialUpdateUrl = (configId: string) => {
+  return `/tracer/insights/configs/${configId}/`;
+};
+
+/**
+ * Rename a report, or forget its saved categories so the next run discovers afresh.
+ */
+export const tracerInsightsConfigsPartialUpdate = async (
+  configId: string,
+  insightConfigPatchApi: InsightConfigPatchApi,
+  options?: RequestInit,
+): Promise<tracerInsightsConfigsPartialUpdateResponse> => {
+  return apiMutator<tracerInsightsConfigsPartialUpdateResponse>(
+    getTracerInsightsConfigsPartialUpdateUrl(configId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(insightConfigPatchApi),
+    },
+  );
+};
+
+export type tracerInsightsConfigsDeleteResponse200 = {
+  data: InsightConfigResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsConfigsDeleteResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsConfigsDeleteResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsConfigsDeleteResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsConfigsDeleteResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsConfigsDeleteResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsConfigsDeleteResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsConfigsDeleteResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsConfigsDeleteResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsConfigsDeleteResponseSuccess =
+  tracerInsightsConfigsDeleteResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsConfigsDeleteResponseError = (
+  | tracerInsightsConfigsDeleteResponse400
+  | tracerInsightsConfigsDeleteResponse402
+  | tracerInsightsConfigsDeleteResponse403
+  | tracerInsightsConfigsDeleteResponse404
+  | tracerInsightsConfigsDeleteResponse429
+  | tracerInsightsConfigsDeleteResponse500
+  | tracerInsightsConfigsDeleteResponse503
+  | tracerInsightsConfigsDeleteResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsConfigsDeleteResponse =
+  | tracerInsightsConfigsDeleteResponseSuccess
+  | tracerInsightsConfigsDeleteResponseError;
+
+export const getTracerInsightsConfigsDeleteUrl = (configId: string) => {
+  return `/tracer/insights/configs/${configId}/`;
+};
+
+/**
+ * Delete a saved report and hide its runs.
+ */
+export const tracerInsightsConfigsDelete = async (
+  configId: string,
+  options?: RequestInit,
+): Promise<tracerInsightsConfigsDeleteResponse> => {
+  return apiMutator<tracerInsightsConfigsDeleteResponse>(
+    getTracerInsightsConfigsDeleteUrl(configId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export type tracerInsightsDraftCreateResponse200 = {
+  data: InsightDraftResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsDraftCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsDraftCreateResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsDraftCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsDraftCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsDraftCreateResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsDraftCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsDraftCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsDraftCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsDraftCreateResponseSuccess =
+  tracerInsightsDraftCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsDraftCreateResponseError = (
+  | tracerInsightsDraftCreateResponse400
+  | tracerInsightsDraftCreateResponse402
+  | tracerInsightsDraftCreateResponse403
+  | tracerInsightsDraftCreateResponse404
+  | tracerInsightsDraftCreateResponse429
+  | tracerInsightsDraftCreateResponse500
+  | tracerInsightsDraftCreateResponse503
+  | tracerInsightsDraftCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsDraftCreateResponse =
+  | tracerInsightsDraftCreateResponseSuccess
+  | tracerInsightsDraftCreateResponseError;
+
+export const getTracerInsightsDraftCreateUrl = () => {
+  return `/tracer/insights/draft/`;
+};
+
+/**
+ * Read a few real units and draft a report setup for the team's goal.
+ */
+export const tracerInsightsDraftCreate = async (
+  insightDraftApi: InsightDraftApi,
+  options?: RequestInit,
+): Promise<tracerInsightsDraftCreateResponse> => {
+  return apiMutator<tracerInsightsDraftCreateResponse>(
+    getTracerInsightsDraftCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(insightDraftApi),
+    },
+  );
+};
+
+export type tracerInsightsPreviewCreateResponse200 = {
+  data: InsightPreviewResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsPreviewCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsPreviewCreateResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsPreviewCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsPreviewCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsPreviewCreateResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsPreviewCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsPreviewCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsPreviewCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsPreviewCreateResponseSuccess =
+  tracerInsightsPreviewCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsPreviewCreateResponseError = (
+  | tracerInsightsPreviewCreateResponse400
+  | tracerInsightsPreviewCreateResponse402
+  | tracerInsightsPreviewCreateResponse403
+  | tracerInsightsPreviewCreateResponse404
+  | tracerInsightsPreviewCreateResponse429
+  | tracerInsightsPreviewCreateResponse500
+  | tracerInsightsPreviewCreateResponse503
+  | tracerInsightsPreviewCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsPreviewCreateResponse =
+  | tracerInsightsPreviewCreateResponseSuccess
+  | tracerInsightsPreviewCreateResponseError;
+
+export const getTracerInsightsPreviewCreateUrl = () => {
+  return `/tracer/insights/preview/`;
+};
+
+/**
+ * Show what the report will read from up to three units before running it.
+ */
+export const tracerInsightsPreviewCreate = async (
+  insightPreviewApi: InsightPreviewApi,
+  options?: RequestInit,
+): Promise<tracerInsightsPreviewCreateResponse> => {
+  return apiMutator<tracerInsightsPreviewCreateResponse>(
+    getTracerInsightsPreviewCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(insightPreviewApi),
+    },
+  );
+};
+
+export type tracerInsightsRunsCreateResponse200 = {
+  data: InsightRunCreatedResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsRunsCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsRunsCreateResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsRunsCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsRunsCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsRunsCreateResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsRunsCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsRunsCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsRunsCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsRunsCreateResponseSuccess =
+  tracerInsightsRunsCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsRunsCreateResponseError = (
+  | tracerInsightsRunsCreateResponse400
+  | tracerInsightsRunsCreateResponse402
+  | tracerInsightsRunsCreateResponse403
+  | tracerInsightsRunsCreateResponse404
+  | tracerInsightsRunsCreateResponse429
+  | tracerInsightsRunsCreateResponse500
+  | tracerInsightsRunsCreateResponse503
+  | tracerInsightsRunsCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsRunsCreateResponse =
+  | tracerInsightsRunsCreateResponseSuccess
+  | tracerInsightsRunsCreateResponseError;
+
+export const getTracerInsightsRunsCreateUrl = () => {
+  return `/tracer/insights/runs/`;
+};
+
+/**
+ * Start a report run over a sampled population; creates the report when new.
+ */
+export const tracerInsightsRunsCreate = async (
+  insightRunCreateApi: InsightRunCreateApi,
+  options?: RequestInit,
+): Promise<tracerInsightsRunsCreateResponse> => {
+  return apiMutator<tracerInsightsRunsCreateResponse>(
+    getTracerInsightsRunsCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(insightRunCreateApi),
+    },
+  );
+};
+
+export type tracerInsightsRunsReadResponse200 = {
+  data: InsightRunResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsRunsReadResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsRunsReadResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsRunsReadResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsRunsReadResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsRunsReadResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsRunsReadResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsRunsReadResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsRunsReadResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsRunsReadResponseSuccess =
+  tracerInsightsRunsReadResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsRunsReadResponseError = (
+  | tracerInsightsRunsReadResponse400
+  | tracerInsightsRunsReadResponse402
+  | tracerInsightsRunsReadResponse403
+  | tracerInsightsRunsReadResponse404
+  | tracerInsightsRunsReadResponse429
+  | tracerInsightsRunsReadResponse500
+  | tracerInsightsRunsReadResponse503
+  | tracerInsightsRunsReadResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsRunsReadResponse =
+  | tracerInsightsRunsReadResponseSuccess
+  | tracerInsightsRunsReadResponseError;
+
+export const getTracerInsightsRunsReadUrl = (runId: string) => {
+  return `/tracer/insights/runs/${runId}/`;
+};
+
+/**
+ * A run's progress while it works, and its full report once complete.
+ */
+export const tracerInsightsRunsRead = async (
+  runId: string,
+  options?: RequestInit,
+): Promise<tracerInsightsRunsReadResponse> => {
+  return apiMutator<tracerInsightsRunsReadResponse>(
+    getTracerInsightsRunsReadUrl(runId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type tracerInsightsRunsUnitsListResponse200 = {
+  data: InsightUnitsResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsRunsUnitsListResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsRunsUnitsListResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsRunsUnitsListResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsRunsUnitsListResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsRunsUnitsListResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsRunsUnitsListResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsRunsUnitsListResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsRunsUnitsListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsRunsUnitsListResponseSuccess =
+  tracerInsightsRunsUnitsListResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsRunsUnitsListResponseError = (
+  | tracerInsightsRunsUnitsListResponse400
+  | tracerInsightsRunsUnitsListResponse402
+  | tracerInsightsRunsUnitsListResponse403
+  | tracerInsightsRunsUnitsListResponse404
+  | tracerInsightsRunsUnitsListResponse429
+  | tracerInsightsRunsUnitsListResponse500
+  | tracerInsightsRunsUnitsListResponse503
+  | tracerInsightsRunsUnitsListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsRunsUnitsListResponse =
+  | tracerInsightsRunsUnitsListResponseSuccess
+  | tracerInsightsRunsUnitsListResponseError;
+
+export const getTracerInsightsRunsUnitsListUrl = (
+  runId: string,
+  params?: TracerInsightsRunsUnitsListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/tracer/insights/runs/${runId}/units/?${stringifiedParams}`
+    : `/tracer/insights/runs/${runId}/units/`;
+};
+
+/**
+ * Analysed units of a run, optionally one category's, oldest first.
+ */
+export const tracerInsightsRunsUnitsList = async (
+  runId: string,
+  params?: TracerInsightsRunsUnitsListParams,
+  options?: RequestInit,
+): Promise<tracerInsightsRunsUnitsListResponse> => {
+  return apiMutator<tracerInsightsRunsUnitsListResponse>(
+    getTracerInsightsRunsUnitsListUrl(runId, params),
+    {
+      ...options,
+      method: "GET",
     },
   );
 };

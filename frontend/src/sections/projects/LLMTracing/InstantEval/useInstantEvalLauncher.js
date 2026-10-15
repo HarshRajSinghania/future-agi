@@ -12,7 +12,7 @@ export function withoutAskParam(search) {
 /**
  * Open/closed state of a view's Instant eval drawer. The drawer mounts on
  * first open and stays mounted, so a run keeps polling while it is closed.
- * A link carrying `?ask=<key>` (from Analyse) opens it prefilled with the
+ * A link carrying `?ask=<key>` (from Insights) opens it prefilled with the
  * hand-off, and the key is dropped from the URL so a reload doesn't reopen it.
  */
 export function useInstantEvalLauncher({ enabled = true, navigate }) {

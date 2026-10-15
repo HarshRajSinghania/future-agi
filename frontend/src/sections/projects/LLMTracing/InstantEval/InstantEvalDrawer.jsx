@@ -15,7 +15,7 @@ import {
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { collectPopulation } from "src/sections/projects/observePopulation";
-import { analyseReportLink } from "src/sections/projects/observeHandoff";
+import { insightsReportLink } from "src/sections/projects/observeHandoff";
 import InstantEvalComposer from "./InstantEvalComposer";
 import InstantEvalResults from "./results/InstantEvalResults";
 import { useJevAvailability } from "./useJevAvailability";
@@ -43,7 +43,7 @@ const DRAWER_WIDTH = 640;
  *
  * scope: { filters, label } — the exact backend filters the view's grid sends
  *   and its date label.
- * seed: a hand-off from Analyse ({ unit, questions?, ids?, label? }); a new
+ * seed: a hand-off from Insights ({ unit, questions?, ids?, label? }); a new
  *   seedKey replaces whatever is on screen with it.
  */
 export default function InstantEvalDrawer({
@@ -292,8 +292,8 @@ export default function InstantEvalDrawer({
                 navigate={navigate}
                 onOpenRow={onOpenRow}
                 onShowInGrid={onShowInGrid}
-                onAnalyse={(analyseSeed) =>
-                  navigate(analyseReportLink(projectId, analyseSeed))
+                onInsights={(insightsSeed) =>
+                  navigate(insightsReportLink(projectId, insightsSeed))
                 }
                 onRunAgain={
                   jev.available

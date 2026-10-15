@@ -19,7 +19,7 @@ import { buildAnswerFilter, explainErrorGroups } from "../useInstantEval";
 import {
   ERROR_ANSWER,
   SKIPPED_ANSWER,
-  analyseSeedFromAnswers,
+  insightsSeedFromAnswers,
   answerText,
   filterRows,
   isUnsure,
@@ -326,7 +326,7 @@ export default function InstantEvalResults({
   navigate,
   onOpenRow,
   onShowInGrid,
-  onAnalyse,
+  onInsights,
   onRunAgain,
 }) {
   const theme = useTheme();
@@ -561,7 +561,7 @@ export default function InstantEvalResults({
                   />
                 </Tooltip>
               )}
-              {isDone && isLabel && selectedCount > 0 && onAnalyse && (
+              {isDone && isLabel && selectedCount > 0 && onInsights && (
                 <Button
                   size="small"
                   variant="outlined"
@@ -569,8 +569,8 @@ export default function InstantEvalResults({
                     <Iconify icon="mdi:chart-box-outline" width={16} />
                   }
                   onClick={() =>
-                    onAnalyse(
-                      analyseSeedFromAnswers({
+                    onInsights(
+                      insightsSeedFromAnswers({
                         unit,
                         item,
                         answer: selected,
@@ -580,7 +580,7 @@ export default function InstantEvalResults({
                   }
                   sx={{ textTransform: "none" }}
                 >
-                  Analyse these {selectedCount} {quoted(selected)}{" "}
+                  Find patterns in these {selectedCount} {quoted(selected)}{" "}
                   {selectedCount === 1 ? meta.noun : meta.plural}
                 </Button>
               )}
@@ -775,6 +775,6 @@ InstantEvalResults.propTypes = {
   navigate: PropTypes.func.isRequired,
   onOpenRow: PropTypes.func,
   onShowInGrid: PropTypes.func,
-  onAnalyse: PropTypes.func,
+  onInsights: PropTypes.func,
   onRunAgain: PropTypes.func,
 };

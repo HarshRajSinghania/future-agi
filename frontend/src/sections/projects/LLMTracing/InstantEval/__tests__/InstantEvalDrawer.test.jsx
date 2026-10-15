@@ -237,7 +237,7 @@ describe("InstantEvalDrawer results", () => {
     );
   });
 
-  it("hands the users who answered No to a new Analyse report", () => {
+  it("hands the users who answered No to a new Insights report", () => {
     harness.run = doneRun(usersResponse);
     renderDrawer({ unit: "users" });
     expect(screen.getByText("cust_kai_278")).toBeInTheDocument();
@@ -247,10 +247,10 @@ describe("InstantEvalDrawer results", () => {
     const rows = screen.getByText("2 users").parentElement.nextSibling;
     expect(within(rows).getByText("cust_ines_979")).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Analyse these 2 “No” users" }),
+      screen.getByRole("button", { name: "Find patterns in these 2 “No” users" }),
     );
     const link = harness.navigate.mock.calls[0][0];
-    expect(link).toMatch(/^\/dashboard\/observe\/p1\/analyse\?new=1&seed=/);
+    expect(link).toMatch(/^\/dashboard\/observe\/p1\/insights\?new=1&seed=/);
     const key = new URLSearchParams(link.split("?")[1]).get("seed");
     const seed = JSON.parse(
       globalThis.sessionStorage.getItem(`observe-handoff:${key}`),

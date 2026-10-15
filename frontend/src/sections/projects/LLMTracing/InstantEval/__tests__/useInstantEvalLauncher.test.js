@@ -41,7 +41,7 @@ describe("useInstantEvalLauncher", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("opens prefilled from an Analyse hand-off and drops the key", () => {
+  it("opens prefilled from an Insights hand-off and drops the key", () => {
     const ask = {
       unit: "sessions",
       questions: [{ question: "Did they get it?", answerType: "yes_no" }],

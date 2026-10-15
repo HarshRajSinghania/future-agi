@@ -41,10 +41,10 @@ const PrimaryGraph = lazy(
   () => import("../LLMTracing/GraphSection/PrimaryGraph"),
 );
 
-// Instant eval / Analyse
+// Instant eval / Insights
 import { useInstantEvalLauncher } from "../LLMTracing/InstantEval/useInstantEvalLauncher";
 import { scopeLabel } from "../LLMTracing/InstantEval/instantEvalUnits";
-import { analyseReportLink } from "../observeHandoff";
+import { insightsReportLink } from "../observeHandoff";
 const InstantEvalDrawer = lazy(
   () => import("../LLMTracing/InstantEval/InstantEvalDrawer"),
 );
@@ -279,7 +279,7 @@ const UsersView = ({
     return [...validatedFilters, ...extraFilters];
   }, [validatedFilters, extraFilters]);
 
-  // --- Instant eval / Analyse ---
+  // --- Instant eval / Insights ---
   // Both ask about exactly the users the grid lists (UsersGrid sends
   // buildUsersRequestFilters(finalFilters), date window included).
   const userViewScope = useMemo(
@@ -293,9 +293,9 @@ const UsersView = ({
     enabled: Boolean(observeId),
     navigate,
   });
-  const openAnalyse = useCallback(() => {
+  const openInsights = useCallback(() => {
     navigate(
-      analyseReportLink(observeId, {
+      insightsReportLink(observeId, {
         unit: "users",
         filters: userViewScope.filters,
         label: scopeLabel(userViewScope),
@@ -916,7 +916,7 @@ const UsersView = ({
             : undefined
         }
         onInstantEval={observeId ? instantEval.openDrawer : undefined}
-        onAnalyse={observeId ? openAnalyse : undefined}
+        onInsights={observeId ? openInsights : undefined}
       />
 
       {/* Filter chips. Inject `display_name` so chips render the column's

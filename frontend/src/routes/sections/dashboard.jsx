@@ -234,8 +234,8 @@ const VoiceFullPage = lazyWithRetry(
 const SessionsView = lazyWithRetry(
   () => import("src/sections/projects/SessionsView/Sessions-view"),
 );
-const AnalyseView = lazyWithRetry(
-  () => import("src/sections/projects/Analyse/AnalyseView"),
+const InsightsView = lazyWithRetry(
+  () => import("src/sections/projects/Insights/InsightsView"),
 );
 const LLMTracingView = lazyWithRetry(
   () => import("src/sections/projects/LLMTracing/LLMTracingView"),
@@ -1143,8 +1143,13 @@ export const dashboardRoutes = (
           element: <UsersView />,
         },
         {
+          path: "insights",
+          element: <InsightsView />,
+        },
+        // Insights was called Analyse; keep old links working.
+        {
           path: "analyse",
-          element: <AnalyseView />,
+          element: <Navigate to="../insights" relative="path" replace />,
         },
       ],
     },

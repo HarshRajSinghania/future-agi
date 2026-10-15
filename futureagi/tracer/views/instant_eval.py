@@ -171,7 +171,7 @@ def _latest_logs(eval_task_id: str, config_ids: list[str], key: str):
 
 
 def _session_display(project_id: str, session_ids: list[str]) -> dict[str, dict]:
-    from ee.agenthub.analyse.units import _message_text, _user_labels
+    from ee.agenthub.insights.units import _message_text, _user_labels
     from tracer.services.clickhouse.v2 import get_reader
 
     if not session_ids:
@@ -201,7 +201,7 @@ def _session_display(project_id: str, session_ids: list[str]) -> dict[str, dict]
 
 
 def _trace_display(project_id: str, trace_ids: list[str]) -> dict[str, dict]:
-    from ee.agenthub.analyse.units import _message_text, _user_labels
+    from ee.agenthub.insights.units import _message_text, _user_labels
     from tracer.services.clickhouse.v2 import get_reader
 
     if not trace_ids:

@@ -35,7 +35,7 @@ import { singleProjectIdFromFilters } from "../LLMTracing/GraphSection/graphFilt
 import { toBackendFilters } from "../LLMTracing/common";
 import { useInstantEvalLauncher } from "../LLMTracing/InstantEval/useInstantEvalLauncher";
 import { scopeLabel } from "../LLMTracing/InstantEval/instantEvalUnits";
-import { analyseReportLink } from "../observeHandoff";
+import { insightsReportLink } from "../observeHandoff";
 
 // Lazy-load graph
 const PrimaryGraph = lazy(
@@ -307,7 +307,7 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
     return [...base, ...extraFilters];
   }, [userScopeFilter, validatedFilters, extraFilters]);
 
-  // --- Instant eval / Analyse ---
+  // --- Instant eval / Insights ---
   // Both ask about exactly the sessions the grid shows (Session-grid sends
   // toBackendFilters(finalFilters), date window included).
   const sessionViewScope = useMemo(
@@ -321,9 +321,9 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
     enabled: Boolean(observeId),
     navigate,
   });
-  const openAnalyse = useCallback(() => {
+  const openInsights = useCallback(() => {
     navigate(
-      analyseReportLink(observeId, {
+      insightsReportLink(observeId, {
         unit: "sessions",
         filters: sessionViewScope.filters,
         label: scopeLabel(sessionViewScope),
@@ -1138,7 +1138,7 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
         onAddEvals={handleAddEvals}
         onAddCustomColumn={() => setOpenCustomColumn(true)}
         onInstantEval={observeId ? instantEval.openDrawer : undefined}
-        onAnalyse={observeId ? openAnalyse : undefined}
+        onInsights={observeId ? openInsights : undefined}
       />
 
       <Suspense fallback={null}>

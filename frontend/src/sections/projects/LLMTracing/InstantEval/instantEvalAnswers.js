@@ -144,9 +144,9 @@ export function labelCountsText(counts) {
 export const quoted = (text) => `“${text}”`;
 
 /**
- * Seed for an Analyse report over the rows that got one answer.
+ * Seed for an Insights report over the rows that got one answer.
  */
-export function analyseSeedFromAnswers({ unit, item, answer, rows }) {
+export function insightsSeedFromAnswers({ unit, item, answer, rows }) {
   const matching = filterRows(rows, { configId: item.configId, answer });
   const count = matching.length;
   const noun = unitWord(unit, count);

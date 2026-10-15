@@ -58219,722 +58219,6 @@
             },
             "parameters": []
         },
-        "/tracer/analyse/configs/": {
-            "get": {
-                "operationId": "tracer_analyse_configs_list",
-                "description": "Saved Analyse reports of a project, newest first, with their latest run.",
-                "parameters": [
-                    {
-                        "name": "project_id",
-                        "in": "query",
-                        "required": true,
-                        "type": "string",
-                        "format": "uuid"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseConfigListResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": []
-        },
-        "/tracer/analyse/configs/{config_id}/": {
-            "get": {
-                "operationId": "tracer_analyse_configs_read",
-                "description": "One saved report with every run, for the trend chart and run pager.",
-                "parameters": [],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseConfigResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-response-validation": true
-            },
-            "patch": {
-                "operationId": "tracer_analyse_configs_partial_update",
-                "description": "Rename a report, or forget its saved categories so the next run discovers afresh.",
-                "parameters": [
-                    {
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseConfigPatch"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseConfigResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "delete": {
-                "operationId": "tracer_analyse_configs_delete",
-                "description": "Delete a saved report and hide its runs.",
-                "parameters": [],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseConfigResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-response-validation": true
-            },
-            "parameters": [
-                {
-                    "name": "config_id",
-                    "in": "path",
-                    "required": true,
-                    "type": "string"
-                }
-            ]
-        },
-        "/tracer/analyse/draft/": {
-            "post": {
-                "operationId": "tracer_analyse_draft_create",
-                "description": "Read a few real units and draft a report setup for the team's goal.",
-                "parameters": [
-                    {
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseDraft"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseDraftResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": []
-        },
-        "/tracer/analyse/preview/": {
-            "post": {
-                "operationId": "tracer_analyse_preview_create",
-                "description": "Show what the report will read from up to three units before running it.",
-                "parameters": [
-                    {
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/AnalysePreview"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalysePreviewResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": []
-        },
-        "/tracer/analyse/runs/": {
-            "post": {
-                "operationId": "tracer_analyse_runs_create",
-                "description": "Start a report run over a sampled population; creates the report when new.",
-                "parameters": [
-                    {
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseRunCreate"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseRunCreatedResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": []
-        },
-        "/tracer/analyse/runs/{run_id}/": {
-            "get": {
-                "operationId": "tracer_analyse_runs_read",
-                "description": "A run's progress while it works, and its full report once complete.",
-                "parameters": [],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseRunResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-response-validation": true
-            },
-            "parameters": [
-                {
-                    "name": "run_id",
-                    "in": "path",
-                    "required": true,
-                    "type": "string"
-                }
-            ]
-        },
-        "/tracer/analyse/runs/{run_id}/units/": {
-            "get": {
-                "operationId": "tracer_analyse_runs_units_list",
-                "description": "Analysed units of a run, optionally one category's, oldest first.",
-                "parameters": [
-                    {
-                        "name": "category_id",
-                        "in": "query",
-                        "required": false,
-                        "type": "string",
-                        "maxLength": 64
-                    },
-                    {
-                        "name": "sub_category_id",
-                        "in": "query",
-                        "required": false,
-                        "type": "string",
-                        "maxLength": 64
-                    },
-                    {
-                        "name": "unit_ids",
-                        "in": "query",
-                        "required": false,
-                        "type": "string",
-                        "maxLength": 4000
-                    },
-                    {
-                        "name": "offset",
-                        "in": "query",
-                        "required": false,
-                        "type": "integer",
-                        "default": 0,
-                        "minimum": 0
-                    },
-                    {
-                        "name": "limit",
-                        "in": "query",
-                        "required": false,
-                        "type": "integer",
-                        "default": 50,
-                        "maximum": 200,
-                        "minimum": 1
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/AnalyseUnitsResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "402": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": [
-                {
-                    "name": "run_id",
-                    "in": "path",
-                    "required": true,
-                    "type": "string"
-                }
-            ]
-        },
         "/tracer/bulk-annotation/": {
             "post": {
                 "operationId": "tracer_bulk-annotation_create",
@@ -63016,6 +62300,722 @@
                 "x-runtime-response-validation": true
             },
             "parameters": []
+        },
+        "/tracer/insights/configs/": {
+            "get": {
+                "operationId": "tracer_insights_configs_list",
+                "description": "Saved Insights reports of a project, newest first, with their latest run.",
+                "parameters": [
+                    {
+                        "name": "project_id",
+                        "in": "query",
+                        "required": true,
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightConfigListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
+        "/tracer/insights/configs/{config_id}/": {
+            "get": {
+                "operationId": "tracer_insights_configs_read",
+                "description": "One saved report with every run, for the trend chart and run pager.",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightConfigResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-response-validation": true
+            },
+            "patch": {
+                "operationId": "tracer_insights_configs_partial_update",
+                "description": "Rename a report, or forget its saved categories so the next run discovers afresh.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/InsightConfigPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightConfigResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "delete": {
+                "operationId": "tracer_insights_configs_delete",
+                "description": "Delete a saved report and hide its runs.",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightConfigResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "config_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/tracer/insights/draft/": {
+            "post": {
+                "operationId": "tracer_insights_draft_create",
+                "description": "Read a few real units and draft a report setup for the team's goal.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/InsightDraft"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightDraftResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
+        "/tracer/insights/preview/": {
+            "post": {
+                "operationId": "tracer_insights_preview_create",
+                "description": "Show what the report will read from up to three units before running it.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/InsightPreview"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightPreviewResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
+        "/tracer/insights/runs/": {
+            "post": {
+                "operationId": "tracer_insights_runs_create",
+                "description": "Start a report run over a sampled population; creates the report when new.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/InsightRunCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightRunCreatedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
+        "/tracer/insights/runs/{run_id}/": {
+            "get": {
+                "operationId": "tracer_insights_runs_read",
+                "description": "A run's progress while it works, and its full report once complete.",
+                "parameters": [],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightRunResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "run_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/tracer/insights/runs/{run_id}/units/": {
+            "get": {
+                "operationId": "tracer_insights_runs_units_list",
+                "description": "Analysed units of a run, optionally one category's, oldest first.",
+                "parameters": [
+                    {
+                        "name": "category_id",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    {
+                        "name": "sub_category_id",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    {
+                        "name": "unit_ids",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "maxLength": 4000
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer",
+                        "default": 0,
+                        "minimum": 0
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer",
+                        "default": 50,
+                        "maximum": 200,
+                        "minimum": 1
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightUnitsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "run_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
         },
         "/tracer/instant-eval/answers/": {
             "get": {
@@ -159783,7 +159783,7 @@
                 }
             }
         },
-        "AnalyseRunSummary": {
+        "InsightRunSummary": {
             "required": [
                 "id",
                 "status",
@@ -159855,7 +159855,7 @@
             },
             "x-nullable": true
         },
-        "AnalyseConfigItem": {
+        "InsightConfigItem": {
             "required": [
                 "id",
                 "name",
@@ -159935,17 +159935,17 @@
                     "format": "date-time"
                 },
                 "latest_run": {
-                    "$ref": "#/definitions/AnalyseRunSummary"
+                    "$ref": "#/definitions/InsightRunSummary"
                 },
                 "runs": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/AnalyseRunSummary"
+                        "$ref": "#/definitions/InsightRunSummary"
                     }
                 }
             }
         },
-        "AnalyseConfigListResult": {
+        "InsightConfigListResult": {
             "required": [
                 "configs"
             ],
@@ -159954,12 +159954,12 @@
                 "configs": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/AnalyseConfigItem"
+                        "$ref": "#/definitions/InsightConfigItem"
                     }
                 }
             }
         },
-        "AnalyseConfigListResponse": {
+        "InsightConfigListResponse": {
             "required": [
                 "result"
             ],
@@ -159971,11 +159971,11 @@
                     "default": true
                 },
                 "result": {
-                    "$ref": "#/definitions/AnalyseConfigListResult"
+                    "$ref": "#/definitions/InsightConfigListResult"
                 }
             }
         },
-        "AnalyseConfigResponse": {
+        "InsightConfigResponse": {
             "required": [
                 "result"
             ],
@@ -159987,11 +159987,11 @@
                     "default": true
                 },
                 "result": {
-                    "$ref": "#/definitions/AnalyseConfigItem"
+                    "$ref": "#/definitions/InsightConfigItem"
                 }
             }
         },
-        "AnalyseConfigPatch": {
+        "InsightConfigPatch": {
             "type": "object",
             "properties": {
                 "name": {
@@ -160007,7 +160007,7 @@
                 }
             }
         },
-        "AnalyseDraft": {
+        "InsightDraft": {
             "required": [
                 "project_id",
                 "unit",
@@ -160063,7 +160063,7 @@
                 }
             }
         },
-        "AnalyseDraftResult": {
+        "InsightDraftResult": {
             "required": [
                 "name",
                 "question",
@@ -160104,7 +160104,7 @@
                 }
             }
         },
-        "AnalyseDraftResponse": {
+        "InsightDraftResponse": {
             "required": [
                 "result"
             ],
@@ -160116,11 +160116,11 @@
                     "default": true
                 },
                 "result": {
-                    "$ref": "#/definitions/AnalyseDraftResult"
+                    "$ref": "#/definitions/InsightDraftResult"
                 }
             }
         },
-        "AnalyseAttribute": {
+        "InsightAttribute": {
             "required": [
                 "key",
                 "type"
@@ -160154,7 +160154,7 @@
                 }
             }
         },
-        "AnalyseConfigInput": {
+        "InsightConfigInput": {
             "required": [
                 "name",
                 "unit",
@@ -160208,7 +160208,7 @@
                 "attributes": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/AnalyseAttribute"
+                        "$ref": "#/definitions/InsightAttribute"
                     }
                 },
                 "sample_size": {
@@ -160219,7 +160219,7 @@
                 }
             }
         },
-        "AnalysePreview": {
+        "InsightPreview": {
             "required": [
                 "project_id",
                 "config",
@@ -160233,7 +160233,7 @@
                     "format": "uuid"
                 },
                 "config": {
-                    "$ref": "#/definitions/AnalyseConfigInput"
+                    "$ref": "#/definitions/InsightConfigInput"
                 },
                 "unit_ids": {
                     "type": "array",
@@ -160247,7 +160247,7 @@
                 }
             }
         },
-        "AnalysePreviewResult": {
+        "InsightPreviewResult": {
             "required": [
                 "units"
             ],
@@ -160261,7 +160261,7 @@
                 }
             }
         },
-        "AnalysePreviewResponse": {
+        "InsightPreviewResponse": {
             "required": [
                 "result"
             ],
@@ -160273,11 +160273,11 @@
                     "default": true
                 },
                 "result": {
-                    "$ref": "#/definitions/AnalysePreviewResult"
+                    "$ref": "#/definitions/InsightPreviewResult"
                 }
             }
         },
-        "AnalyseScope": {
+        "InsightScope": {
             "type": "object",
             "properties": {
                 "filters": {
@@ -160307,7 +160307,7 @@
                 }
             }
         },
-        "AnalysePopulationItem": {
+        "InsightPopulationItem": {
             "required": [
                 "id"
             ],
@@ -160331,7 +160331,7 @@
                 }
             }
         },
-        "AnalyseRunCreate": {
+        "InsightRunCreate": {
             "required": [
                 "project_id",
                 "population"
@@ -160349,15 +160349,15 @@
                     "format": "uuid"
                 },
                 "config": {
-                    "$ref": "#/definitions/AnalyseConfigInput"
+                    "$ref": "#/definitions/InsightConfigInput"
                 },
                 "scope": {
-                    "$ref": "#/definitions/AnalyseScope"
+                    "$ref": "#/definitions/InsightScope"
                 },
                 "population": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/AnalysePopulationItem"
+                        "$ref": "#/definitions/InsightPopulationItem"
                     }
                 },
                 "sample_size": {
@@ -160368,7 +160368,7 @@
                 }
             }
         },
-        "AnalyseRunCreatedResult": {
+        "InsightRunCreatedResult": {
             "required": [
                 "run_id",
                 "config_id"
@@ -160387,7 +160387,7 @@
                 }
             }
         },
-        "AnalyseRunCreatedResponse": {
+        "InsightRunCreatedResponse": {
             "required": [
                 "result"
             ],
@@ -160399,11 +160399,11 @@
                     "default": true
                 },
                 "result": {
-                    "$ref": "#/definitions/AnalyseRunCreatedResult"
+                    "$ref": "#/definitions/InsightRunCreatedResult"
                 }
             }
         },
-        "AnalyseRunDetail": {
+        "InsightRunDetail": {
             "required": [
                 "id",
                 "config_id",
@@ -160536,7 +160536,7 @@
                 }
             }
         },
-        "AnalyseRunResponse": {
+        "InsightRunResponse": {
             "required": [
                 "result"
             ],
@@ -160548,11 +160548,11 @@
                     "default": true
                 },
                 "result": {
-                    "$ref": "#/definitions/AnalyseRunDetail"
+                    "$ref": "#/definitions/InsightRunDetail"
                 }
             }
         },
-        "AnalyseUnitItem": {
+        "InsightUnitItem": {
             "required": [
                 "unit_id",
                 "label",
@@ -160622,7 +160622,7 @@
                 }
             }
         },
-        "AnalyseUnitsResult": {
+        "InsightUnitsResult": {
             "required": [
                 "units",
                 "total"
@@ -160632,7 +160632,7 @@
                 "units": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/AnalyseUnitItem"
+                        "$ref": "#/definitions/InsightUnitItem"
                     }
                 },
                 "total": {
@@ -160641,7 +160641,7 @@
                 }
             }
         },
-        "AnalyseUnitsResponse": {
+        "InsightUnitsResponse": {
             "required": [
                 "result"
             ],
@@ -160653,7 +160653,7 @@
                     "default": true
                 },
                 "result": {
-                    "$ref": "#/definitions/AnalyseUnitsResult"
+                    "$ref": "#/definitions/InsightUnitsResult"
                 }
             }
         },

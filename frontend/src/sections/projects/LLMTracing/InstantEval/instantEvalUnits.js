@@ -90,7 +90,7 @@ export const sessionsTaskPayload = ({ projectId, items, sessionIds }) => ({
   sampling_rate: 100,
 });
 
-// Traces handed over by id (from Analyse) become one membership filter.
+// Traces handed over by id (from Insights) become one membership filter.
 export const traceIdsFilter = (ids) => ({
   column_id: "trace_id",
   filter_config: {
@@ -224,7 +224,7 @@ export const emptyDraft = () => ({
   definitions: {},
 });
 
-// Questions handed over from Analyse (or a saved question) as editor drafts.
+// Questions handed over from Insights (or a saved question) as editor drafts.
 export function draftsFromQuestions(questions = []) {
   const drafts = (Array.isArray(questions) ? questions : [])
     .filter((entry) => entry && typeof entry.question === "string")
