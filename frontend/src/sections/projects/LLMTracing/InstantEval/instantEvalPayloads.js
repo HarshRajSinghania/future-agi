@@ -13,29 +13,98 @@ export const ANSWER_TYPES = {
   CATEGORY: "category",
 };
 
-// What Jev reads from each row. For traces the values are the root span
-// fields the eval mapping resolves (input -> input.value, output ->
-// output.value). Sessions and users are read as the whole conversation: the
-// backend renders every turn of a session as "[Turn i] User: … / Assistant: …"
-// under the transcript variable.
+// What Jev reads from each row: each choice names the template variables its
+// instructions use and the eval mapping that fills them. Traces and spans
+// resolve input/output on the trace or the span itself; trace_tree is
+// every span of the trace as an indented outline (kind, name, model, latency,
+// errors, clipped input/output). A session's transcript is its user and
+// assistant turns; transcript_full adds every turn's tool calls and steps.
 export const READS = {
   input_output: {
     label: "Input and output",
+    hint: "The trace's input and its final output",
     variables: ["input", "output"],
+    mapping: { input: "input", output: "output" },
   },
-  input: { label: "Input only", variables: ["input"] },
-  output: { label: "Output only", variables: ["output"] },
-  transcript: { label: "Whole conversation", variables: ["transcript"] },
+  // The variable can't be called `trace`: the trace eval runner drops a
+  // kwarg of that name and Jev reports it missing.
+  trace_tree: {
+    label: "The whole trace",
+    hint: "Every span: LLM calls, tool calls and results, retrieval, errors",
+    variables: ["whole_trace"],
+    mapping: { whole_trace: "trace_tree" },
+  },
+  input: {
+    label: "Input only",
+    hint: "The trace's input",
+    variables: ["input"],
+    mapping: { input: "input" },
+  },
+  output: {
+    label: "Output only",
+    hint: "The trace's final output",
+    variables: ["output"],
+    mapping: { output: "output" },
+  },
+  transcript: {
+    label: "The conversation",
+    hint: "User and assistant turns, in order",
+    variables: ["transcript"],
+    mapping: { transcript: "transcript" },
+  },
+  transcript_full: {
+    label: "The whole session",
+    hint: "Every turn with its tool calls and intermediate steps",
+    variables: ["conversation"],
+    mapping: { conversation: "transcript_full" },
+  },
 };
 
-// The choices a trace question offers; transcript is for sessions and users.
-export const TRACE_READS = ["input_output", "input", "output"];
+// A span is read on its own: the same fields, worded for one span.
+const SPAN_READS = {
+  input_output: {
+    label: "Span input and output",
+    hint: "This span's own input and output",
+  },
+  input: { label: "Input only", hint: "This span's own input" },
+  output: { label: "Output only", hint: "This span's own output" },
+};
+
+// The choices each view offers, the first being the default.
+export const UNIT_READS = {
+  traces: ["input_output", "trace_tree", "input", "output"],
+  spans: ["input_output", "input", "output"],
+  sessions: ["transcript", "transcript_full"],
+  users: ["transcript", "transcript_full"],
+};
+
+// Kept for callers that only know traces.
+export const TRACE_READS = UNIT_READS.traces;
+
+export const readsFor = (unit) => UNIT_READS[unit] || UNIT_READS.traces;
+
+export const readOption = (unit, reads) => {
+  const base = READS[reads] || READS.input_output;
+  return unit === "spans" && SPAN_READS[reads]
+    ? { ...base, ...SPAN_READS[reads] }
+    : base;
+};
 
 const VARIABLE_LABELS = {
-  input: "Trace input",
-  output: "Trace output",
-  transcript: "Conversation",
+  traces: { input: "Trace input", output: "Trace output" },
+  spans: { input: "Span input", output: "Span output" },
 };
+const SHARED_VARIABLE_LABELS = {
+  whole_trace: "Trace",
+  transcript: "Conversation",
+  conversation: "Conversation",
+};
+
+const variableLabel = (variable, unit) =>
+  VARIABLE_LABELS[unit]?.[variable] ||
+  SHARED_VARIABLE_LABELS[variable] ||
+  VARIABLE_LABELS.traces[variable] ||
+  variable;
 
 export const cleanCategories = (categories = []) => {
   const seen = new Set();
@@ -105,10 +174,10 @@ export function evaluatorName(question, now = new Date()) {
   return `${slug || "instant-eval"}-${stamp}`.slice(0, 255);
 }
 
-export function buildInstructions(question, reads) {
-  const variables = READS[reads]?.variables || READS.input_output.variables;
+export function buildInstructions(question, reads, unit = "traces") {
+  const variables = (READS[reads] || READS.input_output).variables;
   const context = variables
-    .map((variable) => `${VARIABLE_LABELS[variable]}:\n{{${variable}}}`)
+    .map((variable) => `${variableLabel(variable, unit)}:\n{{${variable}}}`)
     .join("\n\n");
   return `${question.trim()}\n\n${context}`;
 }
@@ -122,6 +191,7 @@ export function buildTemplatePayload({
   categories,
   definitions,
   reads,
+  unit,
   now,
 }) {
   const labels = answerLabels({ answerType, categories });
@@ -135,7 +205,7 @@ export function buildTemplatePayload({
   return {
     name: evaluatorName(question, now),
     eval_type: "llm",
-    instructions: buildInstructions(question, reads),
+    instructions: buildInstructions(question, reads, unit),
     model: INSTANT_EVAL_MODEL,
     output_type: "deterministic",
     choice_scores: choiceScores,
@@ -150,9 +220,7 @@ export function buildTemplatePayload({
   };
 }
 
-export const buildEvalMapping = (reads) =>
-  Object.fromEntries(
-    (READS[reads]?.variables || READS.input_output.variables).map(
-      (variable) => [variable, variable],
-    ),
-  );
+// Template variable -> the row field the backend resolves for it.
+export const buildEvalMapping = (reads) => ({
+  ...(READS[reads] || READS.input_output).mapping,
+});

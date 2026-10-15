@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { useNavigate } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Box,
@@ -10,6 +10,8 @@ import {
   IconButton,
   LinearProgress,
   Stack,
+  Tab,
+  Tabs,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -17,13 +19,10 @@ import Iconify from "src/components/iconify";
 import { collectPopulation } from "src/sections/projects/observePopulation";
 import { insightsReportLink } from "src/sections/projects/observeHandoff";
 import InstantEvalComposer from "./InstantEvalComposer";
+import InstantEvalHistory from "./InstantEvalHistory";
 import InstantEvalResults from "./results/InstantEvalResults";
 import { useJevAvailability } from "./useJevAvailability";
-import {
-  useInstantEvalHistory,
-  useInstantEvalRun,
-  useInstantEvals,
-} from "./useInstantEval";
+import { useInstantEvalRun, useInstantEvals } from "./useInstantEval";
 import {
   DEFAULT_LIMIT,
   LIMIT_OPTIONS,
@@ -35,11 +34,14 @@ import {
 } from "./instantEvalUnits";
 
 const DRAWER_WIDTH = 640;
+const APPLIED_SEEDS = new Set();
+const POPULATION_FRESH_MS = 60_000;
 
 /**
- * Instant eval, opened in place from a Traces, Sessions or Users view: ask Jev
- * a question about every row in the view and read the answers here while the
- * grid stays usable beside it.
+ * Instant eval, opened in place from a Traces, Spans, Sessions or Users view:
+ * ask Jev a question about every row in the view and read the answers here,
+ * as they land, while the grid stays usable beside it. History lists every
+ * past run of this view and reopens its results.
  *
  * scope: { filters, label } — the exact backend filters the view's grid sends
  *   and its date label.
@@ -61,27 +63,41 @@ export default function InstantEvalDrawer({
   const navigate = useNavigate();
   const meta = unitMeta(unit);
   const jev = useJevAvailability();
-  const { run, start, rerun, view, reset } = useInstantEvalRun(projectId, unit);
+  const { run, start, rerun, reset } = useInstantEvalRun(projectId, unit);
+  // A past run opened from History, shown apart from the run in Ask.
+  const past = useInstantEvalRun(projectId, unit, { persist: false });
+  const [pastOpen, setPastOpen] = useState(false);
+  const [tab, setTab] = useState("ask");
+  // The tab indicator is measured once the drawer has slid in.
+  const tabsAction = useRef(null);
+  // A hand-off is for the view it names, and applies once per page: the
+  // drawer remounts when the Traces view switches between traces and spans.
+  const unitSeed =
+    seed && (seed.unit || "traces") === unit && !APPLIED_SEEDS.has(seedKey)
+      ? seed
+      : null;
   const [handedOver, setHandedOver] = useState(() =>
-    handedOverScope(seed, unit),
+    handedOverScope(unitSeed, unit),
   );
   const [initialQuestions, setInitialQuestions] = useState(() =>
-    seed?.questions ? draftsFromQuestions(seed.questions) : null,
+    unitSeed?.questions ? draftsFromQuestions(unitSeed.questions) : null,
   );
   const [composerKey, setComposerKey] = useState(0);
 
   // A new hand-off replaces whatever was on screen.
-  const appliedSeed = useRef(null);
   useEffect(() => {
-    if (!seedKey || appliedSeed.current === seedKey) return;
-    appliedSeed.current = seedKey;
+    if (!seedKey || !unitSeed) return;
+    APPLIED_SEEDS.add(seedKey);
     reset();
-    setHandedOver(handedOverScope(seed, unit));
+    setTab("ask");
+    setHandedOver(handedOverScope(unitSeed, unit));
     setInitialQuestions(
-      seed?.questions ? draftsFromQuestions(seed.questions) : null,
+      unitSeed.questions ? draftsFromQuestions(unitSeed.questions) : null,
     );
     setComposerKey((key) => key + 1);
-  }, [seedKey, seed, unit, reset]);
+    // Once per hand-off key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedKey]);
 
   const showComposer = run.phase === "idle" || run.phase === "failed";
   const filters = useMemo(() => scope?.filters || [], [scope?.filters]);
@@ -100,7 +116,12 @@ export default function InstantEvalDrawer({
       unit,
       JSON.stringify(filters),
     ],
-    enabled: open && Boolean(projectId) && showComposer && !handedOver,
+    enabled:
+      open &&
+      tab === "ask" &&
+      Boolean(projectId) &&
+      showComposer &&
+      !handedOver,
     queryFn: async ({ signal }) => ({
       ...(await collectPopulation({
         unit,
@@ -115,39 +136,77 @@ export default function InstantEvalDrawer({
     meta: { errorHandled: true },
   });
 
-  const saved = useInstantEvals(projectId, {
-    enabled: open && jev.available,
-    unit,
-  });
-  const configsByName = useMemo(
-    () => Object.fromEntries(saved.all.map((item) => [item.name, item])),
+  // Saved questions also name the evaluators of past runs in History.
+  const saved = useInstantEvals(projectId, { enabled: open, unit });
+  const configsById = useMemo(
+    () => Object.fromEntries(saved.all.map((item) => [item.configId, item])),
     [saved.all],
   );
-  const history = useInstantEvalHistory(projectId, configsByName, {
-    enabled: open && jev.available && showComposer,
-    unit,
-  });
+  const queryClient = useQueryClient();
 
-  // When a run finishes: its questions join the saved list and the history,
-  // and the view refreshes (trace answers become grid columns).
+  // When a run finishes: its questions join the saved list and History, and
+  // the view refreshes (trace answers become grid columns).
   const finished = useRef(null);
   useEffect(() => {
     if (run.phase !== "done" || !run.taskId || finished.current === run.taskId)
       return;
     finished.current = run.taskId;
     saved.refetch?.();
-    history.refetch?.();
+    queryClient.invalidateQueries({
+      queryKey: ["instant-eval-history", projectId],
+    });
     if (!run.viewing) onRunFinished?.(run);
     // Once per finished run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.phase, run.taskId]);
 
-  const runScope = () => ({ filters, label, handedOver });
+  const openPastRun = (runItem) => {
+    past.view({
+      taskId: runItem.taskId,
+      items: runItem.items,
+      scopeFilters: [],
+      startedAt: runItem.createdAt,
+      asked:
+        runItem.unit !== "users" && runItem.rows
+          ? { rows: runItem.rows }
+          : null,
+    });
+    setPastOpen(true);
+  };
+  const closePastRun = () => {
+    past.reset();
+    setPastOpen(false);
+  };
+
+  // The rows just counted for the scope line are the rows a run asks about;
+  // an older read is left for the run to redo.
+  const runScope = () => ({
+    filters,
+    label,
+    handedOver,
+    ...(!handedOver &&
+    population.data &&
+    Date.now() - population.dataUpdatedAt < POPULATION_FRESH_MS
+      ? { population: population.data }
+      : {}),
+  });
 
   const newQuestion = () => {
     reset();
+    setTab("ask");
     setInitialQuestions(null);
     setComposerKey((key) => key + 1);
+  };
+
+  // A past run's questions asked again over what is in view now.
+  const askAgain = (items) => {
+    rerun({
+      items,
+      limit: DEFAULT_LIMIT[unit],
+      scope: { filters, label, handedOver: null },
+    });
+    closePastRun();
+    setTab("ask");
   };
 
   const scopeText = handedOver
@@ -160,12 +219,30 @@ export default function InstantEvalDrawer({
 
   const busy = ["collecting", "creating"].includes(run.phase);
 
+  const results = (shownRun, { onRunAgain }) => (
+    <InstantEvalResults
+      projectId={projectId}
+      unit={unit}
+      run={shownRun}
+      navigate={navigate}
+      onOpenRow={onOpenRow}
+      onShowInGrid={onShowInGrid}
+      onInsights={(insightsSeed) =>
+        navigate(insightsReportLink(projectId, insightsSeed))
+      }
+      onRunAgain={jev.available ? onRunAgain : undefined}
+    />
+  );
+
   return (
     <Drawer
       anchor="right"
       open={open}
       onClose={onClose}
       variant="persistent"
+      SlideProps={{
+        onEntered: () => tabsAction.current?.updateIndicator(),
+      }}
       PaperProps={{
         sx: {
           width: DRAWER_WIDTH,
@@ -188,34 +265,68 @@ export default function InstantEvalDrawer({
         }}
         sx={{ display: "flex", flexDirection: "column", height: "100%" }}
       >
-        <Stack
-          direction="row"
-          alignItems="flex-start"
-          justifyContent="space-between"
-          spacing={1}
+        <Box
           sx={{
             px: 2.5,
-            py: 2,
+            pt: 2,
             borderBottom: "1px solid",
             borderColor: "divider",
             flexShrink: 0,
           }}
         >
-          <Box sx={{ minWidth: 0 }}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Iconify
-                icon="mdi:creation-outline"
-                width={20}
-                sx={{ color: "primary.main" }}
-              />
-              <Typography variant="h6">Instant eval</Typography>
-            </Stack>
-            <Typography variant="body2" color="text.secondary">
-              Ask Jev about every {meta.noun} in this view.
-            </Typography>
-          </Box>
-          <Stack direction="row" alignItems="center" spacing={0.5}>
-            {!showComposer && (
+          <Stack
+            direction="row"
+            alignItems="flex-start"
+            justifyContent="space-between"
+            spacing={1}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Iconify
+                  icon="mdi:creation-outline"
+                  width={20}
+                  sx={{ color: "primary.main" }}
+                />
+                <Typography variant="h6">Instant eval</Typography>
+              </Stack>
+              <Typography variant="body2" color="text.secondary">
+                Ask Jev about every {meta.noun} in this view.
+              </Typography>
+            </Box>
+            <Tooltip title="Close">
+              <IconButton onClick={onClose} aria-label="Close Instant eval">
+                <Iconify icon="mdi:close" width={20} />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            sx={{ mt: 1 }}
+          >
+            <Tabs
+              action={tabsAction}
+              value={tab}
+              onChange={(_, next) => setTab(next)}
+              aria-label="Instant eval"
+              sx={{
+                minHeight: 36,
+                "& .MuiTab-root": {
+                  minHeight: 36,
+                  py: 0.5,
+                  px: 0,
+                  mr: 2.5,
+                  minWidth: 0,
+                  textTransform: "none",
+                  fontWeight: 600,
+                },
+              }}
+            >
+              <Tab value="ask" label="Ask" />
+              <Tab value="history" label="History" />
+            </Tabs>
+            {tab === "ask" && !showComposer && (
               <Button
                 size="small"
                 startIcon={<Iconify icon="mdi:plus" width={16} />}
@@ -226,13 +337,18 @@ export default function InstantEvalDrawer({
                 New question
               </Button>
             )}
-            <Tooltip title="Close">
-              <IconButton onClick={onClose} aria-label="Close Instant eval">
-                <Iconify icon="mdi:close" width={20} />
-              </IconButton>
-            </Tooltip>
+            {tab === "history" && pastOpen && (
+              <Button
+                size="small"
+                startIcon={<Iconify icon="mdi:arrow-left" width={16} />}
+                onClick={closePastRun}
+                sx={{ textTransform: "none" }}
+              >
+                All runs
+              </Button>
+            )}
           </Stack>
-        </Stack>
+        </Box>
 
         <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2.5, py: 2 }}>
           <Stack spacing={2}>
@@ -255,60 +371,54 @@ export default function InstantEvalDrawer({
                 {jev.reason}
               </Alert>
             )}
-            {run.phase === "failed" && (
+            {tab === "ask" && run.phase === "failed" && (
               <Alert severity="error" onClose={newQuestion}>
                 {run.error}
               </Alert>
             )}
-            {showComposer ? (
-              <InstantEvalComposer
-                key={composerKey}
-                unit={unit}
-                initialQuestions={initialQuestions}
-                scopeText={scopeText}
-                population={population}
-                handedOver={handedOver}
-                onClearHandoff={() => setHandedOver(null)}
-                onRun={({ questions, reads, limit }) =>
-                  start({ questions, reads, limit, scope: runScope() })
-                }
-                disabled={!jev.available || jev.isLoading}
-                savedQuestions={saved.items}
-                pastRuns={history.runs}
-                onViewRun={(runItem) =>
-                  view({
-                    taskId: runItem.taskId,
-                    items: runItem.items,
-                    scopeFilters: runItem.scopeFilters,
-                    startedAt: runItem.createdAt,
-                  })
-                }
-              />
-            ) : (
-              <InstantEvalResults
-                projectId={projectId}
-                unit={unit}
-                run={run}
-                navigate={navigate}
-                onOpenRow={onOpenRow}
-                onShowInGrid={onShowInGrid}
-                onInsights={(insightsSeed) =>
-                  navigate(insightsReportLink(projectId, insightsSeed))
-                }
-                onRunAgain={
-                  jev.available
-                    ? () =>
-                        rerun({
-                          items: run.items,
-                          limit: run.limit || DEFAULT_LIMIT[unit],
-                          scope: run.handedOver
-                            ? { ...runScope(), handedOver: run.handedOver }
-                            : runScope(),
-                        })
-                    : undefined
-                }
-              />
-            )}
+            {tab === "ask" &&
+              (showComposer ? (
+                <InstantEvalComposer
+                  key={composerKey}
+                  unit={unit}
+                  initialQuestions={initialQuestions}
+                  scopeText={scopeText}
+                  population={population}
+                  handedOver={handedOver}
+                  onClearHandoff={() => setHandedOver(null)}
+                  onRun={({ questions, reads, limit }) =>
+                    start({ questions, reads, limit, scope: runScope() })
+                  }
+                  disabled={!jev.available || jev.isLoading}
+                  savedQuestions={saved.items}
+                />
+              ) : (
+                results(run, {
+                  onRunAgain: () =>
+                    rerun({
+                      items: run.items,
+                      limit: run.limit || DEFAULT_LIMIT[unit],
+                      scope: run.handedOver
+                        ? { ...runScope(), handedOver: run.handedOver }
+                        : runScope(),
+                    }),
+                })
+              ))}
+            {tab === "history" &&
+              (pastOpen ? (
+                results(past.run, {
+                  onRunAgain: () => askAgain(past.run.items),
+                })
+              ) : (
+                <InstantEvalHistory
+                  projectId={projectId}
+                  unit={unit}
+                  configsById={configsById}
+                  enabled={open && tab === "history"}
+                  onOpen={openPastRun}
+                  onAsk={() => setTab("ask")}
+                />
+              ))}
           </Stack>
         </Box>
       </Box>
@@ -320,7 +430,7 @@ InstantEvalDrawer.propTypes = {
   open: PropTypes.bool.isRequired,
   onClose: PropTypes.func.isRequired,
   projectId: PropTypes.string.isRequired,
-  unit: PropTypes.oneOf(["traces", "sessions", "users"]).isRequired,
+  unit: PropTypes.oneOf(["traces", "spans", "sessions", "users"]).isRequired,
   scope: PropTypes.shape({
     filters: PropTypes.array,
     label: PropTypes.string,

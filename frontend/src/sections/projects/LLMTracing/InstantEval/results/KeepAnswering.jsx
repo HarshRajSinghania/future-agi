@@ -4,10 +4,17 @@ import { Alert, Button, Stack } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
 import { createContinuousTask, findContinuousTask } from "../useInstantEval";
+import { unitMeta } from "../instantEvalUnits";
 
-// Turns a trace run's questions into a live task: every new trace that
-// matches the run's filters is answered as it arrives.
-export default function KeepAnswering({ projectId, run, navigate }) {
+// Turns a trace (or span) run's questions into a live task: every new trace
+// that matches the run's filters is answered as it arrives.
+export default function KeepAnswering({
+  projectId,
+  run,
+  navigate,
+  unit = "traces",
+}) {
+  const noun = unitMeta(unit);
   const [state, setState] = useState({ step: "idle" });
   const start = async () => {
     setState({ step: "working" });
@@ -24,6 +31,7 @@ export default function KeepAnswering({ projectId, run, navigate }) {
         projectId,
         items: run.items,
         scopeFilters: run.scopeFilters || [],
+        unit,
       });
       setState({ step: "done", taskId });
     } catch (error) {
@@ -51,8 +59,8 @@ export default function KeepAnswering({ projectId, run, navigate }) {
         }
       >
         {state.existed
-          ? "These questions are already being answered for new traces."
-          : "Live. New traces that match this view will be answered as they arrive."}
+          ? `These questions are already being answered for new ${noun.plural}.`
+          : `Live. New ${noun.plural} that match this view will be answered as they arrive.`}
       </Alert>
     );
   if (state.step === "confirm" || state.step === "working")
@@ -85,8 +93,9 @@ export default function KeepAnswering({ projectId, run, navigate }) {
         {run.items.length > 1
           ? `these ${run.items.length} questions`
           : "this question"}{" "}
-        for every new trace that matches this view&apos;s filters. Every answer
-        is billed as one eval run; TypeSafe bills its tokens to your own key.
+        for every new {noun.noun} that matches this view&apos;s filters. Every
+        answer is billed as one eval run; TypeSafe bills its tokens to your own
+        key.
       </Alert>
     );
   return (
@@ -107,7 +116,7 @@ export default function KeepAnswering({ projectId, run, navigate }) {
         onClick={() => setState({ step: "confirm" })}
         sx={{ textTransform: "none" }}
       >
-        Keep answering new traces
+        Keep answering new {noun.plural}
       </Button>
     </>
   );
@@ -117,4 +126,5 @@ KeepAnswering.propTypes = {
   projectId: PropTypes.string.isRequired,
   run: PropTypes.object.isRequired,
   navigate: PropTypes.func.isRequired,
+  unit: PropTypes.oneOf(["traces", "spans"]),
 };

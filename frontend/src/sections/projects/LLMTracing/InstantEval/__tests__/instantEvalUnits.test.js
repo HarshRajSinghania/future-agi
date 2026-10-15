@@ -9,7 +9,9 @@ vi.mock("src/utils/axios", () => ({
 import {
   draftsFromQuestions,
   endUserIds,
+  formatAgo,
   handedOverScope,
+  idsTaskPayload,
   limitHelp,
   limitOptionLabel,
   normalizeReads,
@@ -20,10 +22,8 @@ import {
   scopeLabel,
   scopeLine,
   sessionIdsFromUserSessions,
-  sessionsTaskPayload,
   splitScopeFilters,
   traceIdsFilter,
-  tracesTaskPayload,
   userSessionsRequest,
 } from "../instantEvalUnits";
 
@@ -76,46 +76,29 @@ describe("splitScopeFilters", () => {
 });
 
 describe("task payloads", () => {
-  it("runs a trace question over the view's filters and window", () => {
-    expect(
-      tracesTaskPayload({
-        projectId: "p1",
-        items: ITEMS,
-        limit: 200,
-        scopeFilters: [STATUS_ITEM, DATE_ITEM],
-      }),
-    ).toEqual({
-      name: "Instant eval · Did the customer get what they came for?",
-      project: "p1",
-      evals: ["c1", "c2"],
-      filters: { date_range: RANGE, filters: [STATUS_ITEM] },
-      run_type: "historical",
-      row_type: "traces",
-      spans_limit: 200,
-      sampling_rate: 100,
-    });
-  });
+  const payload = (unit, ids) =>
+    idsTaskPayload({ projectId: "p1", items: ITEMS, unit, ids });
 
-  it("runs a session question over exactly the sessions in view", () => {
-    expect(
-      sessionsTaskPayload({
-        projectId: "p1",
-        items: ITEMS,
-        sessionIds: ["s1", "s2", "s3"],
-      }),
-    ).toEqual({
+  it.each([
+    ["traces", "traces", "trace_id"],
+    ["spans", "spans", "span_id"],
+    ["sessions", "sessions", "session_id"],
+    // A user question is answered session by session.
+    ["users", "sessions", "session_id"],
+  ])("names the %s it asks about, and nothing else", (unit, rowType, key) => {
+    expect(payload(unit, ["a", "b", "c"])).toEqual({
       name: "Instant eval · Did the customer get what they came for?",
       project: "p1",
       evals: ["c1", "c2"],
-      filters: { session_id: ["s1", "s2", "s3"] },
+      filters: { [key]: ["a", "b", "c"] },
       run_type: "historical",
-      row_type: "sessions",
+      row_type: rowType,
       spans_limit: 3,
       sampling_rate: 100,
     });
   });
 
-  it("turns handed-over traces into one membership filter", () => {
+  it("names traces as one membership filter on the trace list", () => {
     expect(traceIdsFilter(["t1", "t2"])).toEqual({
       column_id: "trace_id",
       filter_config: {
@@ -177,11 +160,16 @@ describe("the users flow", () => {
 });
 
 describe("reads", () => {
-  it("reads whole conversations for sessions and users", () => {
+  it("keeps a read only on the views that offer it", () => {
     expect(normalizeReads("sessions", "input_output")).toBe("transcript");
     expect(normalizeReads("users", undefined)).toBe("transcript");
+    expect(normalizeReads("users", "transcript_full")).toBe("transcript_full");
     expect(normalizeReads("traces", "output")).toBe("output");
+    expect(normalizeReads("traces", "trace_tree")).toBe("trace_tree");
     expect(normalizeReads("traces", "transcript")).toBe("input_output");
+    // A span is read on its own; the trace outline is for traces.
+    expect(normalizeReads("spans", "trace_tree")).toBe("input_output");
+    expect(normalizeReads("spans", "input")).toBe("input");
   });
 });
 
@@ -321,34 +309,61 @@ describe("progress", () => {
     });
   });
 
-  it("says where a run is", () => {
+  it("says where a run is, live", () => {
+    const startedAt = "2026-10-15T10:00:00Z";
+    const at = (seconds) => new Date(startedAt).getTime() + seconds * 1000;
     expect(runStatusText({ phase: "collecting" }, "users")).toMatch(
       /users in this view and their latest sessions/,
     );
     expect(
       runStatusText(
-        { phase: "running", progress: { total: 60, completed: 10, failed: 2 } },
-        "users",
+        { phase: "running", startedAt, asked: { rows: 50 } },
+        "sessions",
+        32,
+        at(8),
       ),
-    ).toBe("Jev is reading sessions · 12 of 60");
+    ).toBe("32 of 50 sessions answered · 8 s");
+    expect(
+      runStatusText(
+        {
+          phase: "running",
+          startedAt,
+          asked: { rows: 4, users: 4, sessions: 12 },
+        },
+        "users",
+        1,
+        at(75),
+      ),
+    ).toBe("1 of 4 users (12 sessions) answered · 1 min 15 s");
+    expect(
+      runStatusText({ phase: "running", startedAt }, "spans", 0, at(1)),
+    ).toBe("Starting the run… · 1 s");
     expect(
       runStatusText(
         {
           phase: "done",
-          progress: { total: 50 },
-          startedAt: "2026-10-15T10:00:00Z",
+          asked: { rows: 50 },
+          startedAt,
           finishedAt: "2026-10-15T10:00:14Z",
         },
         "sessions",
         48,
       ),
-    ).toBe("48 of 50 sessions answered in 14s");
+    ).toBe("48 of 50 sessions answered in 14 s");
     expect(
       runStatusText(
-        { phase: "done", asked: { users: 5, sessions: 6 } },
+        { phase: "done", asked: { rows: 5, users: 5, sessions: 6 } },
         "users",
         5,
       ),
     ).toBe("5 users answered from 6 sessions");
+  });
+
+  it("says how long ago a run was", () => {
+    const now = new Date("2026-10-15T12:00:00Z").getTime();
+    expect(formatAgo("2026-10-15T11:59:40Z", now)).toBe("just now");
+    expect(formatAgo("2026-10-15T11:56:00Z", now)).toBe("4 min ago");
+    expect(formatAgo("2026-10-15T09:00:00Z", now)).toBe("3 h ago");
+    expect(formatAgo("2026-10-14T10:00:00Z", now)).toBe("yesterday");
   });
 });

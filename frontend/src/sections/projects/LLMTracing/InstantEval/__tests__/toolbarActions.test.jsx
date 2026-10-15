@@ -24,38 +24,74 @@ const renderToolbar = (props) =>
     />,
   );
 
-describe("ObserveToolbar Instant eval and Insights", () => {
-  it.each(["traces", "sessions", "users"])(
-    "offers both on the %s view",
-    (mode) => {
-      const onInstantEval = vi.fn();
-      const onInsights = vi.fn();
-      renderToolbar({ mode, onInstantEval, onInsights });
-      fireEvent.click(screen.getByRole("button", { name: "Instant eval" }));
-      fireEvent.click(screen.getByRole("button", { name: "Insights" }));
-      expect(onInstantEval).toHaveBeenCalledTimes(1);
-      expect(onInsights).toHaveBeenCalledTimes(1);
-    },
-  );
+const handlers = () => ({
+  onInstantEval: vi.fn(),
+  onInsights: vi.fn(),
+  onAddEvals: vi.fn(),
+});
 
-  it("hides both for spans, in compare mode and without handlers", () => {
-    const handlers = { onInstantEval: vi.fn(), onInsights: vi.fn() };
-    const { unmount } = renderToolbar({
-      mode: "traces",
-      isSpansView: true,
-      ...handlers,
-    });
+const openMenu = () =>
+  fireEvent.click(screen.getByRole("button", { name: "Evaluate" }));
+
+const menuTitles = () =>
+  screen
+    .getAllByRole("menuitem")
+    .map((item) => item.querySelector("p, span")?.textContent);
+
+describe("ObserveToolbar Evaluate menu", () => {
+  it.each([
+    ["traces", "trace", "traces"],
+    ["sessions", "session", "sessions"],
+    ["users", "user", "users"],
+  ])("offers every action on the %s view", (mode, noun, plural) => {
+    const props = handlers();
+    renderToolbar({ mode, ...props });
+    // The three old buttons are one menu now.
     expect(screen.queryByRole("button", { name: "Instant eval" })).toBeNull();
-    unmount();
-    const compare = renderToolbar({
-      mode: "sessions",
-      isCompareActive: true,
-      ...handlers,
-    });
-    expect(screen.queryByRole("button", { name: "Insights" })).toBeNull();
-    compare.unmount();
+    expect(screen.queryByRole("button", { name: "Add Evals" })).toBeNull();
+    openMenu();
+    expect(menuTitles()).toEqual([
+      "Ask a question",
+      "Find patterns",
+      "Add evaluators",
+    ]);
+    expect(
+      screen.getByText(`Jev answers it for every ${noun} in view, in seconds.`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Start an Insights report on these ${plural}.`),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /Ask a question/ }));
+    expect(props.onInstantEval).toHaveBeenCalledTimes(1);
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Find patterns/ }));
+    expect(props.onInsights).toHaveBeenCalledTimes(1);
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Add evaluators/ }));
+    expect(props.onAddEvals).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks about spans on the Spans tab, without Find patterns", () => {
+    const props = handlers();
+    renderToolbar({ mode: "traces", isSpansView: true, ...props });
+    openMenu();
+    expect(menuTitles()).toEqual(["Ask a question", "Add evaluators"]);
+    expect(
+      screen.getByText("Jev answers it for every span in view, in seconds."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Ask a question/ }));
+    expect(props.onInstantEval).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps only Add evaluators in compare mode", () => {
+    renderToolbar({ mode: "sessions", isCompareActive: true, ...handlers() });
+    openMenu();
+    expect(menuTitles()).toEqual(["Add evaluators"]);
+  });
+
+  it("renders nothing without a project's handlers", () => {
     renderToolbar({ mode: "users" });
-    expect(screen.queryByRole("button", { name: "Instant eval" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Insights" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Evaluate" })).toBeNull();
   });
 });

@@ -8,6 +8,8 @@ import {
   buildTemplatePayload,
   cleanCategories,
   evaluatorName,
+  readOption,
+  readsFor,
   validateInstantEval,
 } from "../instantEvalPayloads";
 
@@ -134,6 +136,61 @@ describe("helpers", () => {
     });
     expect(payload.instructions).toContain("{{transcript}}");
     expect(payload.instructions).not.toContain("{{input}}");
+  });
+
+  it("reads a whole trace as one outline of its spans", () => {
+    expect(buildEvalMapping("trace_tree")).toEqual({
+      whole_trace: "trace_tree",
+    });
+    expect(buildInstructions("Did a tool fail?", "trace_tree")).toBe(
+      "Did a tool fail?\n\nTrace:\n{{whole_trace}}",
+    );
+    expect(readOption("traces", "trace_tree")).toMatchObject({
+      label: "The whole trace",
+      hint: "Every span: LLM calls, tool calls and results, retrieval, errors",
+    });
+  });
+
+  it("reads a whole session with every turn's steps", () => {
+    expect(buildEvalMapping("transcript_full")).toEqual({
+      conversation: "transcript_full",
+    });
+    expect(buildInstructions("Was it resolved?", "transcript_full")).toBe(
+      "Was it resolved?\n\nConversation:\n{{conversation}}",
+    );
+    expect(readOption("users", "transcript_full").label).toBe(
+      "The whole session",
+    );
+  });
+
+  it("words a span's input and output as the span's own", () => {
+    expect(buildInstructions("On topic?", "input_output", "spans")).toBe(
+      "On topic?\n\nSpan input:\n{{input}}\n\nSpan output:\n{{output}}",
+    );
+    expect(readOption("spans", "input_output").label).toBe(
+      "Span input and output",
+    );
+    expect(
+      buildTemplatePayload({
+        question: "On topic?",
+        answerType: ANSWER_TYPES.YES_NO,
+        reads: "output",
+        unit: "spans",
+        now: NOW,
+      }).instructions,
+    ).toBe("On topic?\n\nSpan output:\n{{output}}");
+  });
+
+  it("offers each view its own reads, the default first", () => {
+    expect(readsFor("traces")).toEqual([
+      "input_output",
+      "trace_tree",
+      "input",
+      "output",
+    ]);
+    expect(readsFor("spans")).toEqual(["input_output", "input", "output"]);
+    expect(readsFor("sessions")).toEqual(["transcript", "transcript_full"]);
+    expect(readsFor("users")).toEqual(["transcript", "transcript_full"]);
   });
 
   it("names evaluators with a slug the template API accepts", () => {

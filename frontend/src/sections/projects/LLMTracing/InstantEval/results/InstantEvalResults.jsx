@@ -6,35 +6,39 @@ import {
   Button,
   Chip,
   LinearProgress,
+  Skeleton,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
   Typography,
 } from "@mui/material";
-import { alpha, useTheme } from "@mui/material/styles";
+import { alpha, keyframes, useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
-import { ANSWER_TYPES } from "../instantEvalPayloads";
+import { ANSWER_TYPES, readOption } from "../instantEvalPayloads";
 import { buildAnswerFilter, explainErrorGroups } from "../useInstantEval";
 import {
-  ERROR_ANSWER,
-  SKIPPED_ANSWER,
   insightsSeedFromAnswers,
   answerText,
   filterRows,
+  isSettled,
   isUnsure,
   labelCountsText,
   quoted,
+  rowAnswered,
   summarizeQuestion,
   traceRecords,
+  withPlaceholders,
 } from "../instantEvalAnswers";
 import {
+  askedRows,
   filtersWindow,
   formatWhen,
   runStatusText,
   unitMeta,
 } from "../instantEvalUnits";
 import { computeAnswerStats } from "./answerStats";
+import { answerColor, distributionEntries } from "./answerColors";
 import AnswerBehaviour from "./AnswerBehaviour";
 import AnswerHeatmap from "./AnswerHeatmap";
 import KeepAnswering from "./KeepAnswering";
@@ -42,48 +46,46 @@ import { dayLabel, hourRange } from "./heatmap";
 
 const PAGE = 50;
 
-// Categorical hues for category answers; the first is the brand accent.
-const CATEGORY_COLORS = [
-  "#7857FC",
-  "#0EA5E9",
-  "#F59E0B",
-  "#10B981",
-  "#EF4444",
-  "#EC4899",
-  "#14B8A6",
-  "#8B5CF6",
-  "#F97316",
-  "#64748B",
-];
-
-function answerColor(item, answer, theme) {
-  if (answer === ERROR_ANSWER) return alpha(theme.palette.error.main, 0.45);
-  if (answer === SKIPPED_ANSWER) return theme.palette.grey[400];
-  if (item.answerType === ANSWER_TYPES.CATEGORY) {
-    const index = item.labels.indexOf(answer);
-    return CATEGORY_COLORS[
-      (index >= 0 ? index : item.labels.length) % CATEGORY_COLORS.length
-    ];
-  }
-  return answer === "Yes"
-    ? theme.palette.primary.main
-    : theme.palette.grey[500];
-}
+const pulse = keyframes`
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+`;
 
 const percent = (share) => `${Math.round(share * 100)}%`;
 
-function Distribution({ item, summary, selected, onSelect, unit }) {
+// Ticks once a second while a run is working, for the elapsed clock.
+function useNow(active) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+/**
+ * One question's answers as a bar and a legend. While Jev is reading, the bar
+ * is measured against every row asked about, so it fills as answers land;
+ * once done it is the split of the answered rows.
+ */
+function Distribution({
+  item,
+  summary,
+  selected,
+  onSelect,
+  unit,
+  expected,
+  working,
+}) {
   const theme = useTheme();
   const noun = unitMeta(unit);
-  const entries = [
-    ...summary.labels.map((entry) => ({ ...entry, answer: entry.label })),
-    ...(summary.errors.count
-      ? [{ ...summary.errors, answer: ERROR_ANSWER, muted: true }]
-      : []),
-    ...(summary.skipped.count
-      ? [{ ...summary.skipped, answer: SKIPPED_ANSWER, muted: true }]
-      : []),
-  ];
+  const entries = distributionEntries(summary);
+  const denominator = working
+    ? Math.max(summary.total + summary.pending, expected || 0, 1)
+    : Math.max(summary.total, 1);
+  const reading = working ? denominator - summary.total : 0;
   return (
     <Box>
       <Box
@@ -103,10 +105,10 @@ function Distribution({ item, summary, selected, onSelect, unit }) {
             <Box
               key={entry.answer}
               sx={{
-                width: `${entry.share * 100}%`,
+                width: `${(entry.count / denominator) * 100}%`,
                 bgcolor: answerColor(item, entry.answer, theme),
                 opacity: selected && selected !== entry.answer ? 0.35 : 1,
-                transition: "width 400ms ease, opacity 150ms",
+                transition: "width 500ms ease, opacity 150ms",
               }}
             />
           ))}
@@ -166,11 +168,45 @@ function Distribution({ item, summary, selected, onSelect, unit }) {
                 color="text.secondary"
                 sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
               >
-                {entry.count.toLocaleString()} · {percent(entry.share)}
+                {entry.count.toLocaleString()} ·{" "}
+                {summary.total ? percent(entry.share) : "–"}
               </Typography>
             </Stack>
           );
         })}
+        {reading > 0 && (
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1}
+            sx={{ px: 1, py: 0.5 }}
+          >
+            <Box
+              sx={{
+                width: 10,
+                height: 10,
+                borderRadius: "2px",
+                flexShrink: 0,
+                bgcolor: alpha(theme.palette.text.disabled, 0.4),
+                animation: `${pulse} 1.6s ease-in-out infinite`,
+              }}
+            />
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ flex: 1, minWidth: 0 }}
+            >
+              Still reading
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+            >
+              {reading.toLocaleString()}
+            </Typography>
+          </Stack>
+        )}
       </Stack>
     </Box>
   );
@@ -182,11 +218,27 @@ Distribution.propTypes = {
   selected: PropTypes.string,
   onSelect: PropTypes.func.isRequired,
   unit: PropTypes.string.isRequired,
+  expected: PropTypes.number,
+  working: PropTypes.bool,
 };
 
-function AnswerRow({ row, item, unit, onOpen }) {
+function ReadingLabel() {
+  return (
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      noWrap
+      sx={{ animation: `${pulse} 1.6s ease-in-out infinite` }}
+    >
+      Reading…
+    </Typography>
+  );
+}
+
+function AnswerRow({ row, item, unit, working, onOpen }) {
   const theme = useTheme();
   const entry = row.answers?.[item.configId];
+  const settled = isSettled(entry);
   const unsure = isUnsure(entry);
   const isUser = unit === "users";
   const title = isUser ? row.userId || row.label : row.excerpt || row.label;
@@ -199,6 +251,7 @@ function AnswerRow({ row, item, unit, onOpen }) {
     isUser && entry?.counts && labelCountsText(entry.counts),
   ].filter(Boolean);
   const open = () => onOpen?.(row);
+  const waiting = !settled && (working || entry?.pending);
   return (
     <Box
       role="button"
@@ -232,21 +285,31 @@ function AnswerRow({ row, item, unit, onOpen }) {
             height: 8,
             borderRadius: "50%",
             flexShrink: 0,
-            bgcolor: entry
+            bgcolor: settled
               ? answerColor(item, entry.answer, theme)
               : "text.disabled",
+            ...(waiting && {
+              animation: `${pulse} 1.6s ease-in-out infinite`,
+            }),
           }}
         />
-        <Typography
-          variant="caption"
-          fontWeight={600}
-          noWrap
-          title={entry ? answerText(entry.answer) : "Not answered yet"}
-          color={entry ? "text.primary" : "text.disabled"}
-          sx={{ minWidth: 0 }}
-        >
-          {entry ? answerText(entry.answer) : "Pending"}
-        </Typography>
+        {settled ? (
+          <Typography
+            variant="caption"
+            fontWeight={600}
+            noWrap
+            title={answerText(entry.answer)}
+            sx={{ minWidth: 0 }}
+          >
+            {answerText(entry.answer)}
+          </Typography>
+        ) : waiting ? (
+          <ReadingLabel />
+        ) : (
+          <Typography variant="caption" color="text.disabled" noWrap>
+            No answer
+          </Typography>
+        )}
         {unsure && (
           <Tooltip
             title={`Jev was unsure (${percent(entry.confidence)} confident)`}
@@ -265,19 +328,23 @@ function AnswerRow({ row, item, unit, onOpen }) {
         )}
       </Stack>
       <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography
-          variant="body2"
-          fontWeight={isUser ? 600 : 400}
-          sx={{
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-            wordBreak: "break-word",
-          }}
-        >
-          {title || "(no input)"}
-        </Typography>
+        {row.placeholder && !title ? (
+          <Skeleton variant="text" width="70%" sx={{ fontSize: "0.875rem" }} />
+        ) : (
+          <Typography
+            variant="body2"
+            fontWeight={isUser ? 600 : 400}
+            sx={{
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              wordBreak: "break-word",
+            }}
+          >
+            {title || "(no input)"}
+          </Typography>
+        )}
         {isUser && row.excerpt && (
           <Typography
             variant="caption"
@@ -307,6 +374,7 @@ AnswerRow.propTypes = {
   row: PropTypes.object.isRequired,
   item: PropTypes.object.isRequired,
   unit: PropTypes.string.isRequired,
+  working: PropTypes.bool,
   onOpen: PropTypes.func,
 };
 
@@ -341,9 +409,13 @@ export default function InstantEvalResults({
 
   const items = useMemo(() => run.items || [], [run.items]);
   const item = items[Math.min(questionIndex, Math.max(0, items.length - 1))];
-  const rows = useMemo(() => run.answers?.rows || [], [run.answers]);
+  const rows = useMemo(
+    () => withPlaceholders(run.answers, run.placeholders),
+    [run.answers, run.placeholders],
+  );
   const isWorking = ["collecting", "creating", "running"].includes(run.phase);
   const isDone = run.phase === "done";
+  const now = useNow(isWorking && !run.viewing);
 
   useEffect(() => {
     setQuestionIndex(0);
@@ -384,22 +456,21 @@ export default function InstantEvalResults({
     );
   }, [unit, run.metrics, records, item]);
 
-  const answeredRows = rows.filter((row) =>
-    items.every((entry) => row.answers[entry.configId]),
-  ).length;
-  const statusText = runStatusText(run, unit, answeredRows);
+  const answeredRows = rows.filter((row) => rowAnswered(row, items)).length;
+  const expected = askedRows(run, unit);
+  const statusText = runStatusText(run, unit, answeredRows, now);
+  const progressValue =
+    run.phase === "running" && expected
+      ? Math.min(100, (answeredRows / expected) * 100)
+      : null;
   const progress = run.progress;
-  const processed = progress
-    ? Math.min(
-        (progress.completed || 0) + (progress.failed || 0),
-        progress.total,
-      )
-    : 0;
   const selectedCount = selected
     ? summary?.labels.find((entry) => entry.label === selected)?.count || 0
     : 0;
   const isLabel = selected && item?.labels.includes(selected);
   const activeView = view === "behaviour" && !hasBehaviour ? "rows" : view;
+  const readsLabel = item?.reads ? readOption(unit, item.reads).label : null;
+  const canFilterGrid = onShowInGrid && (unit === "traces" || unit === "spans");
 
   return (
     <Stack spacing={2}>
@@ -407,18 +478,15 @@ export default function InstantEvalResults({
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: isWorking ? 1 : 0 }}
+          aria-live="polite"
+          sx={{ mb: isWorking ? 1 : 0, fontVariantNumeric: "tabular-nums" }}
         >
           {statusText}
         </Typography>
         {isWorking && (
           <LinearProgress
-            variant={progress?.total ? "determinate" : "indeterminate"}
-            value={
-              progress?.total
-                ? Math.min(100, (processed / progress.total) * 100)
-                : undefined
-            }
+            variant={progressValue != null ? "determinate" : "indeterminate"}
+            value={progressValue ?? undefined}
             sx={{ height: 4, borderRadius: 2 }}
           />
         )}
@@ -484,6 +552,7 @@ export default function InstantEvalResults({
                 {item.answerType === ANSWER_TYPES.CATEGORY
                   ? "Categories"
                   : "Yes / No"}
+                {readsLabel && ` · Jev read ${readsLabel.toLowerCase()}`}
               </Typography>
               <Typography variant="subtitle1" sx={{ lineHeight: 1.35 }}>
                 {item.question}
@@ -503,7 +572,7 @@ export default function InstantEvalResults({
             )}
           </Stack>
 
-          {summary.total > 0 ? (
+          {summary.total > 0 || (isWorking && expected > 0) ? (
             <Distribution
               item={item}
               summary={summary}
@@ -513,6 +582,8 @@ export default function InstantEvalResults({
                 setShown(PAGE);
               }}
               unit={unit}
+              expected={expected}
+              working={isWorking}
             />
           ) : (
             <Typography variant="body2" color="text.secondary">
@@ -561,30 +632,34 @@ export default function InstantEvalResults({
                   />
                 </Tooltip>
               )}
-              {isDone && isLabel && selectedCount > 0 && onInsights && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={
-                    <Iconify icon="mdi:chart-box-outline" width={16} />
-                  }
-                  onClick={() =>
-                    onInsights(
-                      insightsSeedFromAnswers({
-                        unit,
-                        item,
-                        answer: selected,
-                        rows,
-                      }),
-                    )
-                  }
-                  sx={{ textTransform: "none" }}
-                >
-                  Find patterns in these {selectedCount} {quoted(selected)}{" "}
-                  {selectedCount === 1 ? meta.noun : meta.plural}
-                </Button>
-              )}
-              {isDone && isLabel && selectedCount > 0 && onShowInGrid && (
+              {isDone &&
+                isLabel &&
+                selectedCount > 0 &&
+                onInsights &&
+                unit !== "spans" && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={
+                      <Iconify icon="mdi:chart-box-outline" width={16} />
+                    }
+                    onClick={() =>
+                      onInsights(
+                        insightsSeedFromAnswers({
+                          unit,
+                          item,
+                          answer: selected,
+                          rows,
+                        }),
+                      )
+                    }
+                    sx={{ textTransform: "none" }}
+                  >
+                    Find patterns in these {selectedCount} {quoted(selected)}{" "}
+                    {selectedCount === 1 ? meta.noun : meta.plural}
+                  </Button>
+                )}
+              {isDone && isLabel && selectedCount > 0 && canFilterGrid && (
                 <Button
                   size="small"
                   startIcon={<Iconify icon="mdi:filter-outline" width={16} />}
@@ -601,7 +676,7 @@ export default function InstantEvalResults({
         </Box>
       )}
 
-      {item && rows.length > 0 && unit === "traces" && (
+      {item && rows.length > 0 && unit === "traces" && isDone && (
         <ToggleButtonGroup
           exclusive
           size="small"
@@ -627,7 +702,7 @@ export default function InstantEvalResults({
         </ToggleButtonGroup>
       )}
 
-      {item && activeView === "when" && unit === "traces" && (
+      {item && activeView === "when" && unit === "traces" && isDone && (
         <AnswerHeatmap
           traces={records}
           configId={item.configId}
@@ -653,7 +728,7 @@ export default function InstantEvalResults({
         />
       )}
 
-      {item && activeView === "behaviour" && hasBehaviour && (
+      {item && activeView === "behaviour" && hasBehaviour && isDone && (
         <AnswerBehaviour
           traces={records}
           item={item}
@@ -665,7 +740,7 @@ export default function InstantEvalResults({
         />
       )}
 
-      {item && activeView === "rows" && rows.length > 0 && (
+      {item && (activeView === "rows" || !isDone) && rows.length > 0 && (
         <Box>
           <Stack
             direction="row"
@@ -715,6 +790,7 @@ export default function InstantEvalResults({
                   row={row}
                   item={item}
                   unit={unit}
+                  working={isWorking}
                   onOpen={onOpenRow}
                 />
               ))}
@@ -752,16 +828,20 @@ export default function InstantEvalResults({
               onClick={onRunAgain}
               sx={{ textTransform: "none" }}
             >
-              Run again
+              {run.viewing ? "Ask again on this view" : "Run again"}
             </Button>
           )}
-          {unit === "traces" && rows.length > 0 && !run.viewing && (
-            <KeepAnswering
-              projectId={projectId}
-              run={run}
-              navigate={navigate}
-            />
-          )}
+          {(unit === "traces" || unit === "spans") &&
+            rows.length > 0 &&
+            !run.viewing &&
+            !run.handedOver && (
+              <KeepAnswering
+                projectId={projectId}
+                run={run}
+                navigate={navigate}
+                unit={unit}
+              />
+            )}
         </Stack>
       )}
     </Stack>
@@ -770,7 +850,7 @@ export default function InstantEvalResults({
 
 InstantEvalResults.propTypes = {
   projectId: PropTypes.string.isRequired,
-  unit: PropTypes.oneOf(["traces", "sessions", "users"]).isRequired,
+  unit: PropTypes.oneOf(["traces", "spans", "sessions", "users"]).isRequired,
   run: PropTypes.object.isRequired,
   navigate: PropTypes.func.isRequired,
   onOpenRow: PropTypes.func,

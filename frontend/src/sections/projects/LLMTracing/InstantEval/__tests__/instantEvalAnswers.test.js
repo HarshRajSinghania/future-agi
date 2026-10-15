@@ -17,9 +17,12 @@ import {
   isUnsure,
   labelCountsText,
   normalizeAnswers,
+  rowAnswered,
+  summarizeCounts,
   summarizeQuestion,
   traceMetrics,
   traceRecords,
+  withPlaceholders,
 } from "../instantEvalAnswers";
 
 // Real answers-endpoint responses: six sessions, and the same task rolled up
@@ -67,6 +70,96 @@ describe("normalizeAnswers", () => {
     });
     expect(rows).toHaveLength(1);
     expect(Object.keys(rows[0].answers)).toEqual(["c2"]);
+  });
+});
+
+describe("answers while Jev reads", () => {
+  // One span answered, one being read, one still queued.
+  const live = normalizeAnswers({
+    rows: [
+      {
+        id: "sp1",
+        trace_id: "t1",
+        excerpt: "llm · ChatCompletion: hi",
+        answers: { c1: { answer: "Yes", status: "completed" } },
+      },
+      {
+        id: "sp2",
+        trace_id: "t2",
+        answers: { c1: { answer: null, status: "running" } },
+      },
+      {
+        id: "sp3",
+        trace_id: "t3",
+        answers: { c1: { answer: null, status: "pending" } },
+      },
+    ],
+    answered: 1,
+    pending: 2,
+  });
+  const item = { configId: "c1", labels: ["Yes", "No"] };
+
+  it("keeps rows still being read, without an answer", () => {
+    expect(live).toMatchObject({ answered: 1, pending: 2, loaded: true });
+    expect(live.rows[0]).toMatchObject({ traceId: "t1" });
+    expect(live.rows[1].answers.c1).toMatchObject({
+      answer: null,
+      pending: true,
+    });
+    expect(live.rows.map((row) => rowAnswered(row, [item]))).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it("counts only finished answers, and how many are still read", () => {
+    const summary = summarizeQuestion(live.rows, item);
+    expect(summary).toMatchObject({ total: 1, pending: 2 });
+    expect(summary.labels[0]).toMatchObject({ label: "Yes", count: 1 });
+    expect(filterRows(live.rows, { configId: "c1", answer: "Yes" })).toEqual([
+      live.rows[0],
+    ]);
+  });
+
+  it("lists every row asked about from the start, in view order", () => {
+    const rows = withPlaceholders(live, [
+      {
+        id: "sp0",
+        time: "2026-10-15T10:00:00Z",
+        user_id: "u0",
+        trace_id: "t0",
+      },
+      { id: "sp3" },
+      { id: "sp1" },
+    ]);
+    expect(rows.map((row) => row.id)).toEqual(["sp0", "sp3", "sp1", "sp2"]);
+    expect(rows[0]).toMatchObject({
+      placeholder: true,
+      userId: "u0",
+      traceId: "t0",
+      answers: {},
+    });
+    expect(rows[1].placeholder).toBeUndefined();
+    expect(withPlaceholders(live)).toBe(live.rows);
+  });
+});
+
+describe("summarizeCounts", () => {
+  it("reads a past run's split from its counts, failures apart", () => {
+    const summary = summarizeCounts(
+      { No: 2, Yes: 6, __error__: 1, Maybe: 1, __skipped__: 0 },
+      ITEM,
+    );
+    expect(summary.total).toBe(10);
+    expect(summary.labels).toEqual([
+      { label: "Yes", count: 6, share: 0.6 },
+      { label: "No", count: 2, share: 0.2 },
+      { label: "Maybe", count: 1, share: 0.1 },
+    ]);
+    expect(summary.errors).toEqual({ count: 1, share: 0.1 });
+    expect(summary.skipped.count).toBe(0);
+    expect(summarizeCounts(undefined, ITEM).total).toBe(0);
   });
 });
 

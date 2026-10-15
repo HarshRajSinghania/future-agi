@@ -3,39 +3,36 @@ import {
   ANSWER_TYPES,
   MAX_QUESTIONS,
   TRACE_LIMIT_OPTIONS,
-  TRACE_READS,
   cleanCategories,
+  readsFor,
 } from "./instantEvalPayloads";
 
-// How Instant eval runs over each view. A trace question is an eval task over
-// the view's filters; a session question is an eval task over the exact
-// session ids in view; a user question asks about each user's latest sessions
-// and the answers roll up per user.
+// How Instant eval runs over each view. Every question is an eval task over
+// the exact rows in view when the run starts: the newest trace, span or
+// session ids the grid shows. A user question asks about each user's latest
+// sessions and the answers roll up per user. Naming the rows outright keeps
+// the run to what was on screen and takes the backend's fast path.
 
 export const SESSIONS_PER_USER = 5;
 
 export const LIMIT_OPTIONS = {
   traces: TRACE_LIMIT_OPTIONS,
+  spans: TRACE_LIMIT_OPTIONS,
   sessions: [25, 50, 100, 200],
   users: [10, 25, 50, 100],
 };
 
-export const DEFAULT_LIMIT = { traces: 100, sessions: 50, users: 25 };
+export const DEFAULT_LIMIT = { traces: 50, spans: 50, sessions: 50, users: 25 };
 
 export const TASK_PREFIX = "Instant eval";
 
 export const unitMeta = (unit) => UNITS[unit] || UNITS.traces;
 
-export const defaultReads = (unit) =>
-  unit === "traces" ? "input_output" : "transcript";
+export const defaultReads = (unit) => readsFor(unit)[0];
 
-// Sessions and users always read the whole conversation; traces pick a field.
+// A read choice only applies to the view that offers it.
 export const normalizeReads = (unit, reads) =>
-  unit === "traces"
-    ? TRACE_READS.includes(reads)
-      ? reads
-      : "input_output"
-    : "transcript";
+  readsFor(unit).includes(reads) ? reads : defaultReads(unit);
 
 const taskName = (items) =>
   `${TASK_PREFIX} · ${items[0]?.question || ""}`.slice(0, 255);
@@ -60,37 +57,35 @@ export function splitScopeFilters(scopeFilters = []) {
   return { dateRange, filters };
 }
 
-export function tracesTaskPayload({ projectId, items, limit, scopeFilters }) {
-  const { dateRange, filters } = splitScopeFilters(scopeFilters);
+// The eval task row type and the filter key that names its rows. A user
+// question is answered session by session.
+const ROW_KEYS = {
+  traces: { rowType: "traces", key: "trace_id" },
+  spans: { rowType: "spans", key: "span_id" },
+  sessions: { rowType: "sessions", key: "session_id" },
+  users: { rowType: "sessions", key: "session_id" },
+};
+
+/**
+ * The task for one run: the questions' evaluators over exactly these rows.
+ * An id list with nothing else beside it is what the backend answers fastest
+ * (no time-sliced row proof, one batch of up to 32 at a time).
+ */
+export function idsTaskPayload({ projectId, items, unit, ids }) {
+  const { rowType, key } = ROW_KEYS[unit] || ROW_KEYS.traces;
   return {
     name: taskName(items),
     project: projectId,
     evals: items.map((item) => item.configId),
-    filters: {
-      ...(dateRange ? { date_range: dateRange } : {}),
-      ...(filters.length ? { filters } : {}),
-    },
+    filters: { [key]: ids },
     run_type: "historical",
-    row_type: "traces",
-    spans_limit: limit,
+    row_type: rowType,
+    spans_limit: ids.length,
     sampling_rate: 100,
   };
 }
 
-// Sessions are answered by id, so the task reads exactly the sessions that
-// were in view when the run started.
-export const sessionsTaskPayload = ({ projectId, items, sessionIds }) => ({
-  name: taskName(items),
-  project: projectId,
-  evals: items.map((item) => item.configId),
-  filters: { session_id: sessionIds },
-  run_type: "historical",
-  row_type: "sessions",
-  spans_limit: sessionIds.length,
-  sampling_rate: 100,
-});
-
-// Traces handed over by id (from Insights) become one membership filter.
+// Traces named by id, as one membership filter on the trace list.
 export const traceIdsFilter = (ids) => ({
   column_id: "trace_id",
   filter_config: {
@@ -262,15 +257,16 @@ export function handedOverScope(seed, unit) {
   return ids.length ? { ids, label: seed.label || "" } : null;
 }
 
-export const formatDuration = (from, to) => {
-  const seconds = Math.max(
-    0,
-    Math.round((new Date(to) - new Date(from)) / 1000),
-  );
-  return seconds >= 60
-    ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-    : `${seconds}s`;
+// "8 s", "1 min 5 s".
+export const formatSeconds = (seconds) => {
+  const whole = Math.max(0, Math.round(seconds || 0));
+  return whole >= 60
+    ? `${Math.floor(whole / 60)} min ${whole % 60} s`
+    : `${whole} s`;
 };
+
+export const formatDuration = (from, to) =>
+  formatSeconds((new Date(to) - new Date(from)) / 1000);
 
 export const formatWhen = (value) =>
   value
@@ -282,35 +278,73 @@ export const formatWhen = (value) =>
       })
     : "";
 
+// "just now", "4 min ago", "3 h ago", "Oct 12".
+export function formatAgo(value, now = Date.now()) {
+  if (!value) return "";
+  const seconds = (now - new Date(value).getTime()) / 1000;
+  if (!Number.isFinite(seconds)) return "";
+  if (seconds < 45) return "just now";
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} min ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)} h ago`;
+  if (seconds < 7 * 86400) {
+    const days = Math.round(seconds / 86400);
+    return days === 1 ? "yesterday" : `${days} days ago`;
+  }
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+// How many rows a run asked about, in the unit the results list shows. A past
+// user run only knows its sessions, which aren't rows of this list.
+export const askedRows = (run, unit) =>
+  run.asked?.rows ||
+  (unit === "users" ? run.asked?.users : run.progress?.total) ||
+  0;
+
 /**
  * One line on where a run is: finding rows, saving evaluators, Jev reading
- * (with progress), or what was answered and how long it took.
+ * ("32 of 50 sessions answered · 8 s"), or what was answered and how long it
+ * took ("50 sessions answered in 14 s"). `answeredRows` are the rows with
+ * every question answered; `now` drives the elapsed clock.
  */
-export function runStatusText(run, unit, answeredRows = 0) {
+export function runStatusText(run, unit, answeredRows = 0, now = Date.now()) {
   const meta = unitMeta(unit);
-  // A user question is answered session by session.
-  const readWord = unit === "users" ? "sessions" : meta.plural;
+  const elapsed =
+    run.startedAt && !run.viewing
+      ? ` · ${formatSeconds((now - new Date(run.startedAt).getTime()) / 1000)}`
+      : "";
   switch (run.phase) {
     case "collecting":
-      return unit === "users"
-        ? "Finding the users in this view and their latest sessions…"
-        : `Finding the ${meta.plural} in this view…`;
+      return `${
+        unit === "users"
+          ? "Finding the users in this view and their latest sessions…"
+          : `Finding the ${meta.plural} in this view…`
+      }${elapsed}`;
     case "creating":
-      return "Saving the questions as Jev evaluators…";
+      return `Saving the questions as Jev evaluators…${elapsed}`;
     case "running": {
-      const total = run.progress?.total;
+      const total = askedRows(run, unit);
       if (!total)
-        return run.viewing ? "Loading this run…" : "Starting the run…";
-      const processed = Math.min(
-        (run.progress.completed || 0) + (run.progress.failed || 0),
+        return run.viewing
+          ? "Loading this run…"
+          : `Starting the run…${elapsed}`;
+      const done = Math.min(answeredRows, total);
+      const fromSessions =
+        unit === "users" && run.asked?.sessions
+          ? ` (${plural(run.asked.sessions, "session")})`
+          : "";
+      return `${done.toLocaleString()} of ${total.toLocaleString()} ${unitWord(
+        unit,
         total,
-      );
-      return `Jev is reading ${readWord} · ${processed} of ${total}`;
+      )}${fromSessions} answered${elapsed}${
+        run.reconnecting ? " · reconnecting…" : ""
+      }`;
     }
     case "done": {
       if (run.empty) return run.empty;
-      const asked = unit === "users" ? run.asked?.users : run.asked?.sessions;
-      const total = unit === "users" ? asked : run.progress?.total || asked;
+      const total = askedRows(run, unit);
       const count = `${answeredRows.toLocaleString()}${
         total && total !== answeredRows ? ` of ${total.toLocaleString()}` : ""
       } ${unitWord(unit, total || answeredRows)} answered`;
@@ -320,7 +354,7 @@ export function runStatusText(run, unit, answeredRows = 0) {
           : "";
       const when =
         run.viewing && run.startedAt
-          ? ` · run on ${formatWhen(run.startedAt)}`
+          ? ` · ran ${formatWhen(run.startedAt)}`
           : run.startedAt && run.finishedAt
             ? ` in ${formatDuration(run.startedAt, run.finishedAt)}`
             : "";

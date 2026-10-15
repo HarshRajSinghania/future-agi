@@ -12,6 +12,7 @@ import Iconify from "src/components/iconify";
 import DisplayPanel from "./DisplayPanel";
 import TraceFilterPanel from "./TraceFilterPanel";
 import BulkActionsBar from "./BulkActionsBar";
+import EvaluateMenu from "./InstantEval/EvaluateMenu";
 import { pillSx } from "./toolbarStyles";
 import { useTabStoreShallow } from "./tabStore";
 import { ID_ONLY_FIELDS } from "./idFields";
@@ -34,7 +35,8 @@ const DATE_OPTIONS = [
   { key: "Custom", label: "Custom range" },
 ];
 
-// Views whose rows Instant eval and Insights can ask about.
+// Views whose rows Instant eval can ask about (traces mode covers the Spans
+// tab too). Insights runs on all of them but spans.
 const ASK_MODES = new Set(["traces", "sessions", "users"]);
 
 const ObserveToolbar = ({
@@ -123,16 +125,19 @@ const ObserveToolbar = ({
   // Compare mode: which graph's filter is being edited
   filterTarget,
   onApplyCompareExtraFilters,
-  // Add Evals — opens prefilled task-create draft
+  // Evaluate menu: Add evaluators opens a prefilled task-create draft;
+  // Ask a question opens the Instant eval drawer; Find patterns hands the
+  // rows in view to a new Insights report.
   onAddEvals,
-  // Instant eval drawer and Insights hand-off for the rows in view
   onInstantEval,
   onInsights,
   // Spans view — swaps "Trace Name" filter label to "Span Name"
   isSpansView = false,
 }) => {
-  const showAskActions =
-    ASK_MODES.has(mode) && !isSpansView && !isCompareActive;
+  // Asking needs a project (the views only pass handlers when they have one)
+  // and isn't offered in compare mode.
+  const canAsk = ASK_MODES.has(mode) && !isCompareActive;
+  const askUnit = mode === "traces" && isSpansView ? "spans" : mode;
   const [displayAnchor, setDisplayAnchor] = useState(null);
   const filterButtonRef = useRef(null);
   const [filterButtonEl, setFilterButtonEl] = useState(null);
@@ -550,51 +555,14 @@ const ObserveToolbar = ({
             onToggleSimulationCalls={onToggleSimulationCalls}
           />
 
-          {/* Instant eval asks Jev a question about every row in this view;
-              Insights opens a new report scoped to it. Both need a project
-              (the views only pass handlers when they have one) and are not
-              offered for spans or in compare mode. */}
-          {onInstantEval && showAskActions && (
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Iconify icon="mdi:creation-outline" width={16} />}
-              onClick={onInstantEval}
-              sx={{
-                ...pillSx,
-              }}
-            >
-              Instant eval
-            </Button>
-          )}
-          {onInsights && showAskActions && (
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Iconify icon="mdi:chart-box-outline" width={16} />}
-              onClick={onInsights}
-              sx={{
-                ...pillSx,
-              }}
-            >
-              Insights
-            </Button>
-          )}
-
-          {/* Add Evals — opens task create with project + filters pre-filled */}
-          {onAddEvals && (
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Iconify icon="mdi:plus" width={16} />}
-              onClick={onAddEvals}
-              sx={{
-                ...pillSx,
-              }}
-            >
-              Add Evals
-            </Button>
-          )}
+          {/* Evaluate: ask Jev a question about every row in view, find
+              patterns with Insights, or run saved evaluators. */}
+          <EvaluateMenu
+            unit={askUnit}
+            onAsk={canAsk ? onInstantEval : undefined}
+            onFindPatterns={canAsk && !isSpansView ? onInsights : undefined}
+            onAddEvaluators={onAddEvals}
+          />
         </>
       )}
     </Stack>

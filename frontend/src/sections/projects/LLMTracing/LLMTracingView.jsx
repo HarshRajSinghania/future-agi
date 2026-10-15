@@ -912,13 +912,19 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
   const [_urlRowIndex, setUrlRowIndex, _removeUrlRowIndex] =
     useUrlState("rowIndex");
 
-  const { resetStates, viewMode, setViewMode, setTraceDetailDrawerOpen } =
-    useLLMTracingStoreShallow((state) => ({
-      resetStates: state.resetStates,
-      viewMode: state.viewMode,
-      setViewMode: state.setViewMode,
-      setTraceDetailDrawerOpen: state.setTraceDetailDrawerOpen,
-    }));
+  const {
+    resetStates,
+    viewMode,
+    setViewMode,
+    setTraceDetailDrawerOpen,
+    setSpanDetailDrawerOpen,
+  } = useLLMTracingStoreShallow((state) => ({
+    resetStates: state.resetStates,
+    viewMode: state.viewMode,
+    setViewMode: state.setViewMode,
+    setTraceDetailDrawerOpen: state.setTraceDetailDrawerOpen,
+    setSpanDetailDrawerOpen: state.setSpanDetailDrawerOpen,
+  }));
   const {
     selectedTraces,
     allTracesSelected,
@@ -2931,6 +2937,27 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
       dateLabel,
     ],
   );
+  // The Spans tab asks about exactly the spans its grid shows (SpanGrid sends
+  // the same list, its date window included).
+  const spanViewScope = useMemo(
+    () => ({
+      filters: toBackendFilters([
+        ...primarySpanValidatedFilters,
+        ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
+        ...(extraFilters || []),
+        ...(metricFilters || []),
+      ]),
+      label: dateLabel,
+    }),
+    [
+      primarySpanValidatedFilters,
+      hasEvalFilter,
+      extraFilters,
+      metricFilters,
+      dateLabel,
+    ],
+  );
+  const instantEvalUnit = selectedTab === "spans" ? "spans" : "traces";
   const instantEval = useInstantEvalLauncher({
     enabled: Boolean(observeId),
     navigate,
@@ -2964,12 +2991,26 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
     },
     [projectSource, setTraceDetailDrawerOpen, navigate, observeId],
   );
+  // A span answer opens the trace at that span, as a Spans grid row click.
+  const openInstantEvalSpan = useCallback(
+    (row) => {
+      if (!row.traceId) return;
+      setSpanDetailDrawerOpen({
+        trace_id: row.traceId,
+        span_id: row.id,
+        ...(observeId ? { project_id: observeId } : {}),
+        fromSpansView: true,
+      });
+    },
+    [observeId, setSpanDetailDrawerOpen],
+  );
   // A finished run's answers become an eval column on the grid.
   const refreshAfterInstantEval = useCallback(() => {
-    if (projectSource === PROJECT_SOURCE.SIMULATOR)
+    if (instantEvalUnit === "spans") refreshGridRef(primarySpanGridRef);
+    else if (projectSource === PROJECT_SOURCE.SIMULATOR)
       primaryCallLogsGridRef.current?.refresh?.();
     else refreshGridRef(primaryTraceGridRef);
-  }, [projectSource]);
+  }, [instantEvalUnit, projectSource]);
 
   const handleResetView = useCallback(() => {
     setViewMode(DEFAULT_DISPLAY_CONFIG.viewMode);
@@ -4518,13 +4559,9 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
                 setExcludeSimulationCalls(excludeSimulationCalls ? null : true)
               }
               onAddEvals={handleAddEvals}
-              // Instant eval and Insights are per project and per trace: not in
-              // the cross-project user view, and not from the Spans tab.
-              onInstantEval={
-                observeId && selectedTab !== "spans"
-                  ? instantEval.openDrawer
-                  : undefined
-              }
+              // Instant eval and Insights are per project: not in the
+              // cross-project user view. Insights doesn't read spans.
+              onInstantEval={observeId ? instantEval.openDrawer : undefined}
               onInsights={
                 observeId && selectedTab !== "spans" ? openInsights : undefined
               }
@@ -5400,14 +5437,19 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
       {observeId && instantEval.mounted && (
         <Suspense fallback={null}>
           <InstantEvalDrawer
-            open={instantEval.open && selectedTab !== "spans"}
+            key={instantEvalUnit}
+            open={instantEval.open}
             onClose={instantEval.close}
             projectId={observeId}
-            unit="traces"
-            scope={traceViewScope}
+            unit={instantEvalUnit}
+            scope={instantEvalUnit === "spans" ? spanViewScope : traceViewScope}
             seed={instantEval.seed}
             seedKey={instantEval.seedKey}
-            onOpenRow={openInstantEvalTrace}
+            onOpenRow={
+              instantEvalUnit === "spans"
+                ? openInstantEvalSpan
+                : openInstantEvalTrace
+            }
             onShowInGrid={showInstantEvalAnswers}
             onRunFinished={refreshAfterInstantEval}
           />

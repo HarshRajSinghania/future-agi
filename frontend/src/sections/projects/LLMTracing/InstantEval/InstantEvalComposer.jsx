@@ -14,8 +14,8 @@ import QuestionEditor from "./QuestionEditor";
 import {
   ANSWER_TYPES,
   MAX_QUESTIONS,
-  READS,
-  TRACE_READS,
+  readOption,
+  readsFor,
   validateInstantEval,
 } from "./instantEvalPayloads";
 import {
@@ -24,7 +24,6 @@ import {
   defaultReads,
   draftsFromQuestions,
   emptyDraft,
-  formatWhen,
   limitHelp,
   limitOptionLabel,
   runButtonLabel,
@@ -53,6 +52,21 @@ const EXAMPLES = {
         "Account",
         "Other",
       ],
+    },
+  ],
+  spans: [
+    {
+      question: "Did the model follow the system prompt?",
+      answerType: ANSWER_TYPES.YES_NO,
+    },
+    {
+      question: "Does the output make a claim the input doesn't support?",
+      answerType: ANSWER_TYPES.YES_NO,
+    },
+    {
+      question: "What kind of step is this?",
+      answerType: ANSWER_TYPES.CATEGORY,
+      categories: ["Planning", "Tool call", "Retrieval", "Answer", "Other"],
     },
   ],
   sessions: [
@@ -91,14 +105,6 @@ const EXAMPLES = {
       ],
     },
   ],
-};
-
-const STATUS_DOT = {
-  completed: "success.main",
-  running: "info.main",
-  pending: "info.main",
-  failed: "error.main",
-  paused: "warning.main",
 };
 
 const asDraft = (entry) => draftsFromQuestions([entry])[0];
@@ -173,8 +179,6 @@ export default function InstantEvalComposer({
   onRun,
   disabled,
   savedQuestions,
-  pastRuns,
-  onViewRun,
 }) {
   const meta = unitMeta(unit);
   const [questions, setQuestions] = useState(() =>
@@ -219,7 +223,7 @@ export default function InstantEvalComposer({
 
   const showExamples = !questions.some((question) => question.question.trim());
   const recent = (savedQuestions || []).slice(0, 6);
-  const runs = (pastRuns || []).slice(0, 5);
+  const readChoices = readsFor(unit);
 
   return (
     <Stack spacing={2.5}>
@@ -302,37 +306,43 @@ export default function InstantEvalComposer({
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
           gap: 1.5,
+          alignItems: "start",
         }}
       >
-        {unit === "traces" ? (
-          <TextField
-            select
-            size="small"
-            label="Jev reads"
-            value={reads}
-            onChange={(event) => setReads(event.target.value)}
-          >
-            {TRACE_READS.map((value) => (
-              <MenuItem key={value} value={value}>
-                {READS[value].label}
-              </MenuItem>
-            ))}
-          </TextField>
-        ) : (
-          <TextField
-            size="small"
-            label="Jev reads"
-            value="The whole conversation"
-            InputProps={{ readOnly: true }}
-            helperText="Every turn of each session, in order"
-          />
-        )}
+        <TextField
+          select
+          size="small"
+          label="Jev reads"
+          value={reads}
+          onChange={(event) => setReads(event.target.value)}
+          helperText={readOption(unit, reads).hint}
+          SelectProps={{
+            renderValue: (value) => readOption(unit, value).label,
+          }}
+        >
+          {readChoices.map((value) => (
+            <MenuItem key={value} value={value} sx={{ display: "block" }}>
+              <Typography variant="body2">
+                {readOption(unit, value).label}
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="p"
+                sx={{ whiteSpace: "normal" }}
+              >
+                {readOption(unit, value).hint}
+              </Typography>
+            </MenuItem>
+          ))}
+        </TextField>
         <TextField
           select
           size="small"
           label={unit === "users" ? "Users" : meta.title}
           value={limit}
           onChange={(event) => setLimit(Number(event.target.value))}
+          helperText={limitHelp({ unit, limit })}
         >
           {LIMIT_OPTIONS[unit].map((value) => (
             <MenuItem key={value} value={value}>
@@ -341,9 +351,6 @@ export default function InstantEvalComposer({
           ))}
         </TextField>
       </Box>
-      <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
-        {limitHelp({ unit, limit })}
-      </Typography>
 
       <Box>
         <Button
@@ -381,82 +388,17 @@ export default function InstantEvalComposer({
                 icon={<Iconify icon="mdi:history" width={14} />}
                 label={item.question}
                 title={item.question}
-                onClick={() =>
+                onClick={() => {
                   addQuestion({
                     question: item.question,
                     answerType: item.answerType,
                     categories: item.labels,
                     definitions: item.definitions,
-                  })
-                }
+                  });
+                  if (readChoices.includes(item.reads)) setReads(item.reads);
+                }}
                 sx={{ maxWidth: "100%" }}
               />
-            ))}
-          </Stack>
-        </Box>
-      )}
-
-      {runs.length > 0 && (
-        <Box>
-          <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
-            Past runs
-          </Typography>
-          <Stack
-            sx={{
-              border: "1px solid",
-              borderColor: "divider",
-              borderRadius: 1,
-            }}
-          >
-            {runs.map((runItem) => (
-              <Stack
-                key={runItem.taskId}
-                direction="row"
-                alignItems="center"
-                spacing={1}
-                role="button"
-                tabIndex={0}
-                onClick={() => onViewRun(runItem)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") onViewRun(runItem);
-                }}
-                sx={{
-                  px: 1.25,
-                  py: 0.875,
-                  cursor: "pointer",
-                  borderBottom: "1px solid",
-                  borderColor: "divider",
-                  "&:last-of-type": { borderBottom: "none" },
-                  "&:hover": { bgcolor: "action.hover" },
-                }}
-              >
-                <Box
-                  sx={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: "50%",
-                    flexShrink: 0,
-                    bgcolor: STATUS_DOT[runItem.status] || "text.disabled",
-                  }}
-                />
-                <Typography
-                  variant="body2"
-                  noWrap
-                  sx={{ flex: 1, minWidth: 0 }}
-                >
-                  {runItem.items[0]?.question}
-                  {runItem.items.length > 1
-                    ? ` (+${runItem.items.length - 1} more)`
-                    : ""}
-                </Typography>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ flexShrink: 0 }}
-                >
-                  {formatWhen(runItem.createdAt)}
-                </Typography>
-              </Stack>
             ))}
           </Stack>
         </Box>
@@ -466,7 +408,7 @@ export default function InstantEvalComposer({
 }
 
 InstantEvalComposer.propTypes = {
-  unit: PropTypes.oneOf(["traces", "sessions", "users"]).isRequired,
+  unit: PropTypes.oneOf(["traces", "spans", "sessions", "users"]).isRequired,
   initialQuestions: PropTypes.array,
   scopeText: PropTypes.string,
   population: PropTypes.shape({
@@ -480,6 +422,4 @@ InstantEvalComposer.propTypes = {
   onRun: PropTypes.func.isRequired,
   disabled: PropTypes.bool,
   savedQuestions: PropTypes.array,
-  pastRuns: PropTypes.array,
-  onViewRun: PropTypes.func.isRequired,
 };
