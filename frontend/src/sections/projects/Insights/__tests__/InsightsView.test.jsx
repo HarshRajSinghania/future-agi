@@ -292,6 +292,21 @@ describe("InsightsView", () => {
     expect(screen.getByText("Fix")).toBeInTheDocument();
   });
 
+  it("folds a finding's fifth and later citations into +N", async () => {
+    mocks.omega = true;
+    renderAt(`?report=${CONFIG_ID}`);
+    // Finding 5 of the Omega run cites #16–#20.
+    const more = await screen.findByRole("button", { name: "1 more example" });
+    expect(more).toHaveTextContent("+1");
+    expect(
+      screen.queryByRole("button", { name: "Open example 20" }),
+    ).toBeNull();
+    fireEvent.mouseOver(more);
+    expect(
+      await screen.findByRole("button", { name: "Open example 20" }),
+    ).toBeInTheDocument();
+  });
+
   it("previews a citation on hover with its title and quote", async () => {
     mocks.enriched = true;
     renderAt(`?report=${CONFIG_ID}`);
@@ -459,9 +474,10 @@ describe("InsightsView", () => {
       getItem: (key) => store.get(key) ?? null,
       setItem: (key, value) => store.set(key, value),
     });
+    const answers = [];
     mocks.post.mockImplementation((url) =>
       url === `/tracer/insights/runs/${RUN_ID}/ask/`
-        ? Promise.resolve({ data: askFixture })
+        ? new Promise((resolve) => answers.push(resolve))
         : Promise.reject(new Error(`unexpected ${url}`)),
     );
     try {
@@ -471,11 +487,24 @@ describe("InsightsView", () => {
           name: "Which users are hit hardest?",
         }),
       );
+      // While it answers: what it reads, and the composer stays usable.
       expect(
-        await screen.findByText(
+        await screen.findByText("Reading 72 conversations…"),
+      ).toBeInTheDocument();
+      const input = screen.getByRole("textbox", {
+        name: "Ask about this report",
+      });
+      fireEvent.change(input, { target: { value: "Who came back?" } });
+      expect(screen.getByRole("button", { name: "Ask" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+      await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
+      expect(screen.getAllByText("Reading 72 conversations…")).toHaveLength(2);
+      answers.forEach((resolve) => resolve({ data: askFixture }));
+      expect(
+        await screen.findAllByText(
           /Customers who ask for a human are hit hardest/,
         ),
-      ).toBeInTheDocument();
+      ).toHaveLength(2);
       const [url, body] = mocks.post.mock.calls[0];
       expect(url).toBe(`/tracer/insights/runs/${RUN_ID}/ask/`);
       expect(body).toEqual({
@@ -484,13 +513,14 @@ describe("InsightsView", () => {
       });
       // The cited unit keeps its report number.
       expect(
-        screen.getAllByRole("button", { name: "Open example 11" }).length,
+        (await screen.findAllByRole("button", { name: "Open example 11" }))
+          .length,
       ).toBeGreaterThan(1);
       expect(
-        screen.getByRole("button", {
+        screen.getAllByRole("button", {
           name: "Which of these users came back later?",
-        }),
-      ).toBeInTheDocument();
+        }).length,
+      ).toBe(2);
       expect(store.get(`insights-ask:${RUN_ID}`)).toContain(
         "Which users are hit hardest?",
       );

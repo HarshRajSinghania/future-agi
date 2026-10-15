@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  citationBudget,
   highlightTitle,
   normalizeFindings,
   refsInText,
@@ -183,5 +184,43 @@ describe("highlightTitle", () => {
       "The customer repeatedly asked to speak to a human and rejected the bot's replies, then…",
     );
     expect(highlightTitle({ title: "x".repeat(120) })).toHaveLength(90);
+  });
+});
+
+describe("citationBudget", () => {
+  it("keeps the first four citations in reading order and folds the rest", () => {
+    const finding = {
+      headline: "Policy fails (#12, #13)",
+      detail: "Refunds after threats (#14, #15, #16) and codes #17.",
+      trailingRefs: [18],
+      action: "Enforce it (#12).",
+    };
+    expect(citationBudget(finding)).toEqual({
+      hidden: new Set([16, 17, 18]),
+      more: [16, 17, 18],
+      at: "detail",
+    });
+  });
+
+  it("folds trailing refs after the text and ignores unknown numbers", () => {
+    const finding = {
+      headline: "Order #12345 lost (#1)",
+      detail: "Seen in #2 and #3.",
+      trailingRefs: [4, 5],
+      action: "",
+    };
+    const known = (n) => n < 100;
+    expect(citationBudget(finding, known)).toEqual({
+      hidden: new Set([5]),
+      more: [5],
+      at: "trailing",
+    });
+  });
+
+  it("hides nothing at four or fewer", () => {
+    expect(
+      citationBudget({ headline: "#1 #2", detail: "#3", trailingRefs: [4] })
+        .more,
+    ).toEqual([]);
   });
 });

@@ -87,7 +87,7 @@ Chips.propTypes = {
 
 // An answer in progress: what it is reading, for how long, and that the
 // composer stays free for the next question.
-function Thinking({ startedAt, reading }) {
+function Thinking({ startedAt, reading, hint }) {
   const seconds = useElapsedSeconds(startedAt, true);
   return (
     <Stack spacing={0.75} sx={{ maxWidth: 520 }}>
@@ -108,10 +108,12 @@ function Thinking({ startedAt, reading }) {
         aria-label="Answering"
         sx={{ height: 2, borderRadius: 1 }}
       />
-      <Typography variant="caption" color="text.secondary">
-        Answers take 15–60 seconds and are checked against the report. You can
-        ask another question meanwhile.
-      </Typography>
+      {hint && (
+        <Typography variant="caption" color="text.secondary">
+          Answers take 15–60 seconds and are checked against the report. You can
+          ask another question meanwhile.
+        </Typography>
+      )}
     </Stack>
   );
 }
@@ -119,9 +121,10 @@ function Thinking({ startedAt, reading }) {
 Thinking.propTypes = {
   startedAt: PropTypes.number,
   reading: PropTypes.string.isRequired,
+  hint: PropTypes.bool,
 };
 
-function Answer({ turn, refs, reading, onFollowUp, onRetry }) {
+function Answer({ turn, refs, reading, hint, onFollowUp, onRetry }) {
   const report = useReport();
   return (
     <Box component="li" data-turn sx={{ py: 1.5 }}>
@@ -137,7 +140,7 @@ function Answer({ turn, refs, reading, onFollowUp, onRetry }) {
       </Stack>
       <Box sx={{ pl: 3.25, mt: 0.75 }}>
         {turn.status === "busy" ? (
-          <Thinking startedAt={turn.startedAt} reading={reading} />
+          <Thinking startedAt={turn.startedAt} reading={reading} hint={hint} />
         ) : turn.status === "error" ? (
           <Stack direction="row" spacing={1} alignItems="center">
             <Typography
@@ -239,6 +242,7 @@ Answer.propTypes = {
   turn: PropTypes.object.isRequired,
   refs: PropTypes.instanceOf(Map).isRequired,
   reading: PropTypes.string.isRequired,
+  hint: PropTypes.bool,
   onFollowUp: PropTypes.func.isRequired,
   onRetry: PropTypes.func.isRequired,
 };
@@ -257,7 +261,9 @@ export default function AskPanel({ run, lens }) {
   const [text, setText] = useState("");
   const controllers = useRef(new Map());
   const threadList = useRef(null);
-  const busy = thread.filter((turn) => turn.status === "busy").length;
+  const busyTurns = thread.filter((turn) => turn.status === "busy");
+  const busy = busyTurns.length;
+  const lastBusyId = busyTurns[busy - 1]?.id;
   const analysed = run.result?.totals?.count ?? run.analysed_count ?? 0;
   const noun =
     run.unit === "sessions"
@@ -431,6 +437,8 @@ export default function AskPanel({ run, lens }) {
                 turn={turn}
                 refs={refs}
                 reading={reading}
+                // The timing note once, on the newest answer in progress.
+                hint={turn.id === lastBusyId}
                 onFollowUp={(question) => ask(question)}
                 onRetry={() => ask(turn.question, turn.id)}
               />
