@@ -187,6 +187,24 @@ class TestAgentVersionRuntime:
         first.save()
         assert self._runtime(third).preflight_status == "pending"
 
+    def test_a_soft_deleted_row_does_not_block_the_same_hash(self, agent_version):
+        definition = agent_version.agent_definition
+        second = definition.create_version(description="", commit_message="v2")
+        first = self._runtime(agent_version)
+        first.deleted = True
+        first.save()
+
+        assert self._runtime(second).deleted is False
+
+    def test_legacy_rows_may_share_a_hash(self, agent_version):
+        definition = agent_version.agent_definition
+        second = definition.create_version(description="", commit_message="v2")
+        live = definition.create_version(description="", commit_message="v3")
+        self._runtime(agent_version, preflight_status="legacy")
+        self._runtime(second, preflight_status="legacy")
+
+        assert self._runtime(live).preflight_status == "pending"
+
 
 def test_model_checks_pass_for_the_versioning_tables():
     from django.apps import apps

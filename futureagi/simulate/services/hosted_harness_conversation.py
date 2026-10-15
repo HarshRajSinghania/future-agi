@@ -1253,7 +1253,28 @@ def promote_conversation_checkpoint(
                 environment.save(update_fields=["payload", "updated_at"])
                 return environment
 
-            store_authoring_archive(environment, archive, advance_lifecycle=False)
+            if environment.environment_version_id is not None:
+                from simulate.services.harness_versioning.versions import (
+                    record_authoring,
+                )
+                from simulate.services.hosted_harness_gateway import _authored_payload
+
+                # The versions are the save: they move the archive pointer, and a
+                # failure rolls this promote back instead of leaving them behind.
+                recorded = record_authoring(
+                    environment,
+                    archive,
+                    origin="chat",
+                    prepare_payload=lambda payload: _authored_payload(payload, archive),
+                )
+                if recorded is None:
+                    raise HostedHarnessError(
+                        "versioning_failed",
+                        "the saved workspace could not be recorded as a version",
+                        status_code=409,
+                    )
+            else:
+                store_authoring_archive(environment, archive, advance_lifecycle=False)
             metadata = dict(environment.payload["metadata"])
             metadata["conversation_checkpoints"] = checkpoints
             metadata.pop("conversation_checkpoint", None)
@@ -1285,12 +1306,6 @@ def promote_conversation_checkpoint(
                 output.save(update_fields=["data", "summary", "updated_at"])
             index_scenarios(environment, suite, prune=True)
             _bind_added_scenarios(environment)
-            if environment.environment_version_id is not None:
-                from simulate.services.harness_versioning.versions import (
-                    record_authoring_quietly,
-                )
-
-                record_authoring_quietly(environment, archive, origin="chat")
     if stale_revision is not None:
         _rebase_conversation_workspace(
             conversation,

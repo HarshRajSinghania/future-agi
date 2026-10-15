@@ -1103,8 +1103,9 @@ HARNESS_PARALLELISM_ENABLED = os.getenv("HARNESS_PARALLELISM_ENABLED", "").lower
     "yes",
 )
 HARNESS_MAX_WORLD_SLOTS = int(os.getenv("HARNESS_MAX_WORLD_SLOTS", "8"))
-# Environment versioning: gates new version writes and their UI. Readers decide by
-# data (pins present or not), never by this flag.
+# Environment versioning: decides whether an environment without versions starts getting
+# them, and gates their UI. An environment that has versions always records new ones, and
+# readers decide by data (pins present or not), never by this flag.
 HARNESS_VERSIONING_ENABLED = os.getenv("HARNESS_VERSIONING_ENABLED", "").lower() in (
     "1",
     "true",

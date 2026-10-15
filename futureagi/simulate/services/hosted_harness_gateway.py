@@ -17,7 +17,7 @@ import uuid
 import zlib
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager, nullcontext
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -1910,9 +1910,10 @@ class HostedHarnessGateway:
         simulator_env, simulator_vertex_credentials = _platform_simulator_material()
         guest_pin_policy_released = _add_scoped_guest_pin_policy(simulator_env, job)
         # A chat-driven "add N scenarios" request replays the frozen world but re-runs
-        # scenario-gen (extend) against it. The marker persists across infra retries and is
-        # cleared only once the extended authoring is stored (store_authoring_archive), so a
-        # mid-flight retry re-extends to the same total instead of replaying the old set.
+        # scenario-gen (extend) against it. The marker persists across infra retries and
+        # is cleared only once the extended authoring is stored
+        # (freeze_authoring_archive), so a mid-flight retry re-extends to the same total
+        # instead of replaying the old set.
         extend_command = (
             _extend_command_for(job, payload, include_job=guest_pin_policy_released)
             if authoring_archive is not None
@@ -3147,9 +3148,15 @@ class HostedHarnessGateway:
         # author a different suite for an already-registered RunTest.
         # A chat "add scenarios" extend re-authors the SAME RunTest up to N+delta, so it must
         # re-freeze even though a key already exists — gated on its one-shot marker.
-        # store_authoring_archive clears that marker in the same save.
-        if authoring_complete and (
-            not metadata.get("authoring_object_key") or metadata.get("scenario_extend")
+        # freeze_authoring_archive clears that marker in the same save.
+        attempt_number = int(getattr(attempt, "attempt_number", None) or 1)
+        if (
+            authoring_complete
+            and (
+                not metadata.get("authoring_object_key")
+                or metadata.get("scenario_extend")
+            )
+            and _freeze_failures(metadata, attempt_number) < FREEZE_FAILURE_LIMIT
         ):
             try:
                 packed = sandbox.process.exec(
@@ -3161,17 +3168,12 @@ class HostedHarnessGateway:
                 if packed.exit_code:
                     raise RuntimeError(str(packed.result or "authoring pack failed"))
                 body = sandbox.fs.download_file("/tmp/authoring-rerun.tar.gz", 300)
-                extending = bool(metadata.get("scenario_extend"))
-                store_authoring_archive(job, body, advance_lifecycle=False)
-                from simulate.services.harness_versioning.versions import (
-                    record_authoring_quietly,
+                freeze_authoring_archive(
+                    job,
+                    body,
+                    extending=bool(metadata.get("scenario_extend")),
+                    proved_since=getattr(attempt, "created_at", None),
                 )
-
-                # An extend is versioned only once the first build is.
-                if not extending or job.environment_version_id is not None:
-                    record_authoring_quietly(
-                        job, body, origin="extend" if extending else "authoring"
-                    )
                 job.refresh_from_db()
             except Exception:  # noqa: BLE001 - retry on the next poll; do not abort calls
                 logger.exception(
@@ -3179,6 +3181,8 @@ class HostedHarnessGateway:
                     job.id,
                     attempt.id,
                 )
+                _note_freeze_failure(job, attempt_number)
+                job.refresh_from_db()
         outputs = authoring_stage_outputs(
             contract,
             environment,
@@ -3232,7 +3236,7 @@ class HostedHarnessGateway:
         }:
             job.current_stage = stage
         # Authoring archives use per-scenario files rather than a top-level
-        # scenarios.json.  ``store_authoring_archive`` has already materialized
+        # scenarios.json.  ``freeze_authoring_archive`` has already materialized
         # that snapshot, so a later heartbeat must enrich the visible stages
         # instead of deleting stages whose source file is not present here.
         previous_stage = job.current_stage
@@ -4954,20 +4958,40 @@ def _push_scenarios_to_sandbox(sandbox: Any, suite: list[dict]) -> None:
 class AuthoringArchiveKept(Exception):
     """The edited suite could not be written into the archive without breaking a run."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "authoring_archive_kept",
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
 
-def rewrite_authoring_scenarios(job: HostedHarnessJob, suite: list[dict]) -> str | None:
-    """Write an edited suite back into the sealed archive a rerun replays."""
+
+SCENARIO_EDIT_ON_RUN = "scenario_edit_on_run"
+
+
+def rewrite_authoring_scenarios(
+    job: HostedHarnessJob, suite: list[dict], *, user: Any = None
+) -> str | None:
+    """Write an edited suite back into the environment's authoring archive."""
     from simulate.services.harness_versioning.versions import (
-        environment_head,
         is_versioned,
         record_authoring,
     )
 
+    if job.environment_id is not None:
+        # A run's suite is a copy taken when it started; saving it would roll back the
+        # environment's newer scenarios.
+        raise AuthoringArchiveKept(
+            "Edit scenarios from the environment",
+            code=SCENARIO_EDIT_ON_RUN,
+            status_code=409,
+        )
     versioned = is_versioned(job)
-    # A versioned edit always starts from the environment's current default, never from
-    # the pair a run pinned, so it cannot roll the environment back.
-    source = environment_head(job) if versioned else job
-    metadata = (source.payload or {}).get("metadata") or {}
+    metadata = (job.payload or {}).get("metadata") or {}
     object_key = str(metadata.get("authoring_object_key") or "").strip()
     if not object_key:
         return None
@@ -4995,17 +5019,21 @@ def rewrite_authoring_scenarios(job: HostedHarnessJob, suite: list[dict]) -> str
         # A versioned archive is never overwritten: the edit becomes the next suite version.
         try:
             recorded = record_authoring(
-                source, rewritten, origin="manual", expected_pair_key=object_key
+                job,
+                rewritten,
+                origin="manual",
+                user=user,
+                expected_pair_key=object_key,
             )
         except HostedHarnessError as exc:
-            raise AuthoringArchiveKept(exc.message) from exc
+            raise AuthoringArchiveKept(
+                exc.message, code=exc.code, status_code=exc.status_code
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - an edit that cannot be saved changes nothing
             logger.exception("could not version an amended suite job=%s", job.id)
             raise AuthoringArchiveKept("the change could not be saved") from exc
         if recorded is None:
-            return None
-        if job.environment_id is not None:
-            _repoint_run(job, source)
+            raise AuthoringArchiveKept("the change could not be saved")
         return recorded.pair_key
     client.put_object(
         bucket_name=UPLOAD_BUCKET_NAME,
@@ -5022,20 +5050,6 @@ def rewrite_authoring_scenarios(job: HostedHarnessJob, suite: list[dict]) -> str
     job.content_updated_at = timezone.now()
     job.save(update_fields=["payload", "content_updated_at", "updated_at"])
     return object_key
-
-
-def _repoint_run(run: HostedHarnessJob, environment: HostedHarnessJob) -> None:
-    """An amended run replays the environment's new pair, as it did when both shared one."""
-    environment.refresh_from_db()
-    current = (environment.payload or {}).get("metadata") or {}
-    payload = dict(run.payload or {})
-    metadata = dict(payload.get("metadata") or {})
-    metadata["authoring_object_key"] = current.get("authoring_object_key")
-    metadata["authoring_revision"] = current.get("authoring_revision")
-    payload["metadata"] = metadata
-    run.payload = payload
-    run.content_updated_at = timezone.now()
-    run.save(update_fields=["payload", "content_updated_at", "updated_at"])
 
 
 def rewrite_conversation_scenarios(job: HostedHarnessJob, suite: list[dict]) -> int:
@@ -5214,6 +5228,109 @@ def _rewritten_authoring_archive(body: bytes, suite: list[dict]) -> bytes | None
     return out.getvalue()
 
 
+def _authored_payload(payload: dict[str, Any], body: bytes) -> dict[str, Any]:
+    """The payload changes every freshly stored authoring archive brings."""
+    payload = resolve_authored_connector(dict(payload), body)
+    metadata = dict(payload.get("metadata") or {})
+    metadata["authoring_mode"] = "fresh"
+    # A chat "add scenarios" run consumes its one-shot extend marker here, once the
+    # extended authoring is durably stored, so a later plain rerun replays this set
+    # without re-extending.
+    metadata.pop("scenario_extend", None)
+    payload["metadata"] = metadata
+    return payload
+
+
+def freeze_authoring_archive(
+    job: HostedHarnessJob,
+    body: bytes,
+    *,
+    extending: bool,
+    proved_since: datetime | None = None,
+) -> None:
+    """Store a build's or an extend's authoring archive.
+
+    An environment that already has versions is recorded as its next versions, which
+    move the archive pointer in the same save; if recording fails nothing moves and the
+    error reaches the caller, so the freeze is tried again. Otherwise the archive is
+    stored as one object, and a first build also records versions when versioning is on.
+    """
+    from simulate.services.harness_versioning.versions import (
+        is_versioned,
+        record_authoring,
+        record_authoring_quietly,
+    )
+
+    origin = "extend" if extending else "authoring"
+    # Read fresh: a backfill can version the environment while the archive downloads.
+    if job.environment_id is None and is_versioned(job):
+        record_authoring(
+            job,
+            body,
+            origin=origin,
+            proved_since=proved_since,
+            prepare_payload=lambda payload: _authored_payload(payload, body),
+            consumes_extend_marker=extending,
+        )
+        return
+    store_authoring_archive(job, body, advance_lifecycle=False)
+    if job.environment_id is None and is_versioned(job):
+        # A backfill versioned the environment while the legacy store ran; keep its
+        # versions in step with the archive just stored.
+        record_authoring(job, body, origin=origin, proved_since=proved_since)
+    elif not extending:
+        # An extend is versioned only once the first build is.
+        record_authoring_quietly(job, body, origin=origin, proved_since=proved_since)
+
+
+# A versioned freeze that keeps failing for one attempt stops being retried after this.
+FREEZE_FAILURE_LIMIT = 5
+
+
+def _freeze_failures(metadata: dict[str, Any], attempt_number: int) -> int:
+    failures = metadata.get("versioning_freeze_failures") or {}
+    try:
+        return int(failures.get(str(attempt_number)) or 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def _note_freeze_failure(job: HostedHarnessJob, attempt_number: int) -> None:
+    """Count a failed freeze of an environment with versions, per attempt."""
+    from simulate.services.harness_versioning.versions import is_versioned
+
+    if job.environment_id is not None or not is_versioned(job):
+        return
+    try:
+        with transaction.atomic():
+            locked = HostedHarnessJob.no_workspace_objects.select_for_update().get(
+                id=job.id
+            )
+            payload = dict(locked.payload or {})
+            metadata = dict(payload.get("metadata") or {})
+            failures = dict(metadata.get("versioning_freeze_failures") or {})
+            count = _freeze_failures(metadata, attempt_number) + 1
+            failures[str(attempt_number)] = count
+            metadata["versioning_freeze_failures"] = failures
+            if count >= FREEZE_FAILURE_LIMIT:
+                # The extend marker stays, so the job keeps saying it never finished.
+                metadata["versioning_error"] = {
+                    "code": "freeze_failed",
+                    "attempt": attempt_number,
+                }
+                logger.error(
+                    "harness versioned freeze gave up job=%s attempt=%s failures=%s",
+                    job.id,
+                    attempt_number,
+                    count,
+                )
+            payload["metadata"] = metadata
+            locked.payload = payload
+            locked.save(update_fields=["payload", "updated_at"])
+    except Exception:  # noqa: BLE001 - counting must never stop a run
+        logger.exception("could not count a freeze failure job=%s", job.id)
+
+
 def store_authoring_archive(
     job: HostedHarnessJob, body: bytes, *, advance_lifecycle: bool = True
 ) -> str:
@@ -5229,14 +5346,10 @@ def store_authoring_archive(
         length=len(body),
         content_type="application/gzip",
     )
-    payload = resolve_authored_connector(dict(job.payload or {}), body)
+    payload = _authored_payload(dict(job.payload or {}), body)
     metadata = dict(payload.get("metadata") or {})
     metadata["authoring_object_key"] = object_key
     metadata["authoring_revision"] = authoring_content_digest(body)
-    metadata["authoring_mode"] = "fresh"
-    # A chat "add scenarios" run consumes its one-shot extend marker here, once the extended
-    # authoring is durably stored, so a later plain rerun replays this set without re-extending.
-    metadata.pop("scenario_extend", None)
     payload["metadata"] = metadata
     job.payload = payload
     job.content_updated_at = timezone.now()

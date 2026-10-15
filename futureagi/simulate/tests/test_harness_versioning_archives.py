@@ -28,7 +28,7 @@ AUTHORING = {
     "runtime-validation.json": b'{"status": "passed"}',
     "cost.json": b'{"usd": 1}',
     ".futureagi-conversation.json": b"{}",
-    ".claude/sessions/1.key": b"private",
+    ".agent-cache/sessions/1.key": b"private",
     "handlers/__pycache__/lookup.cpython-311.pyc": b"\x00",
 }
 
@@ -45,6 +45,24 @@ def _tar(entries, *, kind=None):
             else:
                 member.size = len(data)
                 archive.addfile(member, io.BytesIO(data))
+    return out.getvalue()
+
+
+def _tar_with_folders(folders, *, files_per_folder):
+    """A tar with a directory entry per folder, as ``tar`` writes a scenario tree."""
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as archive:
+        root = tarfile.TarInfo("./")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
+        for folder in range(folders):
+            directory = tarfile.TarInfo(f"./scenarios/s{folder}")
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
+            for index in range(files_per_folder):
+                member = tarfile.TarInfo(f"./scenarios/s{folder}/f{index}.py")
+                member.size = 1
+                archive.addfile(member, io.BytesIO(b"x"))
     return out.getvalue()
 
 
@@ -70,13 +88,42 @@ class TestReadArchive:
 
         assert error.value.code == "archive_member_invalid"
 
-    def test_refuses_too_many_members(self, monkeypatch):
-        monkeypatch.setattr(archives, "MAX_ARCHIVE_MEMBERS", 2)
+    def test_refuses_too_many_files(self, monkeypatch):
+        monkeypatch.setattr(archives, "MAX_ARCHIVE_FILES", 2)
 
         with pytest.raises(HostedHarnessError) as error:
             archives.read_archive(_tar({"a": b"", "b": b"", "c": b""}))
 
         assert (error.value.code, error.value.status_code) == ("archive_too_large", 413)
+
+    def test_refuses_too_many_entries(self, monkeypatch):
+        monkeypatch.setattr(archives, "MAX_ARCHIVE_ENTRIES", 2)
+
+        with pytest.raises(HostedHarnessError) as error:
+            archives.read_archive(_tar_with_folders(3, files_per_folder=0))
+
+        assert error.value.code == "archive_too_large"
+
+    def test_directories_do_not_count_as_files(self, monkeypatch):
+        monkeypatch.setattr(archives, "MAX_ARCHIVE_FILES", 4)
+
+        files = archives.read_archive(_tar_with_folders(4, files_per_folder=1))
+
+        assert len(files) == 4
+
+    def test_a_suite_past_ten_thousand_files_is_read(self):
+        body = _tar_with_folders(500, files_per_folder=22)
+
+        files = archives.read_archive(body)
+
+        assert len(files) == 11_000
+
+    def test_the_caps_cover_the_largest_suite_a_job_allows(self):
+        from simulate.models.hosted_harness import MAX_SCENARIOS_PER_JOB
+
+        # Production holds about 22 files and 50 KB per scenario.
+        assert archives.MAX_ARCHIVE_FILES >= MAX_SCENARIOS_PER_JOB * 22 * 1.5
+        assert archives.MAX_ARCHIVE_INFLATED_BYTES >= MAX_SCENARIOS_PER_JOB * 50_000 * 2
 
     def test_refuses_too_many_inflated_bytes(self, monkeypatch):
         monkeypatch.setattr(archives, "MAX_ARCHIVE_INFLATED_BYTES", 10)
@@ -91,6 +138,30 @@ class TestReadArchive:
             archives.read_archive(b"not a tarball")
 
         assert error.value.code == "archive_invalid"
+
+
+class TestRealTarCounts:
+    def test_a_real_tar_counts_only_its_files(self, tmp_path, monkeypatch):
+        import subprocess
+
+        for index in range(3):
+            folder = tmp_path / "scenarios" / f"s{index}" / "checks"
+            folder.mkdir(parents=True)
+            (folder / "c.py").write_text("x")
+        body = subprocess.run(
+            ["tar", "-czf", "-", "."],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+            env={**os.environ, "COPYFILE_DISABLE": "1"},
+        ).stdout
+        monkeypatch.setattr(archives, "MAX_ARCHIVE_FILES", 3)
+
+        files = archives.read_archive(body)
+
+        assert sorted(files) == [
+            f"scenarios/s{index}/checks/c.py" for index in range(3)
+        ]
 
 
 class TestRealTarOutput:

@@ -1866,8 +1866,9 @@ class HostedHarnessProvider:
         )
 
     def amend_scenarios(self, request, pk) -> Response:
-        """Edit a finished run's authored suite, one receipt per requested change."""
+        """Edit an environment's authored suite, one receipt per requested change."""
         from simulate.services.hosted_harness_gateway import (
+            SCENARIO_EDIT_ON_RUN,
             AuthoringArchiveKept,
             push_scenarios_into_live_sandbox,
             rewrite_authoring_scenarios,
@@ -1882,6 +1883,16 @@ class HostedHarnessProvider:
             if scoped is None:
                 return Response(
                     {"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND
+                )
+            if scoped.environment_id is not None:
+                # A run's suite is a copy taken when it started; scenarios are edited on
+                # the environment, which holds the current suite.
+                return Response(
+                    {
+                        "error": SCENARIO_EDIT_ON_RUN,
+                        "message": "Edit scenarios from the environment",
+                    },
+                    status=status.HTTP_409_CONFLICT,
                 )
             job = (
                 HostedHarnessJob.no_workspace_objects.select_for_update()
@@ -2099,9 +2110,14 @@ class HostedHarnessProvider:
             if touched:
                 # The archive a run replays changes first; if it cannot, nothing changes.
                 try:
-                    rewrite_authoring_scenarios(job, suite)
+                    rewrite_authoring_scenarios(job, suite, user=request.user)
                     rewrite_conversation_scenarios(job, suite)
                 except AuthoringArchiveKept as kept:
+                    if kept.code in {"version_conflict", SCENARIO_EDIT_ON_RUN}:
+                        return Response(
+                            {"error": kept.code, "message": str(kept)},
+                            status=kept.status_code or status.HTTP_409_CONFLICT,
+                        )
                     return Response(
                         {
                             "receipts": [

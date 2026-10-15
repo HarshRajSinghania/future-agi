@@ -89,14 +89,17 @@ def environment_diff(
     contract: Mapping[str, Any],
     previous_sub_goals: Mapping[str, str],
     sub_goals: Mapping[str, str],
-    previous_files: Mapping[str, str],
+    previous_files: Mapping[str, str] | None,
     files: Mapping[str, str],
 ) -> dict[str, Any]:
-    """Contract items, sub-goal definitions and world files, each added, removed or changed."""
+    """Contract items, sub-goal definitions and world files, each added, removed or changed.
+
+    A parent whose world files are unknown (backfilled without its archive) has no file diff.
+    """
     return {
         "contract": contract_diff(previous_contract, contract),
         "sub_goals": keyed_diff(previous_sub_goals, sub_goals),
-        "files": keyed_diff(previous_files, files),
+        "files": None if previous_files is None else keyed_diff(previous_files, files),
     }
 
 

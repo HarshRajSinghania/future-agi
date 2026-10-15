@@ -349,9 +349,12 @@ class HarnessAgentVersionRuntime(BaseModel):
     class Meta:
         db_table = "simulate_harness_agent_version_runtime"
         constraints = [
+            # Legacy rows are backfilled per version and soft-deleted rows are history;
+            # neither may block a live version with the same identity.
             models.UniqueConstraint(
                 fields=["agent_definition", "hash"],
-                condition=~Q(preflight_status__in=["failed", "discarded"]),
+                condition=Q(deleted=False)
+                & ~Q(preflight_status__in=["failed", "discarded", "legacy"]),
                 name="uniq_harness_agent_runtime_hash",
             ),
         ]

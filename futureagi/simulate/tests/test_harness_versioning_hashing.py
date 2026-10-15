@@ -5,6 +5,7 @@ import pytest
 
 from simulate.services.canonical_json import canonical_digest
 from simulate.services.harness_versioning import hashing
+from simulate.services.hosted_harness import HostedHarnessError
 
 # Golden digests computed with ALK ``authoring_runtime_validation._artifact_digest``
 # over this exact tree. ``account-status/`` sorts before ``account-status-again/``
@@ -79,6 +80,20 @@ class TestTreeDigest:
         assert hashing.tree_digest({"./a//b.txt": b"x"}) == hashing.tree_digest(
             {"a/b.txt": b"x"}
         )
+
+    def test_refuses_two_paths_that_name_the_same_file(self):
+        with pytest.raises(HostedHarnessError) as error:
+            hashing.tree_digest({"a/b.txt": b"x", "./a//b.txt": b"y"})
+
+        assert error.value.code == "archive_member_invalid"
+
+    def test_refuses_a_path_that_is_not_utf8(self):
+        name = b"bad-\xff.txt".decode("utf-8", "surrogateescape")
+
+        with pytest.raises(HostedHarnessError) as error:
+            hashing.tree_digest({name: b"x"})
+
+        assert error.value.code == "archive_member_invalid"
 
     def test_canonical_digest_matches_alk_canonical_bytes(self):
         assert canonical_digest(CANONICAL_VALUE) == ALK_CANONICAL_DIGEST
@@ -172,6 +187,46 @@ class TestEnvironmentHash:
 
         assert hashing.environment_hash(environment, provider_agent=False)
 
+    def test_a_valid_contract_hashes_as_its_canonical_value(self, environment):
+        contract = json.loads(environment["contract.json"])
+
+        assert hashing.environment_hash(
+            environment, provider_agent=True
+        ) == canonical_digest(
+            {
+                "contract": hashing.hashed_contract(contract, provider_agent=True),
+                "tree": hashing.tree_digest(
+                    environment, exclude=hashing.is_environment_unhashed
+                ),
+            }
+        )
+        assert hashing.contract_hash_raw(environment) == canonical_digest(contract)
+
+    @pytest.mark.parametrize(
+        "first, second",
+        [
+            (b"{not json", b"{also not json"),
+            (b'{"limit": NaN}', b'{"limit": Infinity}'),
+        ],
+    )
+    def test_contracts_without_a_canonical_form_still_differ(
+        self, environment, first, second
+    ):
+        hashes = []
+        for body in (first, second):
+            environment["contract.json"] = body
+            hashes.append(
+                (
+                    hashing.environment_hash(environment, provider_agent=False),
+                    hashing.contract_hash_raw(environment),
+                )
+            )
+
+        assert hashes[0][0] != hashes[1][0]
+        assert hashes[0][1] != hashes[1][1]
+        # Stored in 71-character columns.
+        assert all(len(raw) == 71 for _, raw in hashes)
+
     def test_world_ir_hash_covers_only_the_authored_seed(self, environment):
         before = hashing.world_ir_hash(environment)
         environment["generic-harness/world-ir.json"] = b"{}"
@@ -245,7 +300,7 @@ class TestSuiteHashes:
 
         assert hashing.suite_certify_hash(suite)
 
-    def test_certify_hash_ignores_overlay_fields(self, suite):
+    def test_certify_hash_ignores_overlay_values(self, suite):
         before = hashing.suite_certify_hash(suite)
         suite["scenarios/refund/scenario.json"] = _scenario(
             background_noise="street",
@@ -267,6 +322,50 @@ class TestSuiteHashes:
         ).encode()
 
         assert hashing.suite_certify_hash(suite) != before
+
+    @pytest.mark.parametrize(
+        "changed",
+        [
+            {"max_turns": 12, "persona": {"personality": "calm", "age": 40}},
+            {
+                "background_noise": "cafe",
+                "max_turns": 12,
+                "persona": {"age": 40},
+            },
+            {
+                "background_noise": "cafe",
+                "max_turns": 12,
+                "persona": {"personality": "calm", "accent": "scottish", "age": 40},
+            },
+        ],
+        ids=["field-removed", "persona-field-removed", "persona-field-added"],
+    )
+    def test_certify_hash_changes_when_an_overlay_field_comes_or_goes(
+        self, suite, changed
+    ):
+        # The overlay can change a value but not remove one the bundle was built with.
+        before = hashing.suite_certify_hash(suite)
+        suite["scenarios/refund/scenario.json"] = _scenario(**changed).encode()
+
+        assert hashing.suite_certify_hash(suite) != before
+
+    def test_certify_hash_survives_a_value_json_cannot_canonicalise(self, suite):
+        suite["scenarios/refund/scenario.json"] = b'{"name": "refund", "limit": NaN}'
+        first = hashing.suite_certify_hash(suite)
+        suite["scenarios/refund/scenario.json"] = (
+            b'{"name": "refund", "limit": Infinity}'
+        )
+
+        assert hashing.suite_certify_hash(suite) != first
+
+    def test_a_non_finite_overlay_value_is_still_just_a_value(self, suite):
+        suite["scenarios/refund/scenario.json"] = (
+            b'{"name": "refund", "max_turns": NaN}'
+        )
+        first = hashing.suite_certify_hash(suite)
+        suite["scenarios/refund/scenario.json"] = b'{"name": "refund", "max_turns": 9}'
+
+        assert hashing.suite_certify_hash(suite) == first
 
     def test_certify_hash_keeps_overlay_when_asked(self, suite):
         before = hashing.suite_certify_hash(suite, keep_overlay=True)

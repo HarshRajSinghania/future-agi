@@ -24,8 +24,12 @@ from tfc.utils.storage_client import ensure_bucket, get_storage_client
 
 Files = Mapping[str, bytes]
 
-MAX_ARCHIVE_MEMBERS = 10_000
-MAX_ARCHIVE_INFLATED_BYTES = 256 * 1024 * 1024
+# A 5,000-scenario suite holds about 110,000 files and 250 MB, so both caps leave headroom.
+MAX_ARCHIVE_FILES = 200_000
+# Directories and other non-file entries, which carry no bytes but still cost a read.
+MAX_ARCHIVE_ENTRIES = 1_000_000
+# Archives are read whole into memory and a save holds a few copies, so stay well under 1 GiB.
+MAX_ARCHIVE_INFLATED_BYTES = 512 * 1024 * 1024
 
 SUITE_ROOTS = ("scenarios/", "scenario/")
 SUITE_FILES = frozenset({"scenarios.json", "coverage.json", "proofs.json"})
@@ -76,10 +80,15 @@ def _invalid(path: str) -> HostedHarnessError:
 
 
 def _member_path(name: str) -> str:
-    """The member's relative path, refusing absolute paths and parent references.
+    """The member's relative path, refusing absolute paths, parent references and names
+    that are not UTF-8.
 
     ``tar -czf … .`` writes a ``./`` entry for the root, which reads as an empty path.
     """
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _invalid(name.encode("utf-8", "backslashreplace").decode()) from None
     raw = name.replace("\\", "/")
     if raw.startswith("/"):
         raise _invalid(raw)
@@ -96,7 +105,7 @@ def read_archive(body: bytes) -> dict[str, bytes]:
     try:
         with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
             for count, member in enumerate(archive, start=1):
-                if count > MAX_ARCHIVE_MEMBERS:
+                if count > MAX_ARCHIVE_ENTRIES:
                     raise _too_large()
                 if member.issym() or member.islnk() or member.isdev():
                     raise _invalid(member.name)
@@ -105,6 +114,8 @@ def read_archive(body: bytes) -> dict[str, bytes]:
                     continue
                 if not path or path in files:
                     raise _invalid(member.name)
+                if len(files) >= MAX_ARCHIVE_FILES:
+                    raise _too_large()
                 inflated += member.size
                 if inflated > MAX_ARCHIVE_INFLATED_BYTES:
                     raise _too_large()
@@ -117,6 +128,25 @@ def read_archive(body: bytes) -> dict[str, bytes]:
             status_code=422,
         ) from exc
     return files
+
+
+def archive_stats(body: bytes) -> dict[str, int | bool]:
+    """Entry, file and inflated-byte counts of a tar.gz against the caps; reads headers only."""
+    entries = files = inflated = 0
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
+        for member in archive:
+            entries += 1
+            if member.isfile():
+                files += 1
+                inflated += member.size
+    return {
+        "entries": entries,
+        "files": files,
+        "inflated_bytes": inflated,
+        "within_caps": entries <= MAX_ARCHIVE_ENTRIES
+        and files <= MAX_ARCHIVE_FILES
+        and inflated <= MAX_ARCHIVE_INFLATED_BYTES,
+    }
 
 
 def pack_archive(files: Files) -> bytes:

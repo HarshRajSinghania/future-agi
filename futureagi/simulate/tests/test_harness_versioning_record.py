@@ -5,10 +5,12 @@ import os
 import subprocess
 import tarfile
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from django.utils import timezone
 
 from simulate.models import (
     HarnessEnvironmentVersion,
@@ -57,6 +59,15 @@ def storage(monkeypatch):
     return fake
 
 
+# A build session that started a minute ago, and a proof made during it.
+SESSION = timezone.now() - timedelta(minutes=1)
+
+
+def _proof(holds, *, at=None):
+    when = at or timezone.now()
+    return {"holds": holds, "proved_at": when.isoformat().replace("+00:00", "Z")}
+
+
 def _scenario(name, **fields):
     return {
         "name": name,
@@ -78,7 +89,7 @@ def _authoring(names=NAMES[:2], *, contract=None, proofs=None, sealed=True, **ex
         "handlers/lookup.py": "def handle(db):\n    return {}\n",
         "scenarios.json": json.dumps(documents),
         "cost.json": '{"usd": 3}',
-        ".claude/sessions/1.key": "private",
+        ".agent-cache/sessions/1.key": "private",
     }
     for document in documents:
         folder = f"scenarios/{document['name']}"
@@ -197,7 +208,7 @@ class TestFirstAuthoring:
             recorded.pair_key,
         ):
             files = archives.read_archive(storage.objects[key])
-            assert ".claude/sessions/1.key" not in files
+            assert ".agent-cache/sessions/1.key" not in files
             assert "cost.json" not in files
 
     def test_documents_carry_the_contract_and_sub_goal_digests(
@@ -340,10 +351,13 @@ class TestReuseAndNewVersions:
 class TestValidation:
     def test_proofs_that_all_hold_pass_the_suite(self, user, workspace, storage):
         environment = _environment(user, workspace, "proofs-pass")
-        proofs = {_key(name): {"holds": True} for name in NAMES[:2]}
+        proofs = {_key(name): _proof(True) for name in NAMES[:2]}
 
         recorded = record_authoring(
-            environment, _authoring(proofs=proofs), origin="authoring"
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
         )
 
         validation = HarnessSuiteValidation.no_workspace_objects.get(
@@ -354,10 +368,13 @@ class TestValidation:
 
     def test_some_failing_proofs_make_it_partial(self, user, workspace, storage):
         environment = _environment(user, workspace, "proofs-partial")
-        proofs = {_key(NAMES[0]): {"holds": True}, _key(NAMES[1]): {"holds": False}}
+        proofs = {_key(NAMES[0]): _proof(True), _key(NAMES[1]): _proof(False)}
 
         recorded = record_authoring(
-            environment, _authoring(proofs=proofs), origin="authoring"
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
         )
 
         validation = HarnessSuiteValidation.no_workspace_objects.get(
@@ -368,12 +385,15 @@ class TestValidation:
     def test_proofs_for_dropped_scenarios_are_ignored(self, user, workspace, storage):
         environment = _environment(user, workspace, "proofs-stale")
         proofs = {
-            **{_key(name): {"holds": True} for name in NAMES[:2]},
-            "long-gone": {"holds": False},
+            **{_key(name): _proof(True) for name in NAMES[:2]},
+            "long-gone": _proof(False),
         }
 
         recorded = record_authoring(
-            environment, _authoring(proofs=proofs), origin="authoring"
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
         )
 
         validation = HarnessSuiteValidation.no_workspace_objects.get(
@@ -385,7 +405,195 @@ class TestValidation:
     def test_no_proofs_file_records_no_validation(self, user, workspace, storage):
         environment = _environment(user, workspace, "proofs-none")
 
-        recorded = record_authoring(environment, _authoring(), origin="authoring")
+        recorded = record_authoring(
+            environment, _authoring(), origin="authoring", proved_since=SESSION
+        )
+
+        assert not HarnessSuiteValidation.no_workspace_objects.filter(
+            suite_version=recorded.suite
+        ).exists()
+
+    def test_only_proofs_made_in_this_session_count(self, user, workspace, storage):
+        environment = _environment(user, workspace, "proofs-session")
+        proofs = {
+            _key(NAMES[0]): _proof(True),
+            _key(NAMES[1]): _proof(True, at=SESSION - timedelta(days=1)),
+            "untimed": {"holds": True},
+        }
+
+        recorded = record_authoring(
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
+        )
+
+        validation = HarnessSuiteValidation.no_workspace_objects.get(
+            suite_version=recorded.suite
+        )
+        assert set(validation.proofs) == {_key(NAMES[0])}
+        assert validation.status == "partial"
+
+    def test_proofs_from_an_earlier_session_record_no_validation(
+        self, user, workspace, storage
+    ):
+        environment = _environment(user, workspace, "proofs-old")
+        proofs = {
+            _key(name): _proof(True, at=SESSION - timedelta(hours=3))
+            for name in NAMES[:2]
+        }
+
+        recorded = record_authoring(
+            environment,
+            _authoring(proofs=proofs),
+            origin="extend",
+            proved_since=SESSION,
+        )
+
+        assert not HarnessSuiteValidation.no_workspace_objects.filter(
+            suite_version=recorded.suite
+        ).exists()
+
+    def test_a_proof_time_without_a_zone_is_read_as_utc(self, user, workspace, storage):
+        environment = _environment(user, workspace, "proofs-naive")
+        naive = timezone.now().replace(tzinfo=None).isoformat()
+        proofs = {_key(name): {"holds": True, "proved_at": naive} for name in NAMES[:2]}
+
+        recorded = record_authoring(
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
+        )
+
+        validation = HarnessSuiteValidation.no_workspace_objects.get(
+            suite_version=recorded.suite
+        )
+        assert validation.status == "passed"
+
+    @pytest.mark.parametrize("minutes, counted", [(1, True), (3, False)])
+    def test_the_clock_skew_allowance_is_two_minutes(
+        self, user, workspace, storage, minutes, counted
+    ):
+        environment = _environment(user, workspace, f"proofs-skew-{minutes}")
+        proofs = {
+            _key(name): _proof(True, at=SESSION - timedelta(minutes=minutes))
+            for name in NAMES[:2]
+        }
+
+        recorded = record_authoring(
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
+        )
+
+        assert (
+            HarnessSuiteValidation.no_workspace_objects.filter(
+                suite_version=recorded.suite
+            ).exists()
+            is counted
+        )
+
+    def test_dropping_every_proof_is_logged(self, user, workspace, storage, caplog):
+        environment = _environment(user, workspace, "proofs-all-dropped")
+        proofs = {
+            _key(name): _proof(True, at=SESSION - timedelta(days=1))
+            for name in NAMES[:2]
+        }
+
+        with caplog.at_level("WARNING"):
+            record_authoring(
+                environment,
+                _authoring(proofs=proofs),
+                origin="authoring",
+                proved_since=SESSION,
+            )
+
+        assert any(
+            "every proof predates this session" in record.message
+            for record in caplog.records
+        )
+
+    def test_an_extend_keeps_earlier_proofs_of_unchanged_scenarios(
+        self, user, workspace, storage
+    ):
+        environment = _environment(user, workspace, "proofs-carry")
+        first_proofs = {_key(name): _proof(True, at=SESSION) for name in NAMES[:2]}
+        first = record_authoring(
+            environment,
+            _authoring(proofs=first_proofs),
+            origin="authoring",
+            proved_since=SESSION,
+        )
+        environment.refresh_from_db()
+        # The extend proves only its new scenario; the first two proofs are now old.
+        extend_session = timezone.now() + timedelta(minutes=5)
+        proofs = {**first_proofs, _key(NAMES[2]): _proof(True, at=extend_session)}
+
+        recorded = record_authoring(
+            environment,
+            _authoring(NAMES, proofs=proofs),
+            origin="extend",
+            proved_since=extend_session,
+        )
+
+        assert recorded.environment.id == first.environment.id
+        validation = HarnessSuiteValidation.no_workspace_objects.get(
+            suite_version=recorded.suite
+        )
+        assert set(validation.proofs) == {_key(name) for name in NAMES}
+        assert validation.status == "passed"
+
+    def test_a_changed_scenario_does_not_keep_its_old_proof(
+        self, user, workspace, storage
+    ):
+        environment = _environment(user, workspace, "proofs-carry-changed")
+        first_proofs = {_key(name): _proof(True, at=SESSION) for name in NAMES[:2]}
+        record_authoring(
+            environment,
+            _authoring(proofs=first_proofs),
+            origin="authoring",
+            proved_since=SESSION,
+        )
+        environment.refresh_from_db()
+        extend_session = timezone.now() + timedelta(minutes=5)
+        changed = _scenario(NAMES[0], instruction="call about something else")
+        documents = [changed, *(_scenario(name) for name in NAMES[1:])]
+        proofs = {
+            **first_proofs,
+            _key(NAMES[2]): _proof(True, at=extend_session),
+        }
+
+        recorded = record_authoring(
+            environment,
+            _authoring(
+                NAMES,
+                proofs=proofs,
+                **{
+                    "scenarios.json": json.dumps(documents),
+                    f"scenarios/{NAMES[0]}/scenario.json": json.dumps(changed),
+                },
+            ),
+            origin="extend",
+            proved_since=extend_session,
+        )
+
+        validation = HarnessSuiteValidation.no_workspace_objects.get(
+            suite_version=recorded.suite
+        )
+        assert set(validation.proofs) == {_key(NAMES[1]), _key(NAMES[2])}
+        assert validation.status == "partial"
+
+    def test_a_build_without_a_session_start_records_no_validation(
+        self, user, workspace, storage
+    ):
+        environment = _environment(user, workspace, "proofs-no-cutoff")
+        proofs = {_key(name): _proof(True) for name in NAMES[:2]}
+
+        recorded = record_authoring(
+            environment, _authoring(proofs=proofs), origin="authoring"
+        )
 
         assert not HarnessSuiteValidation.no_workspace_objects.filter(
             suite_version=recorded.suite
@@ -599,7 +807,7 @@ class TestFreezeHook:
             ),
         )
 
-    def _freeze(self, environment, body, monkeypatch):
+    def _freeze(self, environment, body, monkeypatch, sandbox=None, **attempt_fields):
         from simulate.services.hosted_harness_gateway import HostedHarnessGateway
 
         monkeypatch.setattr(
@@ -607,9 +815,16 @@ class TestFreezeHook:
             lambda *args, **kwargs: None,
         )
         attempt = SimpleNamespace(
-            id="attempt-1", job_id=environment.id, attempt_number=1
+            **{
+                "id": "attempt-1",
+                "job_id": environment.id,
+                "attempt_number": 1,
+                **attempt_fields,
+            }
         )
-        HostedHarnessGateway._sync_authoring_progress(attempt, self._sandbox(body))
+        HostedHarnessGateway._sync_authoring_progress(
+            attempt, sandbox or self._sandbox(body)
+        )
         environment.refresh_from_db()
 
     def _building(self, user, workspace, key):
@@ -638,6 +853,21 @@ class TestFreezeHook:
         )
         assert key != frozen
         assert archives.read_archive(storage.objects[key])["contract.json"]
+
+    def test_a_freeze_records_this_sessions_proofs(
+        self, user, workspace, storage, monkeypatch
+    ):
+        environment = self._building(user, workspace, "freeze-proofs")
+        proofs = {_key(name): _proof(True) for name in NAMES[:2]}
+
+        self._freeze(
+            environment, _authoring(proofs=proofs), monkeypatch, created_at=SESSION
+        )
+
+        validation = HarnessSuiteValidation.no_workspace_objects.get(
+            suite_version=environment.suite_version
+        )
+        assert validation.status == "passed"
 
     def test_an_extend_freeze_records_an_extend_version(
         self, user, workspace, storage, monkeypatch
@@ -701,10 +931,13 @@ class TestEditsAgainstAMovedDefault:
         assert (error.value.code, error.value.status_code) == ("version_conflict", 409)
         assert len(_versions(HarnessSuiteVersion, environment)) == 2
 
-    def test_amending_a_run_edits_the_environment_default(
-        self, user, workspace, storage
+    @pytest.mark.parametrize("versioning", [True, False])
+    def test_editing_a_run_is_refused_and_changes_nothing(
+        self, user, workspace, storage, settings, versioning
     ):
-        environment = _environment(user, workspace, "amend-from-run")
+        from simulate.services.hosted_harness_gateway import AuthoringArchiveKept
+
+        environment = _environment(user, workspace, f"amend-from-run-{versioning}")
         record_authoring(environment, _authoring(), origin="authoring")
         environment.refresh_from_db()
         run, _ = create_selected_harness_run(
@@ -713,23 +946,81 @@ class TestEditsAgainstAMovedDefault:
         record_authoring(environment, _authoring(NAMES), origin="chat")
         environment.refresh_from_db()
         newer = environment.suite_version
+        run_key = run.payload["metadata"]["authoring_object_key"]
+        settings.HARNESS_VERSIONING_ENABLED = versioning
+
+        with pytest.raises(AuthoringArchiveKept) as kept:
+            rewrite_authoring_scenarios(
+                run, [_scenario(NAMES[0], background_noise="street")]
+            )
+
+        assert (kept.value.code, kept.value.status_code) == (
+            "scenario_edit_on_run",
+            409,
+        )
+        environment.refresh_from_db()
+        run.refresh_from_db()
+        assert environment.suite_version_id == newer.id
+        assert run.payload["metadata"]["authoring_object_key"] == run_key
+
+    def test_editing_a_run_of_a_deleted_environment_is_refused_not_an_error(
+        self, user, workspace, storage
+    ):
+        from simulate.services.harness_versioning.versions import (
+            environment_head,
+            is_versioned,
+        )
+        from simulate.services.hosted_harness_gateway import AuthoringArchiveKept
+
+        environment = _environment(user, workspace, "amend-deleted-env")
+        record_authoring(environment, _authoring(), origin="authoring")
+        run, _ = create_selected_harness_run(
+            environment, scenario_keys=[_key(NAMES[0])], trials=1, idempotency_key="r1"
+        )
+        HostedHarnessJob.no_workspace_objects.filter(id=environment.id).update(
+            deleted=True
+        )
+
+        assert environment_head(run) is None
+        assert is_versioned(run) is False
+        with pytest.raises(AuthoringArchiveKept) as kept:
+            rewrite_authoring_scenarios(run, [_scenario(NAMES[0])])
+        assert kept.value.code == "scenario_edit_on_run"
+
+    def test_a_version_conflict_keeps_its_code_and_status(
+        self, user, workspace, storage, monkeypatch
+    ):
+        from simulate.services.harness_versioning import versions
+        from simulate.services.hosted_harness_gateway import AuthoringArchiveKept
+
+        environment = _environment(user, workspace, "amend-conflict")
+        record_authoring(environment, _authoring(), origin="authoring")
+        environment.refresh_from_db()
+
+        def conflict(*args, **kwargs):
+            raise HostedHarnessError(
+                "version_conflict", "the environment changed", status_code=409
+            )
+
+        monkeypatch.setattr(versions, "record_authoring", conflict)
+        with pytest.raises(AuthoringArchiveKept) as kept:
+            rewrite_authoring_scenarios(environment, [_scenario(NAMES[0])])
+
+        assert (kept.value.code, kept.value.status_code) == ("version_conflict", 409)
+
+    def test_an_edit_records_who_made_it(self, user, workspace, storage):
+        environment = _environment(user, workspace, "amend-author")
+        record_authoring(environment, _authoring(), origin="authoring")
+        environment.refresh_from_db()
 
         rewrite_authoring_scenarios(
-            run,
-            [
-                _scenario(NAMES[0], background_noise="street"),
-                _scenario(NAMES[1]),
-                _scenario(NAMES[2]),
-            ],
+            environment,
+            [_scenario(NAMES[0], background_noise="street"), _scenario(NAMES[1])],
+            user=user,
         )
 
         environment.refresh_from_db()
-        run.refresh_from_db()
-        assert environment.suite_version.parent_id == newer.id
-        assert environment.suite_version.scenario_count == 3
-        assert run.payload["metadata"]["authoring_object_key"] == (
-            environment.payload["metadata"]["authoring_object_key"]
-        )
+        assert environment.suite_version.created_by_id == user.id
 
     def test_an_amend_that_drops_a_scenario_leaves_it_out_of_the_new_suite(
         self, user, workspace, storage
@@ -782,8 +1073,13 @@ class TestEditsAgainstAMovedDefault:
 class TestEditsCarryNoProof:
     def test_a_chat_version_records_no_validation(self, user, workspace, storage):
         environment = _environment(user, workspace, "chat-no-proof")
-        proofs = {_key(name): {"holds": True} for name in NAMES}
-        record_authoring(environment, _authoring(proofs=proofs), origin="authoring")
+        proofs = {_key(name): _proof(True) for name in NAMES}
+        record_authoring(
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
+        )
 
         second = record_authoring(
             environment, _authoring(NAMES, proofs=proofs), origin="chat"
@@ -797,9 +1093,12 @@ class TestEditsCarryNoProof:
         self, user, workspace, storage
     ):
         environment = _environment(user, workspace, "chat-contract")
-        proofs = {_key(name): {"holds": True} for name in NAMES[:2]}
+        proofs = {_key(name): _proof(True) for name in NAMES[:2]}
         first = record_authoring(
-            environment, _authoring(proofs=proofs), origin="authoring"
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
         )
 
         second = record_authoring(
@@ -822,10 +1121,13 @@ class TestEditsCarryNoProof:
         self, user, workspace, storage
     ):
         environment = _environment(user, workspace, "proof-spelling")
-        proofs = {_key(name).replace("-", "_"): {"holds": True} for name in NAMES[:2]}
+        proofs = {_key(name).replace("-", "_"): _proof(True) for name in NAMES[:2]}
 
         recorded = record_authoring(
-            environment, _authoring(proofs=proofs), origin="authoring"
+            environment,
+            _authoring(proofs=proofs),
+            origin="authoring",
+            proved_since=SESSION,
         )
 
         assert (
@@ -839,7 +1141,10 @@ class TestEditsCarryNoProof:
         environment = _environment(user, workspace, "proof-empty")
 
         recorded = record_authoring(
-            environment, _authoring(proofs={}), origin="authoring"
+            environment,
+            _authoring(proofs={}),
+            origin="authoring",
+            proved_since=SESSION,
         )
 
         assert not HarnessSuiteValidation.no_workspace_objects.filter(
@@ -852,7 +1157,9 @@ class TestSealedCopy:
         self, user, workspace, storage
     ):
         environment = _environment(user, workspace, "sealed-partial")
-        record_authoring(environment, _authoring(), origin="authoring")
+        record_authoring(
+            environment, _authoring(), origin="authoring", proved_since=SESSION
+        )
 
         recorded = record_authoring(
             environment,
@@ -872,7 +1179,9 @@ class TestSealedCopy:
         self, user, workspace, storage
     ):
         environment = _environment(user, workspace, "sealed-missing")
-        record_authoring(environment, _authoring(), origin="authoring")
+        record_authoring(
+            environment, _authoring(), origin="authoring", proved_since=SESSION
+        )
         environment.refresh_from_db()
         storage.objects.pop(environment.payload["metadata"]["sealed_bundle_object_key"])
 
@@ -885,7 +1194,9 @@ class TestSealedCopy:
 class TestMembers:
     def test_a_renamed_scenario_keeps_its_key_and_row(self, user, workspace, storage):
         environment = _environment(user, workspace, "member-rename")
-        first = record_authoring(environment, _authoring(), origin="authoring")
+        first = record_authoring(
+            environment, _authoring(), origin="authoring", proved_since=SESSION
+        )
         renamed = {**_scenario(NAMES[0]), "name": "renamed scenario"}
         body = _authoring(
             **{
@@ -918,7 +1229,9 @@ class TestPromoteNoOp:
         self, user, workspace, storage
     ):
         environment = _environment(user, workspace, "promote-twice")
-        record_authoring(environment, _authoring(), origin="authoring")
+        record_authoring(
+            environment, _authoring(), origin="authoring", proved_since=SESSION
+        )
         environment.refresh_from_db()
         chat = TestChatPromote()
 

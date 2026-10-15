@@ -98,6 +98,35 @@ def _environment_unhashed(path: str) -> bool:
     )
 
 
+def _invalid_path(path: str, why: str) -> Exception:
+    from simulate.services.hosted_harness import HostedHarnessError
+
+    return HostedHarnessError(
+        "archive_member_invalid",
+        f"the authoring archive holds an unsafe member: {path} ({why})",
+        status_code=422,
+    )
+
+
+def _contract_value(raw: bytes | None, *, provider_agent: bool) -> Any:
+    """The contract as hashed, or a marker of its bytes when it has no canonical form.
+
+    JSON allows NaN and Infinity, which canonical JSON refuses, and an unparsable file has
+    no value at all; either way two different files must not hash the same.
+    """
+    contract = _json_object(raw)
+    if contract is not None:
+        kept = hashed_contract(contract, provider_agent=provider_agent)
+        try:
+            canonical_json_bytes(kept)
+            return kept
+        except ValueError:
+            pass
+    if raw is None:
+        return {}
+    return {"unreadable_contract_sha256": hashlib.sha256(raw).hexdigest()}
+
+
 def tree_digest(
     files: Path | Files, *, exclude: Callable[[str], bool] | None = None
 ) -> str:
@@ -111,11 +140,23 @@ def tree_digest(
             digest.update(files.read_bytes())
             return "sha256:" + digest.hexdigest()
         files = read_tree(files) if files.is_dir() else {}
-    files = {PurePosixPath(path).as_posix(): body for path, body in files.items()}
+    normalised: dict[str, bytes] = {}
+    for path, body in files.items():
+        spelled = PurePosixPath(path).as_posix()
+        if spelled in normalised:
+            raise _invalid_path(spelled, "two members share this path")
+        normalised[spelled] = body
+    files = normalised
     for path in sorted(files, key=PurePosixPath):
         if exclude is not None and exclude(path):
             continue
-        relative = path.encode("utf-8")
+        try:
+            relative = path.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise _invalid_path(
+                path.encode("utf-8", "backslashreplace").decode("ascii"),
+                "the path is not valid UTF-8",
+            ) from exc
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
         digest.update(files[path])
@@ -128,10 +169,6 @@ def _json_object(body: bytes | None) -> dict[str, Any] | None:
     except ValueError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def _contract(files: Files) -> dict[str, Any]:
-    return _json_object(files.get("contract.json")) or {}
 
 
 def hashed_contract(
@@ -150,8 +187,8 @@ def hashed_contract(
 def environment_hash(files: Files, *, provider_agent: bool) -> str:
     return canonical_digest(
         {
-            "contract": hashed_contract(
-                _contract(files), provider_agent=provider_agent
+            "contract": _contract_value(
+                files.get("contract.json"), provider_agent=provider_agent
             ),
             "tree": tree_digest(files, exclude=_environment_unhashed),
         }
@@ -159,7 +196,14 @@ def environment_hash(files: Files, *, provider_agent: bool) -> str:
 
 
 def contract_hash_raw(files: Files) -> str:
-    return canonical_digest(_contract(files))
+    raw = files.get("contract.json")
+    contract = _json_object(raw)
+    if raw is not None and contract is None:
+        return "sha256:" + hashlib.sha256(raw).hexdigest()
+    try:
+        return canonical_digest(contract or {})
+    except ValueError:
+        return "sha256:" + hashlib.sha256(raw or b"").hexdigest()
 
 
 def world_ir_hash(files: Files) -> str:
@@ -199,33 +243,42 @@ def suite_hash(files: Files) -> str:
     return tree_digest(scenario_files(files), exclude=_suite_unhashed)
 
 
-def _without_overlay(document: bytes) -> bytes:
+# Stands in for an overlay field's value: which fields are set still counts, since the
+# overlay can change a value but cannot remove a field the sealed bundle carries.
+OVERLAY_PRESENT = "<overlay>"
+
+
+def _overlay_keys_only(document: bytes) -> bytes:
     scenario = _json_object(document)
     if scenario is None:
         return document
     for name in SCENARIO_OVERLAY_FIELDS:
-        scenario.pop(name, None)
+        if name in scenario:
+            scenario[name] = OVERLAY_PRESENT
     persona = scenario.get("persona")
     if isinstance(persona, dict):
         scenario["persona"] = {
-            key: value
+            key: OVERLAY_PRESENT if key in SCENARIO_OVERLAY_PERSONA_FIELDS else value
             for key, value in persona.items()
-            if key not in SCENARIO_OVERLAY_PERSONA_FIELDS
         }
-    return canonical_json_bytes(scenario)
+    try:
+        return canonical_json_bytes(scenario)
+    except ValueError:
+        return document
 
 
 def suite_certify_hash(files: Files, *, keep_overlay: bool = False) -> str:
     """The suite as the sealed bundle sees it.
 
-    Fields the guest overlays at call time are dropped, so overlay-only edits reuse a
-    cached bundle. ``keep_overlay`` is for connectors whose runner ignores the overlay.
+    The values of fields the guest overlays at call time are left out, so a value-only
+    edit reuses a cached bundle; adding or removing such a field does not.
+    ``keep_overlay`` is for connectors whose runner ignores the overlay.
     """
     scenarios = scenario_files(files)
     if not keep_overlay:
         scenarios = {
             path: (
-                _without_overlay(body)
+                _overlay_keys_only(body)
                 if PurePosixPath(path).name == "scenario.json"
                 else body
             )
