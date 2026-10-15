@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { useSearchParams } from "react-router-dom";
-import { Alert, Box, Skeleton, Stack } from "@mui/material";
+import { Alert, Box, Skeleton, Stack, useMediaQuery } from "@mui/material";
 import {
   INSIGHTS_NEW_PARAM,
   INSIGHTS_SEED_PARAM,
   readHandoff,
 } from "src/sections/projects/observeHandoff";
+import { OBSERVE_TABS } from "../common";
 import { useInsightsConfigs } from "./insightsApi";
 import InsightsEmpty from "./InsightsEmpty";
 import NewReport from "./NewReport";
@@ -26,13 +27,18 @@ const REPORT_PARAM = "report";
 const RUN_PARAM = "run";
 const CATEGORY_PARAM = "category";
 const EXAMPLE_PARAM = "example";
+const OBSERVE_TAB_PARAM = "tab";
 const RAIL_KEY = "insights-rail-collapsed";
+// Below this width the rail and the report's table don't fit side by side.
+const RAIL_FITS_WIDTH = 1440;
 
+// The saved choice, or null when the viewer hasn't made one.
 const readRailCollapsed = () => {
   try {
-    return globalThis.localStorage?.getItem(RAIL_KEY) === "1";
+    const saved = globalThis.localStorage?.getItem(RAIL_KEY);
+    return saved == null ? null : saved === "1";
   } catch {
-    return false;
+    return null;
   }
 };
 
@@ -49,10 +55,21 @@ export default function InsightsView() {
   const seed = useMemo(() => readHandoff(seedKey), [seedKey]);
   const configs = useInsightsConfigs(observeId);
   const [rerunConfig, setRerunConfig] = useState(null);
-  const [collapsed, setCollapsed] = useState(readRailCollapsed);
+  // Read on the first render, so a wide screen never flashes a closed rail.
+  const railFits = useMediaQuery(`(min-width:${RAIL_FITS_WIDTH}px)`, {
+    noSsr: true,
+  });
+  const [savedCollapsed, setCollapsed] = useState(readRailCollapsed);
+  const collapsed = savedCollapsed ?? !railFits;
 
+  // Each move replaces the report's params but keeps the Observe page's
+  // `tab=insights`; without it the tab bar falls back to Traces.
   const go = useCallback(
-    (params, options) => setSearchParams(params, options),
+    (params, options) =>
+      setSearchParams(
+        { ...params, [OBSERVE_TAB_PARAM]: OBSERVE_TABS.INSIGHTS },
+        options,
+      ),
     [setSearchParams],
   );
 
@@ -63,15 +80,15 @@ export default function InsightsView() {
     go({ [REPORT_PARAM]: firstId }, { replace: true });
   }, [isNew, reportId, firstId, go]);
 
-  const toggleRail = () =>
-    setCollapsed((value) => {
-      try {
-        globalThis.localStorage?.setItem(RAIL_KEY, value ? "0" : "1");
-      } catch {
-        // The choice lasts until the page reloads.
-      }
-      return !value;
-    });
+  const toggleRail = () => {
+    const next = !collapsed;
+    try {
+      globalThis.localStorage?.setItem(RAIL_KEY, next ? "1" : "0");
+    } catch {
+      // The choice lasts until the page reloads.
+    }
+    setCollapsed(next);
+  };
 
   const openReport = useCallback((id) => go({ [REPORT_PARAM]: id }), [go]);
   const showRun = useCallback(

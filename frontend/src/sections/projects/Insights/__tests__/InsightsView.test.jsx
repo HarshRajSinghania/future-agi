@@ -106,7 +106,36 @@ const population = Array.from({ length: 108 }, (_, i) => ({
   user_id: `u${i % 39}`,
 }));
 
+// The rail starts open on screens of 1440px and wider.
+function setViewport(width) {
+  window.matchMedia = vi.fn((query) => {
+    const min = Number(/min-width:\s*(\d+)px/.exec(query)?.[1] ?? 0);
+    return {
+      matches: width >= min,
+      media: query,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+  });
+}
+
+// Node's own localStorage doesn't persist without --localstorage-file, so
+// each test gets a fresh in-memory one.
+function memoryStorage() {
+  const items = new Map();
+  return {
+    getItem: (key) => (items.has(key) ? items.get(key) : null),
+    setItem: (key, value) => items.set(key, String(value)),
+    removeItem: (key) => items.delete(key),
+    clear: () => items.clear(),
+  };
+}
+
 beforeEach(() => {
+  setViewport(1440);
+  vi.stubGlobal("localStorage", memoryStorage());
   mocks.enriched = false;
   mocks.omega = false;
   mocks.readQuery.mockImplementation((url, { params } = {}) => {
@@ -149,6 +178,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("InsightsView", () => {
@@ -165,11 +195,32 @@ describe("InsightsView", () => {
     expect(screen.getByText("Who are our users?")).toBeInTheDocument();
   });
 
+  it("starts with the reports rail closed on a narrow screen", async () => {
+    setViewport(1280);
+    renderAt(`?report=${CONFIG_ID}`);
+    expect(
+      await screen.findByRole("heading", {
+        name: "Where does the agent fall short?",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("users/personas test")).not.toBeInTheDocument();
+  });
+
+  it("keeps the viewer's choice to open the rail on a narrow screen", async () => {
+    setViewport(1280);
+    globalThis.localStorage.setItem("insights-rail-collapsed", "0");
+    renderAt("");
+    expect(
+      await screen.findByText("sessions/failures test"),
+    ).toBeInTheDocument();
+  });
+
   it("opens the most recent report when none is chosen", async () => {
     renderAt("");
     await waitFor(() =>
       expect(screen.getByTestId("location").textContent).toBe(
-        `?report=${configsFixture.result.configs[0].id}`,
+        // Insights keeps the Observe page's tab, so the tab bar stays on it.
+        `?report=${configsFixture.result.configs[0].id}&tab=insights`,
       ),
     );
   });
@@ -561,7 +612,7 @@ describe("InsightsView", () => {
     );
     await waitFor(() =>
       expect(screen.getByTestId("location").textContent).toBe(
-        `?report=${CONFIG_ID}&run=${RUN_ID}`,
+        `?report=${CONFIG_ID}&run=${RUN_ID}&tab=insights`,
       ),
     );
   });
