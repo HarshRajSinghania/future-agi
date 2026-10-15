@@ -1,5 +1,6 @@
 """R-16, R-17: attempt identities and usage units, with mocked emission."""
 
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -7,7 +8,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from ee.evals.llm.jev_evaluator.evaluator import JevEvaluator
-from ee.jev.metering import build_usage_events, calculate_actual_cost
+from ee.jev.metering import build_usage_events, calculate_actual_cost, usage_event_id
+from ee.usage.schemas.event_types import BillingEventType
 
 pytestmark = pytest.mark.requires_ee
 
@@ -38,11 +40,11 @@ def test_r17_usage_properties_and_attempt_ids():
         instance(), org_id="trusted-org", cell_or_run_id="run-1", amount=0
     )
     assert len(events) == 2
-    assert events[0].event_id == "jev:run-1:1"
+    assert events[0].event_id == usage_event_id("run-1", 1)
     event = events[1]
-    assert event.event_id == "jev:run-1:2"
+    assert event.event_id == usage_event_id("run-1", 2)
     assert event.org_id == "trusted-org"
-    assert event.event_type == "managed_ai_credits_monthly"
+    assert event.event_type == "jev_evaluator"
     assert event.amount == 0
     assert event.properties == {
         "provider": "typesafe",
@@ -58,6 +60,17 @@ def test_r17_usage_properties_and_attempt_ids():
     }
     assert events[0].properties["actual_model"] is None
     assert events[0].properties["outcome"] == "error"
+
+
+def test_usage_events_are_accepted_by_the_billing_consumer():
+    """The consumer drops unknown event types and parses event_id as a UUID."""
+    events = build_usage_events(
+        instance(), org_id="org", cell_or_run_id="run-1", amount=0.1
+    )
+    for event in events:
+        assert BillingEventType(event.event_type) is BillingEventType.JEV_EVALUATOR
+        assert str(uuid.UUID(event.event_id)) == event.event_id
+    assert events[0].event_id != events[1].event_id
 
 
 def test_type_safe_cost_is_input_tokens_only():
@@ -118,5 +131,8 @@ def test_r17_dataset_runner_emits_jev_properties():
         billing.return_value.calculate_ai_credits.return_value = 0
         runner._process_eval_result(SimpleNamespace(id="row"), {})
     events = [call.args[0] for call in emit.call_args_list]
-    assert [event.event_id for event in events] == ["jev:run-1:1", "jev:run-1:2"]
+    assert [event.event_id for event in events] == [
+        usage_event_id("run-1", 1),
+        usage_event_id("run-1", 2),
+    ]
     assert events[-1].properties["output_tokens"] == 6
