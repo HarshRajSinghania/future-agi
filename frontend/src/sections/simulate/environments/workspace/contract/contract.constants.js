@@ -138,12 +138,12 @@ export const END_CONDITIONS_COPY = {
   maxTurnsNote: "Ceiling across the suite. Each scenario carries its own.",
   maxDuration: (seconds) => `${seconds}s`,
   maxDurationNote: "The job's wall-clock limit.",
-  seedValue: (value) => `Deterministic seed · ${value}`,
+  seedValue: (value) => `World seed · ${value}`,
   seedControls: (controls) =>
-    controls.length
-      ? `Fixes ${controls.map((control) => control.replaceAll("_", " ")).join(", ")}. The same seed replays the same world.`
-      : "The same seed replays the same world.",
-  noSeed: "No seed was set for this environment, so runs are not replayed from one.",
+    controls.includes("scenario_world_rng")
+      ? "Controls world initialization randomness. This scope is platform-derived for the supported ALK runtime; it does not guarantee identical conversations or results."
+      : "Seed scope is not reported. This value does not guarantee identical conversations or results.",
+  noSeed: "No seed was reported for this environment.",
 };
 
 export const ACTORS_COPY = {

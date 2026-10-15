@@ -35481,8 +35481,17 @@ export const SimulateApiHarnessEnvironmentsReadResponse = zod.object({
       ended_reasons: zod.array(zod.string().min(1)),
       seed: zod
         .object({
-          value: zod.number(),
-          controls: zod.array(zod.string().min(1)),
+          value: zod
+            .string()
+            .min(1)
+            .describe(
+              "Decimal string preserving the full integer seed without JavaScript precision loss. The internal harness seed remains an integer.",
+            ),
+          controls: zod
+            .array(zod.string().min(1))
+            .describe(
+              "Platform-derived scope for the supported hosted ALK runtime, not an ALK-reported capability. scenario_world_rng controls world initialization randomness, not model responses or conversation replay.",
+            ),
         })
         .optional(),
     }),
@@ -35613,7 +35622,12 @@ export const SimulateApiHarnessEnvironmentsReadResponse = zod.object({
     security: zod.record(zod.string(), zod.string()),
     artifacts: zod.record(zod.string(), zod.string()),
     scenario_count: zod.number(),
-    seed: zod.number(),
+    seed: zod
+      .string()
+      .min(1)
+      .describe(
+        "Decimal string preserving the full internal integer seed without JavaScript precision loss.",
+      ),
     enable_tool_evaluation: zod.boolean(),
   }),
 });
@@ -35853,8 +35867,17 @@ export const SimulateApiHarnessEnvironmentsPartialUpdateResponse = zod.object({
       ended_reasons: zod.array(zod.string().min(1)),
       seed: zod
         .object({
-          value: zod.number(),
-          controls: zod.array(zod.string().min(1)),
+          value: zod
+            .string()
+            .min(1)
+            .describe(
+              "Decimal string preserving the full integer seed without JavaScript precision loss. The internal harness seed remains an integer.",
+            ),
+          controls: zod
+            .array(zod.string().min(1))
+            .describe(
+              "Platform-derived scope for the supported hosted ALK runtime, not an ALK-reported capability. scenario_world_rng controls world initialization randomness, not model responses or conversation replay.",
+            ),
         })
         .optional(),
     }),
@@ -35985,7 +36008,12 @@ export const SimulateApiHarnessEnvironmentsPartialUpdateResponse = zod.object({
     security: zod.record(zod.string(), zod.string()),
     artifacts: zod.record(zod.string(), zod.string()),
     scenario_count: zod.number(),
-    seed: zod.number(),
+    seed: zod
+      .string()
+      .min(1)
+      .describe(
+        "Decimal string preserving the full internal integer seed without JavaScript precision loss.",
+      ),
     enable_tool_evaluation: zod.boolean(),
   }),
 });
@@ -36288,8 +36316,17 @@ export const SimulateApiHarnessEnvironmentsEvaluationsSetToolCallEvaluationRespo
         ended_reasons: zod.array(zod.string().min(1)),
         seed: zod
           .object({
-            value: zod.number(),
-            controls: zod.array(zod.string().min(1)),
+            value: zod
+              .string()
+              .min(1)
+              .describe(
+                "Decimal string preserving the full integer seed without JavaScript precision loss. The internal harness seed remains an integer.",
+              ),
+            controls: zod
+              .array(zod.string().min(1))
+              .describe(
+                "Platform-derived scope for the supported hosted ALK runtime, not an ALK-reported capability. scenario_world_rng controls world initialization randomness, not model responses or conversation replay.",
+              ),
           })
           .optional(),
       }),
@@ -36420,7 +36457,12 @@ export const SimulateApiHarnessEnvironmentsEvaluationsSetToolCallEvaluationRespo
       security: zod.record(zod.string(), zod.string()),
       artifacts: zod.record(zod.string(), zod.string()),
       scenario_count: zod.number(),
-      seed: zod.number(),
+      seed: zod
+        .string()
+        .min(1)
+        .describe(
+          "Decimal string preserving the full internal integer seed without JavaScript precision loss.",
+        ),
       enable_tool_evaluation: zod.boolean(),
     }),
   });

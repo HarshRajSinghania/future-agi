@@ -334,8 +334,13 @@ class HarnessEnvironmentToolCertificationSerializer(serializers.Serializer):
 
 
 class HarnessEnvironmentSeedSerializer(serializers.Serializer):
-    value = serializers.IntegerField()
-    controls = serializers.ListField(child=serializers.CharField())
+    value = serializers.CharField(
+        help_text="Decimal string preserving the full integer seed without JavaScript precision loss. The internal harness seed remains an integer."
+    )
+    controls = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Platform-derived scope for the supported hosted ALK runtime, not an ALK-reported capability. scenario_world_rng controls world initialization randomness, not model responses or conversation replay.",
+    )
 
 
 class HarnessEnvironmentEndConditionsSerializer(serializers.Serializer):
@@ -596,7 +601,10 @@ class HarnessEnvironmentSettingsSerializer(serializers.Serializer):
     security = serializers.DictField(allow_null=True)
     artifacts = serializers.DictField(allow_null=True)
     scenario_count = serializers.IntegerField(allow_null=True)
-    seed = serializers.IntegerField(allow_null=True)
+    seed = serializers.CharField(
+        allow_null=True,
+        help_text="Decimal string preserving the full internal integer seed without JavaScript precision loss.",
+    )
     enable_tool_evaluation = serializers.BooleanField()
 
 

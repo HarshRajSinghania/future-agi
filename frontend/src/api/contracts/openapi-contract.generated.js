@@ -92375,7 +92375,10 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         seed: {
           title: "Seed",
-          type: "integer",
+          description:
+            "Decimal string preserving the full internal integer seed without JavaScript precision loss.",
+          type: "string",
+          minLength: 1,
           "x-nullable": true,
         },
         enable_tool_evaluation: {
@@ -116902,9 +116905,14 @@ export const OPENAPI_CONTRACT = Object.freeze({
       properties: {
         value: {
           title: "Value",
-          type: "integer",
+          description:
+            "Decimal string preserving the full integer seed without JavaScript precision loss. The internal harness seed remains an integer.",
+          type: "string",
+          minLength: 1,
         },
         controls: {
+          description:
+            "Platform-derived scope for the supported hosted ALK runtime, not an ALK-reported capability. scenario_world_rng controls world initialization randomness, not model responses or conversation replay.",
           type: "array",
           items: {
             type: "string",

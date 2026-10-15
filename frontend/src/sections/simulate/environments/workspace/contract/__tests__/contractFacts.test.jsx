@@ -44,20 +44,28 @@ describe("RlContractPanel contract facts", () => {
     expect(truncate.getByText("12 turns")).toBeInTheDocument();
   });
 
-  // it("shows the real seed and what it fixes, or says no seed was set", () => {
-  //   const { unmount } = renderPanel();
-  //   expect(screen.getByText("Deterministic seed · 7")).toBeInTheDocument();
-  //   expect(screen.getByText(/^Fixes scenario world rng\./)).toBeInTheDocument();
-  //   unmount();
+  it("shows every seed digit and limits its scope to world initialization", () => {
+    renderPanel({
+      endConditions: JSON.parse('{"seed":{"value":"8537093545867607782","controls":["scenario_world_rng"]}}'),
+    });
+    expect(screen.getByText("World seed · 8537093545867607782")).toBeInTheDocument();
+    expect(screen.getByText(/^Controls world initialization randomness\./)).toHaveTextContent(
+      "does not guarantee identical conversations or results",
+    );
+  });
 
-  //   renderPanel({
-  //     endConditions: { ...baseEnv.endConditions, seed: undefined },
-  //   });
-  //   expect(screen.getByText("Deterministic seed")).toBeInTheDocument();
-  //   expect(
-  //     screen.getByText(/No seed was set for this environment/),
-  //   ).toBeInTheDocument();
-  // });
+  it("does not infer seed scope for an unknown runtime", () => {
+    renderPanel({ endConditions: { seed: { value: "0", controls: ["unknown_rng"] } } });
+    expect(screen.getByText("World seed · 0")).toBeInTheDocument();
+    expect(screen.getByText(/^Seed scope is not reported\./)).toBeInTheDocument();
+    expect(screen.queryByText(/^Controls world initialization/)).not.toBeInTheDocument();
+  });
+
+  it("does not show a fixture seed when no seed is reported", () => {
+    renderPanel({ endConditions: undefined });
+    expect(screen.queryByText(/^World seed ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Deterministic seed")).not.toBeInTheDocument();
+  });
 
   it("marks each tool with its effect and availability, and shows the effect evidence", () => {
     renderPanel({

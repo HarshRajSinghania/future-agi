@@ -17331,7 +17331,12 @@ export const HarnessEnvironmentEndConditionsApiClock = {
 } as const;
 
 export interface HarnessEnvironmentSeedApi {
-  value: number;
+  /**
+   * Decimal string preserving the full integer seed without JavaScript precision loss. The internal harness seed remains an integer.
+   * @minLength 1
+   */
+  value: string;
+  /** Platform-derived scope for the supported hosted ALK runtime, not an ALK-reported capability. scenario_world_rng controls world initialization randomness, not model responses or conversation replay. */
   controls: string[];
 }
 
@@ -17624,7 +17629,11 @@ export interface HarnessEnvironmentSettingsApi {
   security: HarnessEnvironmentSettingsApiSecurity;
   artifacts: HarnessEnvironmentSettingsApiArtifacts;
   scenario_count: number;
-  seed: number;
+  /**
+   * Decimal string preserving the full internal integer seed without JavaScript precision loss.
+   * @minLength 1
+   */
+  seed: string;
   enable_tool_evaluation: boolean;
 }
 

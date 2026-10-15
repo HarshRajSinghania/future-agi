@@ -136,6 +136,16 @@ def _serialized_contract(evidence, connector="http", seed=42, mode=None):
     return HarnessEnvironmentContractSerializer(section).data
 
 
+@pytest.mark.parametrize("seed", [0, 42, 8537093545867607782, 2**63 - 1])
+def test_seed_survives_api_json_without_browser_precision_loss(seed):
+    from rest_framework.renderers import JSONRenderer
+
+    result = _serialized_contract(_evidence(), seed=seed)
+    encoded = JSONRenderer().render(result)
+    returned = json.loads(encoded)["end_conditions"]["seed"]
+    assert returned == {"value": str(seed), "controls": ["scenario_world_rng"]}
+
+
 @pytest.mark.parametrize("archived", [False, True])
 def test_source_artifacts_reach_real_serializers_with_measured_rows(archived):
     prompt = "You handle order support.\nKeep the original whitespace.\n"
@@ -288,7 +298,7 @@ def test_source_artifacts_reach_real_serializers_with_measured_rows(archived):
     ]
     assert actual["tool_certification"] == _certification()["tools"]
     assert actual["end_conditions"]["seed"] == {
-        "value": 0,
+        "value": "0",
         "controls": ["scenario_world_rng"],
     }
     assert actual["end_conditions"]["terminate_reasons"] == [
@@ -688,8 +698,11 @@ def test_archive_command_includes_measured_build_when_present(tmp_path, built):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "serializer", [HarnessEnvironmentDetailSerializer, HarnessEnvironmentDetailV2Serializer]
+)
 def test_full_detail_serializes_stored_evidence_without_provider_or_storage_reads(
-    user, workspace
+    user, workspace, serializer
 ):
     from simulate.models import HostedHarnessStageOutput
     from simulate.services.hosted_harness import create_hosted_job
@@ -697,7 +710,7 @@ def test_full_detail_serializes_stored_evidence_without_provider_or_storage_read
 
     job, _ = create_hosted_job(
         user.organization,
-        _v1_payload(),
+        {**_v1_payload(), "seed": 8537093545867607782},
         idempotency_key="th8038-source-evidence",
         workspace=workspace,
     )
@@ -727,7 +740,14 @@ def test_full_detail_serializes_stored_evidence_without_provider_or_storage_read
             side_effect=AssertionError("provider read"),
         ),
     ):
-        actual = HarnessEnvironmentDetailSerializer(environment_detail(job)).data
+        detail = environment_detail(job)
+        if serializer is HarnessEnvironmentDetailV2Serializer:
+            detail = environment_detail_v2(detail, [])
+        actual = serializer(detail).data
+    assert actual["contract"]["end_conditions"]["seed"]["value"] == "8537093545867607782"
+    assert actual["settings"]["seed"] == "8537093545867607782"
+    job.refresh_from_db()
+    assert job.payload["seed"] == 8537093545867607782
     assert actual["contract"]["agent"] == "verified"
     assert actual["contract"]["data_schema_columns"]["public.orders"][0]["pk"] is True
     assert actual["contract"]["tool_certification"] == _certification()["tools"]
