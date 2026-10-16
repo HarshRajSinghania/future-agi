@@ -130,7 +130,7 @@ export default function TemplateBuildPanel({ template, showName = false }) {
               <Button
                 variant="contained" color="primary"
                 onClick={handleAdopt}
-                disabled={adopt.isPending}
+                disabled={adopt.isPending || subActors === undefined}
                 startIcon={<Iconify icon="solar:magic-stick-3-bold" width={16} />}
                 sx={{ typography: "s2", fontWeight: "fontWeightBold", whiteSpace: "nowrap" }}
               >

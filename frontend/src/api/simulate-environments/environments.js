@@ -67,9 +67,9 @@ export function useMyEnvironments({ page = 0, pageSize = 25 } = {}) {
   });
 }
 
-// Whether sub-actors are on, read from the environments list the page already loads.
 export function useSubActorsEnabled() {
-  return Boolean(useMyEnvironments().data?.subActors);
+  const { data, isError } = useMyEnvironments();
+  return isError ? false : data?.subActors;
 }
 
 export function useDeleteEnvironment() {

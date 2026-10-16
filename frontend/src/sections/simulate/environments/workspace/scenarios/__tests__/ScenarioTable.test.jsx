@@ -84,7 +84,7 @@ describe("ScenarioTable — hide group", () => {
   });
 });
 
-describe("ScenarioTable — sub-actors", () => {
+describe("ScenarioTable: sub-actors", () => {
   it("names the sub-actors a scenario brings in, not their ids", () => {
     const withCast = { ...env, cast: { subActors: [{ id: "subactor_service", name: "Payment service" }] } };
     render(

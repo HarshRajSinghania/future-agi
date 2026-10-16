@@ -67,11 +67,10 @@ const MIN_TABLE_PX = 360;
 const tickableIds = (rows) =>
   rows.filter((t) => t.sourceScenarioKey).map((t) => t.id);
 
-// The per-call table owns server-backed grouping, filtering, columns and paging
-// for read-only execution results.
-// A sub-goal about no sub-actor is about the person the agent serves.
 const PRIMARY_ACTOR = "primary";
 
+// The per-call table owns server-backed grouping, filtering, columns and paging
+// for read-only execution results.
 export default function RunTraceTable({
   executionId,
   onOpenCall,
@@ -369,7 +368,6 @@ export default function RunTraceTable({
   }, [evals]);
   const pickerEvals =
     (isLoading || error) && !evals.length ? lastEvalsRef.current : evals;
-  // Sub-goal results, narrowed to the actor they are about: the person served or a sub-actor.
   const subGoalEvals = useMemo(
     () =>
       subGoalColumnsFor(columns, filters).map((c) => ({ id: c.key, name: c.label })),
@@ -415,7 +413,6 @@ export default function RunTraceTable({
         choices: Object.keys(OUTCOME_LABELS),
         choiceLabels: OUTCOME_LABELS,
       },
-      // Offered only when some sub-goal is about a sub-actor.
       ...(actorOptions.some((actor) => actor !== PRIMARY_ACTOR)
         ? [
             {

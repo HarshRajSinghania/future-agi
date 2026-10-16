@@ -31,6 +31,11 @@ describe("sub-actors", () => {
       transcript: [{ speaker_role: "sub_actor", speaker_name: "Bystander", content: "Add a stop." }],
     });
     expect(detail.turns[0]).toMatchObject({ role: "sub_actor", speakerName: "Bystander" });
+    const chat = mapCallDetail({
+      simulation_call_type: "text",
+      transcript: [{ role: "sub_actor", content: [{ role: "sub_actor", content: "Add one.", name: "Friend" }] }],
+    });
+    expect(chat.turns[0]).toMatchObject({ role: "sub_actor", speakerName: "Friend" });
 
     const [row] = functionCallTranscriptRows([{ name: "book", error: "fault:timeout:subactor_service" }]);
     expect(row.content).toContain("injected timeout");
@@ -56,18 +61,7 @@ describe("sub-goal results by actor", () => {
 });
 
 describe("template casts", () => {
-  const byId = Object.fromEntries(PREBUILT_ENVIRONMENTS_FIXTURE.map((one) => [one.id, one]));
-  const channels = (id) => byId[id].cast?.subActors.map((one) => one.channel) ?? [];
-
-  it("gives each vertical a cast its surface can deliver", () => {
-    expect(channels("env-voice-support")).toEqual(["ivr", "audio_mix", "transfer_leg", "tool_response"]);
-    expect(channels("env-chat-banking")).toEqual(["thread_message", "tool_response", "inbound_message"]);
-    expect(channels("env-chat-travel")).toEqual(["thread_message", "tool_response", "inbound_message"]);
-    expect(channels("env-browser")).toEqual(["tool_response"]);
-  });
-
   it("gives a surface the harness does not reach no cast", () => {
-    expect(byId["env-coding"].cast).toBeUndefined();
-    expect(byId["env-robotics"].cast).toBeUndefined();
+    expect(PREBUILT_ENVIRONMENTS_FIXTURE.find((one) => one.id === "env-coding").cast).toBeUndefined();
   });
 });

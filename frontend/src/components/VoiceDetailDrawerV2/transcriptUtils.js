@@ -326,3 +326,5 @@ export const computeCallMetrics = (turns) => {
     timeToFirstWord: ttfw,
   };
 };
+
+export const subActorLabel = (name) => `${name || "Someone else"} (not the customer)`;

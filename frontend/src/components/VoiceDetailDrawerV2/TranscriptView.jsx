@@ -20,7 +20,7 @@ import { enqueueSnackbar } from "notistack";
 import CellMarkdown from "src/sections/common/CellMarkdown";
 import { ShowComponent } from "src/components/show";
 import useVoiceAudioStore from "./voiceAudioStore";
-import { computeTotals, enrichTurns, formatClock } from "./transcriptUtils";
+import { computeTotals, enrichTurns, formatClock, subActorLabel } from "./transcriptUtils";
 import { DEFAULT_ROLE_LABELS } from "./constants";
 import FunctionCallContent from "./FunctionCallContent";
 
@@ -364,7 +364,7 @@ const TurnRow = React.forwardRef(
             <Typography
               sx={{ fontSize: 10, color: "text.secondary", fontWeight: 500 }}
             >
-              {turn.speakerName || "Someone else"} · not the customer
+              {subActorLabel(turn.speakerName)}
             </Typography>
           )}
 

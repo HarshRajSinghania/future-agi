@@ -157,6 +157,13 @@ describe("TemplateBuildPanel", () => {
     subActorsOn = false;
   });
 
+  it("waits for the sub-actor setting before it builds", () => {
+    subActorsOn = undefined;
+    renderPanel();
+    expect(screen.getByRole("button", { name: /Build environment/ })).toBeDisabled();
+    subActorsOn = false;
+  });
+
   it("shows the three CLI steps on the Build-locally tab", async () => {
     const user = userEvent.setup();
     renderPanel();
