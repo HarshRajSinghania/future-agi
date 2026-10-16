@@ -18,7 +18,12 @@ from model_hub.models.run_prompt import PromptTemplate, PromptVersion
 from simulate.models import (
     AgentDefinition,
     CallExecution,
+    ChatMessageModel,
+    HostedHarnessAttempt,
+    HostedHarnessExecution,
     HostedHarnessJob,
+    HostedHarnessReceipt,
+    HostedHarnessScenario,
     RunTest,
     Scenarios,
     SimulateEvalConfig,
@@ -1083,6 +1088,7 @@ class TestRunTestRuntimeContracts:
                 "text": "transcript"
             },  # "text" is valid for word_count but not char_count
         )
+        updated_before = eval_config.updated_at
 
         response = auth_client.post(
             f"/simulate/run-tests/{run_test_with_v10_scenario.id}/eval-configs/"
@@ -1093,8 +1099,12 @@ class TestRunTestRuntimeContracts:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST, response.content
         eval_config.refresh_from_db()
-        # Mapping should be preserved (unchanged) since the 400 response prevents save
+        # The whole row must be as it was: this route has no transaction, so
+        # a save made before the mapping check would stay in the database.
         assert eval_config.mapping == {"text": "transcript"}
+        assert eval_config.eval_template_id == word_count_eval_template.id
+        assert eval_config.config == {}
+        assert eval_config.updated_at == updated_before
 
     def test_update_preserves_valid_mapping_keys_when_template_changes(
         self,
@@ -1476,6 +1486,65 @@ class TestRunTestDetailView:
             k: v["regradable"] for k, v in items.items()
         }
 
+    def test_get_run_test_detail_says_which_evals_can_be_edited(
+        self, auth_client, run_test_with_v10_scenario, word_count_eval_template
+    ):
+        suite_template = EvalTemplate.objects.create(
+            name="suite_editable_contract",
+            config={"required_keys": ["conversation"], "output": "Pass/Fail"},
+            owner="system",
+        )
+        mapped = SimulateEvalConfig.objects.create(
+            name="mapped",
+            eval_template=word_count_eval_template,
+            run_test=run_test_with_v10_scenario,
+            mapping={"text": "transcript"},
+        )
+        harness_filled = SimulateEvalConfig.objects.create(
+            name="harness_filled",
+            eval_template=suite_template,
+            run_test=run_test_with_v10_scenario,
+            mapping={},
+        )
+        not_a_dict = SimulateEvalConfig.objects.create(
+            name="not_a_dict",
+            eval_template=word_count_eval_template,
+            run_test=run_test_with_v10_scenario,
+            mapping=["text"],
+        )
+
+        url = f"/simulate/run-tests/{run_test_with_v10_scenario.id}/"
+
+        # Not a harness run: every eval is the person's to edit.
+        native = auth_client.get(url)
+        assert native.status_code == status.HTTP_200_OK, native.content
+        assert {
+            i["id"]: i["editable"]
+            for i in native.json()["simulate_eval_configs_detail"]
+        } == {
+            str(mapped.id): True,
+            str(harness_filled.id): True,
+            str(not_a_dict.id): True,
+        }
+
+        _link_harness_job(run_test_with_v10_scenario)
+
+        response = auth_client.get(url)
+        assert response.status_code == status.HTTP_200_OK, response.content
+        body = response.json()
+
+        items = {i["id"]: i for i in body["simulate_eval_configs_detail"]}
+        assert items[str(mapped.id)]["editable"] is True
+        # Re-grading a harness-filled row is allowed; editing it is not.
+        assert items[str(harness_filled.id)]["editable"] is False
+        assert items[str(harness_filled.id)]["regradable"] is True
+        assert items[str(not_a_dict.id)]["editable"] is False
+
+        # Same field on the compatibility list.
+        assert {i["id"]: i["editable"] for i in body["evals_detail"]} == {
+            k: v["editable"] for k, v in items.items()
+        }
+
     def test_get_run_test_detail_unauthenticated_returns_401(
         self, api_client, run_test_with_v10_scenario
     ):
@@ -1607,6 +1676,245 @@ class TestRunTestExecutionsView:
         assert body["count"] == 12
         assert len(body["results"]) == 10
         assert body["covered_scenario_count"] == 7
+
+    def test_get_run_test_executions_leaves_deleted_calls_out_of_every_count(
+        self,
+        auth_client,
+        run_test_with_v10_scenario,
+        scenario_with_prompt_version,
+        organization,
+        workspace,
+    ):
+        # A call deleted from a run is a soft delete. The run page stops
+        # showing it, so the list must stop counting it. One deleted call of
+        # each kind sits next to the visible ones so that every count is wrong
+        # on its own if it still includes deleted rows.
+        test_execution = TestExecution.objects.create(
+            run_test=run_test_with_v10_scenario,
+            status=TestExecution.ExecutionStatus.COMPLETED,
+            total_scenarios=1,
+            total_calls=11,
+            completed_calls=2,
+        )
+
+        def call(call_status, *, duration=None, response_ms=None, deleted=False):
+            return CallExecution.all_objects.create(
+                test_execution=test_execution,
+                scenario=scenario_with_prompt_version,
+                status=call_status,
+                simulation_call_type=CallExecution.SimulationCallType.TEXT,
+                duration_seconds=duration,
+                response_time_ms=response_ms,
+                deleted=deleted,
+            )
+
+        statuses = CallExecution.CallStatus
+        answered = call(statuses.COMPLETED, duration=10, response_ms=100)
+        call(statuses.COMPLETED, duration=20, response_ms=300)
+        call(statuses.FAILED, duration=0)
+        call(statuses.CANCELLED, duration=0)
+        call(statuses.PENDING)
+        call(statuses.REGISTERED)
+        deleted_answered = call(
+            statuses.COMPLETED, duration=30, response_ms=2000, deleted=True
+        )
+        call(statuses.FAILED, duration=0, deleted=True)
+        call(statuses.CANCELLED, duration=0, deleted=True)
+        call(statuses.PENDING, deleted=True)
+        call(statuses.REGISTERED, deleted=True)
+        for call_execution, turns in ((answered, 1), (deleted_answered, 2)):
+            for _ in range(turns):
+                ChatMessageModel.objects.create(
+                    call_execution=call_execution,
+                    role=ChatMessageModel.RoleChoices.USER,
+                    messages=["Hello"],
+                    organization=organization,
+                    workspace=workspace,
+                    session_id="deleted-calls",
+                )
+
+        response = auth_client.get(
+            f"/simulate/run-tests/{run_test_with_v10_scenario.id}/executions/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.content
+        row = next(
+            item
+            for item in response.json()["results"]
+            if item["id"] == str(test_execution.id)
+        )
+        # The stored counter still says 11; the response reports the visible calls.
+        assert row["calls"] == 6
+        assert row["total_calls"] == 6
+        assert row["completed_calls"] == 2
+        # Failed and cancelled both count as failed.
+        assert row["failed_calls"] == 2
+        assert row["pending_calls"] == 2
+        assert row["connected_calls"] == 2
+        # Attempted leaves out the one pending and the one queued call.
+        assert row["calls_attempted"] == 4
+        assert row["calls_connected_percentage"] == 50.0
+        assert row["success_rate"] == 33.3
+        assert row["avg_response_time"] == 0.2
+        # Already held before: the duration is summed over the prefetched
+        # calls, which come through the manager.
+        assert row["duration"] == 30
+        assert row["total_number_of_fagi_agent_turns"] == 1
+
+    def test_get_run_test_executions_leaves_deleted_calls_out_of_harness_outcomes(
+        self,
+        auth_client,
+        run_test_with_v10_scenario,
+        scenario_with_prompt_version,
+        organization,
+        workspace,
+    ):
+        # A harness run's passed/failed/skipped come from the harness
+        # receipts, which stay in the table after a call is soft deleted. A
+        # receipt reaches its call through the execution, or, for a receipt
+        # without one, through the scenario registration. Both kinds of
+        # deleted call sit next to the visible ones.
+        test_execution = TestExecution.objects.create(
+            run_test=run_test_with_v10_scenario,
+            status=TestExecution.ExecutionStatus.COMPLETED,
+            total_scenarios=5,
+            total_calls=5,
+            completed_calls=5,
+        )
+        job = HostedHarnessJob.no_workspace_objects.create(
+            organization=organization,
+            workspace=workspace,
+            run_test=run_test_with_v10_scenario,
+            test_execution=test_execution,
+            run_id=uuid4(),
+            idempotency_key=uuid4().hex,
+            request_digest=uuid4().hex,
+            schema_version="1.6",
+            seed=1,
+            artifact_level="standard",
+            max_artifact_bytes=1024,
+            deadline_at=timezone.now() + timedelta(hours=1),
+            scenario_count=5,
+            payload={"metadata": {}, "runtime": {"max_duration_seconds": 600}},
+        )
+        attempt = HostedHarnessAttempt.objects.create(
+            job=job,
+            attempt_number=1,
+            token_hash="t" * 64,
+            fence_hash="f" * 64,
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+        def receipt(key, receipt_status, *, deleted, through_execution):
+            call_execution = CallExecution.all_objects.create(
+                test_execution=test_execution,
+                scenario=scenario_with_prompt_version,
+                status=CallExecution.CallStatus.COMPLETED,
+                simulation_call_type=CallExecution.SimulationCallType.TEXT,
+                deleted=deleted,
+            )
+            registration = HostedHarnessScenario.objects.create(
+                job=job,
+                scenario_key=key,
+                call_execution=None if through_execution else call_execution,
+            )
+            execution = (
+                HostedHarnessExecution.objects.create(
+                    job=job,
+                    source_scenario=registration,
+                    execution_key=key,
+                    trial_index=0,
+                    call_execution=call_execution,
+                )
+                if through_execution
+                else None
+            )
+            HostedHarnessReceipt.objects.create(
+                job=job,
+                attempt=attempt,
+                scenario=registration,
+                execution=execution,
+                attempt_number=1,
+                digest="sha256:" + "0" * 64,
+                status=receipt_status,
+                body={},
+            )
+
+        receipt("kept-passed", "passed", deleted=False, through_execution=True)
+        receipt("kept-failed", "failed", deleted=False, through_execution=False)
+        receipt("kept-skipped", "skipped", deleted=False, through_execution=True)
+        receipt("gone-passed", "passed", deleted=True, through_execution=True)
+        receipt("gone-errored", "errored", deleted=True, through_execution=False)
+        receipt("gone-skipped", "skipped", deleted=True, through_execution=True)
+
+        response = auth_client.get(
+            f"/simulate/run-tests/{run_test_with_v10_scenario.id}/executions/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.content
+        row = next(
+            item
+            for item in response.json()["results"]
+            if item["id"] == str(test_execution.id)
+        )
+        assert row["calls"] == 3
+        assert row["total_calls"] == 3
+        assert row["outcome_passed"] == 1
+        assert row["outcome_failed"] == 1
+        assert row["outcome_skipped"] == 1
+
+    def test_get_run_test_executions_times_a_prompt_run_without_deleted_calls(
+        self, auth_client, organization, workspace, scenario_with_prompt_version
+    ):
+        # A prompt simulation's duration is the span from its first chat
+        # message to its last. Messages of a deleted call must not stretch it.
+        run_test = RunTest.objects.create(
+            name="Prompt run with a deleted call",
+            organization=organization,
+            workspace=workspace,
+            source_type=RunTest.SourceTypes.PROMPT,
+        )
+        test_execution = TestExecution.objects.create(
+            run_test=run_test,
+            status=TestExecution.ExecutionStatus.COMPLETED,
+            total_scenarios=1,
+            total_calls=1,
+            completed_calls=1,
+        )
+        started = timezone.now() - timedelta(hours=1)
+        for deleted, offsets in ((False, (0, 10)), (True, (500, 1000))):
+            call_execution = CallExecution.all_objects.create(
+                test_execution=test_execution,
+                scenario=scenario_with_prompt_version,
+                status=CallExecution.CallStatus.COMPLETED,
+                simulation_call_type=CallExecution.SimulationCallType.TEXT,
+                deleted=deleted,
+            )
+            for offset in offsets:
+                message = ChatMessageModel.objects.create(
+                    call_execution=call_execution,
+                    role=ChatMessageModel.RoleChoices.USER,
+                    messages=["Hello"],
+                    organization=organization,
+                    workspace=workspace,
+                    session_id="prompt-run",
+                )
+                ChatMessageModel.objects.filter(id=message.id).update(
+                    created_at=started + timedelta(seconds=offset)
+                )
+
+        response = auth_client.get(f"/simulate/run-tests/{run_test.id}/executions/")
+
+        assert response.status_code == status.HTTP_200_OK, response.content
+        row = next(
+            item
+            for item in response.json()["results"]
+            if item["id"] == str(test_execution.id)
+        )
+        assert row["duration"] == 10
+        assert row["total_calls"] == 1
+        assert row["total_chats"] == 1
+        assert row["total_number_of_fagi_agent_turns"] == 2
 
     def test_get_run_test_executions_counts_native_runs_by_scenario_ids(
         self, auth_client, run_test_with_v10_scenario

@@ -69,6 +69,7 @@ beforeEach(() => {
           { value: "failed", count: 2 },
         ],
       },
+      statusCounts: { passed: 4, failed: 2 },
       count: status ? tasks.length : total,
       totalPages: !status && total > tasks.length ? 3 : 1,
       isLoading: false,
@@ -98,8 +99,46 @@ const rowBox = (name) =>
   screen.getByRole("checkbox", { name: `Select ${name}` });
 const pageBox = () =>
   screen.getByRole("checkbox", { name: "Select all calls on this page" });
+const groupBox = (label) =>
+  screen.getByRole("checkbox", { name: `Select calls in ${label}` });
+// The page's calls split into groups, each `count` long in the whole run.
+const mockGroups = (groups) =>
+  useRunCalls.mockImplementation(() => {
+    const tasks = groups.flatMap((g) => g.rows);
+    return {
+      tasks,
+      columns: [],
+      groups: groups.map((g) => ({
+        measured: g.rows.length,
+        passed: 0,
+        agg: { evals: {} },
+        count: g.rows.length,
+        ...g,
+      })),
+      facets: {},
+      count: tasks.length,
+      totalPages: 1,
+      isLoading: false,
+    };
+  });
 
 describe("RunTraceTable — selecting calls to re-run", () => {
+  it("keeps every checkbox pinned to the left edge while the table scrolls sideways", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    await openRows(user);
+
+    const cells = [
+      pageBox(),
+      groupBox("Refunds"),
+      rowBox("refund · Trial 1"),
+    ].map((box) => box.closest("th, td"));
+    cells.forEach((cell) => {
+      expect(getComputedStyle(cell).position).toBe("sticky");
+      expect(getComputedStyle(cell).left).toBe("0px");
+    });
+  });
+
   it("ticks a call without opening it", async () => {
     const user = userEvent.setup();
     const { onOpenCall } = renderTable();
@@ -135,6 +174,105 @@ describe("RunTraceTable — selecting calls to re-run", () => {
 
     expect(rowBox("refund · Trial 2")).not.toBeChecked();
     expect(rowBox("refund · Trial 3")).not.toBeChecked();
+  });
+
+  it("tells the run page it has calls to tick", () => {
+    const onTickableChange = vi.fn();
+    renderTable({ onTickableChange });
+
+    expect(onTickableChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it("tells the run page when none of its calls can be ticked", () => {
+    const untagged = [task("u1", null, null), task("u2", null, null)];
+    useRunCalls.mockImplementation(() => ({
+      tasks: untagged,
+      columns: [],
+      groups: [],
+      facets: {},
+      count: untagged.length,
+      totalPages: 1,
+      isLoading: false,
+    }));
+    const onTickableChange = vi.fn();
+    renderTable({ onTickableChange });
+
+    expect(onTickableChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("shows no checkbox column for a run with no call to tick, even once filtered", async () => {
+    const user = userEvent.setup();
+    const untagged = [task("u1", null, null), task("u2", null, null, "failed")];
+    useRunCalls.mockImplementation((_id, opts = {}) => {
+      const status = opts.filters?.status?.[0];
+      const tasks = untagged.filter((t) => !status || t.status === status);
+      return {
+        tasks,
+        columns: [],
+        groups: [
+          {
+            label: "Refunds",
+            rows: tasks,
+            count: tasks.length,
+            measured: tasks.length,
+            passed: 0,
+            agg: { evals: {} },
+          },
+        ],
+        facets: {
+          status: [
+            { value: "passed", count: 1 },
+            { value: "failed", count: 1 },
+          ],
+        },
+        statusCounts: { passed: 1, failed: 1 },
+        count: tasks.length,
+        totalPages: 1,
+        isLoading: false,
+      };
+    });
+    renderTable();
+    await openRows(user);
+
+    expect(
+      screen.queryByRole("checkbox", { name: "Select all calls on this page" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Failed/ }));
+    expect(
+      screen.queryByRole("checkbox", { name: "Select all calls on this page" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says nothing while a filter decides which calls show", () => {
+    useRunCalls.mockImplementation(() => ({
+      tasks: [],
+      columns: [],
+      groups: [],
+      facets: {},
+      count: 0,
+      totalPages: 1,
+      isLoading: false,
+    }));
+    const onTickableChange = vi.fn();
+    renderTable({ onTickableChange, initialFilters: { status: ["failed"] } });
+
+    expect(onTickableChange).not.toHaveBeenCalled();
+  });
+
+  it("says nothing while the calls are still loading", () => {
+    useRunCalls.mockImplementation(() => ({
+      tasks: [],
+      columns: [],
+      groups: [],
+      facets: {},
+      count: 0,
+      totalPages: 1,
+      isLoading: true,
+    }));
+    const onTickableChange = vi.fn();
+    renderTable({ onTickableChange });
+
+    expect(onTickableChange).not.toHaveBeenCalled();
   });
 
   it("gives a call without a scenario no checkbox", async () => {
@@ -227,6 +365,108 @@ describe("RunTraceTable — selecting calls to re-run", () => {
     await user.click(screen.getByRole("button", { name: /Failed/ }));
 
     expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+  });
+});
+
+describe("RunTraceTable — ticking a whole group", () => {
+  it("ticks every call in a folded group without opening it", async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(groupBox("Refunds"));
+
+    expect(groupBox("Refunds")).toBeChecked();
+    expect(
+      screen.getByText("6 calls selected · 2 scenarios"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: "Select refund · Trial 1" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a group as partly ticked once folded", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    await openRows(user);
+    await user.click(rowBox("refund · Trial 1"));
+    await openRows(user);
+
+    expect(groupBox("Refunds")).not.toBeChecked();
+    expect(groupBox("Refunds")).toHaveAttribute("data-indeterminate", "true");
+  });
+
+  it("clears a group from its checkbox", async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(groupBox("Refunds"));
+    await user.click(groupBox("Refunds"));
+
+    expect(groupBox("Refunds")).not.toBeChecked();
+    expect(screen.queryByText(/calls? selected/)).not.toBeInTheDocument();
+  });
+
+  it("ticks a group that goes on to another page once its calls here are", async () => {
+    const user = userEvent.setup();
+    mockGroups([{ label: "Refunds", rows: TASKS.slice(0, 3), count: 9 }]);
+    renderTable();
+
+    await user.click(groupBox("Refunds"));
+
+    expect(
+      screen.getByText("3 calls selected · 1 scenario"),
+    ).toBeInTheDocument();
+    expect(groupBox("Refunds")).toBeChecked();
+    expect(groupBox("Refunds")).toHaveAttribute("data-indeterminate", "false");
+  });
+
+  it("clears a group that goes on to another page from its box", async () => {
+    const user = userEvent.setup();
+    mockGroups([{ label: "Refunds", rows: TASKS.slice(0, 3), count: 9 }]);
+    renderTable();
+
+    await user.click(groupBox("Refunds"));
+    await user.click(groupBox("Refunds"));
+
+    expect(screen.queryByText(/calls? selected/)).not.toBeInTheDocument();
+    expect(groupBox("Refunds")).toHaveAttribute("data-indeterminate", "false");
+  });
+
+  it("leaves a group out of every matching call when unticked", async () => {
+    const user = userEvent.setup();
+    total = 120;
+    renderTable();
+    await openRows(user);
+    await user.click(pageBox());
+    await user.click(
+      screen.getByRole("button", { name: "Select all 120 matching calls" }),
+    );
+    expect(groupBox("Refunds")).toBeChecked();
+
+    await user.click(groupBox("Refunds"));
+
+    expect(
+      screen.getByText(
+        "All 120 matching calls are selected except 6 you unticked.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("114 calls selected")).toBeInTheDocument();
+  });
+
+  it("gives a group of untagged calls no checkbox", () => {
+    mockGroups([
+      { label: "Refunds", rows: TASKS.slice(0, 3) },
+      {
+        label: "Untagged",
+        rows: [task("u1", null, null), task("u2", null, null)],
+      },
+    ]);
+    renderTable();
+
+    expect(groupBox("Refunds")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: "Select calls in Untagged" }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -373,6 +613,11 @@ describe("RunTraceTable — the Re-run menu", () => {
     ).toBeInTheDocument();
     // 2 × 20 is within the limit; the limit is about scenarios × trials.
     expect(screen.queryByText(/a run allows up to/)).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("menuitem", { name: /Run as a new simulation/ }),
+    );
+
+    expect(onRerunScenarios).toHaveBeenCalledWith(["refund", "escalate"], 20);
   });
 
   it("disables the option when scenarios × trials passes 200", async () => {

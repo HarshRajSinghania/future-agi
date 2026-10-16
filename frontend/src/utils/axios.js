@@ -167,10 +167,18 @@ axiosInstance.interceptors.response.use(
       setIsRefreshing(true);
 
       try {
+        const refreshGeneration = localStorage.getItem("fai_auth_generation");
         const res = await refreshTokenRequest();
         const newAccessToken = res.data?.access;
 
         if (!newAccessToken) throw new Error("No access token returned");
+
+        if (refreshGeneration !== localStorage.getItem("fai_auth_generation")) {
+          const sessionReplaced = new Error("session replaced");
+          processQueue(sessionReplaced, null);
+          window.location.replace("/dashboard/develop");
+          throw sessionReplaced;
+        }
 
         // 🪪 Save new token in storage + axios headers
         // Workspace header is managed by WorkspaceProvider (reads from sessionStorage).
@@ -196,6 +204,9 @@ axiosInstance.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         return axiosInstance(originalRequest);
       } catch (err) {
+        if (err?.message === "session replaced") {
+          return Promise.reject(err);
+        }
         processQueue(err, null); // ❌ Fail queued requests too
         setSession(null);
         resetUser();
@@ -1837,6 +1848,10 @@ export const endpoints = {
     stats: apiPath("/tracer/feed/issues/stats/"),
     detail: (clusterId) =>
       apiPath("/tracer/feed/issues/{cluster_id}/", { cluster_id: clusterId }),
+    redirect: (clusterId) =>
+      apiPath("/tracer/feed/issues/{cluster_id}/redirect/", {
+        cluster_id: clusterId,
+      }),
     update: (clusterId) =>
       apiPath("/tracer/feed/issues/{cluster_id}/", { cluster_id: clusterId }),
     overview: (clusterId) =>

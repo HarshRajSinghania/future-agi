@@ -288,6 +288,8 @@ import type {
   ConditionalColumnRequestApi,
   ConversationCreateRequestApi,
   ConversationDetailResponseApi,
+  ConversationEvidenceRequestApi,
+  ConversationEvidenceResponseApi,
   ConversationListResponseApi,
   ConversationUpdateRequestApi,
   CreateDatasetFromExperimentRequestApi,
@@ -347,6 +349,7 @@ import type {
   DatasetCopyResponseApi,
   DatasetCreateStartedResponseApi,
   DatasetCreationProgressResponseApi,
+  DatasetDeleteApi,
   DatasetDerivedVariablesResponseApi,
   DatasetEvalStatsResponseApi,
   DatasetExplanationSummaryResponseApi,
@@ -507,6 +510,7 @@ import type {
   FalconMemoryListResponseApi,
   FeedDetailApiResponseApi,
   FeedListApiResponseApi,
+  FeedRedirectApiResponseApi,
   FeedSidebarApiResponseApi,
   FeedStatsApiResponseApi,
   FeedUpdateBodyApi,
@@ -586,9 +590,12 @@ import type {
   HarnessEnvironmentAddEvaluationApi,
   HarnessEnvironmentAvailableEvalsApi,
   HarnessEnvironmentDetailApi,
+  HarnessEnvironmentEvalEditApi,
   HarnessEnvironmentListResponseApi,
   HarnessEnvironmentRenameApi,
   HarnessEnvironmentRunEvaluationQueuedApi,
+  HarnessEnvironmentRunEvaluationsApi,
+  HarnessEnvironmentRunEvaluationsQueuedApi,
   HarnessEnvironmentToolCallEvaluationApi,
   HarnessEventBatchApi,
   HarnessEventBatchResponseApi,
@@ -1060,6 +1067,7 @@ import type {
   Saml2AuthAcsCreateBodyTwo,
   Saml2AuthAuthCallbackListParams,
   Saml2AuthAuthReadParams,
+  Saml2AuthCompleteListParams,
   Saml2AuthGithubCallbackListParams,
   Saml2AuthGithubReadParams,
   Saml2AuthIdpLoginListParams,
@@ -1139,6 +1147,7 @@ import type {
   SimulateApiPersonasWorkspacePersonasParams,
   SimulateApiRunTestsListParams,
   SimulateApiTestExecutionsListParams,
+  SimulateEvalConfigResponseApi,
   SimulateExportReadParams,
   SimulatePromptTemplatesSimulationsListParams,
   SimulateRunTestsEvalSummaryComparisonListParams,
@@ -1282,6 +1291,7 @@ import type {
   TracerFeedIssuesListParams,
   TracerFeedIssuesOverviewListParams,
   TracerFeedIssuesReadParams,
+  TracerFeedIssuesRedirectListParams,
   TracerFeedIssuesRootCauseListParams,
   TracerFeedIssuesSidebarListParams,
   TracerFeedIssuesStatsListParams,
@@ -1358,7 +1368,6 @@ import type {
   TracerUserAlertLogsListAllParams,
   TracerUserAlertLogsListParams,
   TracerUserAlertsList200,
-  TracerUserAlertsListMonitors200,
   TracerUserAlertsListMonitorsParams,
   TracerUserAlertsListParams,
   TracerUserAlertsMetricOptionsParams,
@@ -1428,6 +1437,7 @@ import type {
   UserAlertMonitorDuplicateApi,
   UserAlertMonitorDuplicateResponseApi,
   UserAlertMonitorGraphResponseApi,
+  UserAlertMonitorListResponseApi,
   UserAlertMonitorLogApi,
   UserAlertMonitorLogResolveRequestApi,
   UserAlertMonitorLogResolveResponseApi,
@@ -33890,24 +33900,55 @@ export const modelHubDevelopsDatasetCreationProgressRead = async (
   );
 };
 
-export type modelHubDevelopsDeleteDatasetDeleteResponse204 = {
-  data: void;
-  status: 204;
+export type modelHubDevelopsDeleteDatasetDeleteResponse200 = {
+  data: DevelopDatasetMessageResponseApi;
+  status: 200;
+};
+
+export type modelHubDevelopsDeleteDatasetDeleteResponse400 = {
+  data: ModelHubErrorResponseApi;
+  status: 400;
+};
+
+export type modelHubDevelopsDeleteDatasetDeleteResponse403 = {
+  data: ModelHubErrorResponseApi;
+  status: 403;
+};
+
+export type modelHubDevelopsDeleteDatasetDeleteResponse404 = {
+  data: ModelHubErrorResponseApi;
+  status: 404;
+};
+
+export type modelHubDevelopsDeleteDatasetDeleteResponse409 = {
+  data: ModelHubErrorResponseApi;
+  status: 409;
+};
+
+export type modelHubDevelopsDeleteDatasetDeleteResponse500 = {
+  data: ModelHubErrorResponseApi;
+  status: 500;
 };
 
 export type modelHubDevelopsDeleteDatasetDeleteResponseDefault = {
   data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 204>;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 409 | 500>;
 };
 
 export type modelHubDevelopsDeleteDatasetDeleteResponseSuccess =
-  modelHubDevelopsDeleteDatasetDeleteResponse204 & {
+  modelHubDevelopsDeleteDatasetDeleteResponse200 & {
     headers: Headers;
   };
-export type modelHubDevelopsDeleteDatasetDeleteResponseError =
-  modelHubDevelopsDeleteDatasetDeleteResponseDefault & {
-    headers: Headers;
-  };
+export type modelHubDevelopsDeleteDatasetDeleteResponseError = (
+  | modelHubDevelopsDeleteDatasetDeleteResponse400
+  | modelHubDevelopsDeleteDatasetDeleteResponse403
+  | modelHubDevelopsDeleteDatasetDeleteResponse404
+  | modelHubDevelopsDeleteDatasetDeleteResponse409
+  | modelHubDevelopsDeleteDatasetDeleteResponse500
+  | modelHubDevelopsDeleteDatasetDeleteResponseDefault
+) & {
+  headers: Headers;
+};
 
 export type modelHubDevelopsDeleteDatasetDeleteResponse =
   | modelHubDevelopsDeleteDatasetDeleteResponseSuccess
@@ -33918,6 +33959,7 @@ export const getModelHubDevelopsDeleteDatasetDeleteUrl = () => {
 };
 
 export const modelHubDevelopsDeleteDatasetDelete = async (
+  datasetDeleteApi: DatasetDeleteApi,
   options?: RequestInit,
 ): Promise<modelHubDevelopsDeleteDatasetDeleteResponse> => {
   return apiMutator<modelHubDevelopsDeleteDatasetDeleteResponse>(
@@ -33925,6 +33967,8 @@ export const modelHubDevelopsDeleteDatasetDelete = async (
     {
       ...options,
       method: "DELETE",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(datasetDeleteApi),
     },
   );
 };
@@ -54421,6 +54465,65 @@ export const saml2AuthAuthRead = async (
   );
 };
 
+export type saml2AuthCompleteListResponse302 = {
+  data: void;
+  status: 302;
+};
+
+export type saml2AuthCompleteListResponse400 = {
+  data: SAMLErrorResponseApi;
+  status: 400;
+};
+
+export type saml2AuthCompleteListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 302 | 400>;
+};
+export type saml2AuthCompleteListResponseError = (
+  | saml2AuthCompleteListResponse302
+  | saml2AuthCompleteListResponse400
+  | saml2AuthCompleteListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type saml2AuthCompleteListResponse = saml2AuthCompleteListResponseError;
+
+export const getSaml2AuthCompleteListUrl = (
+  params: Saml2AuthCompleteListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/saml2_auth/complete/?${stringifiedParams}`
+    : `/saml2_auth/complete/`;
+};
+
+export const saml2AuthCompleteList = async (
+  params: Saml2AuthCompleteListParams,
+  options?: RequestInit,
+): Promise<saml2AuthCompleteListResponse> => {
+  return apiMutator<saml2AuthCompleteListResponse>(
+    getSaml2AuthCompleteListUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
 export type saml2AuthGithubCallbackListResponse302 = {
   data: void;
   status: 302;
@@ -58773,6 +58876,56 @@ export const simulateApiHarnessEnvironmentsEvaluationsSetToolCallEvaluation =
     );
   };
 
+export type simulateApiHarnessEnvironmentsEditEvaluationResponse200 = {
+  data: SimulateEvalConfigResponseApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsEditEvaluationResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsEditEvaluationResponseSuccess =
+  simulateApiHarnessEnvironmentsEditEvaluationResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsEditEvaluationResponseError =
+  simulateApiHarnessEnvironmentsEditEvaluationResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsEditEvaluationResponse =
+  | simulateApiHarnessEnvironmentsEditEvaluationResponseSuccess
+  | simulateApiHarnessEnvironmentsEditEvaluationResponseError;
+
+export const getSimulateApiHarnessEnvironmentsEditEvaluationUrl = (
+  id: string,
+  evalConfigId: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/evaluations/${evalConfigId}/`;
+};
+
+/**
+ * Change one eval of this environment. Never grades anything; grade a run again afterwards to refresh its scores.
+ */
+export const simulateApiHarnessEnvironmentsEditEvaluation = async (
+  id: string,
+  evalConfigId: string,
+  harnessEnvironmentEvalEditApi: HarnessEnvironmentEvalEditApi,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsEditEvaluationResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsEditEvaluationResponse>(
+    getSimulateApiHarnessEnvironmentsEditEvaluationUrl(id, evalConfigId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(harnessEnvironmentEvalEditApi),
+    },
+  );
+};
+
 export type simulateApiHarnessEnvironmentsRemoveEvaluationResponse204 = {
   data: void;
   status: 204;
@@ -58922,6 +59075,61 @@ export const simulateApiHarnessEnvironmentsRunsAddRunEvaluation = async (
     },
   );
 };
+
+export type simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponse202 =
+  {
+    data: HarnessEnvironmentRunEvaluationsQueuedApi;
+    status: 202;
+  };
+
+export type simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponseDefault =
+  {
+    data: ManagementAPIErrorResponseApi;
+    status: Exclude<HTTPStatusCodes, 202>;
+  };
+
+export type simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponseSuccess =
+  simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponse202 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponseError =
+  simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponse =
+
+    | simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponseSuccess
+    | simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponseError;
+
+export const getSimulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsUrl =
+  (id: string, executionId: string) => {
+    return `/simulate/api/harness-environments/${id}/runs/${executionId}/evaluations/run/`;
+  };
+
+/**
+ * Grade this finished run's calls again with chosen evals of the environment, without rerunning the calls.
+ */
+export const simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluations =
+  async (
+    id: string,
+    executionId: string,
+    harnessEnvironmentRunEvaluationsApi: HarnessEnvironmentRunEvaluationsApi,
+    options?: RequestInit,
+  ): Promise<simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponse> => {
+    return apiMutator<simulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsResponse>(
+      getSimulateApiHarnessEnvironmentsRunsEvaluationsRunEvaluationsUrl(
+        id,
+        executionId,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(harnessEnvironmentRunEvaluationsApi),
+      },
+    );
+  };
 
 export type simulateApiHarnessJobsListResponse200 = {
   data: HarnessJobReadApi[];
@@ -71081,6 +71289,94 @@ export const tracerFeedIssuesOverviewList = async (
   );
 };
 
+export type tracerFeedIssuesRedirectListResponse200 = {
+  data: FeedRedirectApiResponseApi;
+  status: 200;
+};
+
+export type tracerFeedIssuesRedirectListResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerFeedIssuesRedirectListResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerFeedIssuesRedirectListResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerFeedIssuesRedirectListResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerFeedIssuesRedirectListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 500>;
+};
+
+export type tracerFeedIssuesRedirectListResponseSuccess =
+  tracerFeedIssuesRedirectListResponse200 & {
+    headers: Headers;
+  };
+export type tracerFeedIssuesRedirectListResponseError = (
+  | tracerFeedIssuesRedirectListResponse400
+  | tracerFeedIssuesRedirectListResponse403
+  | tracerFeedIssuesRedirectListResponse404
+  | tracerFeedIssuesRedirectListResponse500
+  | tracerFeedIssuesRedirectListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerFeedIssuesRedirectListResponse =
+  | tracerFeedIssuesRedirectListResponseSuccess
+  | tracerFeedIssuesRedirectListResponseError;
+
+export const getTracerFeedIssuesRedirectListUrl = (
+  clusterId: string,
+  params?: TracerFeedIssuesRedirectListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/tracer/feed/issues/${clusterId}/redirect/?${stringifiedParams}`
+    : `/tracer/feed/issues/${clusterId}/redirect/`;
+};
+
+/**
+ * Resolve an old issue ID to its active redirect target.
+ */
+export const tracerFeedIssuesRedirectList = async (
+  clusterId: string,
+  params?: TracerFeedIssuesRedirectListParams,
+  options?: RequestInit,
+): Promise<tracerFeedIssuesRedirectListResponse> => {
+  return apiMutator<tracerFeedIssuesRedirectListResponse>(
+    getTracerFeedIssuesRedirectListUrl(clusterId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
 export type tracerFeedIssuesRootCauseListResponse200 = {
   data: DeepAnalysisApiResponseApi;
   status: 200;
@@ -71731,6 +72027,65 @@ export const tracerInternalErrorFeedV2AttemptsPartialUpdate = async (
     },
   );
 };
+
+export type tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponse200 =
+  {
+    data: ConversationEvidenceResponseApi;
+    status: 200;
+  };
+
+export type tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponse409 =
+  {
+    data: InvestigationControlErrorApi;
+    status: 409;
+  };
+
+export type tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponseDefault =
+  {
+    data: ManagementAPIErrorResponseApi;
+    status: Exclude<HTTPStatusCodes, 200 | 409>;
+  };
+
+export type tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponseSuccess =
+  tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponseError =
+  (
+    | tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponse409
+    | tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponseDefault
+  ) & {
+    headers: Headers;
+  };
+
+export type tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponse =
+
+    | tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponseSuccess
+    | tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponseError;
+
+export const getTracerInternalErrorFeedV2AttemptsConversationEvidenceCreateUrl =
+  (attemptId: string) => {
+    return `/tracer/internal/error-feed-v2/attempts/${attemptId}/conversation-evidence/`;
+  };
+
+export const tracerInternalErrorFeedV2AttemptsConversationEvidenceCreate =
+  async (
+    attemptId: string,
+    conversationEvidenceRequestApi: ConversationEvidenceRequestApi,
+    options?: RequestInit,
+  ): Promise<tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponse> => {
+    return apiMutator<tracerInternalErrorFeedV2AttemptsConversationEvidenceCreateResponse>(
+      getTracerInternalErrorFeedV2AttemptsConversationEvidenceCreateUrl(
+        attemptId,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(conversationEvidenceRequestApi),
+      },
+    );
+  };
 
 export type tracerInternalErrorFeedV2AttemptsSimulationEvidenceCreateResponse201 =
   {
@@ -81273,23 +81628,30 @@ export const tracerUserAlertsDuplicate = async (
 };
 
 export type tracerUserAlertsListMonitorsResponse200 = {
-  data: TracerUserAlertsListMonitors200;
+  data: UserAlertMonitorListResponseApi;
   status: 200;
+};
+
+export type tracerUserAlertsListMonitorsResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
 };
 
 export type tracerUserAlertsListMonitorsResponseDefault = {
   data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 200>;
+  status: Exclude<HTTPStatusCodes, 200 | 400>;
 };
 
 export type tracerUserAlertsListMonitorsResponseSuccess =
   tracerUserAlertsListMonitorsResponse200 & {
     headers: Headers;
   };
-export type tracerUserAlertsListMonitorsResponseError =
-  tracerUserAlertsListMonitorsResponseDefault & {
-    headers: Headers;
-  };
+export type tracerUserAlertsListMonitorsResponseError = (
+  | tracerUserAlertsListMonitorsResponse400
+  | tracerUserAlertsListMonitorsResponseDefault
+) & {
+  headers: Headers;
+};
 
 export type tracerUserAlertsListMonitorsResponse =
   | tracerUserAlertsListMonitorsResponseSuccess
