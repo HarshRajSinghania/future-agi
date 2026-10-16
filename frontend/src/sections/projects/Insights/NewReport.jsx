@@ -589,7 +589,6 @@ export default function NewReport({
             <Stack direction="row" spacing={2} alignItems="center">
               <Tooltip
                 describeChild
-                describeChild
                 arrow
                 title={
                   fixed
@@ -820,7 +819,6 @@ export default function NewReport({
               />
             ) : (
               <Tooltip
-                describeChild
                 describeChild
                 arrow
                 title={

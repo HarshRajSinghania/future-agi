@@ -1,3 +1,4 @@
+/* eslint-disable react/prop-types */
 import React from "react";
 import PropTypes from "prop-types";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";

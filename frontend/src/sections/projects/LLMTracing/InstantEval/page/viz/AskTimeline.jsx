@@ -144,6 +144,19 @@ const Squares = memo(function Squares({
   );
 });
 
+Squares.propTypes = {
+  columns: PropTypes.arrayOf(PropTypes.object).isRequired,
+  geometry: PropTypes.shape({
+    xOf: PropTypes.func.isRequired,
+    yOf: PropTypes.func.isRequired,
+    w: PropTypes.number.isRequired,
+    h: PropTypes.number.isRequired,
+  }).isRequired,
+  fillOf: PropTypes.func.isRequired,
+  dimmed: PropTypes.func.isRequired,
+  popped: PropTypes.instanceOf(Set).isRequired,
+};
+
 /**
  * Every row of the run on a time axis, one square per row, stacked in time
  * columns by answer: Jev's progress while it reads, and where the answers

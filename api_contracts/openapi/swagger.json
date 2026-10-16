@@ -145025,6 +145025,1484 @@
                 }
             }
         },
+        "InsightRunSummary": {
+            "required": [
+                "id",
+                "status",
+                "stage",
+                "created_at",
+                "finished_at",
+                "population_size",
+                "sample_size",
+                "analysed_count",
+                "taxonomy_mode",
+                "distribution",
+                "scope"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "status": {
+                    "title": "Status",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "stage": {
+                    "title": "Stage",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "created_at": {
+                    "title": "Created at",
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "finished_at": {
+                    "title": "Finished at",
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true
+                },
+                "population_size": {
+                    "title": "Population size",
+                    "type": "integer"
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer"
+                },
+                "analysed_count": {
+                    "title": "Analysed count",
+                    "type": "integer"
+                },
+                "taxonomy_mode": {
+                    "title": "Taxonomy mode",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "distribution": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "scope": {
+                    "title": "Scope",
+                    "type": "object"
+                }
+            },
+            "x-nullable": true
+        },
+        "InsightConfigItem": {
+            "required": [
+                "id",
+                "name",
+                "unit",
+                "lens",
+                "question",
+                "agent_description",
+                "instructions",
+                "attributes",
+                "sample_size",
+                "scope",
+                "has_taxonomy",
+                "taxonomy",
+                "created_at",
+                "latest_run"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "lens": {
+                    "title": "Lens",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "agent_description": {
+                    "title": "Agent description",
+                    "type": "string"
+                },
+                "instructions": {
+                    "title": "Instructions",
+                    "type": "string"
+                },
+                "attributes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer"
+                },
+                "scope": {
+                    "title": "Scope",
+                    "type": "object"
+                },
+                "has_taxonomy": {
+                    "title": "Has taxonomy",
+                    "type": "boolean"
+                },
+                "taxonomy": {
+                    "title": "Taxonomy",
+                    "type": "object"
+                },
+                "created_at": {
+                    "title": "Created at",
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "latest_run": {
+                    "$ref": "#/definitions/InsightRunSummary"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightRunSummary"
+                    }
+                }
+            }
+        },
+        "InsightConfigListResult": {
+            "required": [
+                "configs"
+            ],
+            "type": "object",
+            "properties": {
+                "configs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightConfigItem"
+                    }
+                }
+            }
+        },
+        "InsightConfigListResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightConfigListResult"
+                }
+            }
+        },
+        "InsightConfigResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightConfigItem"
+                }
+            }
+        },
+        "InsightAttribute": {
+            "required": [
+                "key",
+                "type"
+            ],
+            "type": "object",
+            "properties": {
+                "key": {
+                    "title": "Key",
+                    "type": "string",
+                    "maxLength": 60,
+                    "minLength": 1
+                },
+                "type": {
+                    "title": "Type",
+                    "type": "string",
+                    "enum": [
+                        "boolean",
+                        "number",
+                        "string"
+                    ]
+                },
+                "description": {
+                    "title": "Description",
+                    "type": "string",
+                    "maxLength": 300
+                },
+                "filter_by": {
+                    "title": "Filter by",
+                    "type": "boolean",
+                    "default": false
+                }
+            }
+        },
+        "InsightScope": {
+            "type": "object",
+            "properties": {
+                "filters": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "maxLength": 300
+                },
+                "preset": {
+                    "title": "Preset",
+                    "type": "string",
+                    "maxLength": 16
+                },
+                "window": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "minLength": 1
+                    },
+                    "maxItems": 2
+                }
+            }
+        },
+        "InsightConfigPatch": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 1
+                },
+                "reset_taxonomy": {
+                    "title": "Reset taxonomy",
+                    "type": "boolean",
+                    "default": false
+                },
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 1
+                },
+                "lens": {
+                    "title": "Lens",
+                    "type": "string",
+                    "enum": [
+                        "usage",
+                        "failures",
+                        "experience",
+                        "personas",
+                        "custom"
+                    ]
+                },
+                "agent_description": {
+                    "title": "Agent description",
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "instructions": {
+                    "title": "Instructions",
+                    "type": "string",
+                    "maxLength": 1000
+                },
+                "attributes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAttribute"
+                    }
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer",
+                    "maximum": 1000,
+                    "minimum": 10
+                },
+                "scope": {
+                    "$ref": "#/definitions/InsightScope"
+                }
+            }
+        },
+        "InsightDraft": {
+            "required": [
+                "project_id",
+                "unit",
+                "lens",
+                "sample_ids"
+            ],
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "enum": [
+                        "traces",
+                        "sessions",
+                        "users"
+                    ]
+                },
+                "lens": {
+                    "title": "Lens",
+                    "type": "string",
+                    "enum": [
+                        "usage",
+                        "failures",
+                        "experience",
+                        "personas",
+                        "custom"
+                    ]
+                },
+                "goal": {
+                    "title": "Goal",
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "agent_description": {
+                    "title": "Agent description",
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "sample_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 255,
+                        "minLength": 1
+                    },
+                    "maxItems": 5,
+                    "minItems": 1
+                }
+            }
+        },
+        "InsightDraftResult": {
+            "required": [
+                "name",
+                "question",
+                "agent_description",
+                "instructions",
+                "attributes",
+                "examples_read"
+            ],
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "agent_description": {
+                    "title": "Agent description",
+                    "type": "string"
+                },
+                "instructions": {
+                    "title": "Instructions",
+                    "type": "string"
+                },
+                "attributes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "examples_read": {
+                    "title": "Examples read",
+                    "type": "integer"
+                }
+            }
+        },
+        "InsightDraftResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightDraftResult"
+                }
+            }
+        },
+        "InsightConfigInput": {
+            "required": [
+                "name",
+                "unit",
+                "lens",
+                "question"
+            ],
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 1
+                },
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "enum": [
+                        "traces",
+                        "sessions",
+                        "users"
+                    ]
+                },
+                "lens": {
+                    "title": "Lens",
+                    "type": "string",
+                    "enum": [
+                        "usage",
+                        "failures",
+                        "experience",
+                        "personas",
+                        "custom"
+                    ]
+                },
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 1
+                },
+                "agent_description": {
+                    "title": "Agent description",
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "instructions": {
+                    "title": "Instructions",
+                    "type": "string",
+                    "maxLength": 1000
+                },
+                "attributes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAttribute"
+                    }
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer",
+                    "maximum": 1000,
+                    "minimum": 10
+                }
+            }
+        },
+        "InsightPreview": {
+            "required": [
+                "project_id",
+                "config",
+                "unit_ids"
+            ],
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "config": {
+                    "$ref": "#/definitions/InsightConfigInput"
+                },
+                "unit_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 255,
+                        "minLength": 1
+                    },
+                    "maxItems": 3,
+                    "minItems": 1
+                }
+            }
+        },
+        "InsightPreviewResult": {
+            "required": [
+                "units"
+            ],
+            "type": "object",
+            "properties": {
+                "units": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                }
+            }
+        },
+        "InsightPreviewResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightPreviewResult"
+                }
+            }
+        },
+        "InsightPopulationItem": {
+            "required": [
+                "id"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 1
+                },
+                "time": {
+                    "title": "Time",
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "user_id": {
+                    "title": "User id",
+                    "type": "string",
+                    "maxLength": 255
+                }
+            }
+        },
+        "InsightRunCreate": {
+            "required": [
+                "project_id",
+                "population"
+            ],
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "config_id": {
+                    "title": "Config id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "config": {
+                    "$ref": "#/definitions/InsightConfigInput"
+                },
+                "scope": {
+                    "$ref": "#/definitions/InsightScope"
+                },
+                "population": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightPopulationItem"
+                    }
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer",
+                    "maximum": 1000,
+                    "minimum": 10
+                }
+            }
+        },
+        "InsightRunCreatedResult": {
+            "required": [
+                "run_id",
+                "config_id"
+            ],
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "title": "Run id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "config_id": {
+                    "title": "Config id",
+                    "type": "string",
+                    "format": "uuid"
+                }
+            }
+        },
+        "InsightRunCreatedResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightRunCreatedResult"
+                }
+            }
+        },
+        "InsightRunDetail": {
+            "required": [
+                "id",
+                "config_id",
+                "project_id",
+                "status",
+                "stage",
+                "progress",
+                "unit",
+                "scope",
+                "settings",
+                "population_size",
+                "sample_size",
+                "analysed_count",
+                "taxonomy_mode",
+                "result",
+                "models_used",
+                "cost_usd",
+                "error",
+                "created_at",
+                "started_at",
+                "finished_at",
+                "previous_run_id",
+                "next_run_id"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "config_id": {
+                    "title": "Config id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "status": {
+                    "title": "Status",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "stage": {
+                    "title": "Stage",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "progress": {
+                    "title": "Progress",
+                    "type": "object"
+                },
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "scope": {
+                    "title": "Scope",
+                    "type": "object"
+                },
+                "settings": {
+                    "title": "Settings",
+                    "type": "object"
+                },
+                "population_size": {
+                    "title": "Population size",
+                    "type": "integer"
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer"
+                },
+                "analysed_count": {
+                    "title": "Analysed count",
+                    "type": "integer"
+                },
+                "taxonomy_mode": {
+                    "title": "Taxonomy mode",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "result": {
+                    "title": "Result",
+                    "type": "object"
+                },
+                "models_used": {
+                    "title": "Models used",
+                    "type": "object"
+                },
+                "cost_usd": {
+                    "title": "Cost usd",
+                    "type": "number"
+                },
+                "error": {
+                    "title": "Error",
+                    "type": "string"
+                },
+                "created_at": {
+                    "title": "Created at",
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "started_at": {
+                    "title": "Started at",
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true
+                },
+                "finished_at": {
+                    "title": "Finished at",
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true
+                },
+                "previous_run_id": {
+                    "title": "Previous run id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                },
+                "next_run_id": {
+                    "title": "Next run id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                }
+            }
+        },
+        "InsightRunResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightRunDetail"
+                }
+            }
+        },
+        "InsightAskMessage": {
+            "required": [
+                "role",
+                "content"
+            ],
+            "type": "object",
+            "properties": {
+                "role": {
+                    "title": "Role",
+                    "type": "string",
+                    "enum": [
+                        "user",
+                        "assistant"
+                    ]
+                },
+                "content": {
+                    "title": "Content",
+                    "type": "string",
+                    "maxLength": 4000
+                }
+            }
+        },
+        "InsightAsk": {
+            "required": [
+                "question"
+            ],
+            "type": "object",
+            "properties": {
+                "question": {
+                    "title": "Question",
+                    "type": "string",
+                    "maxLength": 500,
+                    "minLength": 1
+                },
+                "history": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAskMessage"
+                    }
+                }
+            }
+        },
+        "InsightAskEvidence": {
+            "required": [
+                "unit_id",
+                "quote"
+            ],
+            "type": "object",
+            "properties": {
+                "unit_id": {
+                    "title": "Unit id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "quote": {
+                    "title": "Quote",
+                    "type": "string"
+                },
+                "evidence_id": {
+                    "title": "Evidence id",
+                    "type": "string"
+                }
+            }
+        },
+        "InsightAskParagraph": {
+            "required": [
+                "text",
+                "unit_ids",
+                "category_ids",
+                "evidence"
+            ],
+            "type": "object",
+            "properties": {
+                "text": {
+                    "title": "Text",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "unit_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "category_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAskEvidence"
+                    }
+                }
+            }
+        },
+        "InsightAskResult": {
+            "required": [
+                "answer",
+                "follow_ups",
+                "dropped"
+            ],
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightAskParagraph"
+                    }
+                },
+                "follow_ups": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "dropped": {
+                    "title": "Dropped",
+                    "type": "integer"
+                }
+            }
+        },
+        "InsightAskResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightAskResult"
+                }
+            }
+        },
+        "InsightUnitItem": {
+            "required": [
+                "unit_id",
+                "label",
+                "user_id",
+                "session_id",
+                "time",
+                "excerpt",
+                "summary",
+                "lens_answer",
+                "facets",
+                "metrics",
+                "category_id",
+                "sub_category_id"
+            ],
+            "type": "object",
+            "properties": {
+                "unit_id": {
+                    "title": "Unit id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string"
+                },
+                "user_id": {
+                    "title": "User id",
+                    "type": "string"
+                },
+                "session_id": {
+                    "title": "Session id",
+                    "type": "string"
+                },
+                "time": {
+                    "title": "Time",
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true
+                },
+                "excerpt": {
+                    "title": "Excerpt",
+                    "type": "string"
+                },
+                "summary": {
+                    "title": "Summary",
+                    "type": "string"
+                },
+                "lens_answer": {
+                    "title": "Lens answer",
+                    "type": "string"
+                },
+                "facets": {
+                    "title": "Facets",
+                    "type": "object"
+                },
+                "metrics": {
+                    "title": "Metrics",
+                    "type": "object"
+                },
+                "category_id": {
+                    "title": "Category id",
+                    "type": "string"
+                },
+                "sub_category_id": {
+                    "title": "Sub category id",
+                    "type": "string"
+                },
+                "content": {
+                    "title": "Content",
+                    "type": "string"
+                }
+            }
+        },
+        "InsightUnitsResult": {
+            "required": [
+                "units",
+                "total"
+            ],
+            "type": "object",
+            "properties": {
+                "units": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InsightUnitItem"
+                    }
+                },
+                "total": {
+                    "title": "Total",
+                    "type": "integer"
+                }
+            }
+        },
+        "InsightUnitsResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightUnitsResult"
+                }
+            }
+        },
+        "InstantEvalRowFacets": {
+            "required": [
+                "model",
+                "turns",
+                "duration_ms",
+                "error"
+            ],
+            "type": "object",
+            "properties": {
+                "model": {
+                    "title": "Model",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "turns": {
+                    "title": "Turns",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "duration_ms": {
+                    "title": "Duration ms",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "error": {
+                    "title": "Error",
+                    "type": "boolean"
+                }
+            }
+        },
+        "InstantEvalAnswer": {
+            "required": [
+                "answer",
+                "explanation"
+            ],
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "title": "Answer",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "explanation": {
+                    "title": "Explanation",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "confidence": {
+                    "title": "Confidence",
+                    "type": "number",
+                    "x-nullable": true
+                },
+                "status": {
+                    "title": "Status",
+                    "type": "string"
+                },
+                "counts": {
+                    "title": "Counts",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "InstantEvalAnswerRow": {
+            "required": [
+                "id",
+                "label",
+                "excerpt",
+                "time",
+                "user_id",
+                "end_user_id",
+                "answers"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string"
+                },
+                "excerpt": {
+                    "title": "Excerpt",
+                    "type": "string"
+                },
+                "time": {
+                    "title": "Time",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "user_id": {
+                    "title": "User id",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "end_user_id": {
+                    "title": "End user id",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "sessions": {
+                    "title": "Sessions",
+                    "type": "integer"
+                },
+                "trace_id": {
+                    "title": "Trace id",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "facets": {
+                    "$ref": "#/definitions/InstantEvalRowFacets"
+                },
+                "answers": {
+                    "title": "Answers",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/InstantEvalAnswer"
+                    }
+                }
+            }
+        },
+        "InstantEvalAnswersResult": {
+            "required": [
+                "unit",
+                "rows",
+                "counts",
+                "answered"
+            ],
+            "type": "object",
+            "properties": {
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InstantEvalAnswerRow"
+                    }
+                },
+                "counts": {
+                    "title": "Counts",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "answered": {
+                    "title": "Answered",
+                    "type": "integer"
+                },
+                "pending": {
+                    "title": "Pending",
+                    "type": "integer"
+                }
+            }
+        },
+        "InstantEvalAnswersResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InstantEvalAnswersResult"
+                }
+            }
+        },
+        "InstantEvalRun": {
+            "required": [
+                "task_id",
+                "name",
+                "created_at",
+                "status",
+                "run_type",
+                "unit",
+                "reads",
+                "rows",
+                "config_ids",
+                "questions",
+                "counts",
+                "answered",
+                "pending"
+            ],
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "title": "Task id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "created_at": {
+                    "title": "Created at",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "status": {
+                    "title": "Status",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "run_type": {
+                    "title": "Run type",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "reads": {
+                    "title": "Reads",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "rows": {
+                    "title": "Rows",
+                    "type": "integer"
+                },
+                "config_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "counts": {
+                    "title": "Counts",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "answered": {
+                    "title": "Answered",
+                    "type": "integer"
+                },
+                "pending": {
+                    "title": "Pending",
+                    "type": "integer"
+                },
+                "finished_at": {
+                    "title": "Finished at",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                }
+            }
+        },
+        "InstantEvalRunsResult": {
+            "required": [
+                "runs",
+                "has_more"
+            ],
+            "type": "object",
+            "properties": {
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InstantEvalRun"
+                    }
+                },
+                "has_more": {
+                    "title": "Has more",
+                    "type": "boolean"
+                }
+            }
+        },
+        "InstantEvalRunsResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InstantEvalRunsResult"
+                }
+            }
+        },
+        "InstantEvalUserSessions": {
+            "required": [
+                "project_id",
+                "end_user_ids"
+            ],
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "end_user_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "maxItems": 500,
+                    "minItems": 1
+                },
+                "window": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "maxItems": 2
+                },
+                "per_user": {
+                    "title": "Per user",
+                    "type": "integer",
+                    "default": 5,
+                    "maximum": 20,
+                    "minimum": 1
+                }
+            }
+        },
+        "InstantEvalUserSession": {
+            "required": [
+                "session_id",
+                "end_user_id",
+                "start_time"
+            ],
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "title": "Session id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "end_user_id": {
+                    "title": "End user id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "start_time": {
+                    "title": "Start time",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                }
+            }
+        },
+        "InstantEvalUserSessionsResult": {
+            "required": [
+                "sessions",
+                "users"
+            ],
+            "type": "object",
+            "properties": {
+                "sessions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/InstantEvalUserSession"
+                    }
+                },
+                "users": {
+                    "title": "Users",
+                    "type": "integer"
+                }
+            }
+        },
+        "InstantEvalUserSessionsResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InstantEvalUserSessionsResult"
+                }
+            }
+        },
         "UpdateInvestigationAttemptRequest": {
             "required": [
                 "organization_id",
@@ -160024,1484 +161502,6 @@
                         "oss",
                         "enterprise"
                     ]
-                }
-            }
-        },
-        "InsightRunSummary": {
-            "required": [
-                "id",
-                "status",
-                "stage",
-                "created_at",
-                "finished_at",
-                "population_size",
-                "sample_size",
-                "analysed_count",
-                "taxonomy_mode",
-                "distribution",
-                "scope"
-            ],
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "status": {
-                    "title": "Status",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "stage": {
-                    "title": "Stage",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "created_at": {
-                    "title": "Created at",
-                    "type": "string",
-                    "format": "date-time"
-                },
-                "finished_at": {
-                    "title": "Finished at",
-                    "type": "string",
-                    "format": "date-time",
-                    "x-nullable": true
-                },
-                "population_size": {
-                    "title": "Population size",
-                    "type": "integer"
-                },
-                "sample_size": {
-                    "title": "Sample size",
-                    "type": "integer"
-                },
-                "analysed_count": {
-                    "title": "Analysed count",
-                    "type": "integer"
-                },
-                "taxonomy_mode": {
-                    "title": "Taxonomy mode",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "distribution": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "scope": {
-                    "title": "Scope",
-                    "type": "object"
-                }
-            },
-            "x-nullable": true
-        },
-        "InsightConfigItem": {
-            "required": [
-                "id",
-                "name",
-                "unit",
-                "lens",
-                "question",
-                "agent_description",
-                "instructions",
-                "attributes",
-                "sample_size",
-                "scope",
-                "has_taxonomy",
-                "taxonomy",
-                "created_at",
-                "latest_run"
-            ],
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "name": {
-                    "title": "Name",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "unit": {
-                    "title": "Unit",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "lens": {
-                    "title": "Lens",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "question": {
-                    "title": "Question",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "agent_description": {
-                    "title": "Agent description",
-                    "type": "string"
-                },
-                "instructions": {
-                    "title": "Instructions",
-                    "type": "string"
-                },
-                "attributes": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "sample_size": {
-                    "title": "Sample size",
-                    "type": "integer"
-                },
-                "scope": {
-                    "title": "Scope",
-                    "type": "object"
-                },
-                "has_taxonomy": {
-                    "title": "Has taxonomy",
-                    "type": "boolean"
-                },
-                "taxonomy": {
-                    "title": "Taxonomy",
-                    "type": "object"
-                },
-                "created_at": {
-                    "title": "Created at",
-                    "type": "string",
-                    "format": "date-time"
-                },
-                "latest_run": {
-                    "$ref": "#/definitions/InsightRunSummary"
-                },
-                "runs": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightRunSummary"
-                    }
-                }
-            }
-        },
-        "InsightConfigListResult": {
-            "required": [
-                "configs"
-            ],
-            "type": "object",
-            "properties": {
-                "configs": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightConfigItem"
-                    }
-                }
-            }
-        },
-        "InsightConfigListResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightConfigListResult"
-                }
-            }
-        },
-        "InsightConfigResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightConfigItem"
-                }
-            }
-        },
-        "InsightAttribute": {
-            "required": [
-                "key",
-                "type"
-            ],
-            "type": "object",
-            "properties": {
-                "key": {
-                    "title": "Key",
-                    "type": "string",
-                    "maxLength": 60,
-                    "minLength": 1
-                },
-                "type": {
-                    "title": "Type",
-                    "type": "string",
-                    "enum": [
-                        "boolean",
-                        "number",
-                        "string"
-                    ]
-                },
-                "description": {
-                    "title": "Description",
-                    "type": "string",
-                    "maxLength": 300
-                },
-                "filter_by": {
-                    "title": "Filter by",
-                    "type": "boolean",
-                    "default": false
-                }
-            }
-        },
-        "InsightScope": {
-            "type": "object",
-            "properties": {
-                "filters": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "label": {
-                    "title": "Label",
-                    "type": "string",
-                    "maxLength": 300
-                },
-                "preset": {
-                    "title": "Preset",
-                    "type": "string",
-                    "maxLength": 16
-                },
-                "window": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "maxLength": 64,
-                        "minLength": 1
-                    },
-                    "maxItems": 2
-                }
-            }
-        },
-        "InsightConfigPatch": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string",
-                    "maxLength": 255,
-                    "minLength": 1
-                },
-                "reset_taxonomy": {
-                    "title": "Reset taxonomy",
-                    "type": "boolean",
-                    "default": false
-                },
-                "question": {
-                    "title": "Question",
-                    "type": "string",
-                    "maxLength": 500,
-                    "minLength": 1
-                },
-                "lens": {
-                    "title": "Lens",
-                    "type": "string",
-                    "enum": [
-                        "usage",
-                        "failures",
-                        "experience",
-                        "personas",
-                        "custom"
-                    ]
-                },
-                "agent_description": {
-                    "title": "Agent description",
-                    "type": "string",
-                    "maxLength": 500
-                },
-                "instructions": {
-                    "title": "Instructions",
-                    "type": "string",
-                    "maxLength": 1000
-                },
-                "attributes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightAttribute"
-                    }
-                },
-                "sample_size": {
-                    "title": "Sample size",
-                    "type": "integer",
-                    "maximum": 1000,
-                    "minimum": 10
-                },
-                "scope": {
-                    "$ref": "#/definitions/InsightScope"
-                }
-            }
-        },
-        "InsightDraft": {
-            "required": [
-                "project_id",
-                "unit",
-                "lens",
-                "sample_ids"
-            ],
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "title": "Project id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "unit": {
-                    "title": "Unit",
-                    "type": "string",
-                    "enum": [
-                        "traces",
-                        "sessions",
-                        "users"
-                    ]
-                },
-                "lens": {
-                    "title": "Lens",
-                    "type": "string",
-                    "enum": [
-                        "usage",
-                        "failures",
-                        "experience",
-                        "personas",
-                        "custom"
-                    ]
-                },
-                "goal": {
-                    "title": "Goal",
-                    "type": "string",
-                    "maxLength": 500
-                },
-                "agent_description": {
-                    "title": "Agent description",
-                    "type": "string",
-                    "maxLength": 500
-                },
-                "sample_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "maxLength": 255,
-                        "minLength": 1
-                    },
-                    "maxItems": 5,
-                    "minItems": 1
-                }
-            }
-        },
-        "InsightDraftResult": {
-            "required": [
-                "name",
-                "question",
-                "agent_description",
-                "instructions",
-                "attributes",
-                "examples_read"
-            ],
-            "type": "object",
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "question": {
-                    "title": "Question",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "agent_description": {
-                    "title": "Agent description",
-                    "type": "string"
-                },
-                "instructions": {
-                    "title": "Instructions",
-                    "type": "string"
-                },
-                "attributes": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "examples_read": {
-                    "title": "Examples read",
-                    "type": "integer"
-                }
-            }
-        },
-        "InsightDraftResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightDraftResult"
-                }
-            }
-        },
-        "InsightConfigInput": {
-            "required": [
-                "name",
-                "unit",
-                "lens",
-                "question"
-            ],
-            "type": "object",
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string",
-                    "maxLength": 255,
-                    "minLength": 1
-                },
-                "unit": {
-                    "title": "Unit",
-                    "type": "string",
-                    "enum": [
-                        "traces",
-                        "sessions",
-                        "users"
-                    ]
-                },
-                "lens": {
-                    "title": "Lens",
-                    "type": "string",
-                    "enum": [
-                        "usage",
-                        "failures",
-                        "experience",
-                        "personas",
-                        "custom"
-                    ]
-                },
-                "question": {
-                    "title": "Question",
-                    "type": "string",
-                    "maxLength": 500,
-                    "minLength": 1
-                },
-                "agent_description": {
-                    "title": "Agent description",
-                    "type": "string",
-                    "maxLength": 500
-                },
-                "instructions": {
-                    "title": "Instructions",
-                    "type": "string",
-                    "maxLength": 1000
-                },
-                "attributes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightAttribute"
-                    }
-                },
-                "sample_size": {
-                    "title": "Sample size",
-                    "type": "integer",
-                    "maximum": 1000,
-                    "minimum": 10
-                }
-            }
-        },
-        "InsightPreview": {
-            "required": [
-                "project_id",
-                "config",
-                "unit_ids"
-            ],
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "title": "Project id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "config": {
-                    "$ref": "#/definitions/InsightConfigInput"
-                },
-                "unit_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "maxLength": 255,
-                        "minLength": 1
-                    },
-                    "maxItems": 3,
-                    "minItems": 1
-                }
-            }
-        },
-        "InsightPreviewResult": {
-            "required": [
-                "units"
-            ],
-            "type": "object",
-            "properties": {
-                "units": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                }
-            }
-        },
-        "InsightPreviewResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightPreviewResult"
-                }
-            }
-        },
-        "InsightPopulationItem": {
-            "required": [
-                "id"
-            ],
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "type": "string",
-                    "maxLength": 255,
-                    "minLength": 1
-                },
-                "time": {
-                    "title": "Time",
-                    "type": "string",
-                    "maxLength": 64
-                },
-                "user_id": {
-                    "title": "User id",
-                    "type": "string",
-                    "maxLength": 255
-                }
-            }
-        },
-        "InsightRunCreate": {
-            "required": [
-                "project_id",
-                "population"
-            ],
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "title": "Project id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "config_id": {
-                    "title": "Config id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "config": {
-                    "$ref": "#/definitions/InsightConfigInput"
-                },
-                "scope": {
-                    "$ref": "#/definitions/InsightScope"
-                },
-                "population": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightPopulationItem"
-                    }
-                },
-                "sample_size": {
-                    "title": "Sample size",
-                    "type": "integer",
-                    "maximum": 1000,
-                    "minimum": 10
-                }
-            }
-        },
-        "InsightRunCreatedResult": {
-            "required": [
-                "run_id",
-                "config_id"
-            ],
-            "type": "object",
-            "properties": {
-                "run_id": {
-                    "title": "Run id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "config_id": {
-                    "title": "Config id",
-                    "type": "string",
-                    "format": "uuid"
-                }
-            }
-        },
-        "InsightRunCreatedResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightRunCreatedResult"
-                }
-            }
-        },
-        "InsightRunDetail": {
-            "required": [
-                "id",
-                "config_id",
-                "project_id",
-                "status",
-                "stage",
-                "progress",
-                "unit",
-                "scope",
-                "settings",
-                "population_size",
-                "sample_size",
-                "analysed_count",
-                "taxonomy_mode",
-                "result",
-                "models_used",
-                "cost_usd",
-                "error",
-                "created_at",
-                "started_at",
-                "finished_at",
-                "previous_run_id",
-                "next_run_id"
-            ],
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "config_id": {
-                    "title": "Config id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "project_id": {
-                    "title": "Project id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "status": {
-                    "title": "Status",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "stage": {
-                    "title": "Stage",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "progress": {
-                    "title": "Progress",
-                    "type": "object"
-                },
-                "unit": {
-                    "title": "Unit",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "scope": {
-                    "title": "Scope",
-                    "type": "object"
-                },
-                "settings": {
-                    "title": "Settings",
-                    "type": "object"
-                },
-                "population_size": {
-                    "title": "Population size",
-                    "type": "integer"
-                },
-                "sample_size": {
-                    "title": "Sample size",
-                    "type": "integer"
-                },
-                "analysed_count": {
-                    "title": "Analysed count",
-                    "type": "integer"
-                },
-                "taxonomy_mode": {
-                    "title": "Taxonomy mode",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "result": {
-                    "title": "Result",
-                    "type": "object"
-                },
-                "models_used": {
-                    "title": "Models used",
-                    "type": "object"
-                },
-                "cost_usd": {
-                    "title": "Cost usd",
-                    "type": "number"
-                },
-                "error": {
-                    "title": "Error",
-                    "type": "string"
-                },
-                "created_at": {
-                    "title": "Created at",
-                    "type": "string",
-                    "format": "date-time"
-                },
-                "started_at": {
-                    "title": "Started at",
-                    "type": "string",
-                    "format": "date-time",
-                    "x-nullable": true
-                },
-                "finished_at": {
-                    "title": "Finished at",
-                    "type": "string",
-                    "format": "date-time",
-                    "x-nullable": true
-                },
-                "previous_run_id": {
-                    "title": "Previous run id",
-                    "type": "string",
-                    "format": "uuid",
-                    "x-nullable": true
-                },
-                "next_run_id": {
-                    "title": "Next run id",
-                    "type": "string",
-                    "format": "uuid",
-                    "x-nullable": true
-                }
-            }
-        },
-        "InsightRunResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightRunDetail"
-                }
-            }
-        },
-        "InsightAskMessage": {
-            "required": [
-                "role",
-                "content"
-            ],
-            "type": "object",
-            "properties": {
-                "role": {
-                    "title": "Role",
-                    "type": "string",
-                    "enum": [
-                        "user",
-                        "assistant"
-                    ]
-                },
-                "content": {
-                    "title": "Content",
-                    "type": "string",
-                    "maxLength": 4000
-                }
-            }
-        },
-        "InsightAsk": {
-            "required": [
-                "question"
-            ],
-            "type": "object",
-            "properties": {
-                "question": {
-                    "title": "Question",
-                    "type": "string",
-                    "maxLength": 500,
-                    "minLength": 1
-                },
-                "history": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightAskMessage"
-                    }
-                }
-            }
-        },
-        "InsightAskEvidence": {
-            "required": [
-                "unit_id",
-                "quote"
-            ],
-            "type": "object",
-            "properties": {
-                "unit_id": {
-                    "title": "Unit id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "quote": {
-                    "title": "Quote",
-                    "type": "string"
-                },
-                "evidence_id": {
-                    "title": "Evidence id",
-                    "type": "string"
-                }
-            }
-        },
-        "InsightAskParagraph": {
-            "required": [
-                "text",
-                "unit_ids",
-                "category_ids",
-                "evidence"
-            ],
-            "type": "object",
-            "properties": {
-                "text": {
-                    "title": "Text",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "unit_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "minLength": 1
-                    }
-                },
-                "category_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "minLength": 1
-                    }
-                },
-                "evidence": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightAskEvidence"
-                    }
-                }
-            }
-        },
-        "InsightAskResult": {
-            "required": [
-                "answer",
-                "follow_ups",
-                "dropped"
-            ],
-            "type": "object",
-            "properties": {
-                "answer": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightAskParagraph"
-                    }
-                },
-                "follow_ups": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "minLength": 1
-                    }
-                },
-                "dropped": {
-                    "title": "Dropped",
-                    "type": "integer"
-                }
-            }
-        },
-        "InsightAskResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightAskResult"
-                }
-            }
-        },
-        "InsightUnitItem": {
-            "required": [
-                "unit_id",
-                "label",
-                "user_id",
-                "session_id",
-                "time",
-                "excerpt",
-                "summary",
-                "lens_answer",
-                "facets",
-                "metrics",
-                "category_id",
-                "sub_category_id"
-            ],
-            "type": "object",
-            "properties": {
-                "unit_id": {
-                    "title": "Unit id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "label": {
-                    "title": "Label",
-                    "type": "string"
-                },
-                "user_id": {
-                    "title": "User id",
-                    "type": "string"
-                },
-                "session_id": {
-                    "title": "Session id",
-                    "type": "string"
-                },
-                "time": {
-                    "title": "Time",
-                    "type": "string",
-                    "format": "date-time",
-                    "x-nullable": true
-                },
-                "excerpt": {
-                    "title": "Excerpt",
-                    "type": "string"
-                },
-                "summary": {
-                    "title": "Summary",
-                    "type": "string"
-                },
-                "lens_answer": {
-                    "title": "Lens answer",
-                    "type": "string"
-                },
-                "facets": {
-                    "title": "Facets",
-                    "type": "object"
-                },
-                "metrics": {
-                    "title": "Metrics",
-                    "type": "object"
-                },
-                "category_id": {
-                    "title": "Category id",
-                    "type": "string"
-                },
-                "sub_category_id": {
-                    "title": "Sub category id",
-                    "type": "string"
-                },
-                "content": {
-                    "title": "Content",
-                    "type": "string"
-                }
-            }
-        },
-        "InsightUnitsResult": {
-            "required": [
-                "units",
-                "total"
-            ],
-            "type": "object",
-            "properties": {
-                "units": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InsightUnitItem"
-                    }
-                },
-                "total": {
-                    "title": "Total",
-                    "type": "integer"
-                }
-            }
-        },
-        "InsightUnitsResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InsightUnitsResult"
-                }
-            }
-        },
-        "InstantEvalRowFacets": {
-            "required": [
-                "model",
-                "turns",
-                "duration_ms",
-                "error"
-            ],
-            "type": "object",
-            "properties": {
-                "model": {
-                    "title": "Model",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "turns": {
-                    "title": "Turns",
-                    "type": "integer",
-                    "x-nullable": true
-                },
-                "duration_ms": {
-                    "title": "Duration ms",
-                    "type": "integer",
-                    "x-nullable": true
-                },
-                "error": {
-                    "title": "Error",
-                    "type": "boolean"
-                }
-            }
-        },
-        "InstantEvalAnswer": {
-            "required": [
-                "answer",
-                "explanation"
-            ],
-            "type": "object",
-            "properties": {
-                "answer": {
-                    "title": "Answer",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                },
-                "explanation": {
-                    "title": "Explanation",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "confidence": {
-                    "title": "Confidence",
-                    "type": "number",
-                    "x-nullable": true
-                },
-                "status": {
-                    "title": "Status",
-                    "type": "string"
-                },
-                "counts": {
-                    "title": "Counts",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "integer"
-                    }
-                }
-            }
-        },
-        "InstantEvalAnswerRow": {
-            "required": [
-                "id",
-                "label",
-                "excerpt",
-                "time",
-                "user_id",
-                "end_user_id",
-                "answers"
-            ],
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "label": {
-                    "title": "Label",
-                    "type": "string"
-                },
-                "excerpt": {
-                    "title": "Excerpt",
-                    "type": "string"
-                },
-                "time": {
-                    "title": "Time",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                },
-                "user_id": {
-                    "title": "User id",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "end_user_id": {
-                    "title": "End user id",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "sessions": {
-                    "title": "Sessions",
-                    "type": "integer"
-                },
-                "trace_id": {
-                    "title": "Trace id",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "facets": {
-                    "$ref": "#/definitions/InstantEvalRowFacets"
-                },
-                "answers": {
-                    "title": "Answers",
-                    "type": "object",
-                    "additionalProperties": {
-                        "$ref": "#/definitions/InstantEvalAnswer"
-                    }
-                }
-            }
-        },
-        "InstantEvalAnswersResult": {
-            "required": [
-                "unit",
-                "rows",
-                "counts",
-                "answered"
-            ],
-            "type": "object",
-            "properties": {
-                "unit": {
-                    "title": "Unit",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InstantEvalAnswerRow"
-                    }
-                },
-                "counts": {
-                    "title": "Counts",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "integer"
-                        }
-                    }
-                },
-                "answered": {
-                    "title": "Answered",
-                    "type": "integer"
-                },
-                "pending": {
-                    "title": "Pending",
-                    "type": "integer"
-                }
-            }
-        },
-        "InstantEvalAnswersResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InstantEvalAnswersResult"
-                }
-            }
-        },
-        "InstantEvalRun": {
-            "required": [
-                "task_id",
-                "name",
-                "created_at",
-                "status",
-                "run_type",
-                "unit",
-                "reads",
-                "rows",
-                "config_ids",
-                "questions",
-                "counts",
-                "answered",
-                "pending"
-            ],
-            "type": "object",
-            "properties": {
-                "task_id": {
-                    "title": "Task id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "name": {
-                    "title": "Name",
-                    "type": "string"
-                },
-                "created_at": {
-                    "title": "Created at",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                },
-                "status": {
-                    "title": "Status",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "run_type": {
-                    "title": "Run type",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "unit": {
-                    "title": "Unit",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "reads": {
-                    "title": "Reads",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "rows": {
-                    "title": "Rows",
-                    "type": "integer"
-                },
-                "config_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "minLength": 1
-                    }
-                },
-                "questions": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "minLength": 1
-                    }
-                },
-                "counts": {
-                    "title": "Counts",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "integer"
-                        }
-                    }
-                },
-                "answered": {
-                    "title": "Answered",
-                    "type": "integer"
-                },
-                "pending": {
-                    "title": "Pending",
-                    "type": "integer"
-                },
-                "finished_at": {
-                    "title": "Finished at",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                }
-            }
-        },
-        "InstantEvalRunsResult": {
-            "required": [
-                "runs",
-                "has_more"
-            ],
-            "type": "object",
-            "properties": {
-                "runs": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InstantEvalRun"
-                    }
-                },
-                "has_more": {
-                    "title": "Has more",
-                    "type": "boolean"
-                }
-            }
-        },
-        "InstantEvalRunsResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InstantEvalRunsResult"
-                }
-            }
-        },
-        "InstantEvalUserSessions": {
-            "required": [
-                "project_id",
-                "end_user_ids"
-            ],
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "title": "Project id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "end_user_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    "maxItems": 500,
-                    "minItems": 1
-                },
-                "window": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "maxItems": 2
-                },
-                "per_user": {
-                    "title": "Per user",
-                    "type": "integer",
-                    "default": 5,
-                    "maximum": 20,
-                    "minimum": 1
-                }
-            }
-        },
-        "InstantEvalUserSession": {
-            "required": [
-                "session_id",
-                "end_user_id",
-                "start_time"
-            ],
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "title": "Session id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "end_user_id": {
-                    "title": "End user id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "start_time": {
-                    "title": "Start time",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                }
-            }
-        },
-        "InstantEvalUserSessionsResult": {
-            "required": [
-                "sessions",
-                "users"
-            ],
-            "type": "object",
-            "properties": {
-                "sessions": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InstantEvalUserSession"
-                    }
-                },
-                "users": {
-                    "title": "Users",
-                    "type": "integer"
-                }
-            }
-        },
-        "InstantEvalUserSessionsResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InstantEvalUserSessionsResult"
                 }
             }
         }

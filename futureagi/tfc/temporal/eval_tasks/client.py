@@ -55,7 +55,7 @@ INSTANT_MAX_CONCURRENT = 32
 
 
 def _instant_sizing(task) -> dict:
-    limit = task.spans_limit or 0
+    limit = getattr(task, "spans_limit", None) or 0
     if not 0 < limit <= INSTANT_MAX_ROWS:
         return {}
     try:
