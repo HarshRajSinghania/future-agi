@@ -1,13 +1,19 @@
 import PropTypes from "prop-types";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Box, Button, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import {
+  Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle,
+  IconButton, Stack, Tooltip, Typography,
+} from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import FormSearchField from "src/components/FormSearchField/FormSearchField";
-import { DataTable } from "src/components/data-table";
+import { DataTable, DataTablePagination } from "src/components/data-table";
+import { useSnackbar } from "notistack";
 import { paths } from "src/routes/paths";
 import { useConnectedAgents } from "../store";
+import { neutralCheckboxSx } from "../components/primitives";
+import { deleteBlockOf } from "../_mock/rsiModel";
 import { agentSourceOf } from "../_mock/agentRegistry";
 import { projectsOfAgent } from "../_mock/projectLinks";
 import AgentStateTags from "./AgentStateTags";
@@ -23,7 +29,8 @@ import useMoveLegacyDefinitions from "./useMoveLegacyDefinitions";
  */
 export default function ConnectedAgentsView({ onConnect }) {
   const navigate = useNavigate();
-  const { agents, hydrated, state } = useConnectedAgents();
+  const { agents, hydrated, state, removeAgent } = useConnectedAgents();
+  const { enqueueSnackbar } = useSnackbar();
   /* Old Simulate agent definitions join this list on their own. */
   useMoveLegacyDefinitions();
   const [query, setQuery] = useState("");
@@ -47,7 +54,76 @@ export default function ConnectedAgentsView({ onConnect }) {
       .filter((a) => !q || `${a.name} ${a.source.label} ${a.source.where} ${a.identity.owner} ${a.identity.description}`.toLowerCase().includes(q));
   }, [agents, query, state]);
 
-  const columns = useMemo(() => [
+  /* Paged like the other lists; a search starts back on page one. */
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  useEffect(() => { setPage(0); }, [query]);
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
+  const pageRows = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+
+  /* Select several and delete them. An agent an environment still tests
+     can't be deleted — same rule as its own page — so its box is off, with
+     the reason on hover. Selection is kept by id across pages. */
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deletable = (a) => !deleteBlockOf(a);
+  const pageDeletable = pageRows.filter(deletable);
+  const pageAllOn = pageDeletable.length > 0 && pageDeletable.every((a) => selectedIds.includes(a.id));
+  const pageSomeOn = pageDeletable.some((a) => selectedIds.includes(a.id));
+  const toggleRow = (id) => setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  const togglePage = () => setSelectedIds((ids) => (pageAllOn
+    ? ids.filter((id) => !pageDeletable.some((a) => a.id === id))
+    : [...new Set([...ids, ...pageDeletable.map((a) => a.id)])]));
+  /* Drop ids that left the list (deleted elsewhere, or now in use). */
+  const selectedAgents = agents.filter((a) => selectedIds.includes(a.id) && deletable(a));
+  const performDelete = () => {
+    selectedAgents.forEach((a) => removeAgent(a.key));
+    enqueueSnackbar(
+      selectedAgents.length === 1
+        ? `${selectedAgents[0].name} deleted. Its runs stay with the environments that ran them.`
+        : `${selectedAgents.length} agents deleted. Their runs stay with the environments that ran them.`,
+      { variant: "success" },
+    );
+    setSelectedIds([]);
+    setConfirmDelete(false);
+  };
+
+  /* Rebuilt each render — the select column reads the current selection. */
+  const columns = [
+    {
+      id: "select", header: "", size: 48, enableSorting: false,
+      renderHeader: () => (
+        <Checkbox
+          size="small"
+          checked={pageAllOn}
+          indeterminate={!pageAllOn && pageSomeOn}
+          disabled={!pageDeletable.length}
+          onChange={togglePage}
+          inputProps={{ "aria-label": "Select every agent on this page that can be deleted" }}
+          sx={{ p: 0, ...neutralCheckboxSx, "&.Mui-disabled": { opacity: 0.3 } }}
+        />
+      ),
+      cell: ({ row }) => {
+        const a = row.original;
+        const blocked = deleteBlockOf(a);
+        const box = (
+          <Checkbox
+            size="small"
+            checked={selectedIds.includes(a.id)}
+            disabled={!!blocked}
+            onChange={() => toggleRow(a.id)}
+            onClick={(e) => e.stopPropagation()}
+            inputProps={{ "aria-label": `Select ${a.name}` }}
+            sx={{ p: 0, ...neutralCheckboxSx, "&.Mui-disabled": { opacity: 0.3 } }}
+          />
+        );
+        return (
+          <Box onClick={(e) => e.stopPropagation()} sx={{ display: "flex", alignItems: "center", height: "100%" }}>
+            {blocked ? <Tooltip arrow placement="right" title={blocked}><span>{box}</span></Tooltip> : box}
+          </Box>
+        );
+      },
+    },
     {
       id: "name", accessorKey: "name", header: "Agent name", meta: { flex: 2 }, minSize: 280, enableSorting: false,
       cell: ({ row }) => {
@@ -155,7 +231,7 @@ export default function ConnectedAgentsView({ onConnect }) {
       id: "connectedAt", accessorKey: "connectedAt", header: "Connected", size: 140, enableSorting: false,
       cell: ({ row }) => <Typography variant="body2" noWrap sx={{ fontSize: 13 }}>{ago(row.original.connectedAt)}</Typography>,
     },
-  ], []);
+  ];
 
   if (hydrated && agents.length === 0) {
     return (
@@ -220,15 +296,57 @@ export default function ConnectedAgentsView({ onConnect }) {
         placeholder="Search"
         sx={{ width: 250, "& .MuiOutlinedInput-root": { height: "30px" } }}
       />
+      {selectedIds.length > 0 && selectedAgents.length > 0 && (
+        <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexShrink: 0, px: 2, py: 1, borderRadius: 1.5, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}>
+          <Typography sx={{ typography: "s2" }}>
+            <Box component="span" sx={{ fontWeight: 700 }}>{selectedAgents.length}</Box>
+            <Box component="span" sx={{ color: "text.secondary" }}>{selectedAgents.length === 1 ? " agent selected" : " agents selected"}</Box>
+          </Typography>
+          <Box flex={1} />
+          <Button size="small" onClick={() => setSelectedIds([])} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", minWidth: 0, px: 1 }}>Clear</Button>
+          <Button
+            size="small" onClick={() => setConfirmDelete(true)}
+            startIcon={<Iconify icon="solar:trash-bin-trash-linear" width={13} />}
+            sx={{ typography: "s2", fontWeight: 600, color: "#DC2626", px: 1, minWidth: 0, "&:hover": { bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.12 : 0.06) } }}
+          >
+            Delete
+          </Button>
+        </Stack>
+      )}
       <DataTable
         columns={columns}
-        data={rows}
+        data={pageRows}
         rowCount={rows.length}
         getRowId={(r) => r.id}
         rowHeight={rows.some((r) => r.identity.description) ? 52 : 44}
         onRowClick={(r) => navigate(`${paths.dashboard.agents}/connected/${r.id}`)}
         emptyMessage="No agents match your search"
       />
+      {rows.length > 0 && (
+        <DataTablePagination
+          page={currentPage}
+          pageSize={pageSize}
+          total={rows.length}
+          onPageChange={setPage}
+          onPageSizeChange={(n) => { setPageSize(n); setPage(0); }}
+        />
+      )}
+      <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>
+          {selectedAgents.length === 1 ? `Delete ${selectedAgents[0].name}?` : `Delete ${selectedAgents.length} agents?`}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ typography: "s2" }}>
+            {`${selectedAgents.length === 1 ? "It leaves" : "They leave"} Connected agents with ${selectedAgents.length === 1 ? "its" : "their"} versions. Runs stay with the environments that ran them, and proofs on shipped changes are kept. Connect ${selectedAgents.length === 1 ? "it" : "any of them"} again any time.`}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setConfirmDelete(false)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
+          <Button variant="contained" onClick={performDelete} sx={{ typography: "s2", fontWeight: 700, bgcolor: "#DC2626", color: "#fff", "&:hover": { bgcolor: "#B91C1C", color: "#fff" } }}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
       {buildFor && (
         <BuildEnvironmentDialog
           open

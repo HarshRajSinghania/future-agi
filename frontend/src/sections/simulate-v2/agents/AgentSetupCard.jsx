@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Box, Button, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { useConnectedAgents, useSimStore } from "../store";
-import { agentNeedsRuntime, agentSourceOf } from "../_mock/agentRegistry";
+import { PROVIDER_LABELS, agentNeedsRuntime, agentSourceOf } from "../_mock/agentRegistry";
 import { needsLiveConsent } from "../_mock/rsiModel";
 import { replicationOf } from "../_mock/replication";
 import { projectsOfAgent } from "../_mock/projectLinks";
@@ -59,9 +59,10 @@ export default function AgentSetupCard({ agent, env, onTab, onBuild, onSaveValue
       id: "consent",
       needed: true,
       done: false,
-      title: "Agree to live test runs",
-      body: "It runs in your account and its tools reach your real systems, so the first run waits for an OK.",
-      action: { label: "Review and agree", onClick: () => onTab("connections") },
+      /* Plain words: what testing does for real, and what's being asked. */
+      title: "Allow test calls",
+      body: `Tests call your real ${PROVIDER_LABELS[agent.values?.provider] ? `${PROVIDER_LABELS[agent.values.provider]} ` : ""}agent, so anything it does — like issuing a refund — really happens. Approve this once before the first run.`,
+      action: { label: "Review", onClick: () => onTab("connections") },
     },
     {
       id: "observe",

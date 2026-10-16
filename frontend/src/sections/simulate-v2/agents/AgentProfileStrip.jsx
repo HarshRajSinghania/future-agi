@@ -67,11 +67,11 @@ export function NeedsConsentNotice({ agent, env, onOpen }) {
           {consent && pin && <QuietTag>Live numbers to pin</QuietTag>}
         </Stack>
         <Typography
-          title={consent ? "We call your agent through test copies or drafts in your account, and its tools reach your real systems." : undefined}
+          title={consent ? "Tests call your real agent, so anything it does — like issuing a refund — really happens." : undefined}
           sx={{ typography: "s3", color: "text.secondary" }}
         >
           {consent
-            ? "The first run waits until you OK test copies in your account."
+            ? "Approve test calls once before the first run."
             : `${pins.line}. Until then tests run with settings overridden for one call.`}
         </Typography>
       </Box>
@@ -79,7 +79,7 @@ export function NeedsConsentNotice({ agent, env, onOpen }) {
         size="small" variant="contained" color="primary" onClick={onOpen}
         sx={{ typography: "s3", fontWeight: 700, height: 28, flexShrink: 0 }}
       >
-        {consent ? "Review and agree" : "Pin numbers"}
+        {consent ? "Review" : "Pin numbers"}
       </Button>
     </Stack>
   );

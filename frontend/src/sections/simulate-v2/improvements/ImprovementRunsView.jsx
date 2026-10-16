@@ -60,10 +60,20 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
      every change in the table is read against. */
   const summaries = useMemo(() => trialSummaries(env, envState).filter((t) => t.selfImprovementId === record.id), [env, envState, record.id]);
   const envRuns = useMemo(() => runSummaries(env, envState), [env, envState]);
-  const baseline = envRuns.find((r) => r.id === record.fromRunId) || null;
+  const startRun = envRuns.find((r) => r.id === record.fromRunId) || null;
   const evals = useMemo(() => evalSeries(envRuns, envState).map((e) => ({ id: e.id, name: e.name })), [envRuns, envState]);
   const metrics = useMemo(() => Object.fromEntries(allMetrics(evals).map((m) => [m.id, m])), [evals]);
   const tableRows = useMemo(() => runs.map((r) => ({ ...r, s: summaries.find((t) => t.trialN === r.n) || null })), [runs, summaries]);
+  /* What the table's changes are read against — the run it started from,
+     unless one of its own runs was set as the baseline (the same choice the
+     environment's Runs tab offers). Kept on the improvement. */
+  const baselineRow = record.baselineRunId ? tableRows.find((r) => r.runId === record.baselineRunId && r.s) || null : null;
+  const baseline = baselineRow?.s || startRun;
+  const setBaseline = (runId) => patch({
+    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id
+      ? { ...o, baselineRunId: runId && runId !== o.baselineRunId ? runId : undefined }
+      : o)),
+  });
   /* The chart leads with the winner, read against the run the improvement
      started from — the same change its row shows — not the latest run. */
   const headline = useMemo(() => {
@@ -76,11 +86,11 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
       /* Scored on the training scenarios, not the full suite its run page shows. */
       metric: "pass rate on training scenarios",
       label: `${kept.name} · winner`,
-      delta: m && baseline ? deltaAgainst(metrics.passRate, m, baseline) : null,
+      delta: m && startRun ? deltaAgainst(metrics.passRate, m, startRun) : null,
       /* Not "Run N" — this page's own runs are numbered too. */
       against: "the run it started from",
     };
-  }, [kept, chartRuns, tableRows, baseline, metrics]);
+  }, [kept, chartRuns, tableRows, startRun, metrics]);
   /* Run · Status · Pass · Duration · Tokens · Cost · Said, not done · Return,
      then a column per grader — the Runs table's columns. */
   const template = `40px minmax(220px, 380px) 150px ${[...Array(6).fill(124), ...evals.map(() => 128)].map((c) => `minmax(${c}px, 1fr)`).join(" ")}`;
@@ -191,13 +201,37 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.25, flexShrink: 0 }}>
         <Typography sx={{ typography: "s1", fontWeight: 700 }}>{`Runs (${runs.length})`}</Typography>
         <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>
-          {selected.length
-            ? `${selected.length} selected`
-            : `Select two or more to compare them scenario by scenario${baseline ? ` · changes are against the run it started from, ${env.name} Run ${baseline.ordinal}` : ""}`}
+          {selected.length ? `${selected.length} selected` : baselineRow ? (
+            <>
+              Measured against{" "}
+              <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>{baselineRow.name || `Run ${baselineRow.n}`}</Box>
+              {" "}— rates in points, everything else in percent
+            </>
+          ) : `Select two or more to compare them scenario by scenario${startRun ? ` · changes are against the run it started from, ${env.name} Run ${startRun.ordinal}` : ""}`}
         </Typography>
         {selected.length > 0 && (
           <Button size="small" onClick={() => setSelected([])} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", minWidth: 0 }}>Clear</Button>
         )}
+        {/* One run is a baseline; two or more is a comparison — as on the
+            environment's Runs tab. */}
+        {selected.length === 1 && patch ? (
+          <Button
+            size="small" variant="contained" color="primary"
+            onClick={() => { setBaseline(selected[0]); setSelected([]); }}
+            startIcon={<Iconify icon="solar:transfer-vertical-linear" width={15} />}
+            sx={{ typography: "s2", fontWeight: 700 }}
+          >
+            {selected[0] === record.baselineRunId ? "Clear baseline" : "Set as baseline"}
+          </Button>
+        ) : selected.length === 0 && baselineRow && patch ? (
+          <Button
+            size="small" onClick={() => setBaseline(null)}
+            startIcon={<Iconify icon="mingcute:close-line" width={14} />}
+            sx={{ typography: "s2", fontWeight: 700, color: "primary.main" }}
+          >
+            Remove baseline
+          </Button>
+        ) : null}
         <Button
           size="small" variant="outlined" disabled={selected.length < 2} onClick={compare}
           startIcon={<Iconify icon="solar:transfer-horizontal-linear" width={15} />}
@@ -246,6 +280,8 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
                   {...clickable(() => openRun(r), { role: "link" })}
                   sx={{
                     display: "grid", gridTemplateColumns: template, alignItems: "stretch", pl: 2.5, cursor: "pointer",
+                    /* The baseline is marked by a rule and a chip, not a filled row. */
+                    borderLeft: "2px solid", borderColor: r.runId === baselineRow?.runId ? "primary.main" : "transparent",
                     bgcolor: picked ? (t) => alpha(t.palette.primary.main, 0.05) : "transparent",
                     "&:hover": { bgcolor: "action.hover" },
                     ...focusRing,
@@ -277,7 +313,20 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
                       {r.s?.letter || `R${r.n}`}
                     </Box>
                     <Box minWidth={0}>
-                      <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{r.name}</Typography>
+                      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+                        <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{r.name}</Typography>
+                        {r.runId === baselineRow?.runId && (
+                          <Typography
+                            sx={{
+                              px: 0.75, py: 0.125, borderRadius: 0.5, flexShrink: 0,
+                              typography: "s3", fontWeight: 700, color: "primary.main",
+                              bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.2 : 0.12),
+                            }}
+                          >
+                            Baseline
+                          </Typography>
+                        )}
+                      </Stack>
                       {r.tried && <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{r.tried}</Typography>}
                     </Box>
                   </Stack>

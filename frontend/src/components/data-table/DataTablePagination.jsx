@@ -74,6 +74,7 @@ export default function DataTablePagination({
         size="small"
         disabled={isFirstPage}
         onClick={() => onPageChange?.(page - 1)}
+        aria-label="Previous page"
       >
         <Iconify icon="eva:chevron-left-fill" width={20} />
       </IconButton>
@@ -81,6 +82,7 @@ export default function DataTablePagination({
         size="small"
         disabled={isLastPage}
         onClick={() => onPageChange?.(page + 1)}
+        aria-label="Next page"
       >
         <Iconify icon="eva:chevron-right-fill" width={20} />
       </IconButton>

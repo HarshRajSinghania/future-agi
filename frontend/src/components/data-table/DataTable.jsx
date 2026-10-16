@@ -53,6 +53,9 @@ export default function DataTable({
         muiCol.flex = 1;
       }
 
+      // Custom header (e.g. a select-all checkbox) — optional.
+      if (col.renderHeader) muiCol.renderHeader = col.renderHeader;
+
       // Cell renderer
       if (col.cell) {
         const CellFn = col.cell;

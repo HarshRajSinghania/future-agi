@@ -276,8 +276,8 @@ export const setupGaps = (env, envState) => {
       severity: "blocking",
       fixedBy: "action",
       area: "Agent",
-      title: "Agree to live test runs",
-      why: "Before the first run, agree to test copies or drafts in your account and confirm your tools are safe to call, using the replay flag where needed. Runs here are Live: the agent runs in your account and its tools reach your real systems.",
+      title: "Allow test calls",
+      why: "Tests call your real agent, so anything it does — like issuing a refund — really happens. Approve this once before the first run, and say whether its tools are safe to call or stubbed in tests.",
       suggested: null,
       ask: href ? { type: "link", label: "Open the agent's connections", href } : { type: "link", label: "Open the Overview tab", to: "overview" },
     },
@@ -572,7 +572,7 @@ export const runReadiness = (envState, env = null) => {
   if (replicationOf(envState.agent)?.needsConsent) return { ready: false, step: "overview", href: agentHref, gap: "gap_endpoint_consent", reason: "Allow test calls to your live agent first — it's reached at a URL we can't copy, so a run drives the real one" };
   /* A Live agent runs in the customer's account with real tools — every way
      to start a run (header, table row, Runs tab, run page) waits for consent. */
-  if (needsLiveConsent(envState.agent)) return { ready: false, step: "overview", href: agentHref, gap: "gap_live_consent", reason: "Agree to live test runs first — on the agent's Connections tab" };
+  if (needsLiveConsent(envState.agent)) return { ready: false, step: "overview", href: agentHref, gap: "gap_live_consent", reason: "Allow test calls first — on the agent's Connections tab" };
   const unsafe = unsafeLiveToolNames(envState);
   if (unsafe.length) return { ready: false, step: "world", gap: "gap_prod_risk", reason: `${unsafe[0]} is set to Live with no safe target — confirm one or lower its tier on the World tab` };
   if (!(envState.scenarios || []).length) return { ready: false, step: "scenarios", reason: "Add scenarios on the Scenarios tab" };

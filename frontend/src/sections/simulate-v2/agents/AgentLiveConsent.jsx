@@ -73,8 +73,8 @@ export function LiveConsentCard({ agent, env, onSave, bare = false, oneLine = fa
   if (proof.kind !== "live" || (!given?.at && agent.values?.endpointConsent?.acknowledgedAt)) return null;
 
   const lead = copies
-    ? "We'll create test copies or drafts in your account and call your agent; its tools reach your real systems."
-    : "We'll call your agent with simulated users; its tools reach your real systems.";
+    ? `We'll make test copies or drafts of your agent in your ${provider === "your" ? "" : `${provider} `}account and call them. Anything the agent does — like issuing a refund — really happens.`
+    : "We'll call your agent with simulated callers. Anything it does — like issuing a refund — really happens.";
 
   const withdraw = () => onSave({ liveTestConsent: null }, "Consent withdrawn — runs of this agent wait until it's given again.");
   const ready = (!copies || copiesOk) && !!tools;
