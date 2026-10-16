@@ -35,6 +35,10 @@ const moveDefaultPath = (envId, piece, versionId) =>
     { id: envId, piece, version_id: versionId },
   );
 
+const agentVersionsPath = (envId) =>
+  apiPath("/simulate/api/harness-environments/{id}/versions/agent/", {
+    id: envId,
+  });
 const discardAgentPath = (envId, versionId) =>
   apiPath(
     "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/",
@@ -99,6 +103,11 @@ export const changeCredentials = async (envId, environmentValues, files) =>
     })
   ).data;
 
+// A new upload, prompt or settings for the environment's agent: the answer is
+// the new agent version, checked next.
+export const createAgentVersion = async (envId, body) =>
+  (await axios.post(agentVersionsPath(envId), body)).data;
+
 // What a run of these picks would use and what to warn about.
 export const getRunPlan = async (envId, picks) =>
   (await axios.get(runPlanPath(envId), { params: versionPickFields(picks) }))
@@ -156,6 +165,8 @@ export const versionFromApi = (item = {}) => ({
   parentId: item.parent_id || null,
   derivedFromAgentVersionId: item.derived_from_agent_version_id || null,
   scenarioCount: item.scenario_count ?? null,
+  source: item.source || null,
+  prompt: item.prompt ?? null,
   preflightStatus: item.preflight_status || null,
   preflightReport: item.preflight_report || null,
   preflightedAt: item.preflighted_at || null,
@@ -350,6 +361,16 @@ export const useDiscardAgentVersion = (envId) =>
 export const useRetryAgentVersion = (envId) =>
   useAgentVersionAction(envId, retryAgentVersion);
 
+const invalidateAgentChange = (queryClient, envId) => {
+  queryClient.invalidateQueries({
+    queryKey: environmentVersionsKey(envId),
+  });
+  queryClient.invalidateQueries({
+    queryKey: ["harness-environment", envId],
+  });
+  queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
+};
+
 // New credential values make the agent's next version, checked next; the
 // versions list then polls until the check lands, and the environment detail
 // and job are asked again for what follows it. Values only ride the request:
@@ -360,15 +381,18 @@ export function useChangeCredentials(envId) {
     meta: { errorHandled: true },
     gcTime: 0,
     mutationFn: ({ values, files }) => changeCredentials(envId, values, files),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: environmentVersionsKey(envId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["harness-environment", envId],
-      });
-      queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
-    },
+    onSuccess: () => invalidateAgentChange(queryClient, envId),
+  });
+}
+
+// A new upload, prompt or settings make the agent's next version, checked
+// next; as with credentials, the list then polls until the check lands.
+export function useCreateAgentVersion(envId) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    meta: { errorHandled: true },
+    mutationFn: (body) => createAgentVersion(envId, body),
+    onSuccess: () => invalidateAgentChange(queryClient, envId),
   });
 }
 

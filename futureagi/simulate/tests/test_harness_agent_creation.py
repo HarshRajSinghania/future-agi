@@ -81,6 +81,10 @@ def gates():
             return stack.enter_context(patch(target, **kwargs))
 
         on("simulate.services.harness_provider._validate_known_hosted_egress")
+        on(
+            "simulate.services.harness_agent_changes.validate_public_github_source",
+            return_value=None,
+        )
         on("simulate.services.harness_provider._validate_phone_connectivity")
         on("simulate.services.harness_usage.require_harness_run_usage")
         on("simulate.services.harness_usage.require_harness_source_call_usage")
@@ -292,6 +296,24 @@ class TestCreate:
         assert (definition.provider, definition.assistant_id) == ("vapi", "asst-1")
         assert definition.agent_type == "voice"
         assert version.configuration_snapshot["assistant_id"] == "asst-1"
+
+    def test_a_credential_change_keeps_the_provider_prompt(
+        self, client, user, workspace, gates
+    ):
+        job = _job(_post(client, workspace, _vapi()))
+        definition = job.agent_version.agent_definition
+        definition.description = "The assistant's prompt."
+        definition.save(update_fields=["description"])
+
+        version = service.change_credentials(
+            job, secret_values={"VAPI_API_KEY": "val-vapi-2"}, activate=False
+        )
+
+        version.refresh_from_db()
+        assert version.description == ""
+        assert (
+            version.configuration_snapshot["description"] == "The assistant's prompt."
+        )
 
 
 class TestSharedProviderAgent:

@@ -1196,7 +1196,9 @@ def _rerun_credentials_agent(
     return version
 
 
-def _environment_agent_maker(organization, payload, secret_values, analysis, user):
+def _environment_agent_maker(
+    organization, payload, secret_values, analysis, user, repository_id=None
+):
     """Check a creation's credentials now; the returned hook makes its agent and first
     version inside the job's transaction."""
     from simulate.services.harness_agent_versions import (
@@ -1214,7 +1216,11 @@ def _environment_agent_maker(organization, payload, secret_values, analysis, use
 
     def make(job) -> None:
         ensure_environment_agent(
-            job, submitted=secret_submitted, check=check, user=user
+            job,
+            submitted=secret_submitted,
+            check=check,
+            user=user,
+            repository_id=repository_id,
         )
 
     return make
@@ -1299,10 +1305,27 @@ class HostedHarnessProvider:
         ).rstrip("/")
         # This uses only references/configuration and deployment env presence.
         # Definitive launch validation runs again after vault resolution.
+        workspace = request_workspace(request)
         try:
             _validate_secret_refs_hosted(payload["agent"]["secret_refs"])
             _validate_phone_connectivity(payload)
             _validate_known_hosted_egress(payload, base_url)
+            if versioning_enabled():
+                from simulate.services.harness_agent_changes import (
+                    validate_public_github_source,
+                )
+
+                # Before the source is cloned; GitHub is asked once replays are out.
+                if (
+                    find_replayed_job(
+                        organization,
+                        payload,
+                        idempotency_key=idempotency_key,
+                        workspace=workspace,
+                    )
+                    is None
+                ):
+                    validate_public_github_source(payload, lookup=False)
         except HostedHarnessError as exc:
             return Response(exc.as_dict(), status=exc.status_code)
         from simulate.services.harness_usage import (
@@ -1332,7 +1355,6 @@ class HostedHarnessProvider:
             if response is not None:
                 return response
             raise
-        workspace = request_workspace(request)
         try:
             with transaction.atomic():
                 # A same-key create waits here and then replays the first's job, so
@@ -1346,12 +1368,21 @@ class HostedHarnessProvider:
                 )
                 on_create = None
                 if replayed is None and versioning_enabled():
+                    from simulate.services.harness_agent_changes import (
+                        validate_public_github_source,
+                    )
+
+                    # A replay answers with its job, whatever GitHub says now.
+                    repository_id = validate_public_github_source(
+                        payload, organization_id=organization.id
+                    )
                     on_create = _environment_agent_maker(
                         organization,
                         payload,
                         secret_values,
                         source_analysis,
                         request.user,
+                        repository_id,
                     )
                 elif replayed is None and secret_values:
                     on_create = _secret_ref_minter(secret_values)

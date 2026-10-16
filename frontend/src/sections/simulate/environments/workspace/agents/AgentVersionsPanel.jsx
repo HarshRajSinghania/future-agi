@@ -25,6 +25,7 @@ import { refusalText } from "../evals/refusalText";
 import MakeDefaultConfirm from "../versions/MakeDefaultConfirm";
 import VersionHeader from "../versions/VersionHeader";
 import AgentCredentials from "./AgentCredentials";
+import AgentSourceChange from "./AgentSourceChange";
 import { PreflightReport } from "./PreflightStatus";
 import { activationText, named } from "./agentVersionStatus";
 
@@ -266,6 +267,11 @@ export default function AgentVersionsPanel({ env }) {
       <Box role="status" aria-live="polite" sx={HIDDEN}>
         {announcement}
       </Box>
+      <AgentSourceChange
+        envId={envId}
+        defaultVersion={defaultVersion}
+        versions={versions}
+      />
       <AgentCredentials
         envId={envId}
         defaultVersion={defaultVersion}

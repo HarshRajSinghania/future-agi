@@ -17817,6 +17817,11 @@ export interface HarnessVersionPersonApi {
 }
 
 /**
+ * An agent version's non-secret source facts.
+ */
+export type HarnessVersionApiSource = { [key: string]: unknown };
+
+/**
  * An agent version's last check: check statuses and names only.
  */
 export type HarnessVersionApiPreflightReport = { [key: string]: unknown };
@@ -17837,6 +17842,10 @@ export interface HarnessVersionApi {
   parent_id: string | null;
   derived_from_agent_version_id: string | null;
   scenario_count: number | null;
+  /** An agent version's non-secret source facts. */
+  source: HarnessVersionApiSource | null;
+  /** The default agent version's prompt; null on every other item. */
+  prompt: string | null;
   /** @minLength 1 */
   preflight_status: string | null;
   /** An agent version's last check: check statuses and names only. */
@@ -17865,6 +17874,39 @@ export interface HarnessVersionsApi {
   agent: HarnessVersionApi[];
   environment: HarnessVersionApi[];
   suite: HarnessVersionApi[];
+}
+
+export interface HarnessAgentConfigChangeApi {
+  /**
+   * @minLength 1
+   * @maxLength 512
+   */
+  phone_number?: string;
+  /**
+   * @minLength 1
+   * @maxLength 512
+   */
+  agent_name?: string;
+  target_speaks_first?: boolean;
+}
+
+export interface HarnessAgentPayloadChangeApi {
+  config: HarnessAgentConfigChangeApi;
+}
+
+export interface HarnessAgentVersionCreateApi {
+  /** A folder uploaded through source-upload. */
+  archive_artifact_id?: string;
+  /**
+   * @minLength 1
+   * @maxLength 65536
+   */
+  prompt?: string;
+  agent_payload?: HarnessAgentPayloadChangeApi;
+}
+
+export interface HarnessAgentCredentialsResponseApi {
+  agent_version: HarnessVersionApi;
 }
 
 export interface HarnessSuiteMemberApi {
@@ -18528,10 +18570,6 @@ export type HarnessSecretValuesResponseApiSecretRefs = {
 
 export interface HarnessSecretValuesResponseApi {
   secret_refs: HarnessSecretValuesResponseApiSecretRefs;
-}
-
-export interface HarnessAgentCredentialsResponseApi {
-  agent_version: HarnessVersionApi;
 }
 
 export interface HarnessSourceUploadResponseApi {
@@ -19417,6 +19455,28 @@ export interface HarnessConversationWorkspaceResponseApi {
   digest: string;
   /** @minimum 0 */
   size: number;
+}
+
+export interface HarnessGitHubPushRepositoryApi {
+  /** @minimum 1 */
+  id?: number;
+  /**
+   * @minLength 1
+   * @maxLength 256
+   */
+  full_name: string;
+  /** @maxLength 256 */
+  default_branch?: string;
+}
+
+export interface HarnessGitHubPushApi {
+  /**
+   * @minLength 1
+   * @maxLength 512
+   */
+  ref: string;
+  deleted?: boolean;
+  repository: HarnessGitHubPushRepositoryApi;
 }
 
 export type HarnessIngressProxyRequestApiPayload = { [key: string]: unknown };

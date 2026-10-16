@@ -17,6 +17,7 @@ const {
   useDiscardAgentVersion,
   useRetryAgentVersion,
   useChangeCredentials,
+  useCreateAgentVersion,
   useRefreshWhenChecked,
   canMakeDefault,
   runPlanKey,
@@ -104,6 +105,8 @@ describe("versionFromApi / toVersions", () => {
       parentId: "e1",
       derivedFromAgentVersionId: "a1",
       scenarioCount: null,
+      source: null,
+      prompt: null,
       preflightStatus: null,
       preflightReport: null,
       preflightedAt: null,
@@ -830,6 +833,66 @@ describe("agent version actions", () => {
     await act(() =>
       result.current.mutateAsync({ versionId: "a3" }).catch(() => {}),
     );
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("versionFromApi source and prompt", () => {
+  it("maps an agent version's source and the default's prompt", () => {
+    const source = {
+      kind: "github",
+      repository: "acme/agent",
+      ref: "main",
+      commit_sha: "a1b2c3d4e5",
+      visibility: "public",
+    };
+    expect(
+      versionFromApi({ id: "a2", source, prompt: "Be brief." }),
+    ).toMatchObject({ source, prompt: "Be brief." });
+    expect(
+      versionFromApi({ id: "a2", source: null, prompt: null }),
+    ).toMatchObject({ source: null, prompt: null });
+    expect(versionFromApi({ id: "a2", prompt: "" }).prompt).toBe("");
+  });
+});
+
+describe("useCreateAgentVersion", () => {
+  const PATH = "/simulate/api/harness-environments/env-1/versions/agent/";
+
+  it("posts the change for the environment and refreshes what follows it", async () => {
+    const answer = { agent_version: { id: "a7", label: "v7" } };
+    axios.post.mockResolvedValue({ data: answer });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useCreateAgentVersion("env-1"), {
+      wrapper,
+    });
+
+    let data;
+    await act(async () => {
+      data = await result.current.mutateAsync({ prompt: "Be brief." });
+    });
+
+    expect(axios.post).toHaveBeenCalledWith(PATH, { prompt: "Be brief." });
+    expect(data).toEqual(answer);
+    expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: environmentVersionsKey("env-1") },
+      { queryKey: ["harness-environment", "env-1"] },
+      { queryKey: ["harness-job", "env-1"] },
+    ]);
+  });
+
+  it("refreshes nothing when the change is refused", async () => {
+    axios.post.mockRejectedValue({ statusCode: 422, error: "agent_unchanged" });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useCreateAgentVersion("env-1"), {
+      wrapper,
+    });
+    await act(async () => {
+      await result.current
+        .mutateAsync({ archive_artifact_id: "src-1" })
+        .catch(() => {});
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
     expect(spy).not.toHaveBeenCalled();
   });
 });

@@ -12,8 +12,12 @@ const MONO = "ui-monospace, Menlo, monospace";
 
 // A version's label, badges, origin, summary and when and by whom it was made.
 export default function VersionHeader({ version }) {
+  const commit =
+    version.origin === "push" && version.source?.commit_sha?.slice(0, 7);
   const origin = version.origin
-    ? VERSIONS_COPY.origin[version.origin] || version.origin
+    ? [VERSIONS_COPY.origin[version.origin] || version.origin, commit]
+        .filter(Boolean)
+        .join(" · ")
     : null;
   const meta = [
     fDateTime(version.createdAt),

@@ -10,6 +10,12 @@ vi.mock("react-router-dom", async () => {
   return { ...actual, useNavigate: () => navigate };
 });
 
+const { enqueueSnackbar } = vi.hoisted(() => ({ enqueueSnackbar: vi.fn() }));
+vi.mock("notistack", async () => ({
+  ...(await vi.importActual("notistack")),
+  enqueueSnackbar,
+}));
+
 // The panel runs the real preflight inline. Repo drafts carry no plaintext
 // secrets, so storeHarnessSecretValues is never hit — but the environments tree
 // (via EnvironmentValues) imports the module, so provide the whole surface.
@@ -175,6 +181,30 @@ describe("PanelSourceRepo", () => {
       value: "owner/repo",
       visibility: "public",
     });
+  });
+
+  it("shows why a private repository was refused at Build", async () => {
+    const message =
+      "Private GitHub repositories can't be versioned yet; use a public repository or upload the folder";
+    preflightHarnessJob.mockResolvedValue(PASS);
+    createHarnessJob.mockRejectedValue({
+      statusCode: 422,
+      error: "github_private_unsupported",
+      message,
+    });
+    enqueueSnackbar.mockReset();
+    renderPanel();
+    typeRepo("owner/repo");
+    runPreflight();
+    await waitFor(() => expect(buildBtn()).toBeEnabled());
+
+    fireEvent.click(buildBtn());
+
+    await waitFor(() =>
+      expect(enqueueSnackbar).toHaveBeenCalledWith(message, { variant: "error" }),
+    );
+    expect(navigate).not.toHaveBeenCalled();
+    expect(buildBtn()).toBeEnabled();
   });
 
   it("resets a passing preflight when a field is edited (stale-green guard)", async () => {

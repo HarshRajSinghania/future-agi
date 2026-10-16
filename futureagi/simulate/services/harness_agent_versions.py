@@ -63,6 +63,7 @@ _OWN_PAYLOAD_KEYS = (
     "requested_defaults",
     "requested_at",
     "created_for_environment",
+    "discarded_by",
 )
 _PROVIDER_ALIASES = {
     ProviderType.VAPI: CONNECTOR_ALIASES["vapi"],
@@ -740,6 +741,7 @@ def create_agent_version(
     trigger: str,
     user: Any = None,
     activate: bool = True,
+    explicit_reuse: bool = True,
 ) -> AgentVersion:
     """The next agent version of ``definition``, asked for by environment ``env``, as a
     draft whose preflight is queued.
@@ -750,6 +752,8 @@ def create_agent_version(
     instead of a new one: made ``env``'s default when its check already passed, else
     its check is queued.
     Without ``activate`` nothing is queued or made a default: the caller checks it.
+    Without ``explicit_reuse`` (a change found in the background) a reused version
+    moves the default as a background activation does, never by hand.
     """
     from simulate.services.harness_versioning.assembly import legacy_runtime
     from simulate.services.harness_versioning.backfill import (
@@ -977,6 +981,12 @@ def create_agent_version(
             version.configuration_snapshot = version.create_snapshot(
                 commit_message=commit_message
             )
+            _own_snapshot_facts(
+                version.configuration_snapshot,
+                version.description,
+                source_kind,
+                source_facts,
+            )
             version.save(update_fields=["configuration_snapshot", "updated_at"])
             runtime.agent_version = version
             runtime.summary = summary
@@ -1000,9 +1010,12 @@ def create_agent_version(
             trigger,
         )
         if reused.preflight_status == Status.PASSED and activate:
-            # Asked for explicitly, so a newer default does not stand in its way.
+            # Asked for by a person, a newer default does not stand in its way; found
+            # in the background, it moves only what a background activation would.
             try:
-                _activate(reused.agent_version, [env.id], explicit=True, user=user)
+                _activate(
+                    reused.agent_version, [env.id], explicit=explicit_reuse, user=user
+                )
             except Exception as exc:  # noqa: BLE001 - recorded; a default move retries
                 logger.warning(
                     "harness_agent_version_activation_failed version=%s"
@@ -1718,8 +1731,19 @@ def _record_activation(version_id: Any, outcomes: Mapping[str, str]) -> None:
             for entry in report.get("activation") or []
             if entry.get("environment_id") not in outcomes
         ]
+        # The same outcome again is counted: a refusal that never clears stops.
+        repeated = {
+            entry.get("environment_id"): int(entry.get("attempts") or 1) + 1
+            for entry in report.get("activation") or []
+            if outcomes.get(entry.get("environment_id")) == entry.get("outcome")
+        }
         report["activation"] = kept + [
             {"environment_id": environment_id, "outcome": outcome}
+            | (
+                {"attempts": repeated[environment_id]}
+                if environment_id in repeated
+                else {}
+            )
             for environment_id, outcome in outcomes.items()
         ]
         HarnessAgentVersionRuntime.no_workspace_objects.filter(id=runtime.id).update(
@@ -1913,6 +1937,17 @@ def _held_elsewhere(
     return any(version.id in _default_lineage(other) for other in others)
 
 
+def _discarded_by(runtime: HarnessAgentVersionRuntime, by_environment: Any) -> bool:
+    """Record the environment's decision on this head; others may still ask for it.
+    Returns whether the payload changed; the caller saves."""
+    payload = runtime.agent_payload or {}
+    by = list(payload.get("discarded_by") or [])
+    if by_environment is None or str(by_environment) in by:
+        return False
+    runtime.agent_payload = {**payload, "discarded_by": [*by, str(by_environment)]}
+    return True
+
+
 def discard_agent_version(version: AgentVersion, *, by_environment: Any = None) -> None:
     """Set a version aside; it stays stored and numbered, never soft-deleted. A legacy
     version, shared by every environment on it, is kept; so is one another environment
@@ -1929,6 +1964,8 @@ def discard_agent_version(version: AgentVersion, *, by_environment: Any = None) 
                 details={"piece": "agent"},
             )
         if runtime.preflight_status == Status.DISCARDED:
+            if _discarded_by(runtime, by_environment):
+                runtime.save(update_fields=["agent_payload", "updated_at"])
             return
         if legacy_runtime(runtime):
             raise _version_shared(
@@ -1963,7 +2000,8 @@ def discard_agent_version(version: AgentVersion, *, by_environment: Any = None) 
                 " can't be discarded"
             )
         runtime.preflight_status = Status.DISCARDED
-        runtime.save(update_fields=["preflight_status", "updated_at"])
+        _discarded_by(runtime, by_environment)
+        runtime.save(update_fields=["preflight_status", "agent_payload", "updated_at"])
         if environment_owned(version.agent_definition_id):
             AgentVersion._base_manager.filter(id=version.id).update(
                 status=AgentVersion.StatusChoices.DEPRECATED, updated_at=timezone.now()
@@ -2061,6 +2099,21 @@ def mirror_default_status(version: AgentVersion) -> None:
         )
 
 
+def _own_snapshot_facts(
+    snapshot: dict[str, Any],
+    description: str,
+    source_kind: str,
+    source: Mapping[str, Any] | None,
+) -> None:
+    """The snapshot reads the definition: a version's own prompt and phone number are
+    what it stands for. Without a prompt of its own it keeps the definition's."""
+    if description:
+        snapshot["description"] = description
+    phone_number = (source or {}).get("phone_number")
+    if source_kind == HarnessAgentVersionRuntime.SourceKind.PHONE and phone_number:
+        snapshot["contact_number"] = phone_number
+
+
 def resnapshot_version(version_id: Any, definition_id: Any = None) -> None:
     """Rebuild a version's snapshot from a fresh read, since the version in hand
     cached its agent and provider row before they were written; never a new version."""
@@ -2071,6 +2124,14 @@ def resnapshot_version(version_id: Any, definition_id: Any = None) -> None:
     if fresh is None:
         return
     snapshot = fresh.create_snapshot(commit_message=fresh.commit_message)
+    row = _side_row(fresh.id)
+    if (
+        row is not None
+        and row.preflight_status != Status.LEGACY
+        and row.trigger != Trigger.CREATION
+    ):
+        # A changed version keeps its own prompt and phone number, as when made.
+        _own_snapshot_facts(snapshot, fresh.description, row.source_kind, row.source)
     if snapshot != fresh.configuration_snapshot:
         AgentVersion._base_manager.filter(id=fresh.id).update(
             configuration_snapshot=snapshot
@@ -2392,6 +2453,7 @@ def ensure_environment_agent(
     submitted: SubmittedCredentials,
     check: CreationCheck,
     user: Any = None,
+    repository_id: int | None = None,
 ) -> AgentVersion:
     """Make a new environment's agent and its first version, and pin the job to it.
 
@@ -2447,7 +2509,9 @@ def ensure_environment_agent(
         definition,
         parent=None,
         env=job,
-        source=payload.get("source") or {},
+        # GitHub's id for the repository, looked up at creation: kept with how the
+        # source is reached, never in the environment's own payload.
+        source={**(payload.get("source") or {}), "repository_id": repository_id},
         prompt=configured_prompt(payload) or None,
         agent_payload={
             **legacy_agent_payload(payload),

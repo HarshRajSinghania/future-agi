@@ -412,12 +412,14 @@ class TestVersionsList:
             if "simulate_harness_agent_version_runtime" in query["sql"]
         ]
         assert runtime_selects
-        # Only the payload's two asking keys are read, never the whole payload;
-        # only whether a row has a blob, never the blob.
+        # Only the payload's asking keys, its source access and the default's prompt
+        # are read, never the whole payload; only whether a row has a blob, never
+        # the blob.
         runtime_selects = [
             re.sub(
                 r"\"agent_payload\" -> '(requested_by_environments"
-                r"|created_for_environment|definition_owner)'"
+                r"|created_for_environment|definition_owner|source_access)'"
+                r"|\"agent_payload\" #> '\{config,target_system_prompt\}'"
                 r"|\"credential_blob\" IS NULL|\"credential_blob\" = ''",
                 "",
                 sql,

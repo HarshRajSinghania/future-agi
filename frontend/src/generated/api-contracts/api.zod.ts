@@ -36286,6 +36286,17 @@ export const SimulateApiHarnessEnvironmentsVersionsResponse = zod.object({
       parent_id: zod.string().uuid().nullable(),
       derived_from_agent_version_id: zod.string().uuid().nullable(),
       scenario_count: zod.number().nullable(),
+      source: zod
+        .object({})
+        .passthrough()
+        .describe("An agent version's non-secret source facts.")
+        .nullable(),
+      prompt: zod
+        .string()
+        .describe(
+          "The default agent version's prompt; null on every other item.",
+        )
+        .nullable(),
       preflight_status: zod.string().min(1).nullable(),
       preflight_report: zod
         .object({})
@@ -36352,6 +36363,17 @@ export const SimulateApiHarnessEnvironmentsVersionsResponse = zod.object({
       parent_id: zod.string().uuid().nullable(),
       derived_from_agent_version_id: zod.string().uuid().nullable(),
       scenario_count: zod.number().nullable(),
+      source: zod
+        .object({})
+        .passthrough()
+        .describe("An agent version's non-secret source facts.")
+        .nullable(),
+      prompt: zod
+        .string()
+        .describe(
+          "The default agent version's prompt; null on every other item.",
+        )
+        .nullable(),
       preflight_status: zod.string().min(1).nullable(),
       preflight_report: zod
         .object({})
@@ -36418,6 +36440,17 @@ export const SimulateApiHarnessEnvironmentsVersionsResponse = zod.object({
       parent_id: zod.string().uuid().nullable(),
       derived_from_agent_version_id: zod.string().uuid().nullable(),
       scenario_count: zod.number().nullable(),
+      source: zod
+        .object({})
+        .passthrough()
+        .describe("An agent version's non-secret source facts.")
+        .nullable(),
+      prompt: zod
+        .string()
+        .describe(
+          "The default agent version's prompt; null on every other item.",
+        )
+        .nullable(),
       preflight_status: zod.string().min(1).nullable(),
       preflight_report: zod
         .object({})
@@ -36468,6 +36501,58 @@ export const SimulateApiHarnessEnvironmentsVersionsResponse = zod.object({
 });
 
 /**
+ * A new agent version from an upload, a prompt edit or a settings edit; it is
+checked next, then made this environment's default.
+ */
+export const SimulateApiHarnessEnvironmentsVersionsCreateAgentVersionParams =
+  zod.object({
+    id: zod.string(),
+  });
+
+export const simulateApiHarnessEnvironmentsVersionsCreateAgentVersionBodyPromptMax = 65536;
+
+export const simulateApiHarnessEnvironmentsVersionsCreateAgentVersionBodyAgentPayloadConfigPhoneNumberMax = 512;
+
+export const simulateApiHarnessEnvironmentsVersionsCreateAgentVersionBodyAgentPayloadConfigAgentNameMax = 512;
+
+export const SimulateApiHarnessEnvironmentsVersionsCreateAgentVersionBody =
+  zod.object({
+    archive_artifact_id: zod
+      .string()
+      .uuid()
+      .optional()
+      .describe("A folder uploaded through source-upload."),
+    prompt: zod
+      .string()
+      .min(1)
+      .max(
+        simulateApiHarnessEnvironmentsVersionsCreateAgentVersionBodyPromptMax,
+      )
+      .optional(),
+    agent_payload: zod
+      .object({
+        config: zod.object({
+          phone_number: zod
+            .string()
+            .min(1)
+            .max(
+              simulateApiHarnessEnvironmentsVersionsCreateAgentVersionBodyAgentPayloadConfigPhoneNumberMax,
+            )
+            .optional(),
+          agent_name: zod
+            .string()
+            .min(1)
+            .max(
+              simulateApiHarnessEnvironmentsVersionsCreateAgentVersionBodyAgentPayloadConfigAgentNameMax,
+            )
+            .optional(),
+          target_speaks_first: zod.boolean().optional(),
+        }),
+      })
+      .optional(),
+  });
+
+/**
  * Set an agent version aside; returns every version.
  */
 export const SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionParams =
@@ -36500,6 +36585,17 @@ export const SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionRespo
         parent_id: zod.string().uuid().nullable(),
         derived_from_agent_version_id: zod.string().uuid().nullable(),
         scenario_count: zod.number().nullable(),
+        source: zod
+          .object({})
+          .passthrough()
+          .describe("An agent version's non-secret source facts.")
+          .nullable(),
+        prompt: zod
+          .string()
+          .describe(
+            "The default agent version's prompt; null on every other item.",
+          )
+          .nullable(),
         preflight_status: zod.string().min(1).nullable(),
         preflight_report: zod
           .object({})
@@ -36568,6 +36664,17 @@ export const SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionRespo
         parent_id: zod.string().uuid().nullable(),
         derived_from_agent_version_id: zod.string().uuid().nullable(),
         scenario_count: zod.number().nullable(),
+        source: zod
+          .object({})
+          .passthrough()
+          .describe("An agent version's non-secret source facts.")
+          .nullable(),
+        prompt: zod
+          .string()
+          .describe(
+            "The default agent version's prompt; null on every other item.",
+          )
+          .nullable(),
         preflight_status: zod.string().min(1).nullable(),
         preflight_report: zod
           .object({})
@@ -36636,6 +36743,17 @@ export const SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionRespo
         parent_id: zod.string().uuid().nullable(),
         derived_from_agent_version_id: zod.string().uuid().nullable(),
         scenario_count: zod.number().nullable(),
+        source: zod
+          .object({})
+          .passthrough()
+          .describe("An agent version's non-secret source facts.")
+          .nullable(),
+        prompt: zod
+          .string()
+          .describe(
+            "The default agent version's prompt; null on every other item.",
+          )
+          .nullable(),
         preflight_status: zod.string().min(1).nullable(),
         preflight_report: zod
           .object({})
@@ -36764,6 +36882,17 @@ export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse =
         parent_id: zod.string().uuid().nullable(),
         derived_from_agent_version_id: zod.string().uuid().nullable(),
         scenario_count: zod.number().nullable(),
+        source: zod
+          .object({})
+          .passthrough()
+          .describe("An agent version's non-secret source facts.")
+          .nullable(),
+        prompt: zod
+          .string()
+          .describe(
+            "The default agent version's prompt; null on every other item.",
+          )
+          .nullable(),
         preflight_status: zod.string().min(1).nullable(),
         preflight_report: zod
           .object({})
@@ -36832,6 +36961,17 @@ export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse =
         parent_id: zod.string().uuid().nullable(),
         derived_from_agent_version_id: zod.string().uuid().nullable(),
         scenario_count: zod.number().nullable(),
+        source: zod
+          .object({})
+          .passthrough()
+          .describe("An agent version's non-secret source facts.")
+          .nullable(),
+        prompt: zod
+          .string()
+          .describe(
+            "The default agent version's prompt; null on every other item.",
+          )
+          .nullable(),
         preflight_status: zod.string().min(1).nullable(),
         preflight_report: zod
           .object({})
@@ -36900,6 +37040,17 @@ export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse =
         parent_id: zod.string().uuid().nullable(),
         derived_from_agent_version_id: zod.string().uuid().nullable(),
         scenario_count: zod.number().nullable(),
+        source: zod
+          .object({})
+          .passthrough()
+          .describe("An agent version's non-secret source facts.")
+          .nullable(),
+        prompt: zod
+          .string()
+          .describe(
+            "The default agent version's prompt; null on every other item.",
+          )
+          .nullable(),
         preflight_status: zod.string().min(1).nullable(),
         preflight_report: zod
           .object({})

@@ -3,8 +3,10 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from simulate.serializers.harness_job import (
+    TARGET_SYSTEM_PROMPT_MAX_CHARS,
     HarnessRunPinnedVersionsSerializer,
     HarnessRunWarningSerializer,
+    phone_number_error,
 )
 from simulate.serializers.requests.run_test_evals import (
     EvalConfigUpdateRequestSerializer,
@@ -17,6 +19,7 @@ from simulate.services.harness_environment import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
+from tfc.utils.api_serializers import StrictInputSerializer
 
 
 class HarnessEnvironmentListQuerySerializer(serializers.Serializer):
@@ -504,6 +507,14 @@ class HarnessVersionSerializer(serializers.Serializer):
     parent_id = serializers.UUIDField(allow_null=True)
     derived_from_agent_version_id = serializers.UUIDField(allow_null=True)
     scenario_count = serializers.IntegerField(allow_null=True)
+    source = serializers.JSONField(
+        allow_null=True, help_text="An agent version's non-secret source facts."
+    )
+    prompt = serializers.CharField(
+        allow_null=True,
+        allow_blank=True,
+        help_text="The default agent version's prompt; null on every other item.",
+    )
     preflight_status = serializers.CharField(allow_null=True)
     preflight_report = serializers.JSONField(
         allow_null=True,
@@ -552,6 +563,51 @@ class HarnessAgentCredentialsResponseSerializer(serializers.Serializer):
     """The agent version a credential change made; its check runs next."""
 
     agent_version = HarnessVersionSerializer()
+
+
+class HarnessAgentConfigChangeSerializer(StrictInputSerializer):
+    phone_number = serializers.CharField(max_length=512, required=False)
+    agent_name = serializers.CharField(max_length=512, required=False)
+    target_speaks_first = serializers.BooleanField(required=False)
+
+    def validate_phone_number(self, value):
+        error = phone_number_error(value)
+        if error:
+            raise serializers.ValidationError(error)
+        return value.strip()
+
+
+class HarnessAgentPayloadChangeSerializer(StrictInputSerializer):
+    config = HarnessAgentConfigChangeSerializer()
+
+
+class HarnessAgentVersionCreateSerializer(serializers.Serializer):
+    """One change to an environment's agent: a new upload, or its prompt and settings."""
+
+    archive_artifact_id = serializers.UUIDField(
+        required=False, help_text="A folder uploaded through source-upload."
+    )
+    prompt = serializers.CharField(
+        required=False,
+        max_length=TARGET_SYSTEM_PROMPT_MAX_CHARS,
+        trim_whitespace=True,
+        allow_blank=False,
+    )
+    agent_payload = HarnessAgentPayloadChangeSerializer(required=False)
+
+    def validate(self, attrs):
+        given = [name for name in self.fields if name in attrs]
+        if not given:
+            raise serializers.ValidationError(
+                "Give archive_artifact_id, prompt or agent_payload."
+            )
+        if "archive_artifact_id" in attrs and len(given) > 1:
+            raise serializers.ValidationError(
+                {"archive_artifact_id": "An upload is a change of its own."}
+            )
+        if "agent_payload" in attrs and not attrs["agent_payload"]["config"]:
+            raise serializers.ValidationError({"agent_payload": "Nothing to change."})
+        return attrs
 
 
 class HarnessVersionsSerializer(serializers.Serializer):

@@ -58,4 +58,12 @@ SIMULATE_SCHEDULES: list[ScheduleConfig] = [
         queue="default",
         description="Re-enqueue usage sealing for hosted sandbox cleanups whose seal never ran",
     ),
+    ScheduleConfig(
+        schedule_id="harness-github-poll",
+        activity_name="poll_harness_github_heads",
+        interval_seconds=600,
+        jitter_seconds=60,
+        queue="default",
+        description="Read the head commit of GitHub repositories that hosted environments watch and record new agent versions",
+    ),
 ]

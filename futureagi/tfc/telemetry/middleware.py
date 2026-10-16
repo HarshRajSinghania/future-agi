@@ -47,6 +47,8 @@ SENSITIVE_BODY_PATH_PREFIXES = (
     "/saml2_auth/",
     "/simulate/api/harness-jobs/secret-values/",
     "/simulate/api/harness-jobs/secret-files/",
+    # Signed over its raw bytes and may carry committer emails; never read early.
+    "/simulate/api/harness/github/webhook/",
 )
 
 

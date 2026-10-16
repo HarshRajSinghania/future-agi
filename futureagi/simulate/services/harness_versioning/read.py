@@ -50,6 +50,15 @@ _PIECE_DEFERRED = ("documents", "diff", "snapshot_diff")
 _AGENT_DEFERRED = ("configuration_snapshot", "description", "release_notes")
 # Never read by the lists; the preflight report holds names and statuses only.
 _RUNTIME_SECRET = ("agent_payload", "credential_blob")
+# The source facts an agent version item shows, by source kind: never a URL, an
+# installation or a credential.
+_SOURCE_FACTS = {
+    "github": ("repository", "ref", "commit_sha"),
+    "phone": ("phone_number", "call_direction"),
+    "provider": ("provider", "assistant_id"),
+    "livekit": ("agent_name",),
+}
+_PROMPT_KINDS = ("provider", "phone", "livekit")
 
 
 def versioning_flags() -> dict[str, bool]:
@@ -167,6 +176,8 @@ def _piece_item(version: Any, default_id: Any, *, suite: bool) -> dict[str, Any]
             else str(version.agent_version_id)
         ),
         "scenario_count": version.scenario_count if suite else None,
+        "source": None,
+        "prompt": None,
         "preflight_status": None,
         "preflight_report": None,
         "preflighted_at": None,
@@ -258,6 +269,7 @@ def _runtimes(
         .annotate(
             asked_by=F("agent_payload__requested_by_environments"),
             asked_for=F("agent_payload__created_for_environment"),
+            access=F("agent_payload__source_access"),
             # Whether a discarded row was a legacy one, without reading its blob.
             blobless=ExpressionWrapper(
                 Q(credential_blob__isnull=True) | Q(credential_blob=""),
@@ -284,16 +296,80 @@ def _parent_agent_versions(
     )
 
 
-def _activation_outcome(
+def _activation_entry(
     report: Mapping[str, Any] | None, environment_id: Any
-) -> str | None:
-    """Why a passed version is or isn't this environment's default, as last recorded."""
+) -> Mapping[str, Any] | None:
+    """This environment's last recorded activation entry."""
     for entry in (report or {}).get("activation") or []:
         if isinstance(entry, Mapping) and entry.get("environment_id") == str(
             environment_id
         ):
-            return str(entry.get("outcome") or "") or None
+            return entry
     return None
+
+
+def _activation_outcome(
+    report: Mapping[str, Any] | None, environment_id: Any
+) -> str | None:
+    """Why a passed version is or isn't this environment's default, as last recorded."""
+    entry = _activation_entry(report, environment_id)
+    return (str(entry.get("outcome") or "") or None) if entry is not None else None
+
+
+def _source_item(runtime: Any, job: HostedHarnessJob, legacy: bool) -> Any:
+    """An agent version's non-secret source facts."""
+    from simulate.services.harness_versioning.backfill import source_access
+
+    kind = str(getattr(runtime, "source_kind", "") or "")
+    if not kind:
+        return None
+    stored = runtime.source if isinstance(runtime.source, Mapping) else {}
+    if kind == "provider" and stored.get("provider") == "remote":
+        return {"kind": kind, "provider": "remote"}
+    item = {"kind": kind}
+    item.update(
+        (name, stored[name])
+        for name in _SOURCE_FACTS.get(kind, ())
+        if stored.get(name) is not None
+    )
+    if kind == "github":
+        # A legacy row is shared: this environment's own access.
+        access = (
+            source_access(job.payload or {})
+            if legacy
+            else getattr(runtime, "access", None)
+        )
+        item["visibility"] = (
+            access.get("visibility") if isinstance(access, Mapping) else None
+        )
+    return item
+
+
+def _default_prompt(
+    version: AgentVersion, runtime: Any, facts: Any, source: Any
+) -> str | None:
+    """The default agent version's prompt, as its runs read it; a code agent's
+    belongs to its source."""
+    if not source or source["kind"] not in _PROMPT_KINDS:
+        return None
+    if source.get("provider") == "remote":
+        return None
+    if facts is runtime:
+        prompt = (
+            HarnessAgentVersionRuntime.no_workspace_objects.filter(id=runtime.id)
+            .values_list("agent_payload__config__target_system_prompt", flat=True)
+            .first()
+        )
+    else:
+        config = (getattr(facts, "agent_payload", None) or {}).get("config") or {}
+        prompt = config.get("target_system_prompt")
+    if not isinstance(prompt, str):
+        prompt = (
+            AgentVersion._base_manager.filter(id=version.id)
+            .values_list("description", flat=True)
+            .first()
+        )
+    return prompt or None
 
 
 def _agent_item(
@@ -318,6 +394,14 @@ def _agent_item(
     legacy = runtime is not None and legacy_runtime(runtime)
     # A legacy row is shared: this environment's own variables are its names.
     named = effective_runtime(job, runtime) if legacy else runtime
+    is_default = version.id == default_id
+    # A default without a side row stands for the environment's own facts.
+    facts = (
+        effective_runtime(job, None, version=version)
+        if is_default and runtime is None
+        else named
+    )
+    source = _source_item(facts, job, legacy or runtime is None)
 
     if runtime is not None and (runtime.summary or "").strip():
         summary = _summary_line(runtime.summary)
@@ -360,6 +444,11 @@ def _agent_item(
         "parent_id": str(parent) if parent is not None else None,
         "derived_from_agent_version_id": None,
         "scenario_count": None,
+        "source": source,
+        # The default's only, so a polled list never repeats it.
+        "prompt": (
+            _default_prompt(version, runtime, facts, source) if is_default else None
+        ),
         "preflight_status": (
             (runtime.preflight_status or None) if runtime is not None else None
         ),

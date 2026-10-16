@@ -576,6 +576,7 @@ import type {
   GroupingOutboxResponseApi,
   HarnessAcceptedResponseApi,
   HarnessAgentCredentialsResponseApi,
+  HarnessAgentVersionCreateApi,
   HarnessArtifactUploadResponseApi,
   HarnessConversationAdjustmentApi,
   HarnessConversationAdjustmentResponseApi,
@@ -59253,6 +59254,57 @@ export const simulateApiHarnessEnvironmentsVersions = async (
   );
 };
 
+export type simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponse202 =
+  {
+    data: HarnessAgentCredentialsResponseApi;
+    status: 202;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponseDefault =
+  {
+    data: ManagementAPIErrorResponseApi;
+    status: Exclude<HTTPStatusCodes, 202>;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponseSuccess =
+  simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponse202 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponseError =
+  simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponse =
+  | simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponseSuccess
+  | simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponseError;
+
+export const getSimulateApiHarnessEnvironmentsVersionsCreateAgentVersionUrl = (
+  id: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/versions/agent/`;
+};
+
+/**
+ * A new agent version from an upload, a prompt edit or a settings edit; it is
+checked next, then made this environment's default.
+ */
+export const simulateApiHarnessEnvironmentsVersionsCreateAgentVersion = async (
+  id: string,
+  harnessAgentVersionCreateApi: HarnessAgentVersionCreateApi,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsVersionsCreateAgentVersionResponse>(
+    getSimulateApiHarnessEnvironmentsVersionsCreateAgentVersionUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(harnessAgentVersionCreateApi),
+    },
+  );
+};
+
 export type simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse200 =
   {
     data: HarnessVersionsApi;
@@ -61269,6 +61321,55 @@ export const simulateApiHarnessConversationsWorkspace = async (
     {
       ...options,
       method: "PUT",
+    },
+  );
+};
+
+export type simulateApiHarnessGithubWebhookCreateResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type simulateApiHarnessGithubWebhookCreateResponse429 = {
+  data: void;
+  status: 429;
+};
+
+export type simulateApiHarnessGithubWebhookCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 204 | 429>;
+};
+
+export type simulateApiHarnessGithubWebhookCreateResponseSuccess =
+  simulateApiHarnessGithubWebhookCreateResponse204 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessGithubWebhookCreateResponseError = (
+  | simulateApiHarnessGithubWebhookCreateResponse429
+  | simulateApiHarnessGithubWebhookCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type simulateApiHarnessGithubWebhookCreateResponse =
+  | simulateApiHarnessGithubWebhookCreateResponseSuccess
+  | simulateApiHarnessGithubWebhookCreateResponseError;
+
+export const getSimulateApiHarnessGithubWebhookCreateUrl = () => {
+  return `/simulate/api/harness/github/webhook/`;
+};
+
+/**
+ * GitHub App push webhook, signed with X-Hub-Signature-256. Answers 204, or 429 when throttled.
+ */
+export const simulateApiHarnessGithubWebhookCreate = async (
+  options?: RequestInit,
+): Promise<simulateApiHarnessGithubWebhookCreateResponse> => {
+  return apiMutator<simulateApiHarnessGithubWebhookCreateResponse>(
+    getSimulateApiHarnessGithubWebhookCreateUrl(),
+    {
+      ...options,
+      method: "POST",
     },
   );
 };

@@ -39,6 +39,7 @@ vi.mock("src/api/simulate-environments/versions", async () => {
     useDiscardAgentVersion: vi.fn(() => useFakeMutation("discard", seed)),
     useRetryAgentVersion: vi.fn(() => useFakeMutation("retry", seed)),
     useChangeCredentials: vi.fn(() => useFakeMutation("change")),
+    useCreateAgentVersion: vi.fn(() => useFakeMutation("create")),
   };
 });
 vi.mock("src/api/simulate-environments/environments", () => ({
@@ -167,6 +168,45 @@ describe("AgentVersionsPanel", () => {
 
     expect(rowOf("a3")).toHaveTextContent("discarded");
     expect(rowOf("a6")).toHaveTextContent("Check passed");
+  });
+
+  it("names a pushed version's commit and shows what the default is built from", () => {
+    state.versions = {
+      ...VERSIONS,
+      agent: [
+        agentItem({
+          id: "a8",
+          label: "v8",
+          origin: "push",
+          source: {
+            kind: "github",
+            repository: "acme/agent",
+            ref: "main",
+            commit_sha: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0",
+            visibility: "public",
+          },
+        }),
+        ...VERSIONS.agent.map((item) =>
+          item.is_default
+            ? {
+                ...item,
+                source: {
+                  kind: "github",
+                  repository: "acme/agent",
+                  ref: "main",
+                },
+              }
+            : item,
+        ),
+      ],
+    };
+    render(<AgentVersionsPanel env={ENV} />);
+
+    expect(rowOf("a8")).toHaveTextContent("Pushed · a1b2c3d");
+    expect(rowOf("a8")).not.toHaveTextContent("a1b2c3d4");
+    expect(screen.getByTestId("agent-source-change")).toHaveTextContent(
+      "Watching acme/agent @ main",
+    );
   });
 
   it("shows a failed check's steps and the names it found missing or rejected", () => {

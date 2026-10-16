@@ -51135,6 +51135,49 @@
                 }
             ]
         },
+        "/simulate/api/harness-environments/{id}/versions/agent/": {
+            "post": {
+                "operationId": "simulate_api_harness-environments_versions_create_agent_version",
+                "description": "A new agent version from an upload, a prompt edit or a settings edit; it is\nchecked next, then made this environment's default.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessAgentVersionCreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessAgentCredentialsResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/": {
             "post": {
                 "operationId": "simulate_api_harness-environments_versions_agent_discard_agent_version",
@@ -52876,6 +52919,42 @@
                     "type": "string"
                 }
             ]
+        },
+        "/simulate/api/harness/github/webhook/": {
+            "post": {
+                "operationId": "simulate_api_harness_github_webhook_create",
+                "description": "GitHub App push webhook, signed with X-Hub-Signature-256. Answers 204, or 429 when throttled.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessGitHubPush"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Accepted or ignored"
+                    },
+                    "429": {
+                        "description": "Throttled"
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "consumes": [],
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true
+            },
+            "parameters": []
         },
         "/simulate/api/harness/ingress/{token}/": {
             "get": {
@@ -125119,6 +125198,8 @@
                 "parent_id",
                 "derived_from_agent_version_id",
                 "scenario_count",
+                "source",
+                "prompt",
                 "preflight_status",
                 "preflight_report",
                 "preflighted_at",
@@ -125195,6 +125276,18 @@
                 "scenario_count": {
                     "title": "Scenario count",
                     "type": "integer",
+                    "x-nullable": true
+                },
+                "source": {
+                    "title": "Source",
+                    "description": "An agent version's non-secret source facts.",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "prompt": {
+                    "title": "Prompt",
+                    "description": "The default agent version's prompt; null on every other item.",
+                    "type": "string",
                     "x-nullable": true
                 },
                 "preflight_status": {
@@ -125292,6 +125385,69 @@
                     "items": {
                         "$ref": "#/definitions/HarnessVersion"
                     }
+                }
+            }
+        },
+        "HarnessAgentConfigChange": {
+            "type": "object",
+            "properties": {
+                "phone_number": {
+                    "title": "Phone number",
+                    "type": "string",
+                    "maxLength": 512,
+                    "minLength": 1
+                },
+                "agent_name": {
+                    "title": "Agent name",
+                    "type": "string",
+                    "maxLength": 512,
+                    "minLength": 1
+                },
+                "target_speaks_first": {
+                    "title": "Target speaks first",
+                    "type": "boolean"
+                }
+            }
+        },
+        "HarnessAgentPayloadChange": {
+            "required": [
+                "config"
+            ],
+            "type": "object",
+            "properties": {
+                "config": {
+                    "$ref": "#/definitions/HarnessAgentConfigChange"
+                }
+            }
+        },
+        "HarnessAgentVersionCreate": {
+            "type": "object",
+            "properties": {
+                "archive_artifact_id": {
+                    "title": "Archive artifact id",
+                    "description": "A folder uploaded through source-upload.",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "prompt": {
+                    "title": "Prompt",
+                    "type": "string",
+                    "maxLength": 65536,
+                    "minLength": 1
+                },
+                "agent_payload": {
+                    "$ref": "#/definitions/HarnessAgentPayloadChange"
+                }
+            }
+        },
+        "HarnessAgentCredentialsResponse": {
+            "required": [
+                "agent_version"
+            ],
+            "type": "object",
+            "properties": {
+                "agent_version": {
+                    "$ref": "#/definitions/HarnessVersion"
                 }
             }
         },
@@ -126803,17 +126959,6 @@
                     "additionalProperties": {
                         "$ref": "#/definitions/SecretReference"
                     }
-                }
-            }
-        },
-        "HarnessAgentCredentialsResponse": {
-            "required": [
-                "agent_version"
-            ],
-            "type": "object",
-            "properties": {
-                "agent_version": {
-                    "$ref": "#/definitions/HarnessVersion"
                 }
             }
         },
@@ -128545,6 +128690,55 @@
                     "title": "Size",
                     "type": "integer",
                     "minimum": 0
+                }
+            }
+        },
+        "HarnessGitHubPushRepository": {
+            "required": [
+                "full_name"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "integer",
+                    "minimum": 1,
+                    "x-nullable": true
+                },
+                "full_name": {
+                    "title": "Full name",
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                },
+                "default_branch": {
+                    "title": "Default branch",
+                    "type": "string",
+                    "maxLength": 256,
+                    "x-nullable": true
+                }
+            }
+        },
+        "HarnessGitHubPush": {
+            "required": [
+                "ref",
+                "repository"
+            ],
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "title": "Ref",
+                    "type": "string",
+                    "maxLength": 512,
+                    "minLength": 1
+                },
+                "deleted": {
+                    "title": "Deleted",
+                    "type": "boolean",
+                    "default": false
+                },
+                "repository": {
+                    "$ref": "#/definitions/HarnessGitHubPushRepository"
                 }
             }
         },

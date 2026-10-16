@@ -42,6 +42,20 @@ def test_agent_version_preflight_runs_on_the_runner_queue():
         assert runner not in registry.get_activities_for_queue(queue)
 
 
+def test_agent_change_detection_runs_on_the_default_queue():
+    from simulate.tasks.harness_agent_changes import (
+        observe_harness_github_push,
+        poll_harness_github_heads,
+    )
+    from simulate.temporal.constants import QUEUE_RUNNER
+    from tfc.temporal.drop_in.decorator import _ACTIVITY_WRAPPERS
+
+    for task in (poll_harness_github_heads, observe_harness_github_push):
+        wrapper = _ACTIVITY_WRAPPERS[task.name]
+        assert wrapper in registry.get_activities_for_queue("default")
+        assert wrapper not in registry.get_activities_for_queue(QUEUE_RUNNER)
+
+
 def test_usage_temporal_registry_prefers_cloud(monkeypatch):
     cloud_registry = MagicMock()
     import_module = MagicMock(

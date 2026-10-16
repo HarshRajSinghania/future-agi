@@ -349,6 +349,45 @@ export const AGENT_VERSIONS_COPY = {
     },
     error: "Couldn't save the values. Try again in a moment.",
   },
+  // A new upload, prompt or settings for the agent, made in the environment.
+  change: {
+    watching: (repository, ref) =>
+      `Watching ${repository} @ ${ref || "the default branch"}`,
+    builtFrom: (repository, ref) =>
+      `Built from ${repository} @ ${ref || "the default branch"}`,
+    watchHint:
+      "New commits become new agent versions automatically; they're checked before becoming the default.",
+    privateNotWatched: "Private repositories aren't watched for new commits.",
+    checkRunning: "Another change is still being checked",
+    upload: "Upload new source",
+    uploading: (progress) => `Uploading… ${progress}%`,
+    creating: "Saving…",
+    editPrompt: "Edit prompt",
+    prompt: "Prompt",
+    evalInstructions: "Instructions used for evaluation",
+    evalInstructionsHint: (provider) =>
+      `Your ${provider || "provider"} assistant keeps its own prompt; this only changes how runs are judged.`,
+    count: (length, max) =>
+      `${length.toLocaleString()} / ${max.toLocaleString()}`,
+    phoneNumber: "Phone number",
+    phoneHint: "In international format, like +14155550100.",
+    savePrompt: "Save",
+    cancel: "Cancel",
+    created: (label) =>
+      label
+        ? `New version ${label} is being checked.`
+        : "The new version is being checked.",
+    errors: {
+      version_not_runnable:
+        "A changed agent can't run yet: preparing new combinations is turned off.",
+      agent_unchanged: "Nothing changed.",
+      agent_connected:
+        "This agent is managed on the Agents page; change it there.",
+      agent_change_unsupported: "This agent's source doesn't take that change.",
+      archive_source_not_found: "The upload expired; upload the folder again.",
+    },
+    error: "Couldn't save the change. Try again in a moment.",
+  },
 };
 
 export const RUN_DIALOG_COPY = {

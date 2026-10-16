@@ -518,6 +518,8 @@ class HarnessJobCreateSerializer(serializers.Serializer):
     def validate_metadata(self, value):
         reserved = {
             "agent_definition_owner",
+            "agent_source_repository_id",
+            "agent_source_seen",
             "attempt_cycle_start",
             "build_agent_version_id",
             "parallelism_clamped",

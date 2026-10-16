@@ -9,6 +9,8 @@ from rest_framework.response import Response
 
 from simulate.models import AgentDefinition, HostedHarnessJob
 from simulate.serializers.harness_environment import (
+    HarnessAgentCredentialsResponseSerializer,
+    HarnessAgentVersionCreateSerializer,
     HarnessDefaultMoveSerializer,
     HarnessEnvironmentAddEvaluationSerializer,
     HarnessEnvironmentAvailableEvalsSerializer,
@@ -283,6 +285,28 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         retry_preflight(version)
         return Response(
             version_reads.list_versions(job), status=status.HTTP_202_ACCEPTED
+        )
+
+    @validated_request(
+        request_serializer=HarnessAgentVersionCreateSerializer,
+        responses={202: HarnessAgentCredentialsResponseSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(detail=True, methods=["post"], url_path="versions/agent")
+    def create_agent_version(self, request, pk=None):
+        """A new agent version from an upload, a prompt edit or a settings edit; it is
+        checked next, then made this environment's default."""
+        from simulate.services.harness_agent_changes import change_agent_source
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        version = change_agent_source(job, **request.validated_data, user=request.user)
+        job.refresh_from_db(fields=["agent_version"])
+        return Response(
+            {"agent_version": version_reads.agent_version_item(job, version)},
+            status=status.HTTP_202_ACCEPTED,
         )
 
     @validated_request(responses={200: HarnessSuiteMemberSerializer(many=True)})

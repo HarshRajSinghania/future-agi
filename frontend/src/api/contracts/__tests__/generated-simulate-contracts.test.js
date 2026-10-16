@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse,
+  SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse,
+  SimulateApiHarnessEnvironmentsVersionsResponse,
   SimulateV3CallExecutionDetailResponse,
   SimulateV3TestExecutionCallsResponse,
 } from "src/generated/api-contracts/api.zod";
@@ -24,4 +27,23 @@ describe.each([
       schema.safeParse([{ name: "Verify the caller's PIN", passed }]).success,
     ).toBe(false);
   });
+});
+
+describe.each([
+  ["versions", SimulateApiHarnessEnvironmentsVersionsResponse],
+  ["move default", SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse],
+  [
+    "discard",
+    SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse,
+  ],
+])("generated %s response", (_name, schema) => {
+  it.each(["agent", "environment", "suite"])(
+    "accepts a null source and prompt on %s items",
+    (piece) => {
+      const item = schema.shape[piece].element.shape;
+
+      expect(item.source.parse(null)).toBeNull();
+      expect(item.prompt.parse(null)).toBeNull();
+    },
+  );
 });

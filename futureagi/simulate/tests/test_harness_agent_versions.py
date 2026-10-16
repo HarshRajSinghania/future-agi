@@ -2004,6 +2004,28 @@ class TestDiscard:
         discard_agent_version(alone, by_environment=first.id)
         assert _side(alone).preflight_status == "discarded"
 
+    def test_a_discard_saves_its_status_and_decision_once(
+        self, user, workspace, storage, scheduled
+    ):
+        first, second = _shared(user, workspace, storage, "av-discard-once")
+        a2 = _create(_a1(first), first, secret_values={"OPENAI_API_KEY": "v2"})
+        real = HarnessAgentVersionRuntime.save
+        with patch.object(
+            HarnessAgentVersionRuntime, "save", autospec=True, side_effect=real
+        ) as save:
+            discard_agent_version(a2, by_environment=first.id)
+            discard_agent_version(a2, by_environment=first.id)
+            discard_agent_version(a2, by_environment=second.id)
+
+        assert [call.kwargs["update_fields"] for call in save.call_args_list] == [
+            ["preflight_status", "agent_payload", "updated_at"],
+            ["agent_payload", "updated_at"],
+        ]
+        assert _side(a2).agent_payload["discarded_by"] == [
+            str(first.id),
+            str(second.id),
+        ]
+
     def test_an_environments_default_cannot_be_discarded(
         self, user, workspace, storage
     ):

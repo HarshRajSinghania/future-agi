@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1071,
+  endpointCount: 1073,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28361,6 +28361,26 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    "/simulate/api/harness-environments/{id}/versions/agent/": {
+      post: {
+        operationId:
+          "simulate_api_harness-environments_versions_create_agent_version",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/HarnessAgentVersionCreate",
+        },
+        queryParameters: {},
+        responses: {
+          202: {
+            $ref: "#/definitions/HarnessAgentCredentialsResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
     "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/":
       {
         post: {
@@ -29168,6 +29188,22 @@ export const OPENAPI_CONTRACT = Object.freeze({
           200: {
             $ref: "#/definitions/HarnessConversationWorkspaceResponse",
           },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness/github/webhook/": {
+      post: {
+        operationId: "simulate_api_harness_github_webhook_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: false,
+        requestBody: {
+          $ref: "#/definitions/HarnessGitHubPush",
+        },
+        queryParameters: {},
+        responses: {
           default: {
             $ref: "#/definitions/ManagementAPIErrorResponse",
           },
@@ -62539,6 +62575,26 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessAgentVersionCreate: {
+      type: "object",
+      properties: {
+        archive_artifact_id: {
+          title: "Archive artifact id",
+          description: "A folder uploaded through source-upload.",
+          type: "string",
+          format: "uuid",
+        },
+        prompt: {
+          title: "Prompt",
+          type: "string",
+          maxLength: 65536,
+          minLength: 1,
+        },
+        agent_payload: {
+          $ref: "#/definitions/HarnessAgentPayloadChange",
+        },
+      },
+    },
     HarnessArtifactUploadResponse: {
       required: ["artifact_id", "duplicate"],
       type: "object",
@@ -63456,6 +63512,26 @@ export const OPENAPI_CONTRACT = Object.freeze({
           items: {
             $ref: "#/definitions/HarnessEventRejection",
           },
+        },
+      },
+    },
+    HarnessGitHubPush: {
+      required: ["ref", "repository"],
+      type: "object",
+      properties: {
+        ref: {
+          title: "Ref",
+          type: "string",
+          maxLength: 512,
+          minLength: 1,
+        },
+        deleted: {
+          title: "Deleted",
+          type: "boolean",
+          default: false,
+        },
+        repository: {
+          $ref: "#/definitions/HarnessGitHubPushRepository",
         },
       },
     },
@@ -92324,6 +92400,8 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "parent_id",
         "derived_from_agent_version_id",
         "scenario_count",
+        "source",
+        "prompt",
         "preflight_status",
         "preflight_report",
         "preflighted_at",
@@ -92398,6 +92476,19 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "integer",
           "x-nullable": true,
         },
+        source: {
+          title: "Source",
+          description: "An agent version's non-secret source facts.",
+          type: "object",
+          "x-nullable": true,
+        },
+        prompt: {
+          title: "Prompt",
+          description:
+            "The default agent version's prompt; null on every other item.",
+          type: "string",
+          "x-nullable": true,
+        },
         preflight_status: {
           title: "Preflight status",
           type: "string",
@@ -92470,6 +92561,15 @@ export const OPENAPI_CONTRACT = Object.freeze({
           description: "Whether this environment can discard an agent version.",
           type: "boolean",
           "x-nullable": true,
+        },
+      },
+    },
+    HarnessAgentPayloadChange: {
+      required: ["config"],
+      type: "object",
+      properties: {
+        config: {
+          $ref: "#/definitions/HarnessAgentConfigChange",
         },
       },
     },
@@ -93463,6 +93563,30 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Message",
           type: "string",
           minLength: 1,
+        },
+      },
+    },
+    HarnessGitHubPushRepository: {
+      required: ["full_name"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "integer",
+          minimum: 1,
+          "x-nullable": true,
+        },
+        full_name: {
+          title: "Full name",
+          type: "string",
+          maxLength: 256,
+          minLength: 1,
+        },
+        default_branch: {
+          title: "Default branch",
+          type: "string",
+          maxLength: 256,
+          "x-nullable": true,
         },
       },
     },
@@ -110249,6 +110373,27 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
       "x-nullable": true,
+    },
+    HarnessAgentConfigChange: {
+      type: "object",
+      properties: {
+        phone_number: {
+          title: "Phone number",
+          type: "string",
+          maxLength: 512,
+          minLength: 1,
+        },
+        agent_name: {
+          title: "Agent name",
+          type: "string",
+          maxLength: 512,
+          minLength: 1,
+        },
+        target_speaks_first: {
+          title: "Target speaks first",
+          type: "boolean",
+        },
+      },
     },
     HarnessEnvironmentEvalInput: {
       required: ["key", "source", "label"],

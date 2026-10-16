@@ -524,6 +524,7 @@ def source_access(payload: Mapping[str, Any]) -> dict[str, Any]:
             "kind": str(source.get("kind") or ""),
             "visibility": source.get("visibility"),
             "installation_id": str(source.get("installation_id") or ""),
+            "repository_id": source.get("repository_id"),
         }
     )
 
