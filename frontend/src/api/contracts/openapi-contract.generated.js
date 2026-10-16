@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1064,
+  endpointCount: 1066,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28361,6 +28361,48 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/":
+      {
+        post: {
+          operationId:
+            "simulate_api_harness-environments_versions_agent_discard_agent_version",
+          runtimeRequestValidation: true,
+          runtimeResponseValidation: true,
+          requestBody: {
+            $ref: "#/definitions/EmptyRequest",
+          },
+          queryParameters: {},
+          responses: {
+            200: {
+              $ref: "#/definitions/HarnessVersions",
+            },
+            default: {
+              $ref: "#/definitions/ManagementAPIErrorResponse",
+            },
+          },
+        },
+      },
+    "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/retry/":
+      {
+        post: {
+          operationId:
+            "simulate_api_harness-environments_versions_agent_retry_agent_version",
+          runtimeRequestValidation: true,
+          runtimeResponseValidation: true,
+          requestBody: {
+            $ref: "#/definitions/EmptyRequest",
+          },
+          queryParameters: {},
+          responses: {
+            202: {
+              $ref: "#/definitions/HarnessVersions",
+            },
+            default: {
+              $ref: "#/definitions/ManagementAPIErrorResponse",
+            },
+          },
+        },
+      },
     "/simulate/api/harness-environments/{id}/versions/suite/{version_id}/members/":
       {
         get: {
@@ -28522,14 +28564,17 @@ export const OPENAPI_CONTRACT = Object.freeze({
       post: {
         operationId: "simulate_api_harness-jobs_secret_values",
         runtimeRequestValidation: true,
-        runtimeResponseValidation: false,
+        runtimeResponseValidation: true,
         requestBody: {
           $ref: "#/definitions/HarnessSecretValues",
         },
         queryParameters: {},
         responses: {
           201: {
-            $ref: "#/definitions/HarnessSecretValues",
+            $ref: "#/definitions/HarnessSecretValuesResponse",
+          },
+          202: {
+            $ref: "#/definitions/HarnessAgentCredentialsResponse",
           },
           default: {
             $ref: "#/definitions/ManagementAPIErrorResponse",
@@ -62390,6 +62435,15 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessAgentCredentialsResponse: {
+      required: ["agent_version"],
+      type: "object",
+      properties: {
+        agent_version: {
+          $ref: "#/definitions/HarnessVersion",
+        },
+      },
+    },
     HarnessArtifactUploadResponse: {
       required: ["artifact_id", "duplicate"],
       type: "object",
@@ -63847,11 +63901,42 @@ export const OPENAPI_CONTRACT = Object.freeze({
       properties: {
         environment_values: {
           title: "Environment values",
+          description:
+            "Values by name; may be empty only when an environment's files are given.",
           type: "object",
           additionalProperties: {
             type: "string",
             maxLength: 65536,
             minLength: 1,
+          },
+        },
+        environment_id: {
+          title: "Environment id",
+          description:
+            "Change this environment's agent credentials: the values make its next agent version instead of being stored as secret refs.",
+          type: "string",
+          format: "uuid",
+        },
+        files: {
+          description:
+            "Credential files staged through secret-files/, by their refs.",
+          type: "array",
+          items: {
+            $ref: "#/definitions/SecretReference",
+          },
+          maxItems: 10,
+        },
+      },
+    },
+    HarnessSecretValuesResponse: {
+      required: ["secret_refs"],
+      type: "object",
+      properties: {
+        secret_refs: {
+          title: "Secret refs",
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/SecretReference",
           },
         },
       },
@@ -91886,6 +91971,169 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessVersion: {
+      required: [
+        "id",
+        "label",
+        "status",
+        "is_default",
+        "created_at",
+        "created_by",
+        "origin",
+        "summary",
+        "hash",
+        "parent_id",
+        "derived_from_agent_version_id",
+        "scenario_count",
+        "preflight_status",
+        "preflight_report",
+        "preflighted_at",
+        "check_started_at",
+        "credential_names",
+        "required_variable_names",
+        "activation_outcome",
+        "requested_here",
+        "pickable",
+        "discardable",
+      ],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          enum: ["draft", "active", "discarded"],
+        },
+        is_default: {
+          title: "Is default",
+          type: "boolean",
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          format: "date-time",
+        },
+        created_by: {
+          $ref: "#/definitions/HarnessVersionPerson",
+        },
+        origin: {
+          title: "Origin",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        summary: {
+          title: "Summary",
+          type: "string",
+        },
+        hash: {
+          title: "Hash",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        parent_id: {
+          title: "Parent id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        derived_from_agent_version_id: {
+          title: "Derived from agent version id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        scenario_count: {
+          title: "Scenario count",
+          type: "integer",
+          "x-nullable": true,
+        },
+        preflight_status: {
+          title: "Preflight status",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        preflight_report: {
+          title: "Preflight report",
+          description:
+            "An agent version's last check: check statuses and names only.",
+          type: "object",
+          "x-nullable": true,
+        },
+        preflighted_at: {
+          title: "Preflighted at",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        check_started_at: {
+          title: "Check started at",
+          description: "When an agent version's latest check was asked for.",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        credential_names: {
+          description:
+            "An agent version's credential names, provider keys included.",
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          "x-nullable": true,
+        },
+        required_variable_names: {
+          description:
+            "The variables an agent version's source reads, when known.",
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          "x-nullable": true,
+        },
+        activation_outcome: {
+          title: "Activation outcome",
+          description:
+            "Why a passed agent version is or isn't this environment's default, as last recorded.",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        requested_here: {
+          title: "Requested here",
+          description: "Whether this environment asked for an agent version.",
+          type: "boolean",
+          "x-nullable": true,
+        },
+        pickable: {
+          title: "Pickable",
+          description:
+            "Whether an agent version can be picked for a run of this environment or made its default.",
+          type: "boolean",
+          "x-nullable": true,
+        },
+        discardable: {
+          title: "Discardable",
+          description: "Whether this environment can discard an agent version.",
+          type: "boolean",
+          "x-nullable": true,
+        },
+      },
+    },
     HarnessConversationEvent: {
       required: [
         "schema_version",
@@ -93955,93 +94203,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
             "artifact",
             "platform_sync",
           ],
-          "x-nullable": true,
-        },
-      },
-    },
-    HarnessVersion: {
-      required: [
-        "id",
-        "label",
-        "status",
-        "is_default",
-        "created_at",
-        "created_by",
-        "origin",
-        "summary",
-        "hash",
-        "parent_id",
-        "derived_from_agent_version_id",
-        "scenario_count",
-        "preflight_status",
-      ],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          format: "uuid",
-        },
-        label: {
-          title: "Label",
-          type: "string",
-          minLength: 1,
-          "x-nullable": true,
-        },
-        status: {
-          title: "Status",
-          type: "string",
-          enum: ["draft", "active", "discarded"],
-        },
-        is_default: {
-          title: "Is default",
-          type: "boolean",
-        },
-        created_at: {
-          title: "Created at",
-          type: "string",
-          format: "date-time",
-        },
-        created_by: {
-          $ref: "#/definitions/HarnessVersionPerson",
-        },
-        origin: {
-          title: "Origin",
-          type: "string",
-          minLength: 1,
-          "x-nullable": true,
-        },
-        summary: {
-          title: "Summary",
-          type: "string",
-        },
-        hash: {
-          title: "Hash",
-          type: "string",
-          minLength: 1,
-          "x-nullable": true,
-        },
-        parent_id: {
-          title: "Parent id",
-          type: "string",
-          format: "uuid",
-          "x-nullable": true,
-        },
-        derived_from_agent_version_id: {
-          title: "Derived from agent version id",
-          type: "string",
-          format: "uuid",
-          "x-nullable": true,
-        },
-        scenario_count: {
-          title: "Scenario count",
-          type: "integer",
-          "x-nullable": true,
-        },
-        preflight_status: {
-          title: "Preflight status",
-          type: "string",
-          minLength: 1,
           "x-nullable": true,
         },
       },
@@ -109734,6 +109895,22 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessVersionPerson: {
+      required: ["id", "name"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          minLength: 1,
+        },
+        name: {
+          title: "Name",
+          type: "string",
+        },
+      },
+      "x-nullable": true,
+    },
     HarnessEnvironmentEvalInput: {
       required: ["key", "source", "label"],
       type: "object",
@@ -110302,22 +110479,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           format: "uuid",
         },
       },
-    },
-    HarnessVersionPerson: {
-      required: ["id", "name"],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          minLength: 1,
-        },
-        name: {
-          title: "Name",
-          type: "string",
-        },
-      },
-      "x-nullable": true,
     },
     HuggingFaceDatasetDetail: {
       required: ["id", "name", "description", "downloads", "likes", "tags"],

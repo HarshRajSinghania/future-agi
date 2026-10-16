@@ -1,15 +1,21 @@
 import PropTypes from "prop-types";
+import { useState } from "react";
 import { Box, Stack, Typography, Grid } from "@mui/material";
+import Iconify from "src/components/iconify";
 import { getSurface } from "src/api/simulate-environments/_fixtures/surfaces";
 import { contractFor } from "src/api/simulate-environments/_fixtures/contract";
-import { ENV_SHAPE, ENV_STATE_SHAPE, OVERVIEW_COPY } from "./overview.constants";
-import { PARALLELISM_COPY, degradeReasonCopy } from "../../parallelism.constants";
-// Manage-versions (the agent "test subject" card + its version drawer) is
-// commented out below, to be picked up later — its imports go with it:
-// import Iconify from "src/components/iconify";
-// import SideDrawer from "../../components/SideDrawer";
-// import AgentsPanel from "../agents/AgentsPanel";
-// (AGENT_SUMMARY_COPY dropped from the overview.constants import with it)
+import {
+  ENV_SHAPE,
+  ENV_STATE_SHAPE,
+  OVERVIEW_COPY,
+  AGENT_SUMMARY_COPY,
+} from "./overview.constants";
+import {
+  PARALLELISM_COPY,
+  degradeReasonCopy,
+} from "../../parallelism.constants";
+import SideDrawer from "../../components/SideDrawer";
+import AgentVersionsPanel from "../agents/AgentVersionsPanel";
 import { GroupHeading, Fact } from "./OverviewPrimitives";
 import AgentSummarySection from "./AgentSummarySection";
 import SourceReadCard from "./SourceReadCard";
@@ -43,7 +49,7 @@ const CONNECTOR_LABEL = {
  * "agent moved ahead" refresh banner (unlocked envs), the getting-started
  * checklist (envs with no agent and no derived world yet) and the
  * source-to-sandbox map (envs with a derived world) render at the designer's
- * positions. An unlocked env's "Manage versions" opens the AgentsPanel in a
+ * positions. An unlocked env's "Manage versions" opens its agent versions in a
  * side drawer overlaid on this tab (the user never leaves Overview); a locked
  * template env keeps "Fork to edit" instead.
  */
@@ -57,30 +63,48 @@ const dependsFromContract = (dependencies) =>
     usedBy: d?.used_by || [],
   }));
 
-export default function OverviewPanel({ env, envState, patch, onGo, agentConnected, locked = false, buildMode, counts, backedWorld }) {
-  // Manage-versions drawer state — commented with the card + drawer below,
-  // to be picked up later.
-  // const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
-  // const [nestedAgentDrawer, setNestedAgentDrawer] = useState(false);
+export default function OverviewPanel({
+  env,
+  envState,
+  patch,
+  onGo,
+  agentConnected,
+  locked = false,
+  buildMode,
+  counts,
+  backedWorld,
+}) {
+  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
+  // Agent versions are managed on real data, so only while versioning is on.
+  const canManageVersions = !locked && Boolean(env.versioning?.enabled);
   const surface = getSurface(env.surface);
   const contract = contractFor(env);
   // The real connector for a backed env (envState.agent.typeId = the job poll's
   // detected connector, e.g. "livekit"). No transports field is served, so this
   // replaces the old hardcoded transports fact.
   const connector = envState?.agent?.typeId;
-  const connectorLabel = connector ? CONNECTOR_LABEL[connector] || connector : "-";
+  const connectorLabel = connector
+    ? CONNECTOR_LABEL[connector] || connector
+    : "-";
 
   const parallelism = env.parallelism;
   const degradeReasons = parallelism?.degrade_reasons || [];
 
-  const hasDerivedWorld = (env.rules?.length || 0) > 0
-    || (envState?.scenarios?.length || 0) > 0
-    || (env.tools?.length || 0) > 0;
+  const hasDerivedWorld =
+    (env.rules?.length || 0) > 0 ||
+    (envState?.scenarios?.length || 0) > 0 ||
+    (env.tools?.length || 0) > 0;
 
   return (
     <Box sx={{ p: 2 }}>
-      <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "flex-start" }} spacing={2}>
-        <Typography sx={{ typography: "s2", color: "text.secondary", maxWidth: 820 }}>
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        alignItems={{ sm: "flex-start" }}
+        spacing={2}
+      >
+        <Typography
+          sx={{ typography: "s2", color: "text.secondary", maxWidth: 820 }}
+        >
           {env.description}
         </Typography>
       </Stack>
@@ -90,33 +114,71 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
         direction="row"
         flexWrap="wrap"
         divider={<Box sx={{ width: "1px", bgcolor: "divider", mx: 2 }} />}
-        sx={{ my: 2, py: 1.25, px: 2, border: "1px solid", borderColor: "divider", borderRadius: 1.5, rowGap: 1, width: "fit-content", maxWidth: "100%" }}
+        sx={{
+          my: 2,
+          py: 1.25,
+          px: 2,
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 1.5,
+          rowGap: 1,
+          width: "fit-content",
+          maxWidth: "100%",
+        }}
       >
         <Fact label={OVERVIEW_COPY.facts.channel} value={surface.label} />
         <Fact label={OVERVIEW_COPY.facts.connector} value={connectorLabel} />
         {parallelism?.requested ? (
-          <Fact label={PARALLELISM_COPY.fact} value={PARALLELISM_COPY.factValue(parallelism)} />
+          <Fact
+            label={PARALLELISM_COPY.fact}
+            value={PARALLELISM_COPY.factValue(parallelism)}
+          />
         ) : null}
       </Stack>
 
       {degradeReasons.length > 0 && (
-        <Box sx={{ mb: 2, py: 1.25, px: 2, border: "1px solid", borderColor: "divider", borderRadius: 1.5, bgcolor: "background.neutral" }}>
-          <Typography sx={{ typography: "s2", fontWeight: "fontWeightSemiBold" }}>
-            {PARALLELISM_COPY.degradedTitle(parallelism.effective, parallelism.requested)}
+        <Box
+          sx={{
+            mb: 2,
+            py: 1.25,
+            px: 2,
+            border: "1px solid",
+            borderColor: "divider",
+            borderRadius: 1.5,
+            bgcolor: "background.neutral",
+          }}
+        >
+          <Typography
+            sx={{ typography: "s2", fontWeight: "fontWeightSemiBold" }}
+          >
+            {PARALLELISM_COPY.degradedTitle(
+              parallelism.effective,
+              parallelism.requested,
+            )}
           </Typography>
           {degradeReasons.map((reason) => (
-            <Typography key={reason} sx={{ typography: "s3", color: "text.secondary", mt: 0.5 }}>
+            <Typography
+              key={reason}
+              sx={{ typography: "s3", color: "text.secondary", mt: 0.5 }}
+            >
               {degradeReasonCopy(reason, parallelism.effective)}
             </Typography>
           ))}
         </Box>
       )}
 
-      <AgentSummarySection subject={env.testSubject} />
+      <AgentSummarySection
+        subject={env.testSubject}
+        onManageVersions={
+          canManageVersions ? () => setAgentDrawerOpen(true) : undefined
+        }
+      />
 
       {/* Optional re-derive prompt when the attached agent has moved ahead of
           the world; only an unlocked env can re-derive. */}
-      {!locked && <AgentRefreshBanner env={env} envState={envState} patch={patch} />}
+      {!locked && (
+        <AgentRefreshBanner env={env} envState={envState} patch={patch} />
+      )}
 
       {/* State-of-the-env summary tiles + latest run — the "how's this env doing
           right now?" answer. Each tile jumps to the tab it summarises. For a
@@ -148,7 +210,11 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
         <Grid item xs={12} md={5}>
           {!buildMode && (
             <AmendmentsCard
-              amendments={backedWorld ? backedWorld.amendments : (env.amendments ?? contract.amendments)}
+              amendments={
+                backedWorld
+                  ? backedWorld.amendments
+                  : env.amendments ?? contract.amendments
+              }
             />
           )}
         </Grid>
@@ -161,17 +227,60 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
       <Grid container spacing={2} alignItems="flex-start" sx={{ mb: 3 }}>
         <Grid item xs={12} md={7}>
           <DependsOnCard
-            dependsOn={backedWorld ? dependsFromContract(backedWorld.dependencies) : contract.dependsOn}
+            dependsOn={
+              backedWorld
+                ? dependsFromContract(backedWorld.dependencies)
+                : contract.dependsOn
+            }
           />
         </Grid>
       </Grid>
 
-      {/* Agent version-management drawer — commented out with the "Manage
-          versions" card above, to be picked up later. When revived, restore the
-          imports (Iconify, SideDrawer, AgentsPanel, AGENT_SUMMARY_COPY), the
-          agentDrawerOpen / nestedAgentDrawer state, and the shared SideDrawer
-          that mounted a version-history header over the AgentsPanel for an
-          unlocked env. Full markup is in git history for this file. */}
+      {/* Agent version-management drawer, overlaid on Overview so the user
+          never leaves the tab. Not kept mounted while closed. */}
+      {canManageVersions && (
+        <SideDrawer
+          open={agentDrawerOpen}
+          onClose={() => setAgentDrawerOpen(false)}
+          width={{ xs: "100%", sm: 720, md: 880 }}
+        >
+          <Stack sx={{ height: "100%", minHeight: 0 }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={1.5}
+              sx={{
+                px: 2.5,
+                py: 1.5,
+                pr: 6,
+                borderBottom: "1px solid",
+                borderColor: "divider",
+                flexShrink: 0,
+              }}
+            >
+              <Iconify
+                icon="solar:cpu-bolt-linear"
+                width={18}
+                sx={{ color: "text.secondary" }}
+              />
+              <Box flex={1} minWidth={0}>
+                <Typography
+                  component="h2"
+                  sx={{ typography: "s1", fontWeight: "fontWeightBold" }}
+                >
+                  {AGENT_SUMMARY_COPY.label}
+                </Typography>
+                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                  {OVERVIEW_COPY.manageVersionsSubtitle}
+                </Typography>
+              </Box>
+            </Stack>
+            <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+              <AgentVersionsPanel env={env} />
+            </Box>
+          </Stack>
+        </SideDrawer>
+      )}
     </Box>
   );
 }

@@ -1,9 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import { render } from "src/utils/test-utils";
 import { MOCK_WORLD } from "src/api/simulate-environments/_fixtures/world";
 import OverviewPanel from "../OverviewPanel";
+
+// The drawer's real-data panel has its own tests; here it only has to mount.
+vi.mock("../../agents/AgentVersionsPanel", () => ({
+  default: ({ env }) => (
+    <div data-testid="agent-versions-panel">{env.id}</div>
+  ),
+}));
 import { HardRulesCard } from "../OverviewCards";
 
 const connectedState = {
@@ -89,7 +97,49 @@ describe("OverviewPanel", () => {
   // source→sandbox map (covered by the SourceToSandboxMap suite in
   // overviewExtras). Its panel-level test went with it.
 
-  // The "Manage versions" agent card + its version drawer are commented out
-  // (picked up later), so their tests — attach-agent disabled, open the drawer,
-  // seeded-baseline copy — were removed with the feature.
+  describe("Manage versions", () => {
+    const versioned = {
+      ...MOCK_WORLD,
+      id: "env-1",
+      versioning: { enabled: true },
+    };
+    const manage = () =>
+      screen.queryByRole("button", { name: "Manage versions" });
+
+    it("opens the agent versions in a drawer while versioning is on", async () => {
+      const user = userEvent.setup();
+      renderPanel({ env: versioned });
+      expect(screen.queryByTestId("agent-versions-panel")).toBeNull();
+
+      await user.click(manage());
+      expect(screen.getByTestId("agent-versions-panel")).toHaveTextContent(
+        "env-1",
+      );
+      expect(
+        screen.getByRole("heading", { level: 2, name: "Test subject" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Manage the agent versions running against this environment",
+        ),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      await waitFor(() =>
+        expect(screen.queryByTestId("agent-versions-panel")).toBeNull(),
+      );
+    });
+
+    it("offers nothing while versioning is off", () => {
+      renderPanel({ env: { ...versioned, versioning: { enabled: false } } });
+      expect(manage()).toBeNull();
+      renderPanel();
+      expect(manage()).toBeNull();
+    });
+
+    it("offers nothing on a locked template", () => {
+      renderPanel({ env: versioned, locked: true });
+      expect(manage()).toBeNull();
+    });
+  });
 });

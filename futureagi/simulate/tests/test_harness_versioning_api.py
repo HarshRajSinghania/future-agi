@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -410,7 +412,19 @@ class TestVersionsList:
             if "simulate_harness_agent_version_runtime" in query["sql"]
         ]
         assert runtime_selects
-        for column in ('"credential_blob"', '"agent_payload"', '"preflight_report"'):
+        # Only the payload's two asking keys are read, never the whole payload;
+        # only whether a row has a blob, never the blob.
+        runtime_selects = [
+            re.sub(
+                r"\"agent_payload\" -> '(requested_by_environments"
+                r"|created_for_environment)'"
+                r"|\"credential_blob\" IS NULL|\"credential_blob\" = ''",
+                "",
+                sql,
+            )
+            for sql in runtime_selects
+        ]
+        for column in ('"credential_blob"', '"agent_payload"'):
             assert all(column not in sql for sql in runtime_selects)
         version_selects = [
             query["sql"]

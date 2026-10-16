@@ -7,6 +7,7 @@ migrations. Idempotent: an environment already versioned only gains what it stil
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -15,7 +16,6 @@ import time
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields
-from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -36,6 +36,7 @@ from simulate.models.harness_versioning import (
 from simulate.models.hosted_harness import MAX_SCENARIOS_PER_JOB, HostedHarnessJob
 from simulate.services.harness_versioning import archives, diffs, hashing
 from simulate.services.harness_versioning.assembly import (
+    legacy_runtime,
     runtime_identity,
     seed_ready_bundle,
 )
@@ -512,6 +513,35 @@ def legacy_source(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     )
 
 
+def source_access(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """How the source is reached: kept beside the identity, as a private clone or a
+    remote target needs it. Holds no secret: the token comes from the installation."""
+    source = payload.get("source") or {}
+    return _clean(
+        {
+            "kind": str(source.get("kind") or ""),
+            "visibility": source.get("visibility"),
+            "installation_id": str(source.get("installation_id") or ""),
+        }
+    )
+
+
+def legacy_agent_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The agent settings of a pre-versioning agent, secret-looking config redacted."""
+    from simulate.services.hosted_harness_gateway import _secret_safe
+
+    agent = payload.get("agent") or {}
+    return _clean(
+        {
+            "connector": agent.get("connector"),
+            "mode": agent.get("mode"),
+            "call_direction": agent.get("call_direction"),
+            "config": _secret_safe(agent.get("config") or {}),
+            "source_access": source_access(payload),
+        }
+    )
+
+
 def _legacy_refs(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """Secret references only: which stored secret each name reads, never a value."""
     refs = ((payload.get("agent") or {}).get("secret_refs")) or {}
@@ -563,7 +593,9 @@ def agent_candidate(models: Models, job: Any) -> tuple[Any, str]:
     """The agent version that becomes A1 and where it came from, or ``(None, "none")``.
 
     In order: the job's own pin, the run test's pin, the bound definition's and then the
-    run test definition's active (else latest) version.
+    run test definition's active (else latest) version, else its newest one in the
+    job's workspace whose side row is legacy or missing. A candidate other than the
+    job's own pin is passed over when its side row holds a credential set.
     """
     if job.agent_version_id:
         # The job's own pin stands even if that version was later soft-deleted.
@@ -577,7 +609,7 @@ def agent_candidate(models: Models, job: Any) -> tuple[Any, str]:
         pinned = models.AgentVersion._base_manager.filter(
             id=run_test.agent_version_id
         ).first()
-        if pinned is not None:
+        if pinned is not None and _pinnable(models, job, pinned):
             return pinned, "run_test_pin"
     definition = _definition(models, job)
     if definition is None:
@@ -594,22 +626,60 @@ def agent_candidate(models: Models, job: Any) -> tuple[Any, str]:
         .first()
         or versions.order_by("-version_number").first()
     )
-    return version, source if version is not None else "none"
+    if version is not None and _pinnable(models, job, version):
+        return version, source
+    # The newest one without another environment's credential set, in this workspace.
+    held = models.HarnessAgentVersionRuntime._base_manager.exclude(
+        preflight_status=HarnessAgentVersionRuntime.PreflightStatus.LEGACY
+    ).values("agent_version_id")
+    version = (
+        versions.filter(Q(workspace_id=job.workspace_id) | Q(workspace__isnull=True))
+        .exclude(id__in=held)
+        .order_by("-version_number")
+        .first()
+    )
+    if version is None:
+        return None, "none"
+    return version, source
 
 
-def side_row_plan(models: Models, job: Any, version: Any) -> tuple[Any, Any]:
-    """The existing side row, or an unsaved new one."""
-    from simulate.services.hosted_harness_gateway import _secret_safe
+def _pinnable(models: Models, job: Any, version: Any) -> bool:
+    """Only a version without a side row or with a legacy one: any other holds another
+    environment's credential set."""
+    status = (
+        models.HarnessAgentVersionRuntime._base_manager.filter(
+            agent_version_id=version.id
+        )
+        .values_list("preflight_status", flat=True)
+        .first()
+    )
+    if status is None or status == HarnessAgentVersionRuntime.PreflightStatus.LEGACY:
+        return True
+    logger.info(
+        "harness_agent_pin_skipped environment=%s agent_version=%s status=%s",
+        job.id,
+        version.id,
+        status,
+    )
+    return False
 
-    Runtime = models.HarnessAgentVersionRuntime
-    # The one-to-one ignores soft deletion, so a deleted side row is still the row.
-    existing = Runtime._base_manager.filter(agent_version_id=version.id).first()
-    if existing is not None:
-        return existing, None
-    payload = job.payload or {}
-    agent = payload.get("agent") or {}
+
+def _legacy_facts(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A legacy side row's facts, as an environment's payload holds them."""
     source_kind, source = legacy_source(payload)
     refs = _legacy_refs(payload)
+    return {
+        "source_kind": source_kind,
+        "source": source,
+        "agent_payload": _clean(
+            {**legacy_agent_payload(payload), "legacy_secret_refs": refs}
+        ),
+        "credential_names": sorted(refs),
+        "credential_names_hash": hashing.credential_names_hash(refs),
+    }
+
+
+def _legacy_row(Runtime: Any, job: Any, version: Any) -> Any:
     runtime = Runtime(
         agent_version_id=version.id,
         agent_definition_id=version.agent_definition_id,
@@ -617,26 +687,45 @@ def side_row_plan(models: Models, job: Any, version: Any) -> tuple[Any, Any]:
         workspace_id=job.workspace_id,
         prompt_hash="sha256:"
         + hashlib.sha256((version.description or "").encode("utf-8")).hexdigest(),
-        source_kind=source_kind,
-        source=source,
-        agent_payload=_clean(
-            {
-                "connector": agent.get("connector"),
-                "mode": agent.get("mode"),
-                "call_direction": agent.get("call_direction"),
-                "config": _secret_safe(agent.get("config") or {}),
-                "legacy_secret_refs": refs,
-            }
-        ),
-        credential_names=sorted(refs),
-        credential_names_hash=hashing.credential_names_hash(refs),
         preflight_status=HarnessAgentVersionRuntime.PreflightStatus.LEGACY,
         trigger=HarnessAgentVersionRuntime.Trigger.BACKFILL,
+        **_legacy_facts(job.payload or {}),
     )
     # Legacy rows are outside the hash's unique constraint, so versions of one definition
     # that share every recorded fact share the hash too.
     runtime.hash = hashing.agent_hash(runtime_identity(runtime))
-    return None, runtime
+    return runtime
+
+
+def side_row_plan(models: Models, job: Any, version: Any) -> tuple[Any, Any]:
+    """The existing side row, or an unsaved new one."""
+    Runtime = models.HarnessAgentVersionRuntime
+    # The one-to-one ignores soft deletion, so a deleted side row is still the row.
+    existing = Runtime._base_manager.filter(agent_version_id=version.id).first()
+    if existing is not None:
+        return existing, None
+    return None, _legacy_row(Runtime, job, version)
+
+
+def effective_runtime(environment: Any, runtime: Any, *, version: Any = None) -> Any:
+    """The facts an agent version stands for in ``environment``'s runs; read only.
+
+    A legacy side row is shared by every environment pinned to its version but records
+    the first one's facts; it stands for ``environment``'s own, built from its payload
+    as the backfill builds a row. So does a ``version`` without a side row. Any other
+    row holds facts of its own. The result is never saved or linked to.
+    """
+    if runtime is None:
+        if environment is None or version is None:
+            return None
+        return _legacy_row(HarnessAgentVersionRuntime, environment, version)
+    if environment is None or not legacy_runtime(runtime):
+        return runtime
+    own = copy.copy(runtime)
+    for name, value in _legacy_facts(environment.payload or {}).items():
+        setattr(own, name, value)
+    own.hash = hashing.agent_hash(runtime_identity(own))
+    return own
 
 
 def _side_row(models: Models, job: Any, version: Any) -> Any:
@@ -647,13 +736,14 @@ def _side_row(models: Models, job: Any, version: Any) -> Any:
     return runtime
 
 
-def _version_at(models: Models, definition_id: Any, moment: datetime) -> Any:
-    return (
+def _version_at(models: Models, run: Any, definition_id: Any) -> Any:
+    found = (
         _live(models.AgentVersion)
-        .filter(agent_definition_id=definition_id, created_at__lte=moment)
+        .filter(agent_definition_id=definition_id, created_at__lte=run.created_at)
         .order_by("-version_number")
         .first()
     )
+    return found if found is not None and _pinnable(models, run, found) else None
 
 
 # --- environment -----------------------------------------------------------------------
@@ -960,9 +1050,7 @@ def run_plan(
         if plan.execution is not None and plan.execution.agent_version_id:
             agent_id = plan.execution.agent_version_id
         elif (execution_definition or definition_id) is not None and (
-            found := _version_at(
-                models, execution_definition or definition_id, run.created_at
-            )
+            found := _version_at(models, run, execution_definition or definition_id)
         ):
             agent_id = found.id
         elif pinned_environment is not None:

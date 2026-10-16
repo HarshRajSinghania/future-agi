@@ -892,38 +892,69 @@ class HostedSourceAcquirer:
             return archive.getvalue(), commit_sha
 
 
+def _check_secret_reference(alias: str, reference: Mapping[str, Any]) -> None:
+    if reference["manager"] != "platform-vault":
+        raise HostedHarnessError(
+            "secret_manager_unsupported",
+            f"unsupported secret manager for {alias}",
+            status_code=422,
+        )
+    if reference["purpose"] != "target_provider":
+        raise HostedHarnessError(
+            "secret_purpose_invalid",
+            f"secret {alias} is not a target_provider secret",
+            status_code=422,
+        )
+
+
+def resolve_secret_reference(
+    organization: Any, alias: str, reference: Mapping[str, Any]
+) -> str:
+    """One platform-vault reference's value, read from the stored secrets."""
+    _check_secret_reference(alias, reference)
+    query = HostedHarnessSecret.no_workspace_objects.filter(
+        organization=organization,
+        name=reference["key"],
+    )
+    version = reference.get("version")
+    if version is not None:
+        query = query.filter(version=version)
+    secret = query.order_by("-created_at").first()
+    if secret is None:
+        raise HostedHarnessError(
+            "secret_not_found",
+            f"platform secret not found for alias {alias}",
+            status_code=422,
+        )
+    return secret.get_value()
+
+
 class PlatformSecretResolver:
     def resolve(self, job: HostedHarnessJob) -> dict[str, str]:
-        resolved: dict[str, str] = {}
+        from simulate.services.harness_agent_versions import pinned_credential_values
+        from simulate.services.harness_credentials import AGENT_VERSION_KEY_PREFIX
+
+        # A job pinned to an agent version with its own credential set reads it; a
+        # legacy or unpinned one reads the stored secrets its refs name.
+        # Locals holding values are named for the error tracker's scrubber.
+        pinned_secrets = pinned_credential_values(job)
+        resolved_secrets: dict[str, str] = {}
         for alias, reference in job.payload["agent"]["secret_refs"].items():
-            if reference["manager"] != "platform-vault":
-                raise HostedHarnessError(
-                    "secret_manager_unsupported",
-                    f"unsupported secret manager for {alias}",
-                    status_code=422,
-                )
-            if reference["purpose"] != "target_provider":
-                raise HostedHarnessError(
-                    "secret_purpose_invalid",
-                    f"secret {alias} is not a target_provider secret",
-                    status_code=422,
-                )
-            query = HostedHarnessSecret.no_workspace_objects.filter(
-                organization=job.organization,
-                name=reference["key"],
+            if pinned_secrets is not None:
+                _check_secret_reference(alias, reference)
+                if alias in pinned_secrets:
+                    resolved_secrets[alias] = pinned_secrets[alias]
+                    continue
+                if str(reference.get("key") or "").startswith(AGENT_VERSION_KEY_PREFIX):
+                    raise HostedHarnessError(
+                        "credential_unavailable",
+                        f"the pinned agent version holds no value for {alias}",
+                        status_code=422,
+                    )
+            resolved_secrets[alias] = resolve_secret_reference(
+                job.organization, alias, reference
             )
-            version = reference.get("version")
-            if version is not None:
-                query = query.filter(version=version)
-            secret = query.order_by("-created_at").first()
-            if secret is None:
-                raise HostedHarnessError(
-                    "secret_not_found",
-                    f"platform secret not found for alias {alias}",
-                    status_code=422,
-                )
-            resolved[alias] = secret.get_value()
-        return resolved
+        return resolved_secrets
 
 
 def resolve_platform_simulator_secrets() -> dict[str, str]:

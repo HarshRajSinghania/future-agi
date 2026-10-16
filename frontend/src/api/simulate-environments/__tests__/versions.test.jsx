@@ -14,6 +14,10 @@ const {
   useSuiteMembers,
   useRunPlan,
   useMoveDefault,
+  useDiscardAgentVersion,
+  useRetryAgentVersion,
+  useChangeCredentials,
+  useRefreshWhenChecked,
   canMakeDefault,
   runPlanKey,
   environmentVersionsKey,
@@ -22,6 +26,7 @@ const {
   toVersions,
   versionFromApi,
   isVersioningDisabled,
+  isStuck,
 } = await import("../versions");
 const { harnessEnvironmentKey, harnessJobQuery } = await import(
   "../environment"
@@ -100,7 +105,61 @@ describe("versionFromApi / toVersions", () => {
       derivedFromAgentVersionId: "a1",
       scenarioCount: null,
       preflightStatus: null,
+      preflightReport: null,
+      preflightedAt: null,
+      checkStartedAt: null,
+      credentialNames: null,
+      requiredVariableNames: null,
+      activationOutcome: null,
+      requestedHere: false,
+      pickable: false,
+      discardable: false,
     });
+  });
+
+  it("maps an agent version's check, credential names and activation", () => {
+    const report = {
+      checks: [
+        {
+          id: "credentials_present",
+          label: "Target credentials",
+          status: "failed",
+          missing: ["API_KEY"],
+        },
+      ],
+      missing: ["API_KEY"],
+      invalid: [],
+      error: null,
+    };
+    expect(
+      versionFromApi({
+        id: "a2",
+        status: "draft",
+        preflight_status: "failed",
+        preflight_report: report,
+        preflighted_at: "2026-10-16T10:00:00Z",
+        check_started_at: "2026-10-16T10:05:00Z",
+        credential_names: ["API_KEY", "REGION"],
+        required_variable_names: ["API_KEY"],
+        activation_outcome: "environment_busy",
+        requested_here: true,
+        pickable: false,
+      }),
+    ).toMatchObject({
+      preflightStatus: "failed",
+      preflightReport: report,
+      preflightedAt: "2026-10-16T10:00:00Z",
+      checkStartedAt: "2026-10-16T10:05:00Z",
+      credentialNames: ["API_KEY", "REGION"],
+      requiredVariableNames: ["API_KEY"],
+      activationOutcome: "environment_busy",
+      requestedHere: true,
+      pickable: false,
+    });
+    expect(versionFromApi({ id: "a3", pickable: true }).pickable).toBe(true);
+    expect(versionFromApi({ id: "a3", discardable: true }).discardable).toBe(
+      true,
+    );
   });
 
   it("finds each piece's default and tells an empty history apart", () => {
@@ -480,12 +539,18 @@ describe("canMakeDefault", () => {
   const version = (overrides) =>
     versionFromApi({ id: "x", status: "active", ...overrides });
 
-  it("offers an active environment or suite version that isn't the default", () => {
+  it("offers an active agent, environment or suite version that isn't the default", () => {
+    expect(canMakeDefault("agent", version({ pickable: true }))).toBe(true);
     expect(canMakeDefault("environment", version())).toBe(true);
     expect(canMakeDefault("suite", version())).toBe(true);
   });
 
-  it("offers nothing for the default, a draft, a discarded one or an agent", () => {
+  it("offers an agent version only when the server says it can be picked", () => {
+    expect(canMakeDefault("agent", version())).toBe(false);
+    expect(canMakeDefault("agent", version({ pickable: false }))).toBe(false);
+  });
+
+  it("offers nothing for the default, a draft or a discarded one", () => {
     expect(canMakeDefault("environment", version({ is_default: true }))).toBe(
       false,
     );
@@ -495,7 +560,8 @@ describe("canMakeDefault", () => {
     expect(canMakeDefault("suite", version({ status: "discarded" }))).toBe(
       false,
     );
-    expect(canMakeDefault("agent", version())).toBe(false);
+    expect(canMakeDefault("agent", version({ status: "draft" }))).toBe(false);
+    expect(canMakeDefault("piece", version())).toBe(false);
   });
 });
 
@@ -553,5 +619,302 @@ describe("isVersioningDisabled", () => {
     ).toBe(false);
     expect(isVersioningDisabled(undefined)).toBe(false);
     expect(isVersioningDisabled(null)).toBe(false);
+  });
+});
+
+describe("agent version checks", () => {
+  const agentItem = (overrides) => ({
+    id: "a5",
+    label: "v5",
+    status: "draft",
+    is_default: false,
+    ...overrides,
+  });
+  const intervalOf = () => {
+    const query = client
+      .getQueryCache()
+      .find({ queryKey: environmentVersionsKey("env-1"), exact: true });
+    return query.options.refetchInterval(query);
+  };
+
+  const pendingHere = (overrides) =>
+    agentItem({
+      preflight_status: "pending",
+      requested_here: true,
+      created_at: new Date().toISOString(),
+      ...overrides,
+    });
+  const intervalFor = async (agent) => {
+    axios.get.mockResolvedValue({
+      data: { ...RESPONSE, agent: [...agent, ...RESPONSE.agent] },
+    });
+    const { result } = renderHook(() => useEnvironmentVersions("env-1"), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    return intervalOf();
+  };
+
+  it("polls the versions while a check this environment asked for runs", async () => {
+    expect(await intervalFor([pendingHere()])).toBe(5000);
+  });
+
+  it("does not poll for another environment's check", async () => {
+    expect(await intervalFor([pendingHere({ requested_here: false })])).toBe(
+      false,
+    );
+  });
+
+  const longAgo = () => new Date(Date.now() - 16 * 60 * 1000).toISOString();
+
+  it("stops polling once a check is stuck", async () => {
+    expect(await intervalFor([pendingHere({ created_at: longAgo() })])).toBe(
+      false,
+    );
+  });
+
+  it("dates a stuck check from its last start", async () => {
+    const restarted = pendingHere({
+      created_at: longAgo(),
+      preflighted_at: new Date().toISOString(),
+    });
+    expect(await intervalFor([restarted])).toBe(5000);
+  });
+
+  it("dates a check asked for again from the server's record, so a reload keeps polling", async () => {
+    const restarted = pendingHere({
+      created_at: longAgo(),
+      preflighted_at: longAgo(),
+      check_started_at: new Date().toISOString(),
+    });
+    expect(await intervalFor([restarted])).toBe(5000);
+    expect(isStuck(versionFromApi(restarted))).toBe(false);
+    expect(
+      isStuck(versionFromApi({ ...restarted, check_started_at: longAgo() })),
+    ).toBe(true);
+  });
+
+  it("polls until a passed check's move of the default is recorded", async () => {
+    const passedHere = pendingHere({
+      preflight_status: "passed",
+      preflighted_at: new Date().toISOString(),
+    });
+    expect(await intervalFor([passedHere])).toBe(5000);
+    expect(
+      await intervalFor([{ ...passedHere, activation_outcome: "activated" }]),
+    ).toBe(false);
+  });
+
+  it.each(["passed", "failed", "legacy", "discarded", null])(
+    "does not poll when no agent version is pending (%s)",
+    async (status) => {
+      axios.get.mockResolvedValue({
+        data: {
+          ...RESPONSE,
+          agent: [agentItem({ preflight_status: status })],
+        },
+      });
+      const { result } = renderHook(() => useEnvironmentVersions("env-1"), {
+        wrapper,
+      });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(intervalOf()).toBe(false);
+    },
+  );
+
+  it("refreshes the detail and the job once the last check lands", () => {
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const pending = [
+      versionFromApi(
+        agentItem({ preflight_status: "pending", requested_here: true }),
+      ),
+    ];
+    const passed = [versionFromApi(agentItem({ preflight_status: "passed" }))];
+    const { rerender } = renderHook(
+      ({ versions }) => useRefreshWhenChecked("env-1", versions),
+      { wrapper, initialProps: { versions: pending } },
+    );
+    expect(spy).not.toHaveBeenCalled();
+    rerender({ versions: passed });
+    expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: harnessEnvironmentKey("env-1") },
+      { queryKey: harnessJobQuery("env-1").queryKey },
+    ]);
+    rerender({ versions: passed });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes nothing when nothing was pending", () => {
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const passed = [versionFromApi(agentItem({ preflight_status: "passed" }))];
+    const { rerender } = renderHook(
+      ({ versions }) => useRefreshWhenChecked("env-1", versions),
+      { wrapper, initialProps: { versions: undefined } },
+    );
+    rerender({ versions: passed });
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent version actions", () => {
+  const invalidated = (spy) => spy.mock.calls.map(([filters]) => filters);
+
+  it("moves the agent default through the shared default path", async () => {
+    axios.post.mockResolvedValue({ data: RESPONSE });
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+    await act(() =>
+      result.current.mutateAsync({
+        piece: "agent",
+        versionId: "a3",
+        expectedDefaultId: "a1",
+      }),
+    );
+    expect(axios.post).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/env-1/versions/agent/a3/default/",
+      { expected_default_id: "a1" },
+    );
+  });
+
+  it.each([
+    ["discards", useDiscardAgentVersion, "discard"],
+    ["checks again", useRetryAgentVersion, "retry"],
+  ])(
+    "%s a version and seeds the versions with the answer",
+    async (_, useAction, action) => {
+      axios.post.mockResolvedValue({ data: RESPONSE });
+      const spy = vi.spyOn(client, "invalidateQueries");
+      const planKey = runPlanKey("env-1", { agent: "a3" });
+      client.setQueryData(planKey, { warnings: [] });
+      const { result } = renderHook(() => useAction("env-1"), { wrapper });
+
+      await act(() => result.current.mutateAsync({ versionId: "a3" }));
+
+      expect(axios.post).toHaveBeenCalledWith(
+        `/simulate/api/harness-environments/env-1/versions/agent/a3/${action}/`,
+        {},
+      );
+      expect(client.getQueryData(environmentVersionsKey("env-1"))).toEqual(
+        RESPONSE,
+      );
+      // A prefix, so the run plan under it is asked again too.
+      expect(invalidated(spy)).toEqual([
+        { queryKey: environmentVersionsKey("env-1") },
+      ]);
+      expect(client.getQueryState(planKey).isInvalidated).toBe(true);
+    },
+  );
+
+  it.each([
+    [useDiscardAgentVersion, "agent_version_in_use"],
+    [useDiscardAgentVersion, "version_not_discardable"],
+    [useRetryAgentVersion, "version_not_retryable"],
+  ])("refreshes the versions after a 422 (%#)", async (useAction, code) => {
+    axios.post.mockRejectedValue({ statusCode: 422, error: code });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useAction("env-1"), { wrapper });
+    await act(() =>
+      result.current.mutateAsync({ versionId: "a3" }).catch(() => {}),
+    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(invalidated(spy)).toEqual([
+      { queryKey: environmentVersionsKey("env-1") },
+    ]);
+  });
+
+  it("leaves the cache alone after a server failure", async () => {
+    axios.post.mockRejectedValue({ statusCode: 500 });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useRetryAgentVersion("env-1"), {
+      wrapper,
+    });
+    await act(() =>
+      result.current.mutateAsync({ versionId: "a3" }).catch(() => {}),
+    );
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("useChangeCredentials", () => {
+  const PATH = "/simulate/api/harness-jobs/secret-values/";
+  const NEW_VERSION = { id: "a6", label: "v6", status: "draft" };
+
+  it("posts the values for the environment and refreshes what follows them", async () => {
+    axios.post.mockResolvedValue({ data: { agent_version: NEW_VERSION } });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useChangeCredentials("env-1"), {
+      wrapper,
+    });
+
+    let answer;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        values: { API_KEY: "sk-secret" },
+      });
+    });
+
+    expect(axios.post).toHaveBeenCalledWith(PATH, {
+      environment_id: "env-1",
+      environment_values: { API_KEY: "sk-secret" },
+    });
+    expect(answer).toEqual({ agent_version: NEW_VERSION });
+    // By prefix: every query under the environment detail and job follows.
+    expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: environmentVersionsKey("env-1") },
+      { queryKey: ["harness-environment", "env-1"] },
+      { queryKey: ["harness-job", "env-1"] },
+    ]);
+  });
+
+  it("sends staged credential files by their refs", async () => {
+    axios.post.mockResolvedValue({ data: { agent_version: NEW_VERSION } });
+    const ref = {
+      manager: "platform-vault",
+      key: "harness-google-adc-1",
+      version: "1",
+      purpose: "target_provider",
+    };
+    const { result } = renderHook(() => useChangeCredentials("env-1"), {
+      wrapper,
+    });
+    await act(() => result.current.mutateAsync({ values: {}, files: [ref] }));
+    expect(axios.post).toHaveBeenCalledWith(PATH, {
+      environment_id: "env-1",
+      environment_values: {},
+      files: [ref],
+    });
+  });
+
+  it("keeps no settled request, values included, in the cache", async () => {
+    axios.post.mockResolvedValue({ data: { agent_version: NEW_VERSION } });
+    const { result, unmount } = renderHook(
+      () => useChangeCredentials("env-1"),
+      { wrapper },
+    );
+    await act(() =>
+      result.current.mutateAsync({ values: { API_KEY: "sk-secret" } }),
+    );
+    const [mutation] = client.getMutationCache().getAll();
+    expect(mutation.options.meta).toEqual({ errorHandled: true });
+    expect(mutation.options.gcTime).toBe(0);
+    unmount();
+    await waitFor(() =>
+      expect(client.getMutationCache().getAll()).toHaveLength(0),
+    );
+  });
+
+  it("refreshes nothing when the values are refused", async () => {
+    axios.post.mockRejectedValue({
+      statusCode: 413,
+      error: "credential_blob_too_large",
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useChangeCredentials("env-1"), {
+      wrapper,
+    });
+    await act(() =>
+      result.current.mutateAsync({ values: { API_KEY: "x" } }).catch(() => {}),
+    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(spy).not.toHaveBeenCalled();
   });
 });

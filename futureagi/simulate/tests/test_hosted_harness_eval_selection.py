@@ -1387,6 +1387,26 @@ def test_a_changed_agent_prompt_reaches_a_new_version(organization, workspace):
 
 
 @pytest.mark.django_db
+def test_a_fact_change_numbers_past_a_soft_deleted_top_version(organization, workspace):
+    job, _ = create_hosted_job(
+        organization, _payload(), idempotency_key="deleted-top-key", workspace=workspace
+    )
+    capability = register_attempt(job.id, endpoint_base_url="https://platform.example")
+    assert _provision(APIClient(), capability, agent_prompt="First.").status_code == 200
+    job.refresh_from_db()
+    agent = job.run_test.agent_definition
+    _record_target_agent_facts(job, agent, {"agent_prompt": "Second."})
+    top = agent.latest_version
+    top.delete()
+
+    _record_target_agent_facts(job, agent, {"agent_prompt": "Third."})
+
+    agent.refresh_from_db()
+    assert agent.latest_version.version_number == top.version_number + 1
+    assert agent.latest_version.configuration_snapshot["description"] == "Third."
+
+
+@pytest.mark.django_db
 def test_provision_records_explicit_rl_call_behavior_over_authored_direction(
     organization, workspace
 ):

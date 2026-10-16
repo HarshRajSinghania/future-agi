@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "src/utils/axios";
 import { apiPath } from "src/api/contracts/api-surface";
@@ -7,13 +8,13 @@ import { apiPath } from "src/api/contracts/api-surface";
  * suite versions, each version's diff, and a suite version's scenarios.
  *
  * The endpoints answer 404 while versioning is switched off, so every read is
- * gated on `enabled` — the workspace passes `env.versioning.enabled`. The one
- * write moves an environment or suite default back to an earlier version.
+ * gated on `enabled` — the workspace passes `env.versioning.enabled`. The writes
+ * move a default to another version, and set aside, re-check or re-credential an
+ * agent version.
  */
 
 export const VERSION_PIECES = ["agent", "environment", "suite"];
-// TODO: step 9 moves the agent default too.
-export const MOVABLE_PIECES = ["environment", "suite"];
+export const MOVABLE_PIECES = ["agent", "environment", "suite"];
 
 const versionsPath = (envId) =>
   apiPath("/simulate/api/harness-environments/{id}/versions/", { id: envId });
@@ -33,6 +34,19 @@ const moveDefaultPath = (envId, piece, versionId) =>
     "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/default/",
     { id: envId, piece, version_id: versionId },
   );
+
+const discardAgentPath = (envId, versionId) =>
+  apiPath(
+    "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/",
+    { id: envId, version_id: versionId },
+  );
+const retryAgentPath = (envId, versionId) =>
+  apiPath(
+    "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/retry/",
+    { id: envId, version_id: versionId },
+  );
+const secretValuesPath = () =>
+  apiPath("/simulate/api/harness-jobs/secret-values/");
 
 const runPlanPath = (envId) =>
   apiPath("/simulate/api/harness-environments/{id}/run-plan/", { id: envId });
@@ -65,6 +79,23 @@ export const moveDefault = async (envId, piece, versionId, expectedDefaultId) =>
   (
     await axios.post(moveDefaultPath(envId, piece, versionId), {
       expected_default_id: expectedDefaultId ?? null,
+    })
+  ).data;
+
+export const discardAgentVersion = async (envId, versionId) =>
+  (await axios.post(discardAgentPath(envId, versionId), {})).data;
+
+export const retryAgentVersion = async (envId, versionId) =>
+  (await axios.post(retryAgentPath(envId, versionId), {})).data;
+
+// New credential values (and staged credential files) for the environment's
+// agent: the answer is the new agent version, checked next.
+export const changeCredentials = async (envId, environmentValues, files) =>
+  (
+    await axios.post(secretValuesPath(), {
+      environment_id: envId,
+      environment_values: environmentValues,
+      ...(files?.length ? { files } : {}),
     })
   ).data;
 
@@ -126,12 +157,66 @@ export const versionFromApi = (item = {}) => ({
   derivedFromAgentVersionId: item.derived_from_agent_version_id || null,
   scenarioCount: item.scenario_count ?? null,
   preflightStatus: item.preflight_status || null,
+  preflightReport: item.preflight_report || null,
+  preflightedAt: item.preflighted_at || null,
+  checkStartedAt: item.check_started_at || null,
+  credentialNames: Array.isArray(item.credential_names)
+    ? item.credential_names
+    : null,
+  requiredVariableNames: Array.isArray(item.required_variable_names)
+    ? item.required_variable_names
+    : null,
+  activationOutcome: item.activation_outcome || null,
+  requestedHere: Boolean(item.requested_here),
+  pickable: Boolean(item.pickable),
+  discardable: Boolean(item.discardable),
 });
 
-// Only an active version that is not already the default can become it.
+// A check still pending after this long is stuck: offered again, not polled.
+export const STUCK_AFTER_MS = 15 * 60 * 1000;
+// The check's latest start: the version's creation, its last check, or the
+// latest time its check was asked for again, as the server recorded it.
+export const lastCheckStart = (version) =>
+  Math.max(
+    0,
+    ...[version.createdAt, version.preflightedAt, version.checkStartedAt]
+      .filter(Boolean)
+      .map((at) => new Date(at).getTime()),
+  );
+export const isStuck = (version) => {
+  if (version.preflightStatus !== "pending") return false;
+  const started = lastCheckStart(version);
+  return started > 0 && Date.now() - started > STUCK_AFTER_MS;
+};
+
+// A check this environment asked for that is still running and not stuck.
+export const checkRunning = (version) =>
+  version.preflightStatus === "pending" &&
+  version.requestedHere &&
+  !isStuck(version);
+// A check this environment waits on: one still running, or one that passed
+// and whose move of the default is not recorded yet.
+const awaitedCheck = (version) =>
+  checkRunning(version) ||
+  (version.preflightStatus === "passed" &&
+    version.requestedHere &&
+    !version.isDefault &&
+    !version.activationOutcome &&
+    Boolean(version.preflightedAt) &&
+    Date.now() - new Date(version.preflightedAt).getTime() < STUCK_AFTER_MS);
+
+// The list is asked again until every awaited check lands.
+const PREFLIGHT_POLL_MS = 5000;
+const awaitsCheck = (data) =>
+  Array.isArray(data?.agent) &&
+  data.agent.some((item) => awaitedCheck(versionFromApi(item)));
+
+// Only an active version that is not already the default can become it; an
+// agent version only when the server says it can be picked here.
 export const canMakeDefault = (piece, version) =>
   MOVABLE_PIECES.includes(piece) &&
   version?.status === "active" &&
+  (piece !== "agent" || version.pickable) &&
   !version.isDefault;
 
 // The three lists plus each piece's default, so readers never search for it.
@@ -159,6 +244,8 @@ export function useEnvironmentVersions(envId, { enabled = true } = {}) {
     select: toVersions,
     enabled: Boolean(envId) && enabled,
     retry: retryUnlessNotFound,
+    refetchInterval: (query) =>
+      awaitsCheck(query.state.data) ? PREFLIGHT_POLL_MS : false,
     meta: { errorHandled: true },
   });
 }
@@ -235,4 +322,69 @@ export function useMoveDefault(envId) {
       }
     },
   });
+}
+
+// The agent version actions answer with every version: seed the list with it,
+// then ask again for the queries nested under it.
+const useAgentVersionAction = (envId, action) => {
+  const queryClient = useQueryClient();
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: environmentVersionsKey(envId) });
+  return useMutation({
+    meta: { errorHandled: true },
+    mutationFn: ({ versionId }) => action(envId, versionId),
+    onSuccess: (data) => {
+      if (data) queryClient.setQueryData(environmentVersionsKey(envId), data);
+      refresh();
+    },
+    onError: (error) => {
+      // The version changed meanwhile (discarded, made default, re-checked).
+      if (errorStatus(error) === 422) refresh();
+    },
+  });
+};
+
+export const useDiscardAgentVersion = (envId) =>
+  useAgentVersionAction(envId, discardAgentVersion);
+
+export const useRetryAgentVersion = (envId) =>
+  useAgentVersionAction(envId, retryAgentVersion);
+
+// New credential values make the agent's next version, checked next; the
+// versions list then polls until the check lands, and the environment detail
+// and job are asked again for what follows it. Values only ride the request:
+// the mutation is dropped from the cache once it settles.
+export function useChangeCredentials(envId) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    meta: { errorHandled: true },
+    gcTime: 0,
+    mutationFn: ({ values, files }) => changeCredentials(envId, values, files),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: environmentVersionsKey(envId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["harness-environment", envId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
+    },
+  });
+}
+
+// A check that lands may have made its version the default: once no awaited
+// check is pending any more, ask again for what follows the default.
+export function useRefreshWhenChecked(envId, agentVersions) {
+  const queryClient = useQueryClient();
+  const pending = (agentVersions || []).some(awaitedCheck);
+  const wasPending = useRef(pending);
+  useEffect(() => {
+    if (wasPending.current && !pending) {
+      queryClient.invalidateQueries({
+        queryKey: ["harness-environment", envId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
+    }
+    wasPending.current = pending;
+  }, [pending, envId, queryClient]);
 }

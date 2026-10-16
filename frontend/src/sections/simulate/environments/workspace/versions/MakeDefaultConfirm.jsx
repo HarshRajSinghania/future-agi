@@ -4,6 +4,7 @@ import { Button, Typography } from "@mui/material";
 import { ConfirmDialog } from "src/components/custom-dialog";
 import { MOVABLE_PIECES } from "src/api/simulate-environments/versions";
 import { VERSIONS_COPY } from "../workspace.constants";
+import { named } from "../agents/agentVersionStatus";
 
 const COPY = VERSIONS_COPY.makeDefault;
 
@@ -19,7 +20,7 @@ export default function MakeDefaultConfirm({
   // Keep naming the version while the dialog fades out.
   const shown = useRef(version);
   if (version) shown.current = version;
-  const label = shown.current?.label || VERSIONS_COPY.unlabelled;
+  const label = named(shown.current);
   return (
     <ConfirmDialog
       open={Boolean(version)}

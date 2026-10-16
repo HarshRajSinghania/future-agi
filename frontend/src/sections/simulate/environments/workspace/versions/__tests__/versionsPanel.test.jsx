@@ -220,6 +220,56 @@ describe("VersionsPanel", () => {
     expect(within(suite).getAllByText("default")).toHaveLength(1);
   });
 
+  it("shows an agent version's check and its report", async () => {
+    const user = userEvent.setup();
+    state.versions = {
+      ...VERSIONS,
+      agent: [
+        item({
+          id: "a5",
+          label: "v5",
+          status: "draft",
+          origin: "credentials",
+          preflight_status: "failed",
+          preflight_report: {
+            checks: [
+              {
+                id: "credentials_present",
+                label: "Target credentials",
+                status: "failed",
+                missing: ["API_KEY"],
+              },
+            ],
+            missing: ["API_KEY"],
+            invalid: [],
+            error: null,
+          },
+        }),
+        item({
+          id: "a6",
+          label: "v6",
+          status: "draft",
+          preflight_status: "pending",
+        }),
+        ...VERSIONS.agent,
+      ],
+    };
+    render(<VersionsPanel env={ENV} />);
+
+    expect(row("agent", "v5")).toHaveTextContent("Check failed");
+    expect(row("agent", "v6")).toHaveTextContent("Checking…");
+    // A version from before versioning has no check to show.
+    expect(row("agent", "v4")).not.toHaveTextContent(/Check/);
+
+    await user.click(row("agent", "v5"));
+    const report = within(screen.getByTestId("version-detail")).getByTestId(
+      "preflight-report",
+    );
+    expect(report).toHaveTextContent(
+      "Target credentials: failed · Missing: API_KEY",
+    );
+  });
+
   it("opens on the default environment version and shows what changed", () => {
     render(<VersionsPanel env={ENV} />);
     const detail = screen.getByTestId("version-detail");
@@ -667,18 +717,54 @@ describe("VersionsPanel", () => {
       ]);
     });
 
-    it("offers nothing on a discarded version or an agent version", async () => {
+    it("offers nothing on a discarded version or an agent version still being checked", async () => {
       const user = userEvent.setup();
       state.versions = {
         ...VERSIONS,
-        agent: [...VERSIONS.agent, item({ id: "a0", label: "v3" })],
+        agent: [
+          item({
+            id: "a5",
+            label: "v5",
+            status: "draft",
+            preflight_status: "pending",
+          }),
+          ...VERSIONS.agent,
+        ],
       };
       render(<VersionsPanel env={ENV} />);
 
       await user.click(row("suite", "v1"));
       expect(screen.queryByRole("button", { name: "Make default" })).toBeNull();
-      await user.click(row("agent", "v3"));
+      await user.click(row("agent", "v5"));
       expect(screen.queryByRole("button", { name: "Make default" })).toBeNull();
+    });
+
+    it("makes an earlier agent version the default after asking", async () => {
+      const user = userEvent.setup();
+      state.versions = {
+        ...VERSIONS,
+        agent: [
+          ...VERSIONS.agent,
+          item({
+            id: "a0",
+            label: "v3",
+            preflight_status: "passed",
+            pickable: true,
+          }),
+        ],
+      };
+      render(<VersionsPanel env={ENV} />);
+
+      await user.click(row("agent", "v3"));
+      await user.click(makeDefault());
+      const dialog = confirmDialog("Make v3 the default agent version?");
+      await user.click(
+        within(dialog).getByRole("button", { name: "Make default" }),
+      );
+
+      expect(move.calls).toEqual([
+        { piece: "agent", versionId: "a0", expectedDefaultId: "a1" },
+      ]);
     });
 
     it("keeps the confirmation busy while the move is pending", async () => {

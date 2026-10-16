@@ -17,7 +17,6 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { fDateTime } from "src/utils/format-time";
 import {
   VERSION_PIECES,
   canMakeDefault,
@@ -27,30 +26,18 @@ import {
   useSuiteMembers,
   useVersionDiff,
 } from "src/api/simulate-environments/versions";
-import { BUILD_TONES } from "../../buildEnvironment/buildTones";
-import { VersionBadge } from "../EnvVersionPin";
 import { VERSIONS_COPY } from "../workspace.constants";
 import { refusalText } from "../evals/refusalText";
+import { PreflightReport } from "../agents/PreflightStatus";
+import { named } from "../agents/agentVersionStatus";
 import MakeDefaultConfirm from "./MakeDefaultConfirm";
 import VersionDiff from "./VersionDiff";
+import VersionHeader from "./VersionHeader";
 import { isEmptyDiff } from "./isEmptyDiff";
 
-const ACCENT = BUILD_TONES.accent;
 const MONO = "ui-monospace, Menlo, monospace";
 
-const originText = (origin) =>
-  origin ? VERSIONS_COPY.origin[origin] || origin : null;
-const named = (version) => version.label || VERSIONS_COPY.unlabelled;
-
 function VersionRow({ version, selected, onSelect }) {
-  const label = named(version);
-  const meta = [
-    fDateTime(version.createdAt),
-    version.createdBy && VERSIONS_COPY.by(version.createdBy),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const status = VERSIONS_COPY.status[version.status];
   return (
     <ListItem disablePadding>
       <ListItemButton
@@ -64,53 +51,7 @@ function VersionRow({ version, selected, onSelect }) {
           py: 1,
         }}
       >
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={0.625}
-          flexWrap="wrap"
-          rowGap={0.375}
-        >
-          <Typography
-            sx={{
-              typography: "s2",
-              fontWeight: "fontWeightBold",
-              fontFamily: MONO,
-            }}
-          >
-            {label}
-          </Typography>
-          {version.isDefault && (
-            <VersionBadge label={VERSIONS_COPY.default} tone={ACCENT} />
-          )}
-          {status && <VersionBadge label={status} />}
-        </Stack>
-        {originText(version.origin) && (
-          <Typography
-            sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}
-          >
-            {originText(version.origin)}
-          </Typography>
-        )}
-        {version.summary && (
-          <Typography
-            sx={{ typography: "s3", color: "text.secondary", mt: 0.25 }}
-          >
-            {version.summary}
-          </Typography>
-        )}
-        {meta && (
-          <Typography
-            sx={{
-              typography: "s3",
-              color: "text.subtitle",
-              mt: 0.25,
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {meta}
-          </Typography>
-        )}
+        <VersionHeader version={version} />
       </ListItemButton>
     </ListItem>
   );
@@ -242,7 +183,6 @@ const isFirst = (version, siblings) =>
   siblings.length > 0 &&
   siblings[siblings.length - 1].id === version.id;
 
-// TODO: step 9 offers this for agent versions too.
 function MakeDefault({ move, piece, version, defaultId }) {
   const [confirming, setConfirming] = useState(false);
   const { makeDefault } = VERSIONS_COPY;
@@ -393,6 +333,9 @@ function VersionDetail({ envId, move, piece, version, siblings, defaultId }) {
         <Typography sx={{ typography: "s2", color: "text.secondary" }}>
           {version.summary}
         </Typography>
+      )}
+      {piece === "agent" && (
+        <PreflightReport report={version.preflightReport} />
       )}
       {body()}
       {piece === "suite" && <SuiteMembers envId={envId} version={version} />}

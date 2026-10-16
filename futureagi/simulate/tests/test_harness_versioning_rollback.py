@@ -291,10 +291,11 @@ class TestApi:
         assert response.status_code == 404
         assert response.json()["error"] == "version_not_found"
 
-    def test_the_agent_default_cannot_move_yet(
+    def test_the_current_agent_default_is_a_no_op(
         self, auth_client, user, workspace, storage
     ):
         environment = _versioned(user, workspace, "rb-agent", storage)
+        before = _snapshot(environment)
 
         response = _move(
             auth_client,
@@ -304,9 +305,8 @@ class TestApi:
             environment.agent_version_id,
         )
 
-        assert response.status_code == 422
-        assert response.json()["error"] == "version_not_pickable"
-        assert response.json()["piece"] == "agent"
+        assert response.status_code == 200
+        assert _snapshot(environment) == before
 
     def test_a_stale_expected_default_is_a_conflict(
         self, auth_client, user, workspace, storage

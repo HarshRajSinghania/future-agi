@@ -31,6 +31,17 @@ def test_hosted_runner_dropin_stays_on_its_dedicated_queue():
         assert runner not in registry.get_activities_for_queue(queue)
 
 
+def test_agent_version_preflight_runs_on_the_runner_queue():
+    from simulate.tasks.harness_agent_versions import preflight_harness_agent_version
+    from simulate.temporal.constants import QUEUE_RUNNER
+    from tfc.temporal.drop_in.decorator import _ACTIVITY_WRAPPERS
+
+    runner = _ACTIVITY_WRAPPERS[preflight_harness_agent_version.name]
+    assert runner in registry.get_activities_for_queue(QUEUE_RUNNER)
+    for queue in ("default", "tasks_s", "tasks_l", "tasks_xl"):
+        assert runner not in registry.get_activities_for_queue(queue)
+
+
 def test_usage_temporal_registry_prefers_cloud(monkeypatch):
     cloud_registry = MagicMock()
     import_module = MagicMock(

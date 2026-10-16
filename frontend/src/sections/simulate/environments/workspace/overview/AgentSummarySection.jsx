@@ -1,11 +1,12 @@
 import PropTypes from "prop-types";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography } from "@mui/material";
+import { Box, Button, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { BUILD_TONES } from "../../buildEnvironment/buildTones";
 import { AGENT_SUMMARY_COPY } from "./overview.constants";
 
-export default function AgentSummarySection({ subject }) {
+// With `onManageVersions`, a "Manage versions" action opens the agent versions.
+export default function AgentSummarySection({ subject, onManageVersions }) {
   const title = subject
     ? AGENT_SUMMARY_COPY.agentTitle(subject.name, subject.active_version)
     : AGENT_SUMMARY_COPY.noAgentTitle;
@@ -44,6 +45,15 @@ export default function AgentSummarySection({ subject }) {
           <Typography sx={{ typography: "s1", fontWeight: "fontWeightBold", mt: 0.25 }}>{title}</Typography>
           {body && <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{body}</Typography>}
         </Box>
+        {onManageVersions && (
+          <Button
+            variant="outlined" size="small" color="inherit"
+            onClick={onManageVersions}
+            sx={{ typography: "s2", fontWeight: "fontWeightBold", flexShrink: 0 }}
+          >
+            {AGENT_SUMMARY_COPY.manage}
+          </Button>
+        )}
       </Stack>
     </Box>
   );
@@ -55,4 +65,5 @@ AgentSummarySection.propTypes = {
     versions_count: PropTypes.number,
     active_version: PropTypes.string,
   }),
+  onManageVersions: PropTypes.func,
 };

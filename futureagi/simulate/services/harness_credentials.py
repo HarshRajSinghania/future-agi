@@ -11,6 +11,12 @@ PLATFORM_FILE_MANAGER = "harness_environment_file"
 # A hosted credential file crosses as an encrypted JSON secret, so its ref is
 # indistinguishable from a value ref except by this key prefix.
 HOSTED_FILE_KEY_PREFIX = "harness-google-adc-"
+# A names-only ref to a value in the pinned agent version's credential set.
+AGENT_VERSION_KEY_PREFIX = "harness-agent-version:"
+# The names-only ref of the one file a hosted agent version holds: Google ADC JSON.
+AGENT_VERSION_FILE_KEY = (
+    f"{AGENT_VERSION_KEY_PREFIX}GOOGLE_APPLICATION_CREDENTIALS_JSON"
+)
 
 
 def is_credential_file_ref(ref) -> bool:
@@ -19,7 +25,8 @@ def is_credential_file_ref(ref) -> bool:
         return False
     if ref.get("manager") == PLATFORM_FILE_MANAGER:
         return True
-    return str(ref.get("key") or "").startswith(HOSTED_FILE_KEY_PREFIX)
+    key = str(ref.get("key") or "")
+    return key.startswith(HOSTED_FILE_KEY_PREFIX) or key == AGENT_VERSION_FILE_KEY
 
 
 def request_scope(request) -> tuple[Any, Any]:

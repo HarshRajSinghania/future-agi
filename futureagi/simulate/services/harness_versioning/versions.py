@@ -56,7 +56,7 @@ DEFAULT_PAIRS_KEPT = 20
 UNREADY_STATES = frozenset(
     {HostedHarnessJob.State.FAILED, HostedHarnessJob.State.CANCELED}
 )
-MOVABLE_PIECES = ("environment", "suite")
+MOVABLE_PIECES = ("agent", "environment", "suite")
 MEMBER_FIELDS = (
     "name",
     "instruction",
@@ -636,6 +636,10 @@ def record_authoring(
         if origin in USER_ORIGINS:
             _refuse_retired_keys(locked, documents)
             _refuse_taken_keys(locked, documents)
+        from simulate.services.harness_agent_versions import fill_agent_pin
+
+        # A build made before its environment was pinned is the pin's version.
+        agent_pinned = fill_agent_pin(locked)
         base_environment = locked.environment_version
         base_suite = locked.suite_version
         environment_diff = None
@@ -659,7 +663,6 @@ def record_authoring(
                 "parent": base_environment,
                 "summary": diffs.summarize_environment(environment_diff),
                 "diff": environment_diff,
-                # TODO: the build's own agent version once environment creation pins it.
                 "agent_version_id": locked.agent_version_id,
                 "created_by": user,
             },
@@ -779,6 +782,8 @@ def record_authoring(
             "content_updated_at",
             "updated_at",
         ]
+        if agent_pinned:
+            update_fields.append("agent_version")
         if 1 <= suite_version.scenario_count <= MAX_SCENARIOS_PER_JOB:
             payload["scenario_count"] = suite_version.scenario_count
             locked.scenario_count = suite_version.scenario_count
@@ -855,12 +860,34 @@ def _recorded_against(
 
 
 def _kept_agent_matches(kept: Mapping[str, Any], job: HostedHarnessJob) -> bool:
+    from simulate.services.harness_versioning.assembly import same_bundle_agent
+
     agent_version_id = kept.get("agent_version_id")
-    # TODO: entries kept before agents were named are trusted; step 9's agent default
-    # move must reseal the default pair or mark it unsealed.
+    # An entry kept before agents were named is the current agent's: an agent move
+    # names every such entry first (``_name_kept_pairs``).
     if not agent_version_id:
         return True
-    return str(agent_version_id) == str(job.agent_version_id or "")
+    # An agent with the same bundle key replays the same sealed bundle.
+    return same_bundle_agent(agent_version_id, job.agent_version_id, job)
+
+
+def _name_kept_pairs(metadata: dict[str, Any], agent_version_id: Any) -> None:
+    """Name the outgoing agent on entries kept before agents were named; with no
+    agent to name, their bundles are not replayed."""
+    pairs = metadata.get("default_pairs")
+    if not isinstance(pairs, dict):
+        return
+    named = {}
+    for name, entry in pairs.items():
+        if isinstance(entry, dict) and not entry.get("agent_version_id"):
+            entry = dict(entry)
+            if agent_version_id:
+                entry["agent_version_id"] = str(agent_version_id)
+            else:
+                entry["sealed"] = False
+                entry.pop("sealed_key", None)
+        named[name] = entry
+    metadata["default_pairs"] = named
 
 
 def _remember_pair(
@@ -910,11 +937,17 @@ def _rollback_unavailable(piece: str) -> HostedHarnessError:
 
 
 def _default_runtime(job: HostedHarnessJob) -> HarnessAgentVersionRuntime | None:
+    """The default agent's side row, with the facts it runs with in ``job``."""
+    from simulate.services.harness_versioning.backfill import effective_runtime
+
     if not job.agent_version_id:
         return None
-    return HarnessAgentVersionRuntime.no_workspace_objects.filter(
-        agent_version_id=job.agent_version_id
-    ).first()
+    return effective_runtime(
+        job,
+        HarnessAgentVersionRuntime.no_workspace_objects.filter(
+            agent_version_id=job.agent_version_id
+        ).first(),
+    )
 
 
 def _cached_sealed(
@@ -1078,6 +1111,99 @@ def _conflict(piece: str, current: Any) -> HostedHarnessError:
     )
 
 
+def move_agent(
+    locked: HostedHarnessJob, version: Any, *, moved: Mapping[str, Any] | None = None
+) -> None:
+    """Make ``version`` the locked environment's default agent.
+
+    The default pair's archive may hold a bundle sealed for the outgoing agent, so the
+    pair is resolved again for the new one: kept when its bundle key is the outgoing
+    one's, else composed with its cached bundle, else bare for runs to certify, else
+    refused with ``rollback_unavailable``. A move by hand is recorded as ``moved``.
+    """
+    outgoing = locked.agent_version_id
+    environment_version = locked.environment_version
+    suite_version = locked.suite_version
+    payload = dict(locked.payload or {})
+    metadata = dict(payload.get("metadata") or {})
+    update_fields = ["agent_version", "content_updated_at", "updated_at"]
+    locked.agent_version = version
+    if (
+        environment_version is not None
+        and suite_version is not None
+        and metadata.get("authoring_object_key")
+    ):
+        _name_kept_pairs(metadata, outgoing)
+        if _recorded_against(metadata, environment_version, suite_version):
+            _remember_pair(
+                metadata,
+                environment_version,
+                suite_version,
+                _outgoing_pair(metadata),
+                agent_version_id=outgoing,
+                replace=False,
+            )
+        pair = _default_pair(
+            locked, metadata, environment_version, suite_version, "agent"
+        )
+        metadata["authoring_object_key"] = pair.key
+        metadata["authoring_revision"] = pair.revision
+        metadata["default_pair_sealed"] = pair.sealed
+        if pair.sealed_key:
+            metadata["sealed_bundle_object_key"] = pair.sealed_key
+        else:
+            metadata.pop("sealed_bundle_object_key", None)
+        _remember_pair(
+            metadata,
+            environment_version,
+            suite_version,
+            pair,
+            agent_version_id=version.id,
+        )
+        payload["metadata"] = metadata
+        locked.payload = payload
+        update_fields.append("payload")
+    if moved is not None:
+        from simulate.services.harness_agent_versions import HAND_MOVE_KEY
+
+        metadata[HAND_MOVE_KEY] = dict(moved)
+        payload["metadata"] = metadata
+        locked.payload = payload
+        if "payload" not in update_fields:
+            update_fields.append("payload")
+    locked.content_updated_at = timezone.now()
+    locked.save(update_fields=update_fields)
+
+
+def _move_agent_default(
+    locked: HostedHarnessJob, version_id: Any, expected_default_id: Any, user: Any
+) -> HostedHarnessJob:
+    from simulate.models import AgentVersion
+    from simulate.services.harness_agent_versions import hand_move, require_agent_pick
+
+    # Locked, so a concurrent discard sees this move before its in-use check.
+    require_agent_pick(
+        locked,
+        version_id,
+        refusal="This older agent version can't be made the default",
+        lock=True,
+    )
+    current = locked.agent_version
+    if current is not None and current.id == version_id:
+        return locked
+    if (current.id if current is not None else None) != expected_default_id:
+        raise _conflict("agent", current)
+    version = AgentVersion.no_workspace_objects.get(id=version_id)
+    move_agent(locked, version, moved=hand_move(user, version.id))
+    logger.info(
+        "harness_default_moved piece=agent from=%s to=%s actor=%s",
+        current.id if current is not None else None,
+        version.id,
+        getattr(user, "id", None),
+    )
+    return locked
+
+
 def move_default(
     environment: HostedHarnessJob,
     piece: str,
@@ -1086,7 +1212,7 @@ def move_default(
     expected_default_id: Any,
     user: Any = None,
 ) -> HostedHarnessJob:
-    """Make an active environment or suite version the environment's default.
+    """Make an agent, environment or suite version the environment's default.
 
     ``expected_default_id`` is the default the caller saw; a newer one refuses the move.
     The pair's runnable archive is found before anything moves, and the whole move is
@@ -1121,6 +1247,8 @@ def move_default(
                 status_code=409,
                 details={"piece": piece},
             )
+        if piece == "agent":
+            return _move_agent_default(locked, version_id, expected_default_id, user)
         version = model.no_workspace_objects.filter(
             job=locked, id=version_id, status=VersionStatus.ACTIVE
         ).first()

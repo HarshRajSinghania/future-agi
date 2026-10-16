@@ -288,6 +288,25 @@ describe("EnvironmentWorkspace run start", () => {
     );
   });
 
+  it("starts the run on a changed agent version", async () => {
+    getHarnessJob.mockResolvedValue(VERSIONED_JOB);
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    await user.click(
+      await screen.findByRole("button", { name: "run selection" }),
+    );
+    dialogPicks.current = { agent: "a2" };
+    await user.click(screen.getByRole("button", { name: "submit picks" }));
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenCalledWith(
+        RUN_URL,
+        { scenario_ids: ["k1", "k2"], trials: 2, agent_version_id: "a2" },
+        { headers: { "Idempotency-Key": "key-1" } },
+      ),
+    );
+  });
+
   it("pre-selects a re-run's versions in the dialog", async () => {
     getHarnessJob.mockResolvedValue(VERSIONED_JOB);
     const user = userEvent.setup();

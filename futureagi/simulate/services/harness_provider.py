@@ -559,7 +559,7 @@ def _connector_credential_readiness(
     }
 
 
-def _preflight_source_connectors(request, payload):
+def _preflight_source_connectors(organization, payload):
     """Scan the submitted source the same way authoring will, so preflight asks for the
     credential family the agent actually uses instead of every family."""
     from simulate.services.hosted_harness_gateway import (
@@ -572,9 +572,7 @@ def _preflight_source_connectors(request, payload):
     # the repository source scanner with a synthetic source.
     if payload["source"]["kind"] in {"remote", "provider"}:
         return [], [], 0
-    probe = HostedHarnessJob(
-        organization=request_organization(request), payload=payload
-    )
+    probe = HostedHarnessJob(organization=organization, payload=payload)
     archive, _commit = HostedSourceAcquirer().acquire(probe)
     detected, required_files, scanned = detect_source_credentials(archive)
     if payload["agent"]["connector"] != "auto":
@@ -582,11 +580,11 @@ def _preflight_source_connectors(request, payload):
     return detected, required_files, scanned
 
 
-def _validate_required_credential_files(request, payload):
+def _validate_required_credential_files(organization, payload):
     """Refuse a launch whose source explicitly requires an absent credential file."""
     from simulate.services.hosted_harness import HostedHarnessError
 
-    analysis = _preflight_source_connectors(request, payload)
+    analysis = _preflight_source_connectors(organization, payload)
     required_files = analysis[1] if len(analysis) == 3 else []
     present = {
         str(alias).upper() for alias in (payload["agent"].get("secret_refs") or {})
@@ -604,7 +602,7 @@ def _validate_required_credential_files(request, payload):
     return analysis
 
 
-def _preflight_credential_probe(payload) -> list[dict[str, Any]]:
+def _preflight_credential_probe(secret_payload) -> list[dict[str, Any]]:
     """Exercise every credential the form submitted against its provider, live.
 
     Values arrive only through the write-only ``credential_values`` preflight field; a
@@ -615,18 +613,19 @@ def _preflight_credential_probe(payload) -> list[dict[str, Any]]:
         probe_provider_target,
     )
 
-    if payload["source"]["kind"] == "remote":
+    if secret_payload["source"]["kind"] == "remote":
         return []
-    values = {
-        str(alias).upper(): str(value)
-        for alias, value in (payload.get("credential_values") or {}).items()
+    submitted_secrets = secret_payload.get("credential_values") or {}
+    secret_values = {
+        str(alias).upper(): str(secret_value)
+        for alias, secret_value in submitted_secrets.items()
     }
-    config = payload["agent"].get("config") or {}
+    config = secret_payload["agent"].get("config") or {}
     livekit_url = config.get("livekit_url") or config.get("LIVEKIT_URL")
-    if livekit_url and not values.get("LIVEKIT_URL"):
-        values["LIVEKIT_URL"] = str(livekit_url)
-    results = list(probe_all(values))
-    agent = payload["agent"]
+    if livekit_url and not secret_values.get("LIVEKIT_URL"):
+        secret_values["LIVEKIT_URL"] = str(livekit_url)
+    results = list(probe_all(secret_values))
+    agent = secret_payload["agent"]
     connector = str(agent.get("connector") or "").strip().lower()
     mode = str(agent.get("mode") or "").strip().lower()
     if connector in {"vapi", "retell", "retell_chat"} and mode in {
@@ -637,12 +636,14 @@ def _preflight_credential_probe(payload) -> list[dict[str, Any]]:
         target = probe_provider_target(
             connector,
             (agent.get("config") or {}).get(target_field),
-            values,
+            secret_values,
         )
         if target is not None:
             results.append(target)
     if connector == "livekit" and mode == "connect_only":
-        target = probe_provider_target(connector, config.get("agent_name"), values)
+        target = probe_provider_target(
+            connector, config.get("agent_name"), secret_values
+        )
         if target is not None:
             results.append(target)
     return [result.as_dict() for result in results]
@@ -870,6 +871,52 @@ def _preflight_checks(
     return checks
 
 
+def run_preflight_checks(organization, secret_payload, analysis=None):
+    """The build preflight's checks of a payload; ``analysis`` (detected connectors,
+    required files, scanned files) stands for scanning its source again.
+
+    Returns the checks, the credential readiness, the probe, any source error and the
+    analysis used.
+    """
+    from simulate.services.hosted_harness import HostedHarnessError
+
+    source_error = None
+    if analysis is None:
+        try:
+            analysis = _preflight_source_connectors(organization, secret_payload)
+        except HostedHarnessError as exc:
+            source_error = exc
+            analysis = ([], [], 0)
+    # Keep two-item patched return values compatible with tests and custom
+    # providers written before credential-file discovery was added.
+    if len(analysis) == 2:
+        detected, scanned = analysis
+        required_files = []
+    else:
+        detected, required_files, scanned = analysis
+    secret_readiness = _connector_credential_readiness(
+        secret_payload, detected, scanned, required_files
+    )
+    secret_probe = _preflight_credential_probe(secret_payload)
+    secret_readiness["report"]["probe"] = secret_probe
+    secret_checks = _preflight_checks(
+        secret_payload["source"]["kind"],
+        source_error,
+        scanned,
+        secret_readiness["missing"],
+        required_files,
+        secret_probe,
+        str(secret_payload["agent"].get("connector") or ""),
+    )
+    return (
+        secret_checks,
+        secret_readiness,
+        secret_probe,
+        source_error,
+        (detected, required_files, scanned),
+    )
+
+
 def _sandbox_preflight_body(payload, report):
     """The declared preflight shape, rebuilt from what the sandbox server reports.
 
@@ -1072,6 +1119,83 @@ def _in_default_suite(environment: HostedHarnessJob, keys: list[str]) -> list[st
     return [key for key in keys if key in members]
 
 
+def _rerun_credentials_agent(
+    environment: HostedHarnessJob,
+    source: HostedHarnessJob,
+    secret_values: dict[str, str],
+) -> Any:
+    """The agent version a rerun with changed values runs: the source run's agent with
+    these values over its set, checked here first. A source run without a side row
+    takes the environment's default when that has a set of its own. ``None`` when the
+    environment does not pin runs or neither has a side row, so they are stored as
+    before.
+    """
+    from simulate.models import AgentVersion, HarnessAgentVersionRuntime
+    from simulate.services.harness_agent_versions import (
+        change_credentials,
+        changed_set_runnable,
+        own_credential_set,
+        preflight_agent_version,
+    )
+    from simulate.services.harness_versioning.versions import pins_runs
+    from simulate.services.hosted_harness import HostedHarnessError
+
+    if not pins_runs(environment):
+        return None
+    parent_id = source.agent_version_id
+    if (
+        not parent_id
+        or not HarnessAgentVersionRuntime.no_workspace_objects.filter(
+            agent_version_id=parent_id
+        ).exists()
+    ):
+        default = (
+            HarnessAgentVersionRuntime.no_workspace_objects.filter(
+                agent_version_id=environment.agent_version_id
+            )
+            .defer("credential_blob")
+            .first()
+            if environment.agent_version_id
+            else None
+        )
+        if default is None or not own_credential_set(default):
+            return None
+        parent_id = environment.agent_version_id
+    parent = (
+        AgentVersion.no_workspace_objects.select_related("agent_definition")
+        .filter(
+            id=parent_id,
+            organization_id=environment.organization_id,
+        )
+        .first()
+    )
+    if parent is None:
+        return None
+    if not changed_set_runnable(environment, source, parent, list(secret_values)):
+        raise HostedHarnessError(
+            "version_not_runnable",
+            "These versions haven't been run together yet and building them is"
+            " turned off",
+            status_code=422,
+        )
+    # Checked here and never made a default: the rerun runs it as a pick.
+    version = change_credentials(
+        environment, secret_values=secret_values, parent=parent, activate=False
+    )
+    result = preflight_agent_version(version, activate=False)
+    if result.status != HarnessAgentVersionRuntime.PreflightStatus.PASSED:
+        raise HostedHarnessError(
+            "agent_preflight_failed",
+            "The changed credentials didn't pass their check, so nothing was rerun",
+            status_code=422,
+            details={
+                "agent_version_id": str(version.id),
+                "preflight_report": result.report,
+            },
+        )
+    return version
+
+
 class HostedHarnessProvider:
     """Persist jobs and drive the configured managed sandbox through Temporal."""
 
@@ -1122,7 +1246,7 @@ class HostedHarnessProvider:
                 return response
             raise
         try:
-            source_analysis = _validate_required_credential_files(request, payload)
+            source_analysis = _validate_required_credential_files(organization, payload)
         except HostedHarnessError as exc:
             return Response(exc.as_dict(), status=exc.status_code)
         try:
@@ -1190,32 +1314,8 @@ class HostedHarnessProvider:
         from simulate.services.hosted_harness import clamp_parallelism
 
         runtime = payload["runtime"]
-        source_error = None
-        try:
-            source_analysis = _preflight_source_connectors(request, payload)
-        except HostedHarnessError as exc:
-            source_error = exc
-            source_analysis = ([], [], 0)
-        # Keep two-item patched return values compatible with tests and custom
-        # providers written before credential-file discovery was added.
-        if len(source_analysis) == 2:
-            detected, scanned = source_analysis
-            required_files = []
-        else:
-            detected, required_files, scanned = source_analysis
-        credentials = _connector_credential_readiness(
-            payload, detected, scanned, required_files
-        )
-        probe = _preflight_credential_probe(payload)
-        credentials["report"]["probe"] = probe
-        checks = _preflight_checks(
-            payload["source"]["kind"],
-            source_error,
-            scanned,
-            credentials["missing"],
-            required_files,
-            probe,
-            str(payload["agent"].get("connector") or ""),
+        checks, credentials, _probe, source_error, _analysis = run_preflight_checks(
+            request_organization(request), payload
         )
         failed = any(check["status"] == "failed" for check in checks)
         runtime_name, runtime_digest = sandbox_runtime_reference()
@@ -1635,6 +1735,7 @@ class HostedHarnessProvider:
         from simulate.models import HostedHarnessSecret
         from simulate.services.hosted_harness import (
             HostedHarnessError,
+            VersionPicks,
             create_selected_harness_run,
         )
         from simulate.temporal.client import start_hosted_harness_gateway_workflow
@@ -1683,24 +1784,36 @@ class HostedHarnessProvider:
             )
             scenario_keys = _in_default_suite(environment, scenario_keys)
         trials = int(prior_metadata.get("trials") or 1)
+        # Changed values of a versioned environment make a new agent version, checked
+        # before the rerun runs it; otherwise they are stored as before.
+        credentials_agent = (
+            _rerun_credentials_agent(environment, job, environment_values)
+            if environment_values
+            else None
+        )
         child, _ = create_selected_harness_run(
             environment,
             scenario_keys=scenario_keys,
             trials=trials,
             idempotency_key=str(uuid4()),
             rerun_of=job if job.environment_id is not None else None,
+            picks=(
+                VersionPicks(agent_version_id=credentials_agent.id)
+                if credentials_agent is not None
+                else None
+            ),
         )
 
-        if environment_values:
+        if environment_values and credentials_agent is None:
             payload = copy.deepcopy(child.payload)
             secret_refs = dict((payload.get("agent") or {}).get("secret_refs") or {})
-            for alias, value in environment_values.items():
+            for alias, secret_value in environment_values.items():
                 key = f"harness-{alias.lower()}-{uuid4().hex}"
                 HostedHarnessSecret.objects.create(
                     organization=organization,
                     name=key,
                     version="1",
-                    encrypted_value=value,
+                    encrypted_value=secret_value,
                 )
                 secret_refs[alias] = {
                     "manager": "platform-vault",

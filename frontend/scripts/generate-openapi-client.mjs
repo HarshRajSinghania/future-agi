@@ -624,6 +624,15 @@ export type ${jsonAlias} = JsonValueApi;`,
       ["derived_from_agent_version_id", "string"],
       ["scenario_count", "number"],
       ["preflight_status", "string"],
+      ["preflight_report", "HarnessVersionApiPreflightReport"],
+      ["preflighted_at", "string"],
+      ["check_started_at", "string"],
+      ["credential_names", "string[]"],
+      ["required_variable_names", "string[]"],
+      ["activation_outcome", "string"],
+      ["requested_here", "boolean"],
+      ["pickable", "boolean"],
+      ["discardable", "boolean"],
     ]) {
       schemas = assertReplaceInNamedBlock(
         schemas,
@@ -876,6 +885,11 @@ export type ${jsonAlias} = JsonValueApi;`,
     }
 
     // The same nullable version fields, in every list of the versions responses.
+    const VERSIONS_RESPONSES = [
+      "SimulateApiHarnessEnvironmentsVersionsResponse",
+      "SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse",
+      "SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse",
+    ];
     for (const [anchor, label] of [
       ['"label": zod.string().min(1)', "label"],
       ['"origin": zod.string().min(1)', "origin"],
@@ -895,15 +909,58 @@ export type ${jsonAlias} = JsonValueApi;`,
         "created_by",
       ],
     ]) {
-      for (const response of [
-        "SimulateApiHarnessEnvironmentsVersionsResponse",
-        "SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse",
-      ]) {
+      for (const response of VERSIONS_RESPONSES) {
         zod = assertReplaceInNamedBlock(
           zod,
           `export const ${response} =`,
           anchor,
           `${anchor}.nullable()`,
+          `${response}.${label} nullable`,
+        );
+      }
+    }
+    // Only agent versions are checked, hold credentials or can be picked.
+    for (const response of VERSIONS_RESPONSES) {
+      for (const [pattern, label] of [
+        [
+          /("preflight_report": zod\.object\(\{\s*\}\)\.passthrough\(\)(?:\.describe\([^)]*\))?)/g,
+          "preflight_report",
+        ],
+        [
+          /("preflighted_at": zod\.string\(\)\.datetime\(\{[^}]*\}\))/g,
+          "preflighted_at",
+        ],
+        [
+          /("check_started_at": zod\.string\(\)\.datetime\(\{[^}]*\}\)(?:\.describe\([^)]*\))?)/g,
+          "check_started_at",
+        ],
+        [
+          /("credential_names": zod\.array\(zod\.string\(\)\.min\(1\)\)(?:\.describe\([^)]*\))?)/g,
+          "credential_names",
+        ],
+        [
+          /("required_variable_names": zod\.array\(zod\.string\(\)\.min\(1\)\)(?:\.describe\([^)]*\))?)/g,
+          "required_variable_names",
+        ],
+        [
+          /("activation_outcome": zod\.string\(\)\.min\(1\)(?:\.describe\([^)]*\))?)/g,
+          "activation_outcome",
+        ],
+        [
+          /("requested_here": zod\.boolean\(\)(?:\.describe\([^)]*\))?)/g,
+          "requested_here",
+        ],
+        [/("pickable": zod\.boolean\(\)(?:\.describe\([^)]*\))?)/g, "pickable"],
+        [
+          /("discardable": zod\.boolean\(\)(?:\.describe\([^)]*\))?)/g,
+          "discardable",
+        ],
+      ]) {
+        zod = assertReplaceRegexInNamedBlock(
+          zod,
+          `export const ${response} =`,
+          pattern,
+          "$1.nullable()",
           `${response}.${label} nullable`,
         );
       }

@@ -505,6 +505,53 @@ class HarnessVersionSerializer(serializers.Serializer):
     derived_from_agent_version_id = serializers.UUIDField(allow_null=True)
     scenario_count = serializers.IntegerField(allow_null=True)
     preflight_status = serializers.CharField(allow_null=True)
+    preflight_report = serializers.JSONField(
+        allow_null=True,
+        help_text="An agent version's last check: check statuses and names only.",
+    )
+    preflighted_at = serializers.DateTimeField(allow_null=True)
+    check_started_at = serializers.DateTimeField(
+        allow_null=True,
+        help_text="When an agent version's latest check was asked for.",
+    )
+    credential_names = serializers.ListField(
+        child=serializers.CharField(),
+        allow_null=True,
+        help_text="An agent version's credential names, provider keys included.",
+    )
+    required_variable_names = serializers.ListField(
+        child=serializers.CharField(),
+        allow_null=True,
+        help_text="The variables an agent version's source reads, when known.",
+    )
+    activation_outcome = serializers.CharField(
+        allow_null=True,
+        help_text=(
+            "Why a passed agent version is or isn't this environment's default, as"
+            " last recorded."
+        ),
+    )
+    requested_here = serializers.BooleanField(
+        allow_null=True,
+        help_text="Whether this environment asked for an agent version.",
+    )
+    pickable = serializers.BooleanField(
+        allow_null=True,
+        help_text=(
+            "Whether an agent version can be picked for a run of this environment"
+            " or made its default."
+        ),
+    )
+    discardable = serializers.BooleanField(
+        allow_null=True,
+        help_text="Whether this environment can discard an agent version.",
+    )
+
+
+class HarnessAgentCredentialsResponseSerializer(serializers.Serializer):
+    """The agent version a credential change made; its check runs next."""
+
+    agent_version = HarnessVersionSerializer()
 
 
 class HarnessVersionsSerializer(serializers.Serializer):

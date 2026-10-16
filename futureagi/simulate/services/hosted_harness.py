@@ -338,10 +338,7 @@ def create_selected_harness_run(
         if missing and pins is not None:
             # A rerun of an environment or of an unpinned run selects keys the default
             # suite may have dropped since; a rerun of a pinned run keeps its suite.
-            from simulate.services.harness_versioning.read import (
-                _label,
-                _message_label,
-            )
+            from simulate.services.harness_versioning.read import _label, _message_label
 
             suite_label = _message_label(_label(pins.suite_version.version_number))
             where = (
@@ -391,11 +388,23 @@ def create_selected_harness_run(
                     }
                 )
 
-        # TODO: replace payload.agent and payload.source with the pinned agent version's
-        # descriptor once agent versions carry their own (step 9); legacy agent versions
-        # mirror this payload.
+        from simulate.services.harness_agent_versions import (
+            apply_agent_version,
+            own_credential_set,
+        )
+
         child_payload = json.loads(json.dumps(environment.payload))
         if (
+            pins is not None
+            and pins.runtime is not None
+            and own_credential_set(pins.runtime)
+        ):
+            # A version with its own credential set runs its own agent and source; a
+            # legacy one mirrors the environment's payload.
+            apply_agent_version(
+                child_payload, pins.runtime, environment_id=environment.id
+            )
+        elif (
             pins is not None
             and pins.rerun_of is not None
             and rerun_of is not None
@@ -476,7 +485,7 @@ def create_selected_harness_run(
             agent_version=(
                 pins.agent_version
                 if pins is not None and pins.agent_version is not None
-                else environment.run_test.agent_version
+                else _unpinned_agent_version(environment)
             ),
             execution_metadata={
                 "environment_job_id": str(environment.id),
@@ -567,6 +576,8 @@ class _RunPins:
     assembly: Any = None
     rerun_of: str | None = None
     agent_version_id: Any = None
+    # The pinned agent version's side row.
+    runtime: Any = None
 
     @property
     def assembled_bundle(self) -> Any:
@@ -683,6 +694,28 @@ class ResolvedPins:
     rerun_of: str | None = None
     # The defaults' pair holds no sealed bundle, so a run of them certifies it.
     unsealed: bool = False
+    # The cache key a rerun keeps from its source; others are computed from the agent.
+    assembly_key: str | None = None
+
+
+def _source_bundle(environment: HostedHarnessJob, source: HostedHarnessJob) -> Any:
+    """The cache row a rerun's source was bound to, read as recorded: the facts its
+    key was made from may have changed in the environment since."""
+    from simulate.models import HarnessAssembledBundle
+
+    if not source.assembled_bundle_id:
+        return None
+    return HarnessAssembledBundle._base_manager.filter(
+        id=source.assembled_bundle_id, job_id=environment.id
+    ).first()
+
+
+def _replayable(bundle: Any) -> bool:
+    from simulate.models import HarnessAssembledBundle
+
+    return bundle.state == HarnessAssembledBundle.State.READY and bool(
+        bundle.object_key
+    )
 
 
 def resolve_run_pins(
@@ -715,7 +748,7 @@ def resolve_run_pins(
             )
         return None
     defaults = _pin_ids(environment)
-    source, loaded = environment, None
+    source, loaded, kept = environment, None, None
     if (
         rerun_of is not None
         and rerun_of.environment_id == environment.id
@@ -724,12 +757,17 @@ def resolve_run_pins(
     ):
         loaded = _load_pins(environment, rerun_of)
         _, environment_version, suite_version, runtime = loaded
+        kept = _source_bundle(environment, rerun_of)
         if _pin_ids(rerun_of) == defaults or (
             runtime is not None
             and (
                 certify_enabled()
-                or bundle_ready(
-                    environment, runtime, environment_version, suite_version
+                or (
+                    _replayable(kept)
+                    if kept is not None
+                    else bundle_ready(
+                        environment, runtime, environment_version, suite_version
+                    )
                 )
             )
         ):
@@ -752,12 +790,20 @@ def resolve_run_pins(
     if loaded is None:
         loaded = _load_ids(environment, ids)
     agent_version, environment_version, suite_version, runtime = loaded
+    # A rerun of its source's very pins replays the bundle its source ran.
+    if source is not rerun_of or ids != _pin_ids(rerun_of) or runtime is None:
+        kept = None
     cached = (
-        bundle_ready(environment, runtime, environment_version, suite_version)
+        (
+            _replayable(kept)
+            if kept is not None
+            else bundle_ready(environment, runtime, environment_version, suite_version)
+        )
         if runtime is not None
         else None
     )
-    at_defaults = ids == defaults
+    # An agent with the default's bundle key runs the default pair's sealed bundle.
+    at_defaults = ids == defaults or replays_default_pair(environment, *ids)
     unsealed = at_defaults and default_pair_unsealed(environment)
     runnable = bool(cached) or (runtime is not None and certify_enabled())
     if unsealed and not runnable:
@@ -792,6 +838,7 @@ def resolve_run_pins(
         cached=cached,
         rerun_of=str(rerun_of.id) if source is rerun_of else None,
         unsealed=unsealed,
+        assembly_key=kept.assembly_key if kept is not None else None,
     )
 
 
@@ -801,15 +848,85 @@ def default_pair_unsealed(environment: HostedHarnessJob) -> bool:
     return metadata.get("default_pair_sealed") is False
 
 
-def _not_pickable(piece: str) -> HostedHarnessError:
-    # Every refused agent pick reads the same, so its reason is not revealed.
-    message = (
-        "Only the environment's current agent version can be picked for now"
-        if piece == "agent"
-        else f"This {piece} version can't be picked for this environment"
+def replays_default_pair(
+    environment: HostedHarnessJob,
+    agent_version_id: Any,
+    environment_version_id: Any,
+    suite_version_id: Any,
+) -> bool:
+    """Whether a run of these versions replays the default pair's sealed bundle: the
+    pair is the default and the agent has the default agent's bundle key."""
+    from simulate.services.harness_versioning.assembly import same_bundle_agent
+
+    return (
+        (environment_version_id, suite_version_id)
+        == (environment.environment_version_id, environment.suite_version_id)
+        and environment_version_id is not None
+        and not default_pair_unsealed(environment)
+        and same_bundle_agent(
+            agent_version_id, environment.agent_version_id, environment
+        )
     )
+
+
+def _unpinned_agent_version(environment: HostedHarnessJob) -> Any:
+    """The run test's agent version, else its agent's latest without a credential
+    set of its own: those are made for one environment."""
+    from simulate.models import HarnessAgentVersionRuntime
+
+    run_test = environment.run_test
+    if run_test.agent_version is not None or run_test.agent_definition is None:
+        return run_test.agent_version
+    held = HarnessAgentVersionRuntime.no_workspace_objects.exclude(
+        preflight_status=HarnessAgentVersionRuntime.PreflightStatus.LEGACY
+    ).values("agent_version_id")
+    return (
+        run_test.agent_definition.versions.exclude(id__in=held)
+        .order_by("-version_number")
+        .first()
+    )
+
+
+def _not_pickable(piece: str) -> HostedHarnessError:
+    # Every refused pick of a piece reads the same, so its reason is not revealed.
     return HostedHarnessError(
-        "version_not_pickable", message, status_code=422, details={"piece": piece}
+        "version_not_pickable",
+        f"This {piece} version can't be picked for this environment",
+        status_code=422,
+        details={"piece": piece},
+    )
+
+
+def agent_version_pickable(environment: HostedHarnessJob, agent_id: Any) -> bool:
+    """A live version of the environment's agent, in its workspace, whose check
+    passed, or a legacy or pre-versioning one."""
+    from simulate.models import AgentVersion, HarnessAgentVersionRuntime
+    from simulate.services.harness_versioning.read import (
+        _agent_definition_id,
+        in_workspace,
+    )
+
+    definition_id = _agent_definition_id(environment)
+    if (
+        definition_id is None
+        or not AgentVersion.no_workspace_objects.filter(
+            in_workspace(environment),
+            id=agent_id,
+            organization_id=environment.organization_id,
+            agent_definition_id=definition_id,
+        ).exists()
+    ):
+        return False
+    status = (
+        HarnessAgentVersionRuntime.no_workspace_objects.filter(
+            agent_version_id=agent_id
+        )
+        .values_list("preflight_status", flat=True)
+        .first()
+    )
+    return status is None or status in (
+        HarnessAgentVersionRuntime.PreflightStatus.PASSED,
+        HarnessAgentVersionRuntime.PreflightStatus.LEGACY,
     )
 
 
@@ -820,14 +937,9 @@ def _check_picks(
 
     A pick of the default is the default, so a dialog that sends it back always runs.
     """
-    from simulate.models import (
-        AgentVersion,
-        HarnessAgentVersionRuntime,
-        HarnessEnvironmentVersion,
-        HarnessSuiteVersion,
-    )
+    from simulate.models import HarnessEnvironmentVersion, HarnessSuiteVersion
     from simulate.models.harness_versioning import VersionStatus
-    from simulate.services.harness_versioning.read import _agent_definition_id
+    from simulate.services.harness_agent_versions import require_agent_pick
 
     agent_id, environment_id, suite_id = picks.ids()
     for piece, model, pick, default in (
@@ -841,31 +953,11 @@ def _check_picks(
                 raise _not_pickable(piece)
     if not agent_id or agent_id == defaults[0]:
         return
-    definition_id = _agent_definition_id(environment)
-    if (
-        definition_id is None
-        or not AgentVersion.no_workspace_objects.filter(
-            id=agent_id,
-            organization_id=environment.organization_id,
-            agent_definition_id=definition_id,
-        ).exists()
-    ):
-        raise _not_pickable("agent")
-    status = (
-        HarnessAgentVersionRuntime.no_workspace_objects.filter(
-            agent_version_id=agent_id
-        )
-        .values_list("preflight_status", flat=True)
-        .first()
+    require_agent_pick(
+        environment,
+        agent_id,
+        refusal="This older agent version can't be run on its own",
     )
-    if status is not None and status not in (
-        HarnessAgentVersionRuntime.PreflightStatus.PASSED,
-        HarnessAgentVersionRuntime.PreflightStatus.LEGACY,
-    ):
-        raise _not_pickable("agent")
-    # TODO: lift once a run carries its pinned agent version's own payload (step 9);
-    # until then it would run the current agent config under another agent's label.
-    raise _not_pickable("agent")
 
 
 def job_pins(
@@ -889,6 +981,7 @@ def job_pins(
     defaults = recorded.get("defaults")
     cached = recorded.get("cached")
     return ResolvedPins(
+        assembly_key=recorded.get("key") or None,
         unsealed=recorded.get("default_pair_sealed") is False,
         agent_version=agent_version,
         environment_version=environment_version,
@@ -985,9 +1078,11 @@ def _pinned_versions(
             resolved.suite_version,
             defaults=resolved.defaults,
             unsealed=resolved.unsealed,
+            key=resolved.assembly_key,
         ),
         rerun_of=resolved.rerun_of,
         agent_version_id=resolved.agent_version_id,
+        runtime=resolved.runtime,
     )
 
 
@@ -1007,7 +1102,8 @@ def _load_ids(
     environment: HostedHarnessJob, ids: tuple[Any, Any, Any]
 ) -> tuple[Any, Any, Any, Any]:
     """The agent, environment and suite versions of these ids, and the agent's side
-    row."""
+    row with the facts it runs with in ``environment``: a shared legacy row stands
+    for the environment's own."""
     from simulate.models import (
         AgentVersion,
         HarnessAgentVersionRuntime,
@@ -1034,10 +1130,15 @@ def _load_ids(
             environment_id=str(environment.id),
             agent_version_id=str(agent_version_id),
         )
+    from simulate.services.harness_versioning.backfill import effective_runtime
+
     runtime = (
-        HarnessAgentVersionRuntime.no_workspace_objects.filter(
-            agent_version=agent_version
-        ).first()
+        effective_runtime(
+            environment,
+            HarnessAgentVersionRuntime.no_workspace_objects.filter(
+                agent_version=agent_version
+            ).first(),
+        )
         if agent_version is not None
         else None
     )
@@ -1470,17 +1571,13 @@ def delete_environment(job: HostedHarnessJob) -> None:
                 )
 
                 cancel_job = HostedHarnessJob.no_workspace_objects.get(id=job_id)
-                HostedHarnessGateway().cancel(
-                    cancel_job, reason=DELETE_CANCEL_REASON
-                )
+                HostedHarnessGateway().cancel(cancel_job, reason=DELETE_CANCEL_REASON)
             except Exception:
                 logger.exception(
                     "hosted_harness_delete_direct_cancel_failed", job_id=job_id
                 )
                 if job_id == parent_cancel_id:
-                    _soft_delete(
-                        HostedHarnessJob.no_workspace_objects.get(id=job_id)
-                    )
+                    _soft_delete(HostedHarnessJob.no_workspace_objects.get(id=job_id))
 
 
 def _soft_delete(job: HostedHarnessJob) -> None:
@@ -1773,6 +1870,10 @@ def provision_scenarios(
                 for persona, row in zip(payload["personas"], dataset_rows, strict=True)
             ]
         _record_target_agent_facts(locked, agent_definition, payload)
+        from simulate.services.harness_agent_versions import fill_agent_pin
+
+        if fill_agent_pin(locked):
+            locked.save(update_fields=["agent_version", "updated_at"])
         _select_platform_evals(locked, run_test, payload, modality)
     return _provision_response(locked, registrations)
 
@@ -1884,18 +1985,19 @@ def _record_target_agent_facts(
         changed.append("target_speaks_first")
     if changed:
         agent_definition.save(update_fields=[*changed, "updated_at"])
-    if (
-        prompt
-        and (
-            agent_definition.latest_version is None
-            or "description" in changed
-            or "assistant_id" in changed
-        )
-    ):
+    # Any changed fact gets a version, so the newest one's snapshot matches.
+    if prompt and (agent_definition.latest_version is None or changed):
+        from simulate.models import AgentDefinition
+        from simulate.services.harness_agent_versions import next_version_number
+
+        AgentDefinition.no_workspace_objects.select_for_update().filter(
+            id=agent_definition.id
+        ).first()
         agent_definition.create_version(
             description=prompt,
             commit_message="hosted harness target agent prompt",
             status="active",
+            version_number=next_version_number(agent_definition.id),
         )
 
 

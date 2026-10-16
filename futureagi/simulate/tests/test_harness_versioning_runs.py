@@ -373,7 +373,10 @@ class TestPins:
         assert run.suite_version_id is None
         assert "version_pins" not in run.payload["metadata"]
         execution = Execution.objects.get(id=run.test_execution_id)
-        assert execution.agent_version_id is None
+        # Recorded, so nothing later falls back to a newer version of the agent.
+        assert execution.agent_version_id == (
+            execution.agent_definition.latest_version.id
+        )
 
     def test_a_legacy_runs_payload_is_the_environments_but_its_selection(
         self, user, workspace, storage

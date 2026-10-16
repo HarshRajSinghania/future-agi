@@ -275,9 +275,11 @@ export function useBuildEnvironment() {
 // uses: the key `agent.secret_refs` is built under, the name the launch check
 // scans for, and what the sandbox reads before writing the 0600 file and
 // exporting the standard variable itself. So: upload under the plain name, then
-// keep whatever the reply calls it.
-export function useUploadSecretFile() {
+// keep whatever the reply calls it. `options` go to the mutation, e.g.
+// `gcTime: 0` so a caller's reset() drops the File from the cache at once.
+export function useUploadSecretFile(options = {}) {
   return useMutation({
+    ...options,
     meta: { errorHandled: true },
     mutationFn: async ({
       file,

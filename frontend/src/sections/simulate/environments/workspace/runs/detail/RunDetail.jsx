@@ -159,6 +159,7 @@ export default function RunDetail({
   // A re-run starts from the versions this run used.
   const rerunOptions = {
     initialPicks: {
+      agent: identity?.pinnedAgentVersion?.id,
       environment: identity?.environmentVersion?.id,
       suite: identity?.suiteVersion?.id,
     },

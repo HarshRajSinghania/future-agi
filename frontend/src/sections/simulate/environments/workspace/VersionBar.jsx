@@ -4,6 +4,7 @@ import Iconify from "src/components/iconify";
 import {
   isVersioningDisabled,
   useEnvironmentVersions,
+  useRefreshWhenChecked,
 } from "src/api/simulate-environments/versions";
 import { VERSIONS_COPY, WORKSPACE_COPY } from "./workspace.constants";
 
@@ -21,6 +22,9 @@ export default function VersionBar({ env, envState }) {
   const { data, error } = useEnvironmentVersions(env?.id, {
     enabled,
   });
+  // Always mounted, so a check that lands with the drawer closed still
+  // refreshes what follows the default.
+  useRefreshWhenChecked(env?.id, data?.agent);
   const { versionBar } = WORKSPACE_COPY;
 
   // Only state a pairing once the server has answered. A failed refresh keeps
@@ -69,39 +73,77 @@ export default function VersionBar({ env, envState }) {
                 : versionBar.noVersionsTooltip
             }
           >
-            <Stack direction="row" alignItems="center" spacing={0.75} sx={{ cursor: "default" }}>
-              <Iconify icon="solar:box-linear" width={14} sx={{ color: "text.subtitle" }} />
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.75}
+              sx={{ cursor: "default" }}
+            >
+              <Iconify
+                icon="solar:box-linear"
+                width={14}
+                sx={{ color: "text.subtitle" }}
+              />
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>
                 {versionBar.envPrefix}{" "}
-                <Box component="span" sx={{ color: "text.primary", fontWeight: "fontWeightBold" }}>
+                <Box
+                  component="span"
+                  sx={{ color: "text.primary", fontWeight: "fontWeightBold" }}
+                >
                   {envLabel}
                 </Box>
               </Typography>
-              <Typography sx={{ typography: "s3", color: "text.disabled", mx: 0.25 }}>·</Typography>
-              <Iconify icon="solar:cpu-bolt-linear" width={14} sx={{ color: "text.subtitle" }} />
               <Typography
-                sx={{ typography: "s3", color: "text.subtitle", fontWeight: "fontWeightSemiBold" }}
+                sx={{ typography: "s3", color: "text.disabled", mx: 0.25 }}
+              >
+                ·
+              </Typography>
+              <Iconify
+                icon="solar:cpu-bolt-linear"
+                width={14}
+                sx={{ color: "text.subtitle" }}
+              />
+              <Typography
+                sx={{
+                  typography: "s3",
+                  color: "text.subtitle",
+                  fontWeight: "fontWeightSemiBold",
+                }}
               >
                 {versionBar.testSubject}
               </Typography>
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>
                 {versionBar.agentPrefix}{" "}
-                <Box component="span" sx={{ color: "text.primary", fontWeight: "fontWeightBold" }}>
+                <Box
+                  component="span"
+                  sx={{ color: "text.primary", fontWeight: "fontWeightBold" }}
+                >
                   {agentLabel}
                 </Box>
               </Typography>
             </Stack>
           </Tooltip>
-          <Typography sx={{ typography: "s3", color: "text.disabled", mx: 0.5 }}>·</Typography>
+          <Typography
+            sx={{ typography: "s3", color: "text.disabled", mx: 0.5 }}
+          >
+            ·
+          </Typography>
           {suiteV && (
             <>
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>
                 {versionBar.suitePrefix}{" "}
-                <Box component="span" sx={{ color: "text.primary", fontWeight: "fontWeightBold" }}>
+                <Box
+                  component="span"
+                  sx={{ color: "text.primary", fontWeight: "fontWeightBold" }}
+                >
                   {named(suiteV)}
                 </Box>
               </Typography>
-              <Typography sx={{ typography: "s3", color: "text.disabled", mx: 0.5 }}>·</Typography>
+              <Typography
+                sx={{ typography: "s3", color: "text.disabled", mx: 0.5 }}
+              >
+                ·
+              </Typography>
             </>
           )}
         </>
@@ -115,7 +157,9 @@ export default function VersionBar({ env, envState }) {
             : versionBar.scenariosTooltip
         }
       >
-        <Typography sx={{ typography: "s3", color: "text.subtitle", cursor: "default" }}>
+        <Typography
+          sx={{ typography: "s3", color: "text.subtitle", cursor: "default" }}
+        >
           {versionBar.scenariosShared(scenarioCount)}
         </Typography>
       </Tooltip>

@@ -6960,6 +6960,12 @@ def _latest_repository_harness_execution(run_test):
     return None
 
 
+# Refusals of a rerun with changed credentials, answered as the harness states them.
+_CREDENTIALS_RERUN_REFUSALS = frozenset(
+    {"agent_preflight_failed", "credential_blob_too_large", "version_not_runnable"}
+)
+
+
 def _dispatch_repository_harness_rerun(
     test_execution, *, environment_values: dict[str, str]
 ) -> dict:
@@ -7170,6 +7176,16 @@ class CallExecutionRerunView(APIView):
                         ),
                     )
                 except Exception as dispatch_error:
+                    from simulate.services.hosted_harness import HostedHarnessError
+
+                    if (
+                        isinstance(dispatch_error, HostedHarnessError)
+                        and dispatch_error.code in _CREDENTIALS_RERUN_REFUSALS
+                    ):
+                        return Response(
+                            dispatch_error.as_dict(),
+                            status=dispatch_error.status_code,
+                        )
                     logger.exception(
                         "repository_harness_rerun_dispatch_failed",
                         test_execution_id=str(test_execution.id),

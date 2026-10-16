@@ -17816,6 +17816,11 @@ export interface HarnessVersionPersonApi {
   name: string;
 }
 
+/**
+ * An agent version's last check: check statuses and names only.
+ */
+export type HarnessVersionApiPreflightReport = { [key: string]: unknown };
+
 export interface HarnessVersionApi {
   id: string;
   /** @minLength 1 */
@@ -17834,6 +17839,26 @@ export interface HarnessVersionApi {
   scenario_count: number | null;
   /** @minLength 1 */
   preflight_status: string | null;
+  /** An agent version's last check: check statuses and names only. */
+  preflight_report: HarnessVersionApiPreflightReport | null;
+  preflighted_at: string | null;
+  /** When an agent version's latest check was asked for. */
+  check_started_at: string | null;
+  /** An agent version's credential names, provider keys included. */
+  credential_names: string[] | null;
+  /** The variables an agent version's source reads, when known. */
+  required_variable_names: string[] | null;
+  /**
+   * Why a passed agent version is or isn't this environment's default, as last recorded.
+   * @minLength 1
+   */
+  activation_outcome: string | null;
+  /** Whether this environment asked for an agent version. */
+  requested_here: boolean | null;
+  /** Whether an agent version can be picked for a run of this environment or made its default. */
+  pickable: boolean | null;
+  /** Whether this environment can discard an agent version. */
+  discardable: boolean | null;
 }
 
 export interface HarnessVersionsApi {
@@ -18473,10 +18498,33 @@ export interface HarnessSecretFileUploadResponseApi {
   size: number;
 }
 
+/**
+ * Values by name; may be empty only when an environment's files are given.
+ */
 export type HarnessSecretValuesApiEnvironmentValues = { [key: string]: string };
 
 export interface HarnessSecretValuesApi {
+  /** Values by name; may be empty only when an environment's files are given. */
   environment_values: HarnessSecretValuesApiEnvironmentValues;
+  /** Change this environment's agent credentials: the values make its next agent version instead of being stored as secret refs. */
+  environment_id?: string;
+  /**
+   * Credential files staged through secret-files/, by their refs.
+   * @maxItems 10
+   */
+  files?: SecretReferenceApi[];
+}
+
+export type HarnessSecretValuesResponseApiSecretRefs = {
+  [key: string]: SecretReferenceApi;
+};
+
+export interface HarnessSecretValuesResponseApi {
+  secret_refs: HarnessSecretValuesResponseApiSecretRefs;
+}
+
+export interface HarnessAgentCredentialsResponseApi {
+  agent_version: HarnessVersionApi;
 }
 
 export interface HarnessSourceUploadResponseApi {

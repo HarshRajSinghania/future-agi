@@ -332,6 +332,8 @@ class HarnessAgentVersionRuntime(BaseModel):
     )
     preflight_report = models.JSONField(null=True, blank=True)
     preflighted_at = models.DateTimeField(null=True, blank=True)
+    # When the latest check was asked for: on creation, a retry or a restart.
+    check_started_at = models.DateTimeField(null=True, blank=True)
     parent = models.ForeignKey(
         "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )

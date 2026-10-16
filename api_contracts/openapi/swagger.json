@@ -51135,6 +51135,104 @@
                 }
             ]
         },
+        "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/": {
+            "post": {
+                "operationId": "simulate_api_harness-environments_versions_agent_discard_agent_version",
+                "description": "Set an agent version aside; returns every version.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/EmptyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessVersions"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "version_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/retry/": {
+            "post": {
+                "operationId": "simulate_api_harness-environments_versions_agent_retry_agent_version",
+                "description": "Check an agent version whose check failed again; returns every version.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/EmptyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessVersions"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "version_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/harness-environments/{id}/versions/suite/{version_id}/members/": {
             "get": {
                 "operationId": "simulate_api_harness-environments_versions_suite_suite_members",
@@ -51180,7 +51278,7 @@
         "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/default/": {
             "post": {
                 "operationId": "simulate_api_harness-environments_versions_move_default",
-                "description": "Make an environment or suite version the default; returns every version.",
+                "description": "Make an agent, environment or suite version the default; returns every\nversion.",
                 "parameters": [
                     {
                         "name": "data",
@@ -51457,7 +51555,7 @@
             "post": {
                 "operationId": "simulate_api_harness-jobs_secret_values",
                 "summary": "Persist uploaded agent values encrypted and return opaque hosted refs.",
-                "description": "Values are intentionally separate from platform/model-provider settings. They are scoped\nto the submitting organization and only resolved inside the selected hosted job.",
+                "description": "Values are intentionally separate from platform/model-provider settings. They are scoped\nto the submitting organization and only resolved inside the selected hosted job.\n\nWith ``environment_id`` the values (and staged ``files``) make that environment's\nnext agent version instead; it is checked next and returned with 202.",
                 "parameters": [
                     {
                         "name": "data",
@@ -51472,7 +51570,13 @@
                     "201": {
                         "description": "",
                         "schema": {
-                            "$ref": "#/definitions/HarnessSecretValues"
+                            "$ref": "#/definitions/HarnessSecretValuesResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessAgentCredentialsResponse"
                         }
                     },
                     "default": {
@@ -51485,7 +51589,8 @@
                 "tags": [
                     "simulate"
                 ],
-                "x-runtime-request-validation": true
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
             },
             "parameters": []
         },
@@ -124803,7 +124908,16 @@
                 "parent_id",
                 "derived_from_agent_version_id",
                 "scenario_count",
-                "preflight_status"
+                "preflight_status",
+                "preflight_report",
+                "preflighted_at",
+                "check_started_at",
+                "credential_names",
+                "required_variable_names",
+                "activation_outcome",
+                "requested_here",
+                "pickable",
+                "discardable"
             ],
             "type": "object",
             "properties": {
@@ -124876,6 +124990,68 @@
                     "title": "Preflight status",
                     "type": "string",
                     "minLength": 1,
+                    "x-nullable": true
+                },
+                "preflight_report": {
+                    "title": "Preflight report",
+                    "description": "An agent version's last check: check statuses and names only.",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "preflighted_at": {
+                    "title": "Preflighted at",
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true
+                },
+                "check_started_at": {
+                    "title": "Check started at",
+                    "description": "When an agent version's latest check was asked for.",
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true
+                },
+                "credential_names": {
+                    "description": "An agent version's credential names, provider keys included.",
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "x-nullable": true
+                },
+                "required_variable_names": {
+                    "description": "The variables an agent version's source reads, when known.",
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "x-nullable": true
+                },
+                "activation_outcome": {
+                    "title": "Activation outcome",
+                    "description": "Why a passed agent version is or isn't this environment's default, as last recorded.",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "requested_here": {
+                    "title": "Requested here",
+                    "description": "Whether this environment asked for an agent version.",
+                    "type": "boolean",
+                    "x-nullable": true
+                },
+                "pickable": {
+                    "title": "Pickable",
+                    "description": "Whether an agent version can be picked for a run of this environment or made its default.",
+                    "type": "boolean",
+                    "x-nullable": true
+                },
+                "discardable": {
+                    "title": "Discardable",
+                    "description": "Whether this environment can discard an agent version.",
+                    "type": "boolean",
                     "x-nullable": true
                 }
             }
@@ -126370,12 +126546,53 @@
             "properties": {
                 "environment_values": {
                     "title": "Environment values",
+                    "description": "Values by name; may be empty only when an environment's files are given.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string",
                         "maxLength": 65536,
                         "minLength": 1
                     }
+                },
+                "environment_id": {
+                    "title": "Environment id",
+                    "description": "Change this environment's agent credentials: the values make its next agent version instead of being stored as secret refs.",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "files": {
+                    "description": "Credential files staged through secret-files/, by their refs.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/SecretReference"
+                    },
+                    "maxItems": 10
+                }
+            }
+        },
+        "HarnessSecretValuesResponse": {
+            "required": [
+                "secret_refs"
+            ],
+            "type": "object",
+            "properties": {
+                "secret_refs": {
+                    "title": "Secret refs",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/SecretReference"
+                    }
+                }
+            }
+        },
+        "HarnessAgentCredentialsResponse": {
+            "required": [
+                "agent_version"
+            ],
+            "type": "object",
+            "properties": {
+                "agent_version": {
+                    "$ref": "#/definitions/HarnessVersion"
                 }
             }
         },

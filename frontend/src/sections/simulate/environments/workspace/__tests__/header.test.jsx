@@ -19,6 +19,7 @@ const versionsResponse = { current: undefined };
 // list the server returns, which the stubbed versions query then serves).
 const moveAnswer = { current: undefined };
 const moveCalls = [];
+const refreshCalls = [];
 vi.mock("src/api/simulate-environments/versions", async () => {
   const actual = await vi.importActual(
     "src/api/simulate-environments/versions",
@@ -46,6 +47,9 @@ vi.mock("src/api/simulate-environments/versions", async () => {
         },
       };
     }),
+    useRefreshWhenChecked: vi.fn((envId, versions) =>
+      refreshCalls.push({ envId, versions }),
+    ),
     useEnvironmentVersions: vi.fn((envId, { enabled } = {}) => {
       const answer = versionsResponse.current;
       if (!enabled || !answer) return { data: undefined, isSuccess: false };
@@ -620,6 +624,14 @@ describe("VersionBar", () => {
     render(<VersionBar env={ENV} envState={{ scenarios: [1, 2, 3, 4] }} />);
     expect(screen.getByText("4 scenarios, shared across agent versions")).toBeInTheDocument();
     expect(screen.queryByText("Default")).toBeNull();
+  });
+
+  it("follows agent checks while mounted, the drawer open or not", () => {
+    versionsResponse.current = VERSIONS;
+    refreshCalls.length = 0;
+    render(<VersionBar env={VERSIONED_ENV} envState={{ scenarios: [1, 2] }} />);
+    expect(refreshCalls.at(-1).envId).toBe(VERSIONED_ENV.id);
+    expect(refreshCalls.at(-1).versions).toHaveLength(1);
   });
 
   it("states the default agent, environment and scenario versions", () => {

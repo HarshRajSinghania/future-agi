@@ -348,32 +348,39 @@ class TestNotPickable:
 
         assert code == "version_not_pickable"
 
-    @pytest.mark.parametrize("side_row", [True, False])
-    def test_an_agent_other_than_the_current_one_for_now(
+    def test_another_agent_version_with_a_bundle_is_picked(
+        self, user, workspace, storage
+    ):
+        environment = _environment(user, workspace, "pk-a-other", storage)
+        a2 = _second_agent(environment)
+        _ready(
+            environment,
+            a2.id,
+            environment.environment_version,
+            environment.suite_version,
+        )
+
+        pins = resolve_run_pins(environment, picks=VersionPicks(agent_version_id=a2.id))
+        run = _create(environment, VersionPicks(agent_version_id=a2.id))
+
+        assert (pins.agent_version.id, pins.cached) == (a2.id, True)
+        assert run.agent_version_id == a2.id
+        assert run.test_execution.agent_version_id == a2.id
+
+    @pytest.mark.parametrize("side_row", [False, True])
+    def test_an_older_agent_version_without_its_own_set_is_not_pickable(
         self, user, workspace, storage, settings, side_row
     ):
         settings.HARNESS_BUNDLE_CERTIFY_ENABLED = True
-        environment = _environment(user, workspace, f"pk-a-other-{side_row}", storage)
-        a2 = _second_agent(environment, side_row=side_row)
-        if side_row:
-            _ready(
-                environment,
-                a2.id,
-                environment.environment_version,
-                environment.suite_version,
-            )
+        environment = _environment(user, workspace, f"pk-a-old-{side_row}", storage)
+        a2 = _second_agent(environment, preflight_status="legacy", side_row=side_row)
 
-        with pytest.raises(HostedHarnessError) as caught:
-            resolve_run_pins(environment, picks=VersionPicks(agent_version_id=a2.id))
+        refusal = _refusal(environment, VersionPicks(agent_version_id=a2.id))
 
-        assert caught.value.status_code == 422
-        assert caught.value.code == "version_not_pickable"
-        assert caught.value.message == (
-            "Only the environment's current agent version can be picked for now"
-        )
-        assert (
-            _refused(environment, VersionPicks(agent_version_id=a2.id))
-            == "version_not_pickable"
+        assert (refusal.code, refusal.message, refusal.details) == (
+            "version_not_pickable",
+            "This older agent version can't be run on its own",
+            {"piece": "agent"},
         )
 
     def test_every_refused_agent_pick_reads_the_same(self, user, workspace, storage):
@@ -391,10 +398,7 @@ class TestNotPickable:
             == [
                 {
                     "error": "version_not_pickable",
-                    "message": (
-                        "Only the environment's current agent version can be picked"
-                        " for now"
-                    ),
+                    "message": "This agent version can't be picked for this environment",
                     "retryable": False,
                     "piece": "agent",
                 }

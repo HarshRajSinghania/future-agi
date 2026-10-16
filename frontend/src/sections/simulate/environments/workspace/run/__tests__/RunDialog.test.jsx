@@ -47,7 +47,14 @@ const item = (overrides) => ({
   ...overrides,
 });
 const VERSIONS = {
-  agent: [item({ id: "a4", label: "v4", is_default: true })],
+  agent: [
+    item({ id: "a5", label: "v5", status: "draft" }),
+    item({ id: "a4", label: "v4", is_default: true, pickable: true }),
+    item({ id: "a3", label: "v3", pickable: true }),
+    item({ id: "a2", label: "v2", status: "discarded" }),
+    // Older than versioning: listed as active, but the server won't run it.
+    item({ id: "a1", label: "v1", preflight_status: "legacy" }),
+  ],
   environment: [
     item({ id: "e2", label: "v2", is_default: true }),
     item({ id: "e1", label: "v1" }),
@@ -90,12 +97,9 @@ const pickOption = async (user, picker, option) => {
   await user.click(screen.getByRole("option", { name: option }));
 };
 const runButton = () => screen.getByRole("button", { name: /^Run/ });
-// The field a picker or the read-only agent version sits in, helper text included.
+// The field a picker sits in, helper text included.
 const field = (name) =>
-  (
-    screen.queryByRole("combobox", { name }) ||
-    screen.getByRole("textbox", { name })
-  ).closest(".MuiFormControl-root");
+  screen.getByRole("combobox", { name }).closest(".MuiFormControl-root");
 
 describe("RunDialog", () => {
   beforeEach(() => {
@@ -126,14 +130,47 @@ describe("RunDialog", () => {
     ]);
   });
 
-  it("shows the agent version read-only, with why", () => {
+  it("offers the agent versions that can run, the default pre-selected", async () => {
+    const user = userEvent.setup();
     renderDialog();
-    const agent = screen.getByRole("textbox", { name: "Agent version" });
-    expect(agent).toHaveValue("v4 (default)");
-    expect(agent).toHaveAttribute("readonly");
+    const agent = screen.getByRole("combobox", { name: "Agent version" });
+    expect(agent).toHaveTextContent("v4 (default)");
+
+    await user.click(agent);
+    const options = within(screen.getByRole("listbox")).getAllByRole("option");
+    // A version still being checked (draft), discarded or older than
+    // versioning can't run.
+    expect(options.map((one) => one.textContent)).toEqual([
+      "v4 (default)",
+      "v3",
+    ]);
+  });
+
+  it("sends the agent version only when the user changed it", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog();
+
+    await pickOption(user, "Agent version", "v3");
+    expect(planCalls.at(-1).picks).toEqual({ agent: "a3" });
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      { agent: "a3" },
+      ["k1", "k2"],
+      resolved({ agent: "a3" }),
+    );
+
+    await pickOption(user, "Agent version", "v4 (default)");
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect(onSubmit).toHaveBeenLastCalledWith({}, ["k1", "k2"], DEFAULTS);
+  });
+
+  it("pre-selects a re-run's agent version", () => {
+    const { onSubmit } = renderDialog({ initialPicks: { agent: "a3" } });
     expect(
-      screen.getByText("Runs use the environment's current agent version."),
-    ).toBeInTheDocument();
+      screen.getByRole("combobox", { name: "Agent version" }),
+    ).toHaveTextContent("v3");
+    expect(planCalls.at(-1).picks).toEqual({ agent: "a3" });
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("sends nothing when the defaults are kept", async () => {
@@ -351,6 +388,96 @@ describe("RunDialog", () => {
     expect(screen.getByTestId("rerun-fallback")).toHaveTextContent(
       "That run's versions can't run now; using the current defaults.",
     );
+  });
+
+  it("falls back to the default agent only for a re-run agent version no longer active", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog({
+      initialPicks: { agent: "a2", environment: "e1", suite: "s2" },
+    });
+    expect(
+      screen.getByRole("combobox", { name: "Agent version" }),
+    ).toHaveTextContent("v4 (default)");
+    // The run's environment and scenario versions are still valid: kept.
+    expect(
+      screen.getByRole("combobox", { name: "Environment version" }),
+    ).toHaveTextContent("v1");
+    expect(
+      screen.getByRole("combobox", { name: "Scenario version" }),
+    ).toHaveTextContent("v2");
+    expect(planCalls.at(-1).picks).toEqual({ environment: "e1", suite: "s2" });
+    expect(screen.getByTestId("rerun-fallback")).toHaveTextContent(
+      "That run's agent version can't run now; using the current default agent.",
+    );
+    await user.click(runButton());
+    const kept = { environment: "e1", suite: "s2" };
+    expect(onSubmit).toHaveBeenCalledWith(kept, ["k1"], resolved(kept));
+  });
+
+  it("keeps a pre-change run's other versions when its agent can't be picked", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog({
+      initialPicks: { agent: "a1", environment: "e1", suite: "s2" },
+    });
+    expect(
+      screen.getByRole("combobox", { name: "Agent version" }),
+    ).toHaveTextContent("v4 (default)");
+    expect(
+      screen.getByRole("combobox", { name: "Environment version" }),
+    ).toHaveTextContent("v1");
+    expect(screen.getByTestId("rerun-fallback")).toHaveTextContent(
+      "That run's agent version can't run now; using the current default agent.",
+    );
+    await user.click(runButton());
+    const kept = { environment: "e1", suite: "s2" };
+    expect(onSubmit).toHaveBeenCalledWith(kept, ["k1"], resolved(kept));
+  });
+
+  it("drops only the agent when the server refuses a re-run's agent pick", async () => {
+    const user = userEvent.setup();
+    const rerunPicks = { agent: "a3", environment: "e1", suite: "s2" };
+    state.plans[JSON.stringify(rerunPicks)] = {
+      error: refusal(
+        "version_not_pickable",
+        "This older agent version can't be run on its own",
+        { piece: "agent" },
+      ),
+    };
+    const { onSubmit } = renderDialog({ initialPicks: rerunPicks });
+
+    expect(
+      screen.getByRole("combobox", { name: "Agent version" }),
+    ).toHaveTextContent("v4 (default)");
+    expect(
+      screen.getByRole("combobox", { name: "Scenario version" }),
+    ).toHaveTextContent("v2");
+    expect(planCalls.at(-1).picks).toEqual({ environment: "e1", suite: "s2" });
+    expect(screen.getByTestId("rerun-fallback")).toHaveTextContent(
+      "That run's agent version can't run now; using the current default agent.",
+    );
+    expect(screen.queryByTestId("run-error")).toBeNull();
+    await user.click(runButton());
+    const kept = { environment: "e1", suite: "s2" };
+    expect(onSubmit).toHaveBeenCalledWith(kept, ["k1"], resolved(kept));
+  });
+
+  it("falls back to every default when the kept versions are refused too", async () => {
+    const user = userEvent.setup();
+    state.plans[JSON.stringify({ environment: "e1", suite: "s2" })] = {
+      error: refusal("version_not_runnable", "Not run together yet"),
+    };
+    const { onSubmit } = renderDialog({
+      initialPicks: { agent: "a2", environment: "e1", suite: "s2" },
+    });
+    expect(
+      screen.getByRole("combobox", { name: "Environment version" }),
+    ).toHaveTextContent("v2 (default)");
+    expect(screen.getByTestId("rerun-fallback")).toHaveTextContent(
+      "That run's versions can't run now; using the current defaults.",
+    );
+    expect(screen.queryByTestId("run-error")).toBeNull();
+    await user.click(runButton());
+    expect(onSubmit).toHaveBeenCalledWith({}, ["k1", "k2"], DEFAULTS);
   });
 
   it("falls back to the defaults when a re-run's versions are refused", async () => {

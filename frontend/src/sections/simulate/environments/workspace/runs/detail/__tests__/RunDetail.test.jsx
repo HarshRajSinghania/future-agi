@@ -894,7 +894,11 @@ describe("RunDetail", () => {
 
     await user.click(screen.getByRole("button", { name: /Run again/ }));
     expect(onStartRun).toHaveBeenCalledWith(["scenario-a", "scenario-b"], 3, {
-      initialPicks: { environment: undefined, suite: undefined },
+      initialPicks: {
+        agent: undefined,
+        environment: undefined,
+        suite: undefined,
+      },
     });
     stubTickable = true;
   });
@@ -906,6 +910,7 @@ describe("RunDetail", () => {
     useRunDetail.mockReturnValue({
       identity: {
         ...IDENTITY,
+        pinnedAgentVersion: { id: "a4", label: "v4" },
         environmentVersion: { id: "e1", label: "v1" },
         suiteVersion: { id: "s2", label: "v2" },
       },
@@ -916,7 +921,7 @@ describe("RunDetail", () => {
 
     await user.click(screen.getByRole("button", { name: /Run again/ }));
     expect(onStartRun).toHaveBeenCalledWith(["scenario-a", "scenario-b"], 3, {
-      initialPicks: { environment: "e1", suite: "s2" },
+      initialPicks: { agent: "a4", environment: "e1", suite: "s2" },
     });
     stubTickable = true;
   });
@@ -927,6 +932,7 @@ describe("RunDetail", () => {
     useRunDetail.mockReturnValue({
       identity: {
         ...IDENTITY,
+        pinnedAgentVersion: { id: "a4", label: "v4" },
         environmentVersion: { id: "e1", label: "v1" },
         suiteVersion: { id: "s2", label: "v2" },
       },
@@ -937,7 +943,7 @@ describe("RunDetail", () => {
 
     await user.click(screen.getByRole("button", { name: "rerun ticked" }));
     expect(onStartRun).toHaveBeenCalledWith(["scenario-a"], 2, {
-      initialPicks: { environment: "e1", suite: "s2" },
+      initialPicks: { agent: "a4", environment: "e1", suite: "s2" },
     });
   });
 

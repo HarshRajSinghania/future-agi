@@ -77,9 +77,25 @@ def certify_enabled() -> bool:
     return bool(getattr(settings, "HARNESS_BUNDLE_CERTIFY_ENABLED", False))
 
 
+def legacy_runtime(runtime: Any) -> bool:
+    """A side row without a credential set of its own: backfilled or pinned at build.
+
+    Only a legacy row has no blob, so the blob is read for a discarded row alone; a
+    list that never loads it annotates ``blobless`` instead.
+    """
+    if runtime.preflight_status == "legacy":
+        return True
+    if runtime.preflight_status != "discarded":
+        return False
+    blobless = getattr(runtime, "blobless", None)
+    return blobless if blobless is not None else not runtime.credential_blob
+
+
 def runtime_identity(runtime: Any) -> hashing.AgentIdentity:
-    """The identity a legacy side row stands for, rebuilt from its stored facts."""
+    """The identity a side row stands for, rebuilt from its stored facts."""
     agent_payload = runtime.agent_payload or {}
+    if not legacy_runtime(runtime):
+        return _credential_set_identity(runtime)
     refs = agent_payload.get("legacy_secret_refs") or {}
     return hashing.AgentIdentity(
         source=f"{runtime.source_kind}:"
@@ -99,10 +115,73 @@ def runtime_identity(runtime: Any) -> hashing.AgentIdentity:
     )
 
 
+def _credential_set_identity(runtime: Any) -> hashing.AgentIdentity:
+    """A side row with its own credential set: keyed fingerprints, provider aliases
+    included; the provider keys count through their own fingerprint.
+
+    The version hash takes the fingerprints, so a value change is a new version; the
+    bundle key takes their names only, so it reuses the bundle, and matches the legacy
+    row the version was made from while names, source, prompt and settings match.
+    """
+    agent_payload = runtime.agent_payload or {}
+    fingerprints = {
+        str(name): str(value)
+        for name, value in sorted((runtime.credential_fingerprints or {}).items())
+    }
+    provider = {
+        name: value
+        for name, value in fingerprints.items()
+        if name in hashing.PROVIDER_CREDENTIAL_ALIASES
+    }
+    return hashing.AgentIdentity(
+        source=f"{runtime.source_kind}:"
+        + json.dumps(runtime.source or {}, sort_keys=True, separators=(",", ":")),
+        connector=str(agent_payload.get("connector") or ""),
+        mode=str(agent_payload.get("mode") or ""),
+        call_direction=str(agent_payload.get("call_direction") or ""),
+        target_speaks_first=agent_payload.get("target_speaks_first"),
+        config=agent_payload.get("config") or {},
+        prompt_hash=runtime.prompt_hash,
+        credential_fingerprints=fingerprints,
+        provider_credentials_fingerprint=(
+            canonical_digest(provider) if provider else None
+        ),
+        provider_alias_names=tuple(sorted(provider)),
+    )
+
+
+def agent_bundle_hash(runtime: Any) -> str:
+    """The agent's part of its bundles' cache keys."""
+    return hashing.agent_cache_hash(runtime_identity(runtime))
+
+
+def same_bundle_agent(agent_version_id: Any, other_id: Any, environment: Any) -> bool:
+    """Whether two agent versions run the same bundles in ``environment``: a
+    value-only change does. A shared legacy row stands for the environment's facts."""
+    from simulate.services.harness_versioning.backfill import effective_runtime
+
+    if not agent_version_id or not other_id:
+        return False
+    if str(agent_version_id) == str(other_id):
+        return True
+    runtimes = [
+        effective_runtime(
+            environment,
+            HarnessAgentVersionRuntime.no_workspace_objects.filter(
+                agent_version_id=version_id
+            ).first(),
+        )
+        for version_id in (agent_version_id, other_id)
+    ]
+    if None in runtimes:
+        return False
+    return agent_bundle_hash(runtimes[0]) == agent_bundle_hash(runtimes[1])
+
+
 def bundle_key(runtime: Any, environment_version: Any, suite_version: Any) -> str:
     """The cache key of the bundle agent ``runtime`` runs against this pair."""
     return hashing.assembly_key(
-        hashing.agent_cache_hash(runtime_identity(runtime)),
+        agent_bundle_hash(runtime),
         environment_version.hash,
         suite_version.certify_hash,
     )
@@ -198,10 +277,15 @@ def seed_ready_bundle(
     Only a bundle its certificate is for is cached. An existing row that is not ready takes
     the bundle; a ready one is kept, unless ``replace_ready`` and its digest differs.
     """
+    from simulate.services.harness_versioning.backfill import effective_runtime
+
     certificate = sealed_certificate(sealed)
     if certificate is None:
         return None
-    key = bundle_key(runtime, environment_version, suite_version)
+    # A shared legacy row stands for this environment's facts, as its runs look it up.
+    key = bundle_key(
+        effective_runtime(job, runtime), environment_version, suite_version
+    )
     if not certifies_bundle(sealed):
         logger.warning(
             "harness_bundle_cache",
@@ -320,14 +404,16 @@ def run_assembly(
     *,
     defaults: bool = True,
     unsealed: bool = False,
+    key: str | None = None,
 ) -> RunAssembly | None:
-    """The cache row for this combination, created pending when it is new.
+    """The cache row for this combination, created pending when it is new; ``key``
+    is one a rerun keeps from its source.
 
     Call under the environment's lock. A failed row is reset, so this run builds again.
     """
     if runtime is None:
         return None
-    key = bundle_key(runtime, environment_version, suite_version)
+    key = key or bundle_key(runtime, environment_version, suite_version)
     bundle, _ = HarnessAssembledBundle._base_manager.get_or_create(
         job_id=environment.id,
         assembly_key=key,

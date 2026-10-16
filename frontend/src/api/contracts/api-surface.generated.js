@@ -5,7 +5,7 @@
 export const API_SURFACE_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1064,
+  endpointCount: 1066,
   groups: {
     accounts: {
       "/accounts/2fa/recovery-codes/": ["get"],
@@ -860,6 +860,10 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/simulate/api/harness-environments/{id}/runs/{execution_id}/evaluations/run/":
         ["post"],
       "/simulate/api/harness-environments/{id}/versions/": ["get"],
+      "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/":
+        ["post"],
+      "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/retry/":
+        ["post"],
       "/simulate/api/harness-environments/{id}/versions/suite/{version_id}/members/":
         ["get"],
       "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/default/":
@@ -2149,6 +2153,10 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/simulate/api/harness-environments/{id}/runs/{execution_id}/evaluations/run/":
     ["post"],
   "/simulate/api/harness-environments/{id}/versions/": ["get"],
+  "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/discard/":
+    ["post"],
+  "/simulate/api/harness-environments/{id}/versions/agent/{version_id}/retry/":
+    ["post"],
   "/simulate/api/harness-environments/{id}/versions/suite/{version_id}/members/":
     ["get"],
   "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/default/":

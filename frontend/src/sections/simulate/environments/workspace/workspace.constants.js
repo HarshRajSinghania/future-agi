@@ -178,7 +178,11 @@ export const VERSIONS_COPY = {
     action: "Make default",
     actionFor: (label) => `Make ${label} the default`,
     title: (label, piece) => `Make ${label} the default ${piece}?`,
-    pieces: { environment: "environment", suite: "scenario version" },
+    pieces: {
+      agent: "agent version",
+      environment: "environment",
+      suite: "scenario version",
+    },
     body: "New runs use it. If this combination hasn't run before, the next run prepares it first.",
     confirm: "Make default",
     pending: "Making default…",
@@ -223,6 +227,108 @@ export const VERSIONS_COPY = {
   },
 };
 
+// The environment's agent versions and their credentials (Overview → Manage
+// versions). Credential values are never shown; only their names are.
+export const AGENT_VERSIONS_COPY = {
+  title: "Agent versions",
+  empty: "This environment's agent has no versions yet.",
+  loadError: "Couldn't load the agent versions. Try again in a moment.",
+  disabled: "Versioning is switched off for this environment.",
+  preflight: {
+    pending: "Checking…",
+    failed: "Check failed",
+    passed: "Check passed",
+  },
+  checks: {
+    passed: "passed",
+    failed: "failed",
+    skipped: "skipped",
+  },
+  missing: (names) => `Missing: ${names.join(", ")}`,
+  invalid: (names) => `Rejected by the provider: ${names.join(", ")}`,
+  checkError: (code) => `The check couldn't finish (${code}).`,
+  // Why a version whose check passed is not this environment's default.
+  activation: {
+    environment_busy: "Not made default: the environment was busy",
+    rollback_unavailable:
+      "Not made default: this combination hasn't been prepared yet",
+    not_parent_default:
+      "Not made default: the default changed while it was checked",
+    default_moved_by_hand:
+      "Not made default: the default was changed by hand while it was checked",
+    superseded: "Not made default: a later change is already the default",
+    discarded: "Not made default: it was discarded while it was checked",
+    environment_gone: "Not made default: the environment was deleted",
+    not_requested:
+      "Not made default: its credentials were changed for another environment",
+    not_bound: "Not made default: this environment can't use this version",
+    rerun_only: "Made for a single rerun; not used as the default",
+    failed: "Not made default: something went wrong; make it default by hand",
+  },
+  activationOther: (code) => `Not made default (${code})`,
+  // Read aloud when a version's check starts or lands.
+  checkStatus: (label, status) => `${label}: ${status}`,
+  discard: {
+    action: "Discard",
+    actionFor: (label) => `Discard ${label}`,
+    title: (label) => `Discard ${label}?`,
+    body: "It stays in the history but can no longer be run or made the default.",
+    confirm: "Discard",
+    pending: "Discarding…",
+    error: "Couldn't discard this version. Try again in a moment.",
+  },
+  retry: {
+    action: "Check again",
+    actionFor: (label) => `Check ${label} again`,
+    pending: "Starting…",
+    error: "Couldn't start the check again. Try again in a moment.",
+  },
+  credentials: {
+    title: "Credentials",
+    subtitle: (label) => `Variables the default version ${label} runs with.`,
+    none: "No credentials are stored for the default version.",
+    noDefault: "There's no default agent version yet.",
+    requiredMissing: "required, not set",
+    change: "Change values",
+    checkRunning: "A credentials check is still running",
+    newNameHint:
+      "Adding variables may not be possible yet: this environment may have to be prepared again with them.",
+    formHint:
+      "Only the values you fill in change; every other variable keeps its value. Saving makes a new agent version, which is checked before it becomes the default.",
+    name: "Name",
+    value: "Value",
+    addVariable: "Add variable",
+    // Drops the row from this change only; the stored value stays.
+    removeVariable: (name) => `Don't change ${name || "this variable"}`,
+    invalidName:
+      "Use letters, digits and underscores, not starting with a digit.",
+    duplicateName: "This name is used twice.",
+    fileLabel: "Google service-account JSON",
+    chooseFile: "Upload JSON file",
+    removeFile: "Remove file",
+    uploading: "Uploading…",
+    uploadError: "Couldn't upload the file.",
+    nothingToSave: "Fill in at least one value or upload a file.",
+    cancel: "Cancel",
+    save: "Save values",
+    saving: "Saving…",
+    saved: (label) => `Saved as ${label}.`,
+    errors: {
+      credential_blob_too_large:
+        "These values are too large to store. Remove some and try again.",
+      agent_versions_unavailable:
+        "This environment's agent can't take new credentials yet.",
+      credential_file_invalid: "The credential file isn't valid.",
+      secret_not_found: "The uploaded file has expired. Upload it again.",
+      credential_missing: (error) =>
+        `A stored value for ${error?.name || "a variable"} is missing; enter it again.`,
+      version_not_runnable:
+        "These variables can't be used yet: this environment would have to be prepared again with them, and that's turned off.",
+    },
+    error: "Couldn't save the values. Try again in a moment.",
+  },
+};
+
 export const RUN_DIALOG_COPY = {
   title: "Run simulation",
   pieces: {
@@ -233,7 +339,6 @@ export const RUN_DIALOG_COPY = {
   default: "default",
   none: "None yet",
   unlabelled: "Unnumbered version",
-  agentHelper: "Runs use the environment's current agent version.",
   loading: "Loading versions…",
   loadError: "Couldn't load the versions. The run uses the current defaults.",
   disabled: "Versioning is switched off, so the run uses the current versions.",
@@ -242,6 +347,8 @@ export const RUN_DIALOG_COPY = {
   refused: "These versions can't run.",
   rerunFallback:
     "That run's versions can't run now; using the current defaults.",
+  rerunAgentFallback:
+    "That run's agent version can't run now; using the current default agent.",
   allScenarios: (n, suite) =>
     `Runs all ${n} scenario${n === 1 ? "" : "s"} in ${suite}.`,
   allCurrentScenarios: (suite) => `Runs all scenarios in ${suite}.`,

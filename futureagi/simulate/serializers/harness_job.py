@@ -827,8 +827,44 @@ class HarnessSecretFileUploadResponseSerializer(serializers.Serializer):
 class HarnessSecretValuesSerializer(serializers.Serializer):
     environment_values = serializers.DictField(
         child=serializers.CharField(max_length=65_536, trim_whitespace=False),
-        allow_empty=False,
+        allow_empty=True,
+        help_text=(
+            "Values by name; may be empty only when an environment's files are given."
+        ),
     )
+    environment_id = serializers.UUIDField(
+        required=False,
+        help_text=(
+            "Change this environment's agent credentials: the values make its next"
+            " agent version instead of being stored as secret refs."
+        ),
+    )
+    files = serializers.ListField(
+        child=SecretReferenceSerializer(),
+        required=False,
+        max_length=10,
+        help_text="Credential files staged through secret-files/, by their refs.",
+    )
+
+    def validate(self, attrs):
+        if attrs.get("environment_id") is None:
+            if "files" in attrs:
+                raise serializers.ValidationError(
+                    {"files": "files are only taken with environment_id"}
+                )
+            if not attrs["environment_values"]:
+                raise serializers.ValidationError(
+                    {
+                        "environment_values": [
+                            self.fields["environment_values"].error_messages["empty"]
+                        ]
+                    }
+                )
+        elif not attrs["environment_values"] and not attrs.get("files"):
+            raise serializers.ValidationError(
+                {"environment_values": "give at least one value or file"}
+            )
+        return attrs
 
     def validate_environment_values(self, values):
         if len(values) > 100:

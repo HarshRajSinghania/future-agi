@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from simulate.models import (
+    HarnessAgentVersionRuntime,
     HarnessAssembledBundle,
     HarnessSuiteValidation,
     HostedHarnessJob,
@@ -58,13 +59,69 @@ def _cache_state(environment: HostedHarnessJob, pins: ResolvedPins) -> str | Non
     return (
         HarnessAssembledBundle._base_manager.filter(
             job_id=environment.id,
-            assembly_key=bundle_key(
-                pins.runtime, pins.environment_version, pins.suite_version
-            ),
+            assembly_key=pins.assembly_key
+            or bundle_key(pins.runtime, pins.environment_version, pins.suite_version),
         )
         .values_list("state", flat=True)
         .first()
     )
+
+
+def _names(names: list[str]) -> str:
+    return ", ".join(names)
+
+
+def _credential_warnings(runtime: HarnessAgentVersionRuntime) -> list[dict[str, Any]]:
+    """What the pinned agent version's credentials lack, by name; no value is read
+    except to learn whether its set can be decrypted at all."""
+    from simulate.serializers.harness_job import CONNECTOR_ALIASES
+    from simulate.services.harness_agent_versions import (
+        credential_set_readable,
+        own_credential_set,
+        version_credential_names,
+    )
+
+    warnings = []
+    names = set(version_credential_names(runtime))
+    required = runtime.required_variable_names
+    if required is not None:
+        missing = sorted({str(name) for name in required} - names)
+        if missing:
+            warnings.append(
+                _warning(
+                    "variable_missing",
+                    f"This agent version has no value for {_names(missing)}",
+                    "agent",
+                )
+            )
+    if not own_credential_set(runtime):
+        return warnings
+    agent_payload = runtime.agent_payload or {}
+    config = agent_payload.get("config") or {}
+    held = set(names)
+    if str(config.get("livekit_url") or config.get("LIVEKIT_URL") or "").strip():
+        held.add("LIVEKIT_URL")
+    connector = str(agent_payload.get("connector") or "")
+    unavailable = [
+        alias for alias in CONNECTOR_ALIASES.get(connector, ()) if alias not in held
+    ]
+    if unavailable:
+        warnings.append(
+            _warning(
+                "provider_key_unavailable",
+                f"This agent version has no {_names(unavailable)} for {connector}",
+                "agent",
+            )
+        )
+    if not credential_set_readable(runtime):
+        warnings.append(
+            _warning(
+                "credential_unavailable",
+                "This agent version's credentials can't be read; save them again",
+                "agent",
+            )
+        )
+    return warnings
 
 
 def run_warnings(
@@ -110,10 +167,11 @@ def run_warnings(
                 "agent",
             )
         )
+    if agent_version is not None and pins.runtime is not None:
+        warnings.extend(_credential_warnings(pins.runtime))
     # TODO: source_unavailable (piece agent) once a GitHub commit can be checked
     # cheaply; today only a sandbox clone resolves one.
-    # TODO: variable_missing, provider_key_unavailable and credential_unavailable
-    # with credentials (step 9); nudge_open with nudges (step 12).
+    # TODO: nudge_open with nudges (step 12).
     if not _prepares(pins):
         return warnings
     if failed_before or (

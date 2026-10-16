@@ -50,6 +50,7 @@ from simulate.services.harness_versioning import read as version_reads
 from simulate.services.hosted_harness import HostedHarnessError, VersionPicks
 from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_errors import build_error_envelope
+from tfc.utils.api_serializers import EmptyRequestSerializer
 from tfc.utils.pagination import ExtendedPageNumberPagination
 
 
@@ -197,7 +198,8 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         ),
     )
     def move_default(self, request, pk=None, piece=None, version_id=None):
-        """Make an environment or suite version the default; returns every version."""
+        """Make an agent, environment or suite version the default; returns every
+        version."""
         from simulate.services.harness_versioning.versions import (
             MOVABLE_PIECES,
             move_default,
@@ -207,14 +209,6 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         job = self._job(request, pk)
         if job is None:
             return self._not_found()
-        if piece == "agent":
-            # TODO: move the agent default with agent versions (step 9).
-            raise HostedHarnessError(
-                "version_not_pickable",
-                "The agent's default can't be changed here yet",
-                status_code=422,
-                details={"piece": "agent"},
-            )
         identifier = _uuid_or_none(version_id)
         if piece not in MOVABLE_PIECES or identifier is None:
             raise version_reads.version_not_found()
@@ -226,6 +220,70 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
             user=request.user,
         )
         return Response(version_reads.list_versions(moved))
+
+    def _agent_version(self, job, version_id):
+        """One agent version of this environment's agent, or a 404."""
+        identifier = _uuid_or_none(version_id)
+        found = (
+            version_reads._agent_versions(job, [identifier])
+            if identifier is not None
+            else []
+        )
+        if not found:
+            raise version_reads.version_not_found()
+        return found[0]
+
+    @validated_request(
+        request_serializer=EmptyRequestSerializer,
+        responses={200: HarnessVersionsSerializer},
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"versions/agent/(?P<version_id>[0-9a-fA-F-]{36})/discard",
+    )
+    def discard_agent_version(self, request, pk=None, version_id=None):
+        """Set an agent version aside; returns every version."""
+        from simulate.services.harness_agent_versions import (
+            discard_agent_version,
+            require_environments_version,
+        )
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        version = self._agent_version(job, version_id)
+        require_environments_version(job, version)
+        discard_agent_version(version, by_environment=job.id)
+        return Response(version_reads.list_versions(job))
+
+    @validated_request(
+        request_serializer=EmptyRequestSerializer,
+        responses={202: HarnessVersionsSerializer},
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"versions/agent/(?P<version_id>[0-9a-fA-F-]{36})/retry",
+    )
+    def retry_agent_version(self, request, pk=None, version_id=None):
+        """Check an agent version whose check failed again; returns every version."""
+        from simulate.services.harness_agent_versions import (
+            require_environments_version,
+            retry_preflight,
+        )
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        version = self._agent_version(job, version_id)
+        require_environments_version(job, version)
+        retry_preflight(version)
+        return Response(
+            version_reads.list_versions(job), status=status.HTTP_202_ACCEPTED
+        )
 
     @validated_request(responses={200: HarnessSuiteMemberSerializer(many=True)})
     @action(

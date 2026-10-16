@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import PropTypes from "prop-types";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("src/api/harness/harness", () => ({
@@ -362,6 +362,29 @@ describe("useUploadSecretFile", () => {
     expect(out.name).toBe("creds.json");
     expect(out.size).toBe(42);
     expect(out).not.toHaveProperty("contents");
+  });
+
+  it("drops the file from the cache on reset when asked to keep nothing", async () => {
+    uploadHarnessSecretFile.mockResolvedValue({
+      secret_ref: { key: "ref-9" },
+      environment_name: "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+      size: 42,
+    });
+    const { Wrapper, queryClient } = makeWrapper();
+    const { result } = renderHook(() => useUploadSecretFile({ gcTime: 0 }), {
+      wrapper: Wrapper,
+    });
+    const file = new File(["{}"], "creds.json", { type: "application/json" });
+    await result.current.mutateAsync({ file });
+    const [mutation] = queryClient.getMutationCache().getAll();
+    expect(mutation.state.variables.file).toBe(file);
+    expect(mutation.options.meta).toEqual({ errorHandled: true });
+
+    act(() => result.current.reset());
+
+    await waitFor(() =>
+      expect(queryClient.getMutationCache().getAll()).toHaveLength(0),
+    );
   });
 
   it("surfaces a rejected upload rather than swallowing it", async () => {

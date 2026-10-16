@@ -23,17 +23,22 @@ import {
 import { RUN_DIALOG_COPY as COPY } from "../workspace.constants";
 import { inlineRunError, planRefusal } from "./runErrors";
 
-// TODO: step 9 makes the agent version pickable too.
-const PICKABLE = ["environment", "suite"];
+// Only versions a run can take are offered: an active environment or scenario
+// version, an agent version the server marks pickable (its check passed), and
+// always the default.
+const PICKABLE = VERSION_PIECES;
+const offered = (piece, version) =>
+  version.isDefault ||
+  (piece === "agent" ? version.pickable : version.status === "active");
 
 const named = (version) => version?.label || COPY.unlabelled;
 const optionLabel = (version) =>
   version.isDefault ? `${named(version)} (${COPY.default})` : named(version);
 
 /**
- * Pick the environment and scenario versions a run uses, see what to watch
- * out for, and start it. Only the versions the user changed are sent; the rest
- * run the environment's defaults at submit time.
+ * Pick the agent, environment and scenario versions a run uses, see what to
+ * watch out for, and start it. Only the versions the user changed are sent;
+ * the rest run the environment's defaults at submit time.
  */
 export default function RunDialog({
   open,
@@ -56,6 +61,8 @@ export default function RunDialog({
   const [rerun, setRerun] = useState(() =>
     PICKABLE.some((piece) => initialPicks?.[piece]) ? "checking" : "done",
   );
+  // Only the re-run's agent version fell back; its other versions are kept.
+  const [agentFellBack, setAgentFellBack] = useState(false);
   // A refusal stays shown until the user changes a pick.
   const [dismissedError, setDismissedError] = useState(null);
 
@@ -64,9 +71,7 @@ export default function RunDialog({
       Object.fromEntries(
         VERSION_PIECES.map((piece) => [
           piece,
-          (data?.[piece] || []).filter(
-            (version) => version.status === "active" || version.isDefault,
-          ),
+          (data?.[piece] || []).filter((version) => offered(piece, version)),
         ]),
       ),
     [data],
@@ -97,23 +102,35 @@ export default function RunDialog({
 
   useEffect(() => {
     if (rerun !== "checking" || !data) return;
-    const stale = PICKABLE.some(
+    const stale = PICKABLE.filter(
       (piece) =>
-        initialPicks?.[piece] &&
-        !options[piece].some((one) => one.id === initialPicks[piece]),
+        overrides[piece] &&
+        !options[piece].some((one) => one.id === overrides[piece]),
     );
-    if (stale || refusedPlan) {
+    // The server refusing only the agent pick is a stale agent too.
+    const agentRefused =
+      refusedPlan?.error === "version_not_pickable" &&
+      refusedPlan?.piece === "agent" &&
+      Boolean(overrides.agent);
+    if (agentRefused && !stale.includes("agent")) stale.push("agent");
+    if (stale.length === 1 && stale[0] === "agent") {
+      // The environment and scenario versions are still checked together.
+      setOverrides(({ agent, ...kept }) => kept);
+      setAgentFellBack(true);
+    } else if (stale.length || refusedPlan) {
       setOverrides({});
+      setAgentFellBack(false);
       setRerun("fellBack");
     } else if (plan.data || plan.isError) {
       // A plan that failed on the server keeps the re-run's versions.
-      setRerun("done");
+      setRerun(agentFellBack ? "fellBack" : "done");
     }
   }, [
     rerun,
     data,
     options,
-    initialPicks,
+    overrides,
+    agentFellBack,
     refusedPlan,
     plan.data,
     plan.isError,
@@ -183,21 +200,6 @@ export default function RunDialog({
     onSubmit?.(picks, runIds, selected);
   };
 
-  const agentField = () => {
-    const agent = data?.defaults?.agent;
-    return (
-      <TextField
-        fullWidth
-        size="small"
-        label={COPY.pieces.agent}
-        value={agent ? optionLabel(agent) : COPY.none}
-        InputProps={{ readOnly: true }}
-        error={pickerError === "agent"}
-        helperText={pickerError === "agent" ? errorText : COPY.agentHelper}
-      />
-    );
-  };
-
   const pickerField = (piece) => (
     <TextField
       key={piece}
@@ -262,11 +264,10 @@ export default function RunDialog({
     const line = scenarioLine();
     return (
       <>
-        {agentField()}
         {PICKABLE.map(pickerField)}
         {rerun === "fellBack" && (
           <Alert severity="info" data-testid="rerun-fallback">
-            {COPY.rerunFallback}
+            {agentFellBack ? COPY.rerunAgentFallback : COPY.rerunFallback}
           </Alert>
         )}
         {line && (
@@ -364,7 +365,7 @@ RunDialog.propTypes = {
   // Undefined runs every scenario.
   scenarioIds: PropTypes.arrayOf(PropTypes.string),
   trials: PropTypes.number,
-  // {environment, suite} → version id, pre-selected (a re-run's versions).
+  // {agent, environment, suite} → version id, pre-selected (a re-run's versions).
   initialPicks: PropTypes.objectOf(PropTypes.string),
   onClose: PropTypes.func,
   // (picks, scenarioIds, resolved {agent, environment, suite} version ids).

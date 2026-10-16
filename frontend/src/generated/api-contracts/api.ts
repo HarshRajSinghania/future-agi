@@ -575,6 +575,7 @@ import type {
   GroupingOutboxRequestApi,
   GroupingOutboxResponseApi,
   HarnessAcceptedResponseApi,
+  HarnessAgentCredentialsResponseApi,
   HarnessArtifactUploadResponseApi,
   HarnessConversationAdjustmentApi,
   HarnessConversationAdjustmentResponseApi,
@@ -620,6 +621,7 @@ import type {
   HarnessScenarioOperationResponseApi,
   HarnessSecretFileUploadResponseApi,
   HarnessSecretValuesApi,
+  HarnessSecretValuesResponseApi,
   HarnessSourceUploadResponseApi,
   HarnessSuiteMemberApi,
   HarnessUsageRequestApi,
@@ -59245,6 +59247,116 @@ export const simulateApiHarnessEnvironmentsVersions = async (
   );
 };
 
+export type simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse200 =
+  {
+    data: HarnessVersionsApi;
+    status: 200;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponseDefault =
+  {
+    data: ManagementAPIErrorResponseApi;
+    status: Exclude<HTTPStatusCodes, 200>;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponseSuccess =
+  simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponseError =
+  simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse =
+
+    | simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponseSuccess
+    | simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponseError;
+
+export const getSimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionUrl =
+  (id: string, versionId: string) => {
+    return `/simulate/api/harness-environments/${id}/versions/agent/${versionId}/discard/`;
+  };
+
+/**
+ * Set an agent version aside; returns every version.
+ */
+export const simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersion =
+  async (
+    id: string,
+    versionId: string,
+    emptyRequestApi: EmptyRequestApi,
+    options?: RequestInit,
+  ): Promise<simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse> => {
+    return apiMutator<simulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse>(
+      getSimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionUrl(
+        id,
+        versionId,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(emptyRequestApi),
+      },
+    );
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponse202 =
+  {
+    data: HarnessVersionsApi;
+    status: 202;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponseDefault =
+  {
+    data: ManagementAPIErrorResponseApi;
+    status: Exclude<HTTPStatusCodes, 202>;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponseSuccess =
+  simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponse202 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponseError =
+  simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponse =
+
+    | simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponseSuccess
+    | simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponseError;
+
+export const getSimulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionUrl =
+  (id: string, versionId: string) => {
+    return `/simulate/api/harness-environments/${id}/versions/agent/${versionId}/retry/`;
+  };
+
+/**
+ * Check an agent version whose check failed again; returns every version.
+ */
+export const simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersion =
+  async (
+    id: string,
+    versionId: string,
+    emptyRequestApi: EmptyRequestApi,
+    options?: RequestInit,
+  ): Promise<simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponse> => {
+    return apiMutator<simulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionResponse>(
+      getSimulateApiHarnessEnvironmentsVersionsAgentRetryAgentVersionUrl(
+        id,
+        versionId,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(emptyRequestApi),
+      },
+    );
+  };
+
 export type simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse200 =
   {
     data: HarnessSuiteMemberApi[];
@@ -59329,7 +59441,8 @@ export const getSimulateApiHarnessEnvironmentsVersionsMoveDefaultUrl = (
 };
 
 /**
- * Make an environment or suite version the default; returns every version.
+ * Make an agent, environment or suite version the default; returns every
+version.
  */
 export const simulateApiHarnessEnvironmentsVersionsMoveDefault = async (
   id: string,
@@ -59672,19 +59785,26 @@ export const simulateApiHarnessJobsSecretFileUpload = async (
 };
 
 export type simulateApiHarnessJobsSecretValuesResponse201 = {
-  data: HarnessSecretValuesApi;
+  data: HarnessSecretValuesResponseApi;
   status: 201;
+};
+
+export type simulateApiHarnessJobsSecretValuesResponse202 = {
+  data: HarnessAgentCredentialsResponseApi;
+  status: 202;
 };
 
 export type simulateApiHarnessJobsSecretValuesResponseDefault = {
   data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 201>;
+  status: Exclude<HTTPStatusCodes, 201 | 202>;
 };
 
-export type simulateApiHarnessJobsSecretValuesResponseSuccess =
-  simulateApiHarnessJobsSecretValuesResponse201 & {
-    headers: Headers;
-  };
+export type simulateApiHarnessJobsSecretValuesResponseSuccess = (
+  | simulateApiHarnessJobsSecretValuesResponse201
+  | simulateApiHarnessJobsSecretValuesResponse202
+) & {
+  headers: Headers;
+};
 export type simulateApiHarnessJobsSecretValuesResponseError =
   simulateApiHarnessJobsSecretValuesResponseDefault & {
     headers: Headers;
@@ -59701,6 +59821,9 @@ export const getSimulateApiHarnessJobsSecretValuesUrl = () => {
 /**
  * Values are intentionally separate from platform/model-provider settings. They are scoped
 to the submitting organization and only resolved inside the selected hosted job.
+
+With ``environment_id`` the values (and staged ``files``) make that environment's
+next agent version instead; it is checked next and returned with 202.
  * @summary Persist uploaded agent values encrypted and return opaque hosted refs.
  */
 export const simulateApiHarnessJobsSecretValues = async (

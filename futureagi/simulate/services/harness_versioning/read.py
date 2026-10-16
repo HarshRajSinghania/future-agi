@@ -7,7 +7,15 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from django.conf import settings
-from django.db.models import CharField, F, Func, QuerySet
+from django.db.models import (
+    BooleanField,
+    CharField,
+    ExpressionWrapper,
+    F,
+    Func,
+    Q,
+    QuerySet,
+)
 from django.db.models.fields.json import KeyTextTransform
 
 from simulate.models import (
@@ -40,7 +48,8 @@ _AGENT_STATUS = {
 # Large columns: the lists never read them; each read loads only what it uses.
 _PIECE_DEFERRED = ("documents", "diff", "snapshot_diff")
 _AGENT_DEFERRED = ("configuration_snapshot", "description", "release_notes")
-_RUNTIME_SECRET = ("agent_payload", "credential_blob", "preflight_report")
+# Never read by the lists; the preflight report holds names and statuses only.
+_RUNTIME_SECRET = ("agent_payload", "credential_blob")
 
 
 def versioning_flags() -> dict[str, bool]:
@@ -159,6 +168,15 @@ def _piece_item(version: Any, default_id: Any, *, suite: bool) -> dict[str, Any]
         ),
         "scenario_count": version.scenario_count if suite else None,
         "preflight_status": None,
+        "preflight_report": None,
+        "preflighted_at": None,
+        "check_started_at": None,
+        "credential_names": None,
+        "required_variable_names": None,
+        "activation_outcome": None,
+        "requested_here": None,
+        "pickable": None,
+        "discardable": None,
     }
 
 
@@ -180,14 +198,19 @@ def _agent_definition_id(job: HostedHarnessJob) -> Any:
     return None
 
 
+def in_workspace(job: HostedHarnessJob) -> Q:
+    """Agent versions of the environment's workspace, or of none."""
+    return Q(workspace_id=job.workspace_id) | Q(workspace__isnull=True)
+
+
 def _agent_versions(
     job: HostedHarnessJob, ids: list[Any] | None = None
 ) -> list[AgentVersion]:
     """The agent versions of the environment's agent definition, newest first.
 
-    Scoped by the environment's organisation as well as its definition, so a stray pin
-    never lists another organisation's versions. The environment's pinned version is
-    always listed, even soft-deleted, so a pin always has its default row.
+    Scoped by the environment's organisation and workspace as well as its definition,
+    so a stray pin never lists another workspace's versions. The environment's pinned
+    version is always listed, even soft-deleted, so a pin always has its default row.
     """
     definition_id = _agent_definition_id(job)
     if definition_id is None:
@@ -196,7 +219,9 @@ def _agent_versions(
         "agent_definition_id": definition_id,
         "organization_id": job.organization_id,
     }
-    versions = AgentVersion.no_workspace_objects.filter(**scope).defer(*_AGENT_DEFERRED)
+    versions = AgentVersion.no_workspace_objects.filter(
+        in_workspace(job), **scope
+    ).defer(*_AGENT_DEFERRED)
     if ids is not None:
         versions = versions.filter(id__in=ids)
     found = list(versions)
@@ -224,6 +249,15 @@ def _runtimes(
         )
         .select_related("created_by")
         .defer(*deferred)
+        .annotate(
+            asked_by=F("agent_payload__requested_by_environments"),
+            asked_for=F("agent_payload__created_for_environment"),
+            # Whether a discarded row was a legacy one, without reading its blob.
+            blobless=ExpressionWrapper(
+                Q(credential_blob__isnull=True) | Q(credential_blob=""),
+                output_field=BooleanField(),
+            ),
+        )
     )
     return {runtime.agent_version_id: runtime for runtime in runtimes}
 
@@ -244,12 +278,41 @@ def _parent_agent_versions(
     )
 
 
+def _activation_outcome(
+    report: Mapping[str, Any] | None, environment_id: Any
+) -> str | None:
+    """Why a passed version is or isn't this environment's default, as last recorded."""
+    for entry in (report or {}).get("activation") or []:
+        if isinstance(entry, Mapping) and entry.get("environment_id") == str(
+            environment_id
+        ):
+            return str(entry.get("outcome") or "") or None
+    return None
+
+
 def _agent_item(
     version: AgentVersion,
     runtime: HarnessAgentVersionRuntime | None,
     default_id: Any,
     parents: Mapping[Any, Any],
+    job: HostedHarnessJob,
+    lineage: set[Any],
 ) -> dict[str, Any]:
+    from simulate.services.harness_agent_versions import (
+        _held_elsewhere,
+        agent_pick_allowed,
+        requested_here,
+        version_credential_names,
+    )
+    from simulate.services.harness_versioning.assembly import legacy_runtime
+    from simulate.services.harness_versioning.backfill import effective_runtime
+
+    environment_id = job.id
+    Status = HarnessAgentVersionRuntime.PreflightStatus
+    legacy = runtime is not None and legacy_runtime(runtime)
+    # A legacy row is shared: this environment's own variables are its names.
+    named = effective_runtime(job, runtime) if legacy else runtime
+
     if runtime is not None and (runtime.summary or "").strip():
         summary = _summary_line(runtime.summary)
     else:
@@ -258,6 +321,17 @@ def _agent_item(
         parents.get(runtime.parent_id)
         if runtime is not None and runtime.parent_id
         else None
+    )
+    report = (
+        runtime.preflight_report
+        if runtime is not None and isinstance(runtime.preflight_report, Mapping)
+        else None
+    )
+    # Annotated by ``_runtimes``.
+    asked_here = runtime is not None and requested_here(
+        getattr(runtime, "asked_by", None),
+        getattr(runtime, "asked_for", None),
+        environment_id,
     )
     return {
         "id": str(version.id),
@@ -268,6 +342,10 @@ def _agent_item(
             else "active"
         ),
         "is_default": version.id == default_id,
+        # As a run's pick or a move takes it: the default, a version whose check
+        # passed, or a legacy or pre-versioning one of the default's lineage.
+        "pickable": version.id == default_id
+        or agent_pick_allowed(job, version.id, runtime, lineage),
         "created_at": version.created_at.isoformat(),
         "created_by": _person(runtime.created_by) if runtime is not None else None,
         "origin": (runtime.trigger or None) if runtime is not None else None,
@@ -279,7 +357,52 @@ def _agent_item(
         "preflight_status": (
             (runtime.preflight_status or None) if runtime is not None else None
         ),
+        "preflight_report": report,
+        "preflighted_at": (
+            runtime.preflighted_at.isoformat()
+            if runtime is not None and runtime.preflighted_at
+            else None
+        ),
+        "check_started_at": (
+            runtime.check_started_at.isoformat()
+            if runtime is not None and runtime.check_started_at
+            else None
+        ),
+        "credential_names": (
+            version_credential_names(named) if named is not None else None
+        ),
+        "required_variable_names": (
+            [str(name) for name in runtime.required_variable_names]
+            if runtime is not None and isinstance(runtime.required_variable_names, list)
+            else None
+        ),
+        "activation_outcome": _activation_outcome(report, environment_id),
+        "requested_here": asked_here,
+        # As a discard from here takes it: never one another environment holds.
+        "discardable": runtime is not None
+        and not legacy
+        and runtime.preflight_status != Status.DISCARDED
+        and version.id != default_id
+        and (asked_here or version.id in lineage)
+        and not _held_elsewhere(
+            version, getattr(runtime, "asked_for", None), environment_id
+        ),
     }
+
+
+def agent_version_item(job: HostedHarnessJob, version: AgentVersion) -> dict[str, Any]:
+    """One agent version of ``job``'s agent, as the version lists show it."""
+    from simulate.services.harness_agent_versions import _default_lineage
+
+    runtimes = _runtimes(job, [version])
+    return _agent_item(
+        version,
+        runtimes.get(version.id),
+        job.agent_version_id,
+        _parent_agent_versions(job, runtimes),
+        job,
+        _default_lineage(job),
+    )
 
 
 def list_versions(job: HostedHarnessJob) -> dict[str, list[dict[str, Any]]]:
@@ -293,13 +416,21 @@ def list_versions(job: HostedHarnessJob) -> dict[str, list[dict[str, Any]]]:
         .select_related("created_by")
         .defer(*_PIECE_DEFERRED)
     )
+    from simulate.services.harness_agent_versions import _default_lineage
+
     agents = _agent_versions(job)
     runtimes = _runtimes(job, agents)
     parents = _parent_agent_versions(job, runtimes)
+    lineage = _default_lineage(job)
     return {
         "agent": [
             _agent_item(
-                version, runtimes.get(version.id), job.agent_version_id, parents
+                version,
+                runtimes.get(version.id),
+                job.agent_version_id,
+                parents,
+                job,
+                lineage,
             )
             for version in agents
         ],
@@ -394,7 +525,8 @@ def _agent_facts(
     )
     names = runtime.credential_names
     names = [str(name) for name in names] if isinstance(names, list) else []
-    names = names or list(fingerprints)
+    # Provider keys are fingerprinted only, while a legacy row names them.
+    names = sorted({*names, *fingerprints})
     source = _mapping(runtime.source, version_id, "source")
     return {
         "source": {"kind": runtime.source_kind, **source},
@@ -417,6 +549,8 @@ def _stored_diff(value: Any, version_id: Any) -> Mapping[str, Any] | None:
 def _agent_diff(
     job: HostedHarnessJob, version_id: Any, against_id: Any | None
 ) -> dict[str, Any]:
+    from simulate.services.harness_versioning.backfill import effective_runtime
+
     wanted = [version_id] if against_id is None else [version_id, against_id]
     versions = {str(version.id): version for version in _agent_versions(job, wanted)}
     version = versions.get(str(version_id))
@@ -432,6 +566,9 @@ def _agent_diff(
     other = runtimes.get(versions[str(against_id)].id)
     if runtime is None or other is None:
         return {"summary": "", "diff": None}
+    # A legacy row is shared: it stands for this environment's own facts.
+    runtime = effective_runtime(job, runtime)
+    other = effective_runtime(job, other)
     names_only = not (
         _digests(runtime.credential_fingerprints)
         and _digests(other.credential_fingerprints)
