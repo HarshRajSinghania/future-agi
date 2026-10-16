@@ -2,7 +2,7 @@ import PropTypes from "prop-types";
 import { Box, Button, Dialog, MenuItem, Select, Stack, Switch, TextField, Typography } from "@mui/material";
 import { PROVIDER_LABELS, definitionOf, sourceKindOf } from "../_mock/agentRegistry";
 import {
-  agentStatusOf, deleteBlockOf, disconnectReasonFor, fixDepthOf, platformTestingOf, releaseDetectionOf,
+  agentStatusOf, deleteEffectOf, disconnectReasonFor, fixDepthOf, platformTestingOf, releaseDetectionOf,
 } from "../_mock/rsiModel";
 import { InfoTip, KvRow, PanelCard } from "./AgentBits";
 import { ago, plural } from "./agentViewUtils";
@@ -14,7 +14,7 @@ import { ago, plural } from "./agentViewUtils";
  */
 export function LifecycleCard({ agent, onSaveValues, onArchive, onDelete }) {
   const status = agentStatusOf(agent);
-  const blocked = deleteBlockOf(agent);
+  const effect = deleteEffectOf(agent);
   const archived = status.status === "archived";
   const disconnected = status.status === "disconnected";
   const reconnect = () => onSaveValues({ disconnected: null }, `${agent.name} is connected again.`);
@@ -47,10 +47,10 @@ export function LifecycleCard({ agent, onSaveValues, onArchive, onDelete }) {
         </ActionRow>
         <ActionRow
           title="Delete"
-          body={blocked ? "Still tested by an environment" : "Removes it from Connected agents"}
-          hint={blocked || "Runs stay with the environments that ran them."}
+          body="Removes it from Connected agents"
+          hint={effect || "Runs stay with the environments that ran them."}
         >
-          <Button size="small" variant="outlined" disabled={!!blocked} onClick={onDelete} sx={{ ...btnSx, ...(!blocked && { color: "#DC2626", borderColor: "rgba(220,38,38,0.4)" }) }}>Delete</Button>
+          <Button size="small" variant="outlined" onClick={onDelete} sx={{ ...btnSx, color: "#DC2626", borderColor: "rgba(220,38,38,0.4)" }}>Delete</Button>
         </ActionRow>
       </Stack>
     </PanelCard>

@@ -229,7 +229,7 @@ export const runDefaultsOf = (envState) => {
 /* ── agent lifecycle, main environment, channels (agents builder) ────────── */
 /* Kept in agentLifecycle.js and read from here, so every screen asks one module. */
 export {
-  agentStatusOf, AGENT_STATUS_LABELS, disconnectReasonFor, deleteBlockOf, mainEnvOf,
+  agentStatusOf, AGENT_STATUS_LABELS, disconnectReasonFor, deleteEffectOf, mainEnvOf,
   agentChannelsOf, channelEnvsOf, CHANNEL_LABELS, retellPinStateOf, releaseDetectionOf,
   CLOSED_PLATFORMS, CLOSED_PLATFORM_NOTE, FRAMEWORK_TUNING, FRAMEWORK_TUNING_NOTE, frameworkPhaseOf,
 } from "./agentLifecycle";

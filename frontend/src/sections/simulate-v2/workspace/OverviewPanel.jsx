@@ -117,11 +117,16 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         >
           <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "center" }} spacing={2}>
             <Box flex={1}>
+              {/* Its agent was deleted from Agents: say so, and that nothing here went with it. */}
               <Typography sx={{ typography: "s1", fontWeight: 700 }}>
-                Connect your agent to start testing
+                {envState?.removedAgent
+                  ? `${envState.removedAgent.name || "Its agent"} was deleted — connect an agent to run again`
+                  : "Connect your agent to start testing"}
               </Typography>
               <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>
-                {surface.blurb} We handle the {surface.transports.join(", ")} side — you point us at your agent.
+                {envState?.removedAgent
+                  ? "Scenarios, evaluations and past runs are all still here."
+                  : `${surface.blurb} We handle the ${surface.transports.join(", ")} side — you point us at your agent.`}
               </Typography>
             </Box>
             <Button

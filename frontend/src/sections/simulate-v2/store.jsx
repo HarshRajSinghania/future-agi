@@ -488,10 +488,28 @@ function reducer(state, action) {
       return { ...state, projectLinks: { ...(state.projectLinks || {}), [action.project]: action.agentKey } };
     }
 
-    /* Disconnect an agent. Only offered when no environment tests it; its
-       runs stay with the environments that ran them. */
+    /*
+      Delete an agent. Environments are the work — scenarios, evaluations,
+      runs — so they're never deleted with it: each one testing the agent
+      is unlinked and keeps everything else, showing "Connect agent" until
+      one is connected. Observe projects linked to it are unlinked too, so
+      their issues read "Connect agent to fix".
+    */
     case "removeAgent": {
-      return { ...state, connectedAgents: (state.connectedAgents || []).filter((a) => a.key !== action.key) };
+      const { key } = action;
+      const at = new Date().toISOString();
+      const byEnv = Object.fromEntries(Object.entries(state.byEnv || {}).map(([envId, es]) => (
+        es?.agent && envAgentKey(es.agent, envId) === key
+          ? [envId, { ...es, agent: null, removedAgent: { key, name: es.agent.name || null, at } }]
+          : [envId, es]
+      )));
+      const projectLinks = Object.fromEntries(Object.entries(state.projectLinks || {}).filter(([, k]) => k !== key));
+      return {
+        ...state,
+        connectedAgents: (state.connectedAgents || []).filter((a) => a.key !== key),
+        byEnv,
+        projectLinks,
+      };
     }
 
     /*

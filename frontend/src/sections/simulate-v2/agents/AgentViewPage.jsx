@@ -73,7 +73,7 @@ import BuildEnvironmentDialog from "./BuildEnvironmentDialog";
 import SwitchVersionDialog from "./SwitchVersionDialog";
 import MovePlatformDialog from "./MovePlatformDialog";
 import AgentSetupCard from "./AgentSetupCard";
-import { COMING_SOON_NOTE, agentStatusOf, deleteBlockOf, isComingSoon, mainEnvOf } from "../_mock/rsiModel";
+import { COMING_SOON_NOTE, agentStatusOf, deleteEffectOf, isComingSoon, mainEnvOf } from "../_mock/rsiModel";
 import { OUTSIDE_CHANGE_LABEL, isOutsideChange } from "../_mock/agentSync";
 import { runIdentityOf } from "../_mock/runIdentity";
 import { limitsOf } from "./agentLimits";
@@ -402,7 +402,6 @@ export default function AgentViewPage() {
   const settingUp = showsSetup(agent);
   const archived = status.status === "archived";
   const identity = identityOf(agent);
-  const deleteBlocked = deleteBlockOf(agent);
   /* The environment Fix runs in by default. */
   const mainEnv = mainEnvOf(agent, state);
   /* What archiving removes on the platform — the test copies we made. */
@@ -520,13 +519,13 @@ export default function AgentViewPage() {
   const switchEnv = switchFor
     ? state.myEnvironments.find((e) => e.id === switchFor.envId)
     : null;
-  /* Disconnecting would orphan environments testing it, so they go first. */
+  /* Its environments stay, unlinked — the store keeps their work. */
   const disconnect = () => {
     setDisconnectOpen(false);
     navigate(`${paths.dashboard.agents}?tab=connected`);
     removeAgent(agent.key);
     enqueueSnackbar(
-      `${agent.name} deleted. Its runs stay with the environments that ran them.`,
+      `${agent.name} deleted.${agent.usedIn.length ? ` ${agent.usedIn.length === 1 ? "Its environment stays" : `Its ${agent.usedIn.length} environments stay`} — connect an agent there to run again.` : ""}`,
       { variant: "success" },
     );
   };
@@ -804,29 +803,24 @@ export default function AgentViewPage() {
               {archived ? "Restore" : "Archive"}
             </Typography>
           </MenuItem>
-          <Tooltip arrow placement="left" title={deleteBlocked || ""}>
-            <Box>
-              <MenuItem
-                disabled={!!deleteBlocked}
-                onClick={() => {
-                  setMoreAnchor(null);
-                  setDisconnectOpen(true);
-                }}
-                sx={{ gap: 1, py: 1, color: "#DC2626" }}
-              >
-                <Iconify
-                  icon="solar:trash-bin-minimalistic-linear"
-                  width={16}
-                  sx={{ flexShrink: 0 }}
-                />
-                <Typography
-                  sx={{ typography: "s2", fontWeight: 600, color: "inherit" }}
-                >
-                  Delete
-                </Typography>
-              </MenuItem>
-            </Box>
-          </Tooltip>
+          <MenuItem
+            onClick={() => {
+              setMoreAnchor(null);
+              setDisconnectOpen(true);
+            }}
+            sx={{ gap: 1, py: 1, color: "#DC2626" }}
+          >
+            <Iconify
+              icon="solar:trash-bin-minimalistic-linear"
+              width={16}
+              sx={{ flexShrink: 0 }}
+            />
+            <Typography
+              sx={{ typography: "s2", fontWeight: 600, color: "inherit" }}
+            >
+              Delete
+            </Typography>
+          </MenuItem>
         </Menu>
       </Stack>
 
@@ -1931,8 +1925,11 @@ function DisconnectDialog({ open, agent, onClose, onConfirm }) {
           {`Delete ${agent.name}?`}
         </Typography>
         <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.75 }}>
-          {`It leaves Connected agents with its ${plural(agent.versions.length, "version")}. Runs stay with the environments that ran them, and proofs on shipped changes are kept. Connect it again any time — or archive it instead to keep it listed.`}
+          {`It leaves Connected agents with its ${plural(agent.versions.length, "version")}. Proofs on shipped changes are kept. Connect it again any time — or archive it instead to keep it listed.`}
         </Typography>
+        {deleteEffectOf(agent) && (
+          <Typography sx={{ typography: "s2", color: "text.secondary", mt: 1 }}>{deleteEffectOf(agent)}</Typography>
+        )}
       </Box>
       <Stack
         direction="row"

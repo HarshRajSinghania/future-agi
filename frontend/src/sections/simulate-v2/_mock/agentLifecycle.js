@@ -79,12 +79,16 @@ export const agentStatusOf = (agent) => {
   return { status: "connected", label: AGENT_STATUS_LABELS.connected, reason: null };
 };
 
-/** Can it be deleted? Only once no environment tests it. */
-export const deleteBlockOf = (agent) => {
-  const n = (agent?.usedIn || []).length;
-  return n
-    ? `Delete is possible once no environment tests it — ${n === 1 ? "1 environment still does" : `${n} environments still do`}. Switch or delete ${n === 1 ? "it" : "them"} first, or archive the agent to stop runs and improvements.`
-    : null;
+/**
+ * What deleting it does to the environments testing it: nothing is deleted
+ * with it — they stay, unlinked, with their scenarios, evaluations and runs.
+ * Null when no environment tests it.
+ */
+export const deleteEffectOf = (agent) => {
+  const used = agent?.usedIn || [];
+  if (!used.length) return null;
+  const one = used.length === 1;
+  return `${one ? `${used[0].envName} stays` : `Its ${used.length} environments stay`}, with ${one ? "its" : "their"} scenarios, evaluations and runs. ${one ? "It shows" : "They show"} "Connect agent" until you connect one.`;
 };
 
 /* ── where it's tested ────────────────────────────────────────────────────── */

@@ -13,7 +13,6 @@ import { useSnackbar } from "notistack";
 import { paths } from "src/routes/paths";
 import { useConnectedAgents } from "../store";
 import { neutralCheckboxSx } from "../components/primitives";
-import { deleteBlockOf } from "../_mock/rsiModel";
 import { agentSourceOf } from "../_mock/agentRegistry";
 import { projectsOfAgent } from "../_mock/projectLinks";
 import AgentStateTags from "./AgentStateTags";
@@ -61,27 +60,25 @@ export default function ConnectedAgentsView({ onConnect }) {
   const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
   const pageRows = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
 
-  /* Select several and delete them. An agent an environment still tests
-     can't be deleted — same rule as its own page — so its box is off, with
-     the reason on hover. Selection is kept by id across pages. */
+  /* Select several and delete them. Any agent can go: environments testing
+     it stay, unlinked, with their scenarios, evaluations and runs. Selection
+     is kept by id across pages. */
   const [selectedIds, setSelectedIds] = useState([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const deletable = (a) => !deleteBlockOf(a);
-  const pageDeletable = pageRows.filter(deletable);
-  const pageAllOn = pageDeletable.length > 0 && pageDeletable.every((a) => selectedIds.includes(a.id));
-  const pageSomeOn = pageDeletable.some((a) => selectedIds.includes(a.id));
+  const pageAllOn = pageRows.length > 0 && pageRows.every((a) => selectedIds.includes(a.id));
+  const pageSomeOn = pageRows.some((a) => selectedIds.includes(a.id));
   const toggleRow = (id) => setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   const togglePage = () => setSelectedIds((ids) => (pageAllOn
-    ? ids.filter((id) => !pageDeletable.some((a) => a.id === id))
-    : [...new Set([...ids, ...pageDeletable.map((a) => a.id)])]));
-  /* Drop ids that left the list (deleted elsewhere, or now in use). */
-  const selectedAgents = agents.filter((a) => selectedIds.includes(a.id) && deletable(a));
+    ? ids.filter((id) => !pageRows.some((a) => a.id === id))
+    : [...new Set([...ids, ...pageRows.map((a) => a.id)])]));
+  /* Only ids still in the list count (one may have been deleted elsewhere). */
+  const picked = agents.filter((a) => selectedIds.includes(a.id));
+  /* The environments left without an agent — each counted once. */
+  const envsLeft = new Set(picked.flatMap((a) => (a.usedIn || []).map((u) => u.envId))).size;
   const performDelete = () => {
-    selectedAgents.forEach((a) => removeAgent(a.key));
+    picked.forEach((a) => removeAgent(a.key));
     enqueueSnackbar(
-      selectedAgents.length === 1
-        ? `${selectedAgents[0].name} deleted. Its runs stay with the environments that ran them.`
-        : `${selectedAgents.length} agents deleted. Their runs stay with the environments that ran them.`,
+      `${picked.length === 1 ? `${picked[0].name} deleted` : `${picked.length} agents deleted`}.${envsLeft ? ` ${envsLeft === 1 ? "1 environment stays" : `${envsLeft} environments stay`} — connect an agent there to run again.` : ""}`,
       { variant: "success" },
     );
     setSelectedIds([]);
@@ -97,29 +94,24 @@ export default function ConnectedAgentsView({ onConnect }) {
           size="small"
           checked={pageAllOn}
           indeterminate={!pageAllOn && pageSomeOn}
-          disabled={!pageDeletable.length}
+          disabled={!pageRows.length}
           onChange={togglePage}
-          inputProps={{ "aria-label": "Select every agent on this page that can be deleted" }}
-          sx={{ p: 0, ...neutralCheckboxSx, "&.Mui-disabled": { opacity: 0.3 } }}
+          inputProps={{ "aria-label": "Select every agent on this page" }}
+          sx={{ p: 0, ...neutralCheckboxSx }}
         />
       ),
       cell: ({ row }) => {
         const a = row.original;
-        const blocked = deleteBlockOf(a);
-        const box = (
-          <Checkbox
-            size="small"
-            checked={selectedIds.includes(a.id)}
-            disabled={!!blocked}
-            onChange={() => toggleRow(a.id)}
-            onClick={(e) => e.stopPropagation()}
-            inputProps={{ "aria-label": `Select ${a.name}` }}
-            sx={{ p: 0, ...neutralCheckboxSx, "&.Mui-disabled": { opacity: 0.3 } }}
-          />
-        );
         return (
           <Box onClick={(e) => e.stopPropagation()} sx={{ display: "flex", alignItems: "center", height: "100%" }}>
-            {blocked ? <Tooltip arrow placement="right" title={blocked}><span>{box}</span></Tooltip> : box}
+            <Checkbox
+              size="small"
+              checked={selectedIds.includes(a.id)}
+              onChange={() => toggleRow(a.id)}
+              onClick={(e) => e.stopPropagation()}
+              inputProps={{ "aria-label": `Select ${a.name}` }}
+              sx={{ p: 0, ...neutralCheckboxSx }}
+            />
           </Box>
         );
       },
@@ -296,18 +288,18 @@ export default function ConnectedAgentsView({ onConnect }) {
         placeholder="Search"
         sx={{ width: 250, "& .MuiOutlinedInput-root": { height: "30px" } }}
       />
-      {selectedIds.length > 0 && selectedAgents.length > 0 && (
+      {picked.length > 0 && (
         <Stack direction="row" alignItems="center" spacing={1.5} sx={{ flexShrink: 0, px: 2, py: 1, borderRadius: 1.5, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}>
-          <Typography sx={{ typography: "s2" }}>
-            <Box component="span" sx={{ fontWeight: 700 }}>{selectedAgents.length}</Box>
-            <Box component="span" sx={{ color: "text.secondary" }}>{selectedAgents.length === 1 ? " agent selected" : " agents selected"}</Box>
+          <Typography noWrap sx={{ typography: "s2", minWidth: 0 }}>
+            <Box component="span" sx={{ fontWeight: 700 }}>{picked.length}</Box>
+            <Box component="span" sx={{ color: "text.secondary" }}>{picked.length === 1 ? " agent selected" : " agents selected"}</Box>
           </Typography>
           <Box flex={1} />
           <Button size="small" onClick={() => setSelectedIds([])} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", minWidth: 0, px: 1 }}>Clear</Button>
           <Button
             size="small" onClick={() => setConfirmDelete(true)}
             startIcon={<Iconify icon="solar:trash-bin-trash-linear" width={13} />}
-            sx={{ typography: "s2", fontWeight: 600, color: "#DC2626", px: 1, minWidth: 0, "&:hover": { bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.12 : 0.06) } }}
+            sx={{ typography: "s2", fontWeight: 600, color: "#DC2626", px: 1, minWidth: 0, flexShrink: 0, "&:hover": { bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.12 : 0.06) } }}
           >
             Delete
           </Button>
@@ -333,12 +325,17 @@ export default function ConnectedAgentsView({ onConnect }) {
       )}
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>
-          {selectedAgents.length === 1 ? `Delete ${selectedAgents[0].name}?` : `Delete ${selectedAgents.length} agents?`}
+          {picked.length === 1 ? `Delete ${picked[0].name}?` : `Delete ${picked.length} agents?`}
         </DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ typography: "s2" }}>
-            {`${selectedAgents.length === 1 ? "It leaves" : "They leave"} Connected agents with ${selectedAgents.length === 1 ? "its" : "their"} versions. Runs stay with the environments that ran them, and proofs on shipped changes are kept. Connect ${selectedAgents.length === 1 ? "it" : "any of them"} again any time.`}
+            {`${picked.length === 1 ? "It leaves" : "They leave"} Connected agents with ${picked.length === 1 ? "its" : "their"} versions. Proofs on shipped changes are kept. Connect ${picked.length === 1 ? "it" : "any of them"} again any time.`}
           </DialogContentText>
+          {envsLeft > 0 && (
+            <DialogContentText sx={{ typography: "s2", mt: 1.5 }}>
+              {`${envsLeft === 1 ? "1 environment tests" : `${envsLeft} environments test`} ${picked.length === 1 ? "it" : "them"}. ${envsLeft === 1 ? "It stays" : "They stay"}, with ${envsLeft === 1 ? "its" : "their"} scenarios, evaluations and runs, and ${envsLeft === 1 ? "shows" : "show"} "Connect agent" until you connect one.`}
+            </DialogContentText>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setConfirmDelete(false)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
