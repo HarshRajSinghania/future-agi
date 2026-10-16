@@ -26,6 +26,9 @@ from simulate.models import (
 )
 from simulate.utils.ended_reason import canonical_ended_reasons
 
+# The actor of a sub-goal that is about no sub-actor: the person the agent serves.
+PRIMARY_ACTOR = "primary"
+
 # The four states the list's status pill knows. The pipeline reports far finer
 # stages; the raw one travels alongside as ``stage`` so a caller that wants
 # progress can still derive it.
@@ -438,6 +441,8 @@ def _catalogue_index(catalogue: Any) -> dict[str, dict[str, Any]]:
             "what": str(entry.get("what") or ""),
             "kind": "judge" if entry.get("judged") else "checkpoint",
             "claim": str(entry.get("judged") or ""),
+            # Who the sub-goal is about: a sub-actor's id, or the person the agent serves.
+            "actor": str(entry.get("sub_actor") or "") or PRIMARY_ACTOR,
         }
     return index
 

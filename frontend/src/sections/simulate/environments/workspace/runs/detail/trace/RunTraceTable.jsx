@@ -46,6 +46,7 @@ import {
   defaultTraceColumns,
   toolbarButtonSx,
 } from "./traceTable.constants";
+import { subGoalColumnsFor } from "src/api/simulate-environments/runCalls";
 
 const PAGE_SIZE = 50;
 const bannerButtonSx = {
@@ -68,6 +69,9 @@ const tickableIds = (rows) =>
 
 // The per-call table owns server-backed grouping, filtering, columns and paging
 // for read-only execution results.
+// A sub-goal about no sub-actor is about the person the agent serves.
+const PRIMARY_ACTOR = "primary";
+
 export default function RunTraceTable({
   executionId,
   onOpenCall,
@@ -365,11 +369,20 @@ export default function RunTraceTable({
   }, [evals]);
   const pickerEvals =
     (isLoading || error) && !evals.length ? lastEvalsRef.current : evals;
+  // Sub-goal results, narrowed to the actor they are about: the person served or a sub-actor.
   const subGoalEvals = useMemo(
     () =>
-      columns
-        .filter((c) => c.group === "Sub-goal Results")
-        .map((c) => ({ id: c.key, name: c.label })),
+      subGoalColumnsFor(columns, filters).map((c) => ({ id: c.key, name: c.label })),
+    [columns, filters],
+  );
+  const actorOptions = useMemo(
+    () => [
+      ...new Set(
+        columns
+          .filter((c) => c.group === "Sub-goal Results" && c.actor)
+          .map((c) => c.actor),
+      ),
+    ],
     [columns],
   );
 
@@ -402,8 +415,20 @@ export default function RunTraceTable({
         choices: Object.keys(OUTCOME_LABELS),
         choiceLabels: OUTCOME_LABELS,
       },
+      // Offered only when some sub-goal is about a sub-actor.
+      ...(actorOptions.some((actor) => actor !== PRIMARY_ACTOR)
+        ? [
+            {
+              value: "actor",
+              label: "Actor",
+              type: "enum",
+              choices: actorOptions,
+              choiceLabels: { [PRIMARY_ACTOR]: "Person served" },
+            },
+          ]
+        : []),
     ],
-    [goalOptions, subGoalOptions],
+    [goalOptions, subGoalOptions, actorOptions],
   );
   // Calls handed over from a diagnosis issue; shown as their own chip rather than
   // a Filter-panel field, since the panel cannot express an id list.
