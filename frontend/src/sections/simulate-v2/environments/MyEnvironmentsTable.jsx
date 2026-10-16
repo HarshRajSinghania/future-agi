@@ -3,12 +3,13 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { alpha, keyframes } from "@mui/material/styles";
 import {
+  Avatar, AvatarGroup,
+  Chip,
   Box, Button, Stack, Typography, Tooltip, IconButton, Menu, MenuItem, ListItemIcon, ListItemText,
-  Tab, TextField, InputAdornment,
+  TextField, InputAdornment,
 } from "@mui/material";
 import { paths } from "src/routes/paths";
 import { DataTable } from "src/components/data-table";
-import { SegmentedTabs } from "src/components/tabs/tabs";
 import DataTablePagination from "src/components/data-table/DataTablePagination";
 import Iconify from "src/components/iconify";
 import { subTasksFor } from "../_mock/contract";
@@ -487,24 +488,25 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
             }}
             sx={{ width: 280, ...compactInputSx }}
           />
-          {/* Status, with how many are in each — the product's tab chips. */}
-          <SegmentedTabs value={statusFilter} onChange={(_, v) => { setStatusFilter(v); setPage(0); }}>
+          {/* Status, with how many are in each — a menu like the two beside it. */}
+          <TextField
+            select size="small" value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
+            SelectProps={{ renderValue: (v) => (v === "all" ? "All statuses" : STATUS_META[v].label.replace("…", "")) }}
+            inputProps={{ "aria-label": "Status" }}
+            sx={selectSx}
+          >
             {["all", "running", "failed", "not_run", "completed", "passed", "building"]
               .filter((k) => k === "all" || statusCounts[k])
               .map((k) => (
-                <Tab
-                  key={k} value={k} disableRipple
-                  label={(
-                    <Stack direction="row" alignItems="center" spacing={0.625}>
-                      <span>{k === "all" ? "All" : STATUS_META[k].label.replace("…", "")}</span>
-                      <Box component="span" sx={{ color: "text.subtitle", fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>
-                        {k === "all" ? rows.length : statusCounts[k]}
-                      </Box>
-                    </Stack>
-                  )}
-                />
+                <MenuItem key={k} value={k} sx={{ typography: "s2", gap: 1.5 }}>
+                  <Box component="span" sx={{ flex: 1 }}>{k === "all" ? "All statuses" : STATUS_META[k].label.replace("…", "")}</Box>
+                  <Box component="span" sx={{ color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
+                    {k === "all" ? rows.length : statusCounts[k]}
+                  </Box>
+                </MenuItem>
               ))}
-          </SegmentedTabs>
+          </TextField>
           <TextField select size="small" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }} sx={selectSx}>
             <MenuItem value="all" sx={{ typography: "s2" }}>All agent types</MenuItem>
             {typeChoices.map((t) => <MenuItem key={t} value={t} sx={{ typography: "s2" }}>{(MODALITY[t] || MODALITY.chat).label}</MenuItem>)}
@@ -624,7 +626,7 @@ MyEnvironmentsTable.propTypes = {
 /* ── status pill ─────────────────────────────────────────────────────────── */
 
 const pulse = keyframes`
-  0%,100% { opacity: 0.55; }
+  0%,100% { opacity: 0.75; }
   50%     { opacity: 1; }
 `;
 
@@ -653,43 +655,39 @@ const pulse = keyframes`
                   "Not run yet" and made a finished run look inert.
 */
 const STATUS_META = {
-  building:  { label: "Building",     color: "#7857FC" },
-  not_run:   { label: "Not run yet",  color: "#9CA3AF" },
-  running:   { label: "Running…",     color: "#2563EB" },
+  building:  { label: "Building",     color: "#7857FC", animated: true },
+  not_run:   { label: "Not run yet" },
+  running:   { label: "Running…",     color: "#2563EB", animated: true },
   passed:    { label: "Passed",       color: "#16A34A" },
   failed:    { label: "Failed",       color: "#DC2626" },
-  completed: { label: "Completed",    color: "#CA8A04", text: "text.secondary" },
+  /* A finished run with no gate verdict: neutral, like the Improvements
+     table's endings that just stopped — nothing to celebrate or flag. */
+  completed: { label: "Completed" },
 };
 
+/* The Improvements table's chip: outlined, small radius, coloured only when
+   the state means something; neutral states keep the shape in the divider
+   colour. */
 function StatusPill({ status, progress }) {
   const meta = STATUS_META[status] || STATUS_META.not_run;
   const detail = status === "building" && progress
     ? `${progress.done}/${progress.total} steps`
     : "";
-  const isAnimated = status === "building" || status === "running";
-
   return (
-    <Tooltip arrow title={detail}>
-      <Stack
-        direction="row" alignItems="center" spacing={0.75}
+    <Tooltip arrow title={detail} disableHoverListener={!detail}>
+      <Chip
+        variant="outlined"
+        size="small"
+        label={meta.label}
         sx={{
-          display: "inline-flex",
-          px: 0.875, py: 0.375, borderRadius: 999,
-          border: "1px solid",
-          borderColor: alpha(meta.color, 0.35),
-          bgcolor: (t) => alpha(meta.color, t.palette.mode === "dark" ? 0.14 : 0.09),
+          typography: "s3",
+          fontWeight: "fontWeightMedium",
+          borderColor: meta.color || "divider",
+          color: meta.color || "text.secondary",
+          backgroundColor: (t) => (meta.color ? alpha(meta.color, t.palette.mode === "dark" ? 0.04 : 0.02) : "transparent"),
+          animation: meta.animated ? `${pulse} 1.6s ease-in-out infinite` : "none",
         }}
-      >
-        <Box
-          sx={{
-            width: 6, height: 6, borderRadius: "50%", bgcolor: meta.color,
-            animation: isAnimated ? `${pulse} 1.4s ease-in-out infinite` : "none",
-          }}
-        />
-        <Typography sx={{ typography: "s3", fontWeight: 700, color: meta.text || meta.color }}>
-          {meta.label}
-        </Typography>
-      </Stack>
+      />
     </Tooltip>
   );
 }
@@ -725,13 +723,23 @@ LastRunCell.propTypes = { last: PropTypes.object };
 
 /* ── owner ───────────────────────────────────────────────────────────────── */
 
-/* The owner's initials; their name on hover. */
+/* The owner's initials, drawn exactly as the Dashboards list draws its
+   people (the same AvatarGroup + Avatar, same size); their name on hover. */
+const initialsOf = (name) => {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return (parts.length >= 2 ? parts[0][0] + parts[1][0] : parts[0].slice(0, 2)).toUpperCase();
+};
 function OwnerCell({ name }) {
-  const initials = String(name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return (
     <Tooltip arrow title={name || ""}>
-      <Box sx={{ width: 24, height: 24, borderRadius: "50%", display: "grid", placeItems: "center", border: "1px solid", borderColor: "divider", typography: "s3", fontSize: 10, fontWeight: 700, color: "text.secondary", cursor: "default" }}>
-        {initials}
+      <Box sx={{ display: "inline-flex", cursor: "default" }}>
+        <AvatarGroup
+          max={1}
+          sx={{ "& .MuiAvatar-root": { width: 26, height: 26, fontSize: "11px", fontWeight: 700, borderWidth: 2 } }}
+        >
+          <Avatar>{initialsOf(name)}</Avatar>
+        </AvatarGroup>
       </Box>
     </Tooltip>
   );

@@ -18,7 +18,7 @@ export default function WorldDrawer({ world, onClose }) {
             <Box flex={1} minWidth={0}>
               <Stack direction="row" alignItems="center" spacing={1}>
                 <Typography noWrap sx={{ typography: "m3", fontWeight: 600 }}>{world.name}</Typography>
-                <QuietTag>{world.soon ? `${world.typeLabel} · Coming soon` : world.typeLabel}</QuietTag>
+                <QuietTag>{world.typeLabel}</QuietTag>
               </Stack>
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>
                 Ready to run with a placeholder agent.

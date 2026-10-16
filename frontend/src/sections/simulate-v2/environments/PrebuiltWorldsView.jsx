@@ -3,17 +3,19 @@ import { useMemo, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { Box, ButtonBase, IconButton, InputBase, MenuItem, Select, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { WORLD_TYPES, domainLabelOf, filterWorlds, prebuiltWorlds } from "./landingData";
+import { SANDBOX_TYPE, WORLD_TYPES, domainLabelOf, filterWorlds, prebuiltWorlds, sandboxMatches, worldTotal } from "./landingData";
+import { SaasSandboxCard } from "./SaasSandbox";
 import { WorldCard } from "./LandingBits";
 import { AGENT_TYPES } from "./connectOptions";
-import ChipCard from "./ChipCard";
 import WorldDrawer from "./WorldDrawer";
 
 /*
   Every prebuilt world, filterable. A world is the world only — open one to
   see what's in it and build it, then connect your agent.
+  `bare` drops the page heading — the Build environment drawer's own header
+  says "Prebuilt worlds" and carries the way back.
 */
-export default function PrebuiltWorldsView({ onBack }) {
+export default function PrebuiltWorldsView({ onBack, bare = false }) {
   const worlds = useMemo(() => prebuiltWorlds(), []);
   const [query, setQuery] = useState("");
   const [type, setType] = useState("all");
@@ -21,12 +23,23 @@ export default function PrebuiltWorldsView({ onBack }) {
   const [open, setOpen] = useState(null);
   const shown = useMemo(() => filterWorlds(worlds, { query, type, domain }), [worlds, query, type, domain]);
   const domains = useMemo(() => [...new Set(worlds.map((w) => w.domain))].sort((a, b) => domainLabelOf(a).localeCompare(domainLabelOf(b))), [worlds]);
-  const countOf = (id) => (id === "all" ? worlds.length : worlds.filter((w) => w.type === id).length);
-  const types = [{ id: "all", label: "All types" }, ...WORLD_TYPES.map((t) => ({ ...t, icon: AGENT_TYPES.find((a) => a.id === t.id)?.icon }))].filter((t) => countOf(t.id) > 0);
+  /* The SaaS sandbox is one more world, pinned first under "Any agent". */
+  const total = worldTotal();
+  const withSandbox = sandboxMatches({ query, type, domain });
+  const countOf = (id) => (id === "all" ? total : id === SANDBOX_TYPE.id ? 1 : worlds.filter((w) => w.type === id).length);
+  const types = [
+    { id: "all", label: "All types" },
+    { ...SANDBOX_TYPE, icon: "solar:widget-4-linear" },
+    ...WORLD_TYPES.map((t) => ({ ...t, icon: AGENT_TYPES.find((a) => a.id === t.id)?.icon })),
+  ].filter((t) => countOf(t.id) > 0);
+  const listed = type === SANDBOX_TYPE.id ? [] : shown;
+  const grid = { display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(3, 1fr)" } };
+  const selectSx = { height: 34, flexShrink: 0, "& .MuiSelect-select": { typography: "s2", fontWeight: 600, py: 0.75, display: "flex", alignItems: "center", gap: 0.75 } };
 
   return (
     <Box sx={{ pb: 4 }}>
       {/* Back sits beside the title, as on the other Environments sub-pages. */}
+      {!bare && (
       <Stack direction="row" alignItems="flex-start" spacing={1.5} sx={{ mb: 2 }}>
         <Tooltip arrow title="Back to build environment">
           <IconButton size="small" onClick={onBack} aria-label="Back to build environment" sx={{ mt: 0.25 }}>
@@ -36,13 +49,14 @@ export default function PrebuiltWorldsView({ onBack }) {
         <Box minWidth={0}>
           <Typography component="h2" sx={{ typography: "m2", fontWeight: 600 }}>
             Prebuilt worlds
-            <Box component="span" sx={{ color: "text.secondary", fontWeight: 500, ml: 0.75 }}>{worlds.length}</Box>
+            <Box component="span" sx={{ color: "text.secondary", fontWeight: 500, ml: 0.75 }}>{total}</Box>
           </Typography>
           <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
             Tables, tools, rules and starter scenarios, ready to run. A placeholder agent stands in until you connect yours.
           </Typography>
         </Box>
       </Stack>
+      )}
 
       <Stack direction={{ xs: "column", md: "row" }} spacing={1.25} alignItems={{ md: "center" }} sx={{ mb: 2 }}>
         <Box
@@ -62,30 +76,29 @@ export default function PrebuiltWorldsView({ onBack }) {
           />
         </Box>
 
-        {/* The same type chips as the landing's connect filter; Coming-soon worlds stay browsable. */}
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+        {/* Type and domain as two menus, so the row never wraps. */}
+        <Select
+          size="small"
+          value={type}
+          onChange={(e) => setType(e.target.value)}
+          inputProps={{ "aria-label": "Type" }}
+          sx={{ ...selectSx, minWidth: 160 }}
+        >
           {types.map((t) => (
-            <ChipCard
-              key={t.id}
-              icon={t.icon}
-              on={type === t.id}
-              onClick={() => setType(t.id)}
-              label={(
-                <>
-                  {t.label}
-                  <Box component="span" sx={{ ml: 0.625, color: "text.disabled", fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{countOf(t.id)}</Box>
-                </>
-              )}
-            />
+            <MenuItem key={t.id} value={t.id} sx={{ typography: "s2", gap: 0.75 }}>
+              {t.icon && <Iconify icon={t.icon} width={14} sx={{ color: "text.secondary" }} />}
+              {t.label}
+              <Box component="span" sx={{ ml: "auto", pl: 1.5, color: "text.disabled", fontVariantNumeric: "tabular-nums" }}>{countOf(t.id)}</Box>
+            </MenuItem>
           ))}
-        </Box>
+        </Select>
 
         <Select
           size="small"
           value={domain}
           onChange={(e) => setDomain(e.target.value)}
           inputProps={{ "aria-label": "Domain" }}
-          sx={{ minWidth: 150, height: 34, flexShrink: 0, "& .MuiSelect-select": { typography: "s2", fontWeight: 600, py: 0.75 } }}
+          sx={{ ...selectSx, minWidth: 150 }}
         >
           <MenuItem value="all" sx={{ typography: "s2" }}>All domains</MenuItem>
           {domains.map((d) => <MenuItem key={d} value={d} sx={{ typography: "s2" }}>{domainLabelOf(d)}</MenuItem>)}
@@ -93,19 +106,14 @@ export default function PrebuiltWorldsView({ onBack }) {
 
         <Box flex={1} />
         <Typography sx={{ typography: "s2", color: "text.secondary", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
-          {`${shown.length} of ${worlds.length} worlds`}
+          {`${listed.length + (withSandbox ? 1 : 0)} of ${total} worlds`}
         </Typography>
       </Stack>
 
-      {WORLD_TYPES.find((t) => t.id === type)?.soon && (
-        <Typography sx={{ typography: "s2", color: "text.secondary", mb: 1.5 }}>
-          {`${WORLD_TYPES.find((t) => t.id === type).label} agents can't be connected yet — you can still build and explore these worlds.`}
-        </Typography>
-      )}
-
-      {shown.length ? (
-        <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(3, 1fr)" } }}>
-          {shown.map((w) => <WorldCard key={w.id} world={w} onOpen={setOpen} selected={open?.id === w.id} />)}
+      {listed.length || withSandbox ? (
+        <Box sx={grid}>
+          {withSandbox && <SaasSandboxCard />}
+          {listed.map((w) => <WorldCard key={w.id} world={w} onOpen={setOpen} selected={open?.id === w.id} />)}
         </Box>
       ) : (
         <Stack alignItems="center" spacing={0.75} sx={{ py: 8, border: "1px dashed", borderColor: "divider", borderRadius: 1.5 }}>
@@ -120,4 +128,5 @@ export default function PrebuiltWorldsView({ onBack }) {
     </Box>
   );
 }
-PrebuiltWorldsView.propTypes = { onBack: PropTypes.func.isRequired };
+PrebuiltWorldsView.propTypes = { onBack: PropTypes.func.isRequired, bare: PropTypes.bool };
+

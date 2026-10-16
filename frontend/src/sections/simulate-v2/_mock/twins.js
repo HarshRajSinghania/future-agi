@@ -151,6 +151,8 @@ export const TWIN_CATALOG = [
     category: "crm",
     apiLevel: "api",
     icon: "logos:hubspot",
+    /* The wordmark is dark grey — a light mark reads on a dark background. */
+    iconDark: "simple-icons:hubspot",
     color: "#FF7A59",
     blurb: "Contacts, companies, deals, tickets. Property updates are stateful.",
     depth: ["Contacts", "Companies", "Deals", "Tickets"],

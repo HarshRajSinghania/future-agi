@@ -104,12 +104,12 @@ export function WorldCard({ world, onOpen, selected = false }) {
     >
       <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
         <Typography noWrap sx={{ typography: "s1", fontWeight: 700, flex: 1, minWidth: 0 }}>{world.name}</Typography>
-        <QuietTag>{world.soon ? `${world.typeLabel} · Coming soon` : world.typeLabel}</QuietTag>
+        <QuietTag>{world.typeLabel}</QuietTag>
       </Stack>
-      <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, minHeight: 36, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+      <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, mb: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
         {world.tagline}
       </Typography>
-      <Stack direction="row" justifyContent="space-between" spacing={1} sx={{ mt: 1.5, pt: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
+      <Stack direction="row" justifyContent="space-between" spacing={1} sx={{ mt: "auto", pt: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
         <Typography noWrap sx={{ typography: "s2", color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
           {`${world.tools} tools · ${world.tables} tables · ${world.scenarios} scenarios`}
         </Typography>

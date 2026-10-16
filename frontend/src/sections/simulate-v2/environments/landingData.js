@@ -242,7 +242,6 @@ export const prebuiltWorlds = () => ENVIRONMENT_TEMPLATES
       tagline: t.tagline,
       type: type.id,
       typeLabel: type.label,
-      soon: !!type.soon,
       domain: t.domain,
       domainLabel: domainLabelOf(t.domain),
       tools: (t.tools || []).length,
@@ -252,8 +251,8 @@ export const prebuiltWorlds = () => ENVIRONMENT_TEMPLATES
       template: t,
     };
   })
-  /* Worlds you can connect an agent to today first, then the rest. */
-  .sort((a, b) => (a.soon - b.soon) || (b.popularity - a.popularity));
+  /* Every type is open — most used first. */
+  .sort((a, b) => b.popularity - a.popularity);
 
 /** Worlds a search, a type and a domain leave. */
 export const filterWorlds = (worlds, { query = "", type = "all", domain = "all" } = {}) => {
@@ -267,3 +266,17 @@ export const filterWorlds = (worlds, { query = "", type = "all", domain = "all" 
 
 /** SaaS sandboxes for web environments. */
 export const sandboxServices = () => TWIN_CATALOG.map((t) => ({ id: t.id, name: t.name, icon: t.icon, iconDark: t.iconDark }));
+
+/*
+  The SaaS sandbox counts as one more world in the full list — pinned first,
+  under its own "Any agent" type. It shows when no type or domain narrows it
+  out and a search, if any, matches it or one of its apps.
+*/
+export const SANDBOX_TYPE = { id: "any", label: "Any agent" };
+export const sandboxMatches = ({ query = "", type = "all", domain = "all" } = {}) => {
+  if (domain !== "all" || (type !== "all" && type !== SANDBOX_TYPE.id)) return false;
+  const q = query.trim().toLowerCase();
+  return !q || `saas sandbox any agent ${TWIN_CATALOG.map((t) => t.name).join(" ")}`.toLowerCase().includes(q);
+};
+/** Every world the full list shows — the prebuilt ones and the sandbox. */
+export const worldTotal = () => prebuiltWorlds().length + 1;

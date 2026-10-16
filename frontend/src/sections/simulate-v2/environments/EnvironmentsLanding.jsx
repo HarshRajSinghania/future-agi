@@ -1,21 +1,20 @@
 import PropTypes from "prop-types";
 import { Suspense, lazy, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { alpha, useTheme } from "@mui/material/styles";
-import { Box, Button, ButtonBase, Stack, Tooltip, Typography } from "@mui/material";
-import Iconify from "src/components/iconify";
+import { Box, Button, Stack, Typography } from "@mui/material";
 import { paths } from "src/routes/paths";
 import {
   detectPaste,
-  prebuiltWorlds, sandboxServices,
+  prebuiltWorlds, worldTotal,
 } from "./landingData";
 import { connectGroupsFor } from "../agents/connect/agentConnectData";
 import { AGENT_TYPES } from "./connectOptions";
 import ChipCard from "./ChipCard";
-import { QuietTag, SectionHead, WorldCard } from "./LandingBits";
+import { SectionHead, WorldCard } from "./LandingBits";
 import { Directory, PasteBar } from "./ConnectDirectory";
-import { PANEL_SX, OUTLINE_BTN, focusRing } from "./landingStyles";
+import { OUTLINE_BTN, focusRing } from "./landingStyles";
 import WorldDrawer from "./WorldDrawer";
+import SaasSandboxRow from "./SaasSandbox";
 import { ConnectSubmitContext } from "../agents/connect/connectSubmit";
 import { useSaveConnectedAgent } from "../agents/connect/useSaveConnectedAgent";
 import { clickable } from "../components/clickable";
@@ -188,14 +187,16 @@ function PrebuiltSection({ sectionRef, onBrowse }) {
         subtitle="Tables, tools and rules, ready to run. Connect your agent — a placeholder stands in until you do."
         action={(
           <Button size="small" variant="outlined" onClick={onBrowse} sx={OUTLINE_BTN}>
-            {`Browse all ${worlds.length}`}
+            {`Browse all ${worldTotal()}`}
           </Button>
         )}
       />
-      <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(4, 1fr)" } }}>
+      <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(3, 1fr)" } }}>
         {featured.map((w) => <WorldCard key={w.id} world={w} onOpen={setOpen} selected={open?.id === w.id} />)}
-        {/* Web environments — a SaaS sandbox is a ready-made world too, so it sits with them. */}
-        <SaasWorldCard />
+      </Box>
+      {/* Or no made-up world at all: the agent's own apps, sandboxed. */}
+      <Box sx={{ mt: 1.5 }}>
+        <SaasSandboxRow />
       </Box>
       <WorldDrawer world={open} onClose={() => setOpen(null)} />
     </Box>
@@ -205,40 +206,3 @@ PrebuiltSection.propTypes = { sectionRef: PropTypes.object, onBrowse: PropTypes.
 
 /* ── web environments, as one world card ────────────────────────────── */
 
-function SaasWorldCard() {
-  const navigate = useNavigate();
-  const theme = useTheme();
-  const services = useMemo(() => sandboxServices(), []);
-  const shown = services.slice(0, 6);
-  return (
-    <ButtonBase
-      onClick={() => navigate(paths.dashboard.simulate.environmentNewTwin)}
-      sx={{
-        ...PANEL_SX, p: 2.25, display: "flex", flexDirection: "column", alignItems: "stretch", textAlign: "left",
-        transition: "border-color .12s ease",
-        "&:hover": { borderColor: (t) => alpha(t.palette.text.primary, 0.3) },
-        "&.Mui-focusVisible": focusRing,
-      }}
-    >
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
-        <Typography noWrap sx={{ typography: "s1", fontWeight: 700, flex: 1, minWidth: 0 }}>SaaS sandbox</Typography>
-        <QuietTag>Any agent</QuietTag>
-      </Stack>
-      <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, minHeight: 36, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-        Your agent calls the real SaaS APIs — a sandbox we run answers and resets between runs
-      </Typography>
-      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 1.5, pt: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
-        {shown.map((sv) => (
-          <Tooltip key={sv.id} arrow title={sv.name}>
-            <Box sx={{ width: 22, height: 22, borderRadius: 0.75, display: "grid", placeItems: "center", bgcolor: (t) => alpha(t.palette.text.primary, 0.05), flexShrink: 0 }}>
-              <Iconify icon={theme.palette.mode === "dark" && sv.iconDark ? sv.iconDark : sv.icon} width={13} />
-            </Box>
-          </Tooltip>
-        ))}
-        {services.length > shown.length && (
-          <Typography sx={{ typography: "s2", color: "text.secondary", pl: 0.25 }}>{`+${services.length - shown.length}`}</Typography>
-        )}
-      </Stack>
-    </ButtonBase>
-  );
-}

@@ -18,6 +18,8 @@ import ChipCard from "./ChipCard";
 import EnvironmentsLanding from "./EnvironmentsLanding";
 import PrebuiltWorldsView from "./PrebuiltWorldsView";
 import SetupDrawer from "./SetupDrawer";
+import SideDrawer from "../components/SideDrawer";
+import { worldTotal } from "./landingData";
 import GithubRepoPicker from "../integrations/GithubRepoPicker";
 import { repoUrlOf, installedRepos } from "../_mock/integrations";
 import DescribeFlowStep from "./intake/DescribeFlowStep";
@@ -68,18 +70,34 @@ export default function StartEnvironment({ entry = false }) {
     window.history.replaceState(window.history.state, "", url);
     buildScrollRef.current?.scrollTo?.({ top: 0 });
   };
-  /* Entry-page tab. "build" shows the picker; "my" shows the table of
-     already-created envs; "personas" the workspace persona library, usable
-     in any environment. Non-entry callers (e.g. New environment on a
-     dedicated page) do not surface the tabs. Deep-linkable via ?tab=. */
-  const [tab, setTabState] = useState(() => {
-    const t = new URLSearchParams(window.location.search).get("tab");
-    return ["build", "my", "personas"].includes(t) ? t : "build";
-  });
+  /* Entry-page tabs: "my" — the environments, or, before there are any,
+     the way to build one — and "personas", the workspace persona library.
+     Building is a drawer once environments exist (the header's Build
+     environment); before that it *is* the My environments tab. An old
+     ?tab=build link opens the drawer. Deep-linkable via ?tab=. */
+  const initialParams = new URLSearchParams(window.location.search);
+  const [tab, setTabState] = useState(() => (initialParams.get("tab") === "personas" ? "personas" : "my"));
   const setTab = (t) => {
     setTabState(t);
     const url = new URL(window.location.href);
-    if (t === "build") url.searchParams.delete("tab"); else url.searchParams.set("tab", t);
+    if (t === "my") url.searchParams.delete("tab"); else url.searchParams.set("tab", t);
+    window.history.replaceState(window.history.state, "", url);
+  };
+  const envCount = (state?.myEnvironments || []).length;
+  const hasEnvs = envCount > 0;
+  const [buildOpen, setBuildOpen] = useState(() => initialParams.get("tab") === "build" || initialParams.get("view") === "worlds");
+  const openBuild = () => {
+    if (!hasEnvs) { setTab("my"); return; }
+    setView("landing");
+    setBuildOpen(true);
+  };
+  const closeBuild = () => {
+    setBuildOpen(false);
+    setPicked(null);
+    setChoice(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("view");
+    if (url.searchParams.get("tab") === "build") url.searchParams.delete("tab");
     window.history.replaceState(window.history.state, "", url);
   };
   const panelRef = useRef(null);
@@ -141,6 +159,34 @@ export default function StartEnvironment({ entry = false }) {
     ? { height: "100%", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }
     : { p: 2 };
 
+  /* How to start: paste, a prebuilt world, or connect the agent — or every
+     prebuilt world. Shown in the empty My environments tab, else in the
+     Build environment drawer. A pick opens its setup in a drawer on top. */
+  const chooser = (inDrawer) => (
+    <>
+      {view === "worlds" && <PrebuiltWorldsView onBack={() => setView("landing")} bare={inDrawer} />}
+      {view === "landing" && (
+        <EnvironmentsLanding
+          onPick={pickFromLanding}
+          onAgentConnected={setPendingAgent}
+          onBrowseWorlds={() => setView("worlds")}
+          examplesRef={examplesRef}
+          picked={picked}
+        />
+      )}
+      <SetupDrawer
+        open={!!picked}
+        onClose={() => { setPicked(null); setChoice(null); }}
+        meta={picked?.meta}
+        subtitle={picked ? (OPTIONS.find((o) => o.id === picked.choice)?.setupSubtitle || OPTIONS.find((o) => o.id === picked.choice)?.blurb) : null}
+      >
+        {picked && (
+          <FlowPanel key={`${picked.choice}-${picked.at}`} choice={picked.choice} prefill={picked.prefill} bare />
+        )}
+      </SetupDrawer>
+    </>
+  );
+
   return (
     <Box sx={rootSx}>
       <Stack
@@ -170,24 +216,22 @@ export default function StartEnvironment({ entry = false }) {
           </Box>
         </Stack>
         <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
-          {entry && (tab === "my" || tab === "personas") ? (
-            /* From the list or the persona library, the way to a new
-               environment is one click — not a trip back to the other tab.
-               (Start from scratch opened a panel on the Build tab, so here it
-               did nothing visible.) */
+          {entry && (hasEnvs || tab === "personas") ? (
+            /* One click to a new environment from either tab: a drawer over
+               the list once environments exist; before that the way to build
+               is My environments itself, so from Personas it goes there. */
             <Button
               size="small"
               variant="contained"
               color="primary"
-              onClick={() => setTab("build")}
+              onClick={openBuild}
               startIcon={<Iconify icon="solar:add-circle-linear" width={14} />}
               sx={{ typography: "s2", fontWeight: 700 }}
             >
               Build environment
             </Button>
           ) : entry ? (
-            /* The Build tab is the way in — no second, guided route to the same
-               place. A build left midway shows in My environments, not here. */
+            /* No environments yet: the tab below is the builder. */
             null
           ) : (
             <Button
@@ -218,21 +262,13 @@ export default function StartEnvironment({ entry = false }) {
             }}
           >
             <Tab
-              value="build"
-              disableRipple
-              label="Build environment"
-              /* Clicking it from the worlds list or the journey goes back to the start. */
-              onClick={() => { if (tab === "build" && view !== "landing") setView("landing"); }}
-              sx={TAB_SX}
-            />
-            <Tab
               value="my"
               disableRipple
               label={(
                 <Stack direction="row" alignItems="center" spacing={0.75} component="span">
                   <span>My environments</span>
                   <Box component="span" sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
-                    {(state?.myEnvironments || []).length}
+                    {envCount}
                   </Box>
                 </Stack>
               )}
@@ -243,29 +279,51 @@ export default function StartEnvironment({ entry = false }) {
         </Box>
       )}
 
-      {entry && tab === "build" && (
+      {/* Building, before any environment exists: the My environments tab is
+          the builder, in place of an empty table. */}
+      {entry && tab === "my" && !hasEnvs && (
         <Box ref={buildScrollRef} sx={{ flex: 1, minHeight: 0, overflow: "auto", px: 2, pt: 2.5 }}>
-          {view === "worlds" && <PrebuiltWorldsView onBack={() => setView("landing")} />}
-          {view === "landing" && (
-            <EnvironmentsLanding
-              onPick={pickFromLanding}
-              onAgentConnected={setPendingAgent}
-              onBrowseWorlds={() => setView("worlds")}
-              examplesRef={examplesRef}
-              picked={picked}
-            />
-          )}
-          <SetupDrawer
-            open={!!picked}
-            onClose={() => { setPicked(null); setChoice(null); }}
-            meta={picked?.meta}
-            subtitle={picked ? (OPTIONS.find((o) => o.id === picked.choice)?.setupSubtitle || OPTIONS.find((o) => o.id === picked.choice)?.blurb) : null}
-          >
-            {picked && (
-              <FlowPanel key={`${picked.choice}-${picked.at}`} choice={picked.choice} prefill={picked.prefill} bare />
-            )}
-          </SetupDrawer>
+          {chooser(false)}
         </Box>
+      )}
+
+      {/* Once there are environments, the same builder opens over the list. */}
+      {entry && (
+        <SideDrawer open={buildOpen && hasEnvs} onClose={closeBuild} width={BUILD_DRAWER_WIDTH}>
+          {buildOpen && hasEnvs && (
+            <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+              <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, py: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+                {/* Browsing every world: the header becomes that page, with the way back. */}
+                {view === "worlds" && (
+                  <IconButton size="small" onClick={() => setView("landing")} aria-label="Back to build environment">
+                    <Iconify icon="solar:alt-arrow-left-linear" width={18} />
+                  </IconButton>
+                )}
+                <Box flex={1} minWidth={0}>
+                  <Typography sx={{ typography: "m3", fontWeight: 600 }}>
+                    {view === "worlds" ? (
+                      <>
+                        Prebuilt worlds
+                        <Box component="span" sx={{ color: "text.secondary", fontWeight: 500, ml: 0.75 }}>{WORLD_COUNT}</Box>
+                      </>
+                    ) : "Build environment"}
+                  </Typography>
+                  <Typography noWrap sx={{ typography: "s2", color: "text.secondary" }}>
+                    {view === "worlds"
+                      ? "Tables, tools, rules and starter scenarios, ready to run. A placeholder agent stands in until you connect yours."
+                      : "Start from anything you have — a link, a prebuilt world, or the agent itself."}
+                  </Typography>
+                </Box>
+                <IconButton size="small" onClick={closeBuild} aria-label="Close">
+                  <Iconify icon="eva:close-fill" width={18} sx={{ color: "text.secondary" }} />
+                </IconButton>
+              </Stack>
+              <Box ref={buildScrollRef} sx={{ flex: 1, minHeight: 0, overflow: "auto", px: 3, pt: 2.5 }}>
+                {chooser(true)}
+              </Box>
+            </Box>
+          )}
+        </SideDrawer>
       )}
 
       {!entry && (
@@ -351,7 +409,7 @@ export default function StartEnvironment({ entry = false }) {
 
       {entry && tab === "personas" && <PersonaLibraryTab />}
 
-      {entry && tab === "my" && (
+      {entry && tab === "my" && hasEnvs && (
         /* Datasets-page pattern — flex column that fills the remaining
            viewport height so DataTablePagination inside
            MyEnvironmentsTable pins to the bottom of the screen rather
@@ -381,6 +439,12 @@ export default function StartEnvironment({ entry = false }) {
     </Box>
   );
 }
+
+/* Shown beside "Prebuilt worlds" in the drawer header. */
+const WORLD_COUNT = worldTotal();
+
+/* Wide enough for the connect directory's four columns. */
+const BUILD_DRAWER_WIDTH = 1180;
 
 const TAB_SX = {
   minHeight: 38,
