@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from simulate.serializers.harness_job import (
+    HarnessRunPinnedVersionsSerializer,
+    HarnessRunWarningSerializer,
+)
 from simulate.serializers.requests.run_test_evals import (
     EvalConfigUpdateRequestSerializer,
 )
@@ -520,6 +524,27 @@ class HarnessVersionDiffSerializer(serializers.Serializer):
 
     summary = serializers.CharField(allow_blank=True)
     diff = serializers.JSONField(allow_null=True)
+
+
+class HarnessRunPlanQuerySerializer(serializers.Serializer):
+    agent_version_id = serializers.UUIDField(required=False)
+    environment_version_id = serializers.UUIDField(required=False)
+    suite_version_id = serializers.UUIDField(required=False)
+
+
+class HarnessRunPlanSerializer(serializers.Serializer):
+    """What a run of the picked versions would use and should be warned about."""
+
+    versions = HarnessRunPinnedVersionsSerializer()
+    warnings = HarnessRunWarningSerializer(many=True)
+    bundle_cached = serializers.BooleanField(
+        allow_null=True,
+        help_text=(
+            "Whether the run replays a cached bundle (true) or prepares one (false);"
+            " null when it runs without one, as the defaults do before their bundle"
+            " is cached."
+        ),
+    )
 
 
 class HarnessSuiteMemberSerializer(serializers.Serializer):

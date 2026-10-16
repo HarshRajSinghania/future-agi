@@ -17708,6 +17708,42 @@ export interface SimulateEvalConfigResponseApi {
   readonly editable?: boolean;
 }
 
+export interface RunVersionLabelApi {
+  readonly id?: string;
+  /** @minLength 1 */
+  readonly label?: string | null;
+}
+
+export interface HarnessRunPinnedVersionsApi {
+  agent: RunVersionLabelApi | null;
+  environment: RunVersionLabelApi | null;
+  suite: RunVersionLabelApi | null;
+}
+
+export type HarnessRunWarningApiPiece =
+  (typeof HarnessRunWarningApiPiece)[keyof typeof HarnessRunWarningApiPiece];
+
+export const HarnessRunWarningApiPiece = {
+  agent: "agent",
+  environment: "environment",
+  suite: "suite",
+} as const;
+
+export interface HarnessRunWarningApi {
+  /** @minLength 1 */
+  code: string;
+  /** @minLength 1 */
+  message: string;
+  piece: HarnessRunWarningApiPiece | null;
+}
+
+export interface HarnessRunPlanApi {
+  versions: HarnessRunPinnedVersionsApi;
+  warnings: HarnessRunWarningApi[];
+  /** Whether the run replays a cached bundle (true) or prepares one (false); null when it runs without one, as the defaults do before their bundle is cached. */
+  bundle_cached: boolean | null;
+}
+
 export interface HarnessRunCreateApi {
   /** @maxItems 1000 */
   scenario_ids: string[];
@@ -17716,6 +17752,9 @@ export interface HarnessRunCreateApi {
    * @maximum 20
    */
   trials?: number;
+  agent_version_id?: string | null;
+  environment_version_id?: string | null;
+  suite_version_id?: string | null;
 }
 
 export interface HarnessRunCreateResponseApi {
@@ -17737,6 +17776,8 @@ export interface HarnessRunCreateResponseApi {
   state: string;
   /** @minLength 1 */
   stage: string;
+  versions: HarnessRunPinnedVersionsApi;
+  warnings: HarnessRunWarningApi[];
 }
 
 export interface HarnessEnvironmentRunEvaluationQueuedApi {
@@ -21196,12 +21237,6 @@ export interface RunTestExecutionResponseApi {
   readonly scenario_ids?: readonly string[];
 }
 
-export interface RunVersionLabelApi {
-  readonly id?: string;
-  /** @minLength 1 */
-  readonly label?: string;
-}
-
 export interface TestExecutionItemResponseApi {
   /** @minLength 1 */
   readonly id?: string;
@@ -21242,8 +21277,10 @@ export interface TestExecutionItemResponseApi {
   readonly outcome_passed?: number;
   readonly outcome_failed?: number;
   readonly outcome_skipped?: number;
-  environment_version?: RunVersionLabelApi;
-  suite_version?: RunVersionLabelApi;
+  environment_version?: RunVersionLabelApi | null;
+  suite_version?: RunVersionLabelApi | null;
+  pinned_agent_version?: RunVersionLabelApi | null;
+  readonly agent_differs?: boolean;
 }
 
 export interface RunTestExecutionsResponseApi {
@@ -23092,8 +23129,10 @@ export interface RunExecutionApi {
   ordinal: number;
   /** @minLength 1 */
   agent_version: string;
-  environment_version?: RunVersionLabelApi;
-  suite_version?: RunVersionLabelApi;
+  environment_version?: RunVersionLabelApi | null;
+  suite_version?: RunVersionLabelApi | null;
+  pinned_agent_version?: RunVersionLabelApi | null;
+  agent_differs?: boolean;
   selected_scenario_keys?: string[];
   /** @minimum 1 */
   trials?: number;
@@ -34784,6 +34823,12 @@ export type SimulateApiHarnessEnvironmentsListParams = {
    * @maximum 100
    */
   limit?: number;
+};
+
+export type SimulateApiHarnessEnvironmentsRunPlanParams = {
+  agent_version_id?: string;
+  environment_version_id?: string;
+  suite_version_id?: string;
 };
 
 export type SimulateApiHarnessEnvironmentsVersionsVersionDiffParams = {

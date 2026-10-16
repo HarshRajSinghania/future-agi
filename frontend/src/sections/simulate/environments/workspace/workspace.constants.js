@@ -209,3 +209,53 @@ export const VERSIONS_COPY = {
     useCase: "Use case",
   },
 };
+
+export const RUN_DIALOG_COPY = {
+  title: "Run simulation",
+  pieces: {
+    agent: "Agent version",
+    environment: "Environment version",
+    suite: "Scenario version",
+  },
+  default: "default",
+  none: "None yet",
+  unlabelled: "Unnumbered version",
+  agentHelper: "Runs use the environment's current agent version.",
+  loading: "Loading versions…",
+  loadError: "Couldn't load the versions. The run uses the current defaults.",
+  disabled: "Versioning is switched off, so the run uses the current versions.",
+  checking: "Checking these versions…",
+  planError: "Couldn't check these versions for warnings.",
+  refused: "These versions can't run.",
+  rerunFallback:
+    "That run's versions can't run now; using the current defaults.",
+  allScenarios: (n, suite) =>
+    `Runs all ${n} scenario${n === 1 ? "" : "s"} in ${suite}.`,
+  allCurrentScenarios: (suite) => `Runs all scenarios in ${suite}.`,
+  emptySuite: (suite) => `${suite} has no scenarios to run.`,
+  noneInSuite: (suite) => `None of the selected scenarios are in ${suite}.`,
+  selectedScenarios: (n) => `Runs ${n} selected scenario${n === 1 ? "" : "s"}.`,
+  membersLoading: "Loading the scenarios in this version…",
+  membersError: "Couldn't load the scenarios in this version.",
+  notInSuite: (keys, suite) =>
+    `${keys.length} selected scenario${keys.length === 1 ? " isn't" : "s aren't"} in ${suite} and will be skipped: ${keys.join(", ")}`,
+  trials: (n) => `${n} repeat${n === 1 ? "" : "s"} each.`,
+  cancel: "Cancel",
+  run: "Run",
+  runAnyway: "Run anyway",
+  starting: "Starting…",
+};
+
+// The run's agent is not the one its environment version was built with.
+const shortVersion = (prefix, label) => {
+  const number = /^v(\d+)$/i.exec(label || "")?.[1];
+  if (number) return `${prefix}${number}`;
+  return label ? `${prefix} ${label}` : null;
+};
+export const agentDiffersTag = (agentLabel, envLabel) => {
+  const agent = shortVersion("A", agentLabel);
+  const env = shortVersion("E", envLabel);
+  return agent && env
+    ? `${agent} differs from ${env}`
+    : "Agent differs from its environment version";
+};

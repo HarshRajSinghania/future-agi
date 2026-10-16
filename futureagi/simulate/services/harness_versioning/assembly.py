@@ -293,14 +293,19 @@ class RunAssembly:
     cached: bool
     # Pinned to the environment's defaults when created, so a miss takes today's path.
     defaults: bool = True
+    # The row was failed until this run reset it, so the run warns as run-plan did.
+    failed_before: bool = False
 
     def as_metadata(self) -> dict[str, Any]:
-        return {
+        data = {
             "key": self.key,
             "bundle_id": str(self.bundle.id),
             "cached": self.cached,
             "defaults": self.defaults,
         }
+        if self.failed_before:
+            data["failed_before"] = True
+        return data
 
 
 def run_assembly(
@@ -329,7 +334,8 @@ def run_assembly(
             "state": HarnessAssembledBundle.State.PENDING,
         },
     )
-    if bundle.state == HarnessAssembledBundle.State.FAILED:
+    failed_before = bundle.state == HarnessAssembledBundle.State.FAILED
+    if failed_before:
         HarnessAssembledBundle._base_manager.filter(
             id=bundle.id, state=HarnessAssembledBundle.State.FAILED
         ).update(**_RESET, updated_at=timezone.now())
@@ -337,7 +343,13 @@ def run_assembly(
     cached = bundle.state == HarnessAssembledBundle.State.READY and bool(
         bundle.object_key
     )
-    return RunAssembly(bundle=bundle, key=key, cached=cached, defaults=defaults)
+    return RunAssembly(
+        bundle=bundle,
+        key=key,
+        cached=cached,
+        defaults=defaults,
+        failed_before=failed_before,
+    )
 
 
 def bundle_ready(

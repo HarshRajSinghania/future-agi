@@ -8,6 +8,7 @@ import { fDateTime, formatDuration } from "src/utils/format-time";
 import { runColor } from "../runs.constants";
 import StatusChip from "../StatusChip";
 import StopRunControl from "../StopRunControl";
+import AgentDiffersTag from "../../run/AgentDiffersTag";
 
 // The dashed placeholder a not-yet-backed cell shows.
 const DASH = "-";
@@ -74,9 +75,9 @@ function SummaryRow({ row, evals, onOpenRun }) {
   const clickable = !!row.executionId;
   const open = () => clickable && onOpenRun?.(row);
 
-  // The run's own agent version (per-execution, real). The environment version
-  // is deliberately NOT shown per row: there is no per-run env version, so
-  // stamping the current one onto every run misrepresents what each ran against.
+  // The run's own agent version (per-execution, real). A run pinned to an
+  // environment version whose agent differs is tagged; its versions show on
+  // the run's own page.
   const sub = row.agentVersion ? `agent ${row.agentVersion}` : "";
 
   return (
@@ -101,9 +102,17 @@ function SummaryRow({ row, evals, onOpenRun }) {
             {row.ordinal}
           </Box>
           <Box minWidth={0}>
-            <Typography noWrap sx={{ typography: "s2", fontWeight: "fontWeightSemiBold" }}>
-              {row.label}{sub ? ` · ${sub}` : ""}
-            </Typography>
+            <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+              <Typography noWrap sx={{ typography: "s2", fontWeight: "fontWeightSemiBold" }}>
+                {row.label}{sub ? ` · ${sub}` : ""}
+              </Typography>
+              {row.agentDiffers && (
+                <AgentDiffersTag
+                  agentVersion={row.pinnedAgentVersion}
+                  environmentVersion={row.environmentVersion}
+                />
+              )}
+            </Stack>
             <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
               {row.at ? fDateTime(row.at) : DASH}
             </Typography>

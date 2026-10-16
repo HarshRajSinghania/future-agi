@@ -613,6 +613,7 @@ import type {
   HarnessResultReceiptApi,
   HarnessRunCreateApi,
   HarnessRunCreateResponseApi,
+  HarnessRunPlanApi,
   HarnessScenarioAmendApi,
   HarnessScenarioOperationApi,
   HarnessScenarioOperationResponseApi,
@@ -1137,6 +1138,7 @@ import type {
   SimulateApiHarnessConversationsCommandsParams,
   SimulateApiHarnessConversationsSessionStoreParams,
   SimulateApiHarnessEnvironmentsListParams,
+  SimulateApiHarnessEnvironmentsRunPlanParams,
   SimulateApiHarnessEnvironmentsVersionsVersionDiffParams,
   SimulateApiHarnessJobsSecretFileUploadBody,
   SimulateApiHarnessJobsSourceUploadBody,
@@ -58979,6 +58981,70 @@ export const simulateApiHarnessEnvironmentsRemoveEvaluation = async (
     {
       ...options,
       method: "DELETE",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsRunPlanResponse200 = {
+  data: HarnessRunPlanApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsRunPlanResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsRunPlanResponseSuccess =
+  simulateApiHarnessEnvironmentsRunPlanResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsRunPlanResponseError =
+  simulateApiHarnessEnvironmentsRunPlanResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsRunPlanResponse =
+  | simulateApiHarnessEnvironmentsRunPlanResponseSuccess
+  | simulateApiHarnessEnvironmentsRunPlanResponseError;
+
+export const getSimulateApiHarnessEnvironmentsRunPlanUrl = (
+  id: string,
+  params?: SimulateApiHarnessEnvironmentsRunPlanParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/simulate/api/harness-environments/${id}/run-plan/?${stringifiedParams}`
+    : `/simulate/api/harness-environments/${id}/run-plan/`;
+};
+
+/**
+ * The versions a run of these picks would use and what to warn about; no
+writes. An absent pick is the environment's default.
+ */
+export const simulateApiHarnessEnvironmentsRunPlan = async (
+  id: string,
+  params?: SimulateApiHarnessEnvironmentsRunPlanParams,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsRunPlanResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsRunPlanResponse>(
+    getSimulateApiHarnessEnvironmentsRunPlanUrl(id, params),
+    {
+      ...options,
+      method: "GET",
     },
   );
 };

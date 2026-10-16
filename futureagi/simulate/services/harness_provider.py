@@ -1296,8 +1296,10 @@ class HostedHarnessProvider:
     def run(self, request, pk) -> Response:
         """Create and dispatch one immutable selected-scenario simulation Run."""
 
+        from simulate.services.harness_versioning.run_warnings import created_run
         from simulate.services.hosted_harness import (
             HostedHarnessError,
+            VersionPicks,
             create_selected_harness_run,
         )
         from simulate.temporal.client import start_hosted_harness_gateway_workflow
@@ -1329,6 +1331,13 @@ class HostedHarnessProvider:
                 scenario_keys=list(request.validated_data["scenario_ids"]),
                 trials=request.validated_data["trials"],
                 idempotency_key=idempotency_key,
+                picks=VersionPicks(
+                    agent_version_id=request.validated_data.get("agent_version_id"),
+                    environment_version_id=request.validated_data.get(
+                        "environment_version_id"
+                    ),
+                    suite_version_id=request.validated_data.get("suite_version_id"),
+                ),
             )
             retry_dispatch = False
             if (
@@ -1461,6 +1470,7 @@ class HostedHarnessProvider:
                 "total_calls": len(manifest),
                 "state": child.state,
                 "stage": child.current_stage,
+                **created_run(environment, child),
             },
             status=status.HTTP_202_ACCEPTED,
         )

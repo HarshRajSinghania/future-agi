@@ -93,6 +93,11 @@ export function executionToRun(raw) {
     scenarioIds: raw?.scenario_keys ?? [],
     trials: raw?.trials ?? 1,
     agentVersion: raw?.agent_version ?? null,
+    // The versions the run was pinned to ({id, label}), null before versioning.
+    pinnedAgentVersion: raw?.pinned_agent_version ?? null,
+    environmentVersion: raw?.environment_version ?? null,
+    suiteVersion: raw?.suite_version ?? null,
+    agentDiffers: Boolean(raw?.agent_differs),
     durationS: raw?.duration ?? null,
   };
 }

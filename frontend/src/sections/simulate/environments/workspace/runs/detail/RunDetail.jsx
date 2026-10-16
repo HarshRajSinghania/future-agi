@@ -23,6 +23,7 @@ import {
 import SectionCard from "../../../components/SectionCard";
 import StatusChip from "../StatusChip";
 import StopRunControl from "../StopRunControl";
+import AgentDiffersTag from "../../run/AgentDiffersTag";
 import AddEvaluationDrawer from "../../evals/AddEvaluationDrawer";
 import AddEvalsDrawer from "../../evals/AddEvalsDrawer";
 import RunTraceTable from "./trace/RunTraceTable";
@@ -143,6 +144,25 @@ export default function RunDetail({
   // finishedAt is a known gap (the executions row carries no end time), so the
   // sub-line reports when the run STARTED rather than inventing a finish.
   const startedLabel = identity?.startedAt ? fToNow(identity.startedAt) : "";
+  // The agent version this run was pinned to, else the one it was recorded with.
+  const agentLabel =
+    identity?.pinnedAgentVersion?.label ?? identity?.agentVersion ?? "-";
+  // The environment and scenario versions this run was pinned to, if any.
+  const pinnedLabels = [
+    identity?.environmentVersion?.label &&
+      `env ${identity.environmentVersion.label}`,
+    identity?.suiteVersion?.label && `scenarios ${identity.suiteVersion.label}`,
+  ]
+    .filter(Boolean)
+    .map((label) => ` · ${label}`)
+    .join("");
+  // A re-run starts from the versions this run used.
+  const rerunOptions = {
+    initialPicks: {
+      environment: identity?.environmentVersion?.id,
+      suite: identity?.suiteVersion?.id,
+    },
+  };
 
   const back = () =>
     navigate(
@@ -218,9 +238,15 @@ export default function RunDetail({
             )}
             <Typography noWrap sx={{ typography: "s1_2", fontWeight: 700 }}>
               {identity
-                ? `Run ${identity.ordinal} · agent ${identity.agentVersion ?? "-"}`
+                ? `Run ${identity.ordinal} · agent ${agentLabel}${pinnedLabels}`
                 : "Run complete"}
             </Typography>
+            {identity?.agentDiffers && (
+              <AgentDiffersTag
+                agentVersion={identity.pinnedAgentVersion}
+                environmentVersion={identity.environmentVersion}
+              />
+            )}
             {status && <StatusChip status={status} />}
             <StopRunControl
               executionId={executionId}
@@ -289,6 +315,7 @@ export default function RunDetail({
               onStartRun?.(
                 identity?.scenarioIds || undefined,
                 identity?.trials || 1,
+                rerunOptions,
               )
             }
             sx={{
@@ -384,7 +411,11 @@ export default function RunDetail({
               initialFilters={tableHandoff.filters}
               // Ticked calls re-run as a new simulation, through the same start
               // as any run: it opens the new run.
-              onRerunScenarios={onStartRun}
+              onRerunScenarios={
+                onStartRun
+                  ? (keys, trials) => onStartRun(keys, trials, rerunOptions)
+                  : null
+              }
               onTickableChange={setHasTickableCalls}
               runTrials={identity?.trials || 1}
               rerunDisabledReason={

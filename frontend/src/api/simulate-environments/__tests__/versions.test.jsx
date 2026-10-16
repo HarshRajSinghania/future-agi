@@ -10,6 +10,8 @@ const {
   useEnvironmentVersions,
   useVersionDiff,
   useSuiteMembers,
+  useRunPlan,
+  runPlanKey,
   environmentVersionsKey,
   versionDiffKey,
   suiteMembersKey,
@@ -220,6 +222,78 @@ describe("useSuiteMembers", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toEqual([]);
   });
+});
+
+describe("useRunPlan", () => {
+  const PLAN = {
+    versions: {
+      agent: { id: "a1", label: "v4" },
+      environment: { id: "e1", label: "v1" },
+      suite: { id: "s3", label: "v3" },
+    },
+    warnings: [
+      { code: "suite_unproved", message: "Suite v3 unproved", piece: "suite" },
+    ],
+    bundle_cached: false,
+  };
+
+  it("asks with only the picks that are set, keyed under the versions", async () => {
+    axios.get.mockResolvedValue({ data: PLAN });
+    const { result } = renderHook(
+      () => useRunPlan("env-1", { environment: "e1", suite: undefined }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(axios.get).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/env-1/run-plan/",
+      { params: { environment_version_id: "e1" } },
+    );
+    expect(result.current.data).toEqual(PLAN);
+    expect(runPlanKey("env-1", { environment: "e1" })).toEqual([
+      "harness-env-versions",
+      "env-1",
+      "run-plan",
+      null,
+      "e1",
+      null,
+    ]);
+    expect(
+      client.getQueryData(runPlanKey("env-1", { environment: "e1" })),
+    ).toEqual(PLAN);
+  });
+
+  it("asks with no params for the defaults", async () => {
+    axios.get.mockResolvedValue({ data: PLAN });
+    const { result } = renderHook(() => useRunPlan("env-1", {}), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(axios.get).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/env-1/run-plan/",
+      { params: {} },
+    );
+  });
+
+  it("asks nothing until enabled", () => {
+    renderHook(() => useRunPlan("env-1", {}, { enabled: false }), {
+      wrapper,
+    });
+    expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a refusal", { statusCode: 422, error: "version_not_runnable" }, 1],
+    ["a conflict", { statusCode: 409 }, 1],
+    ["a server failure", { statusCode: 500 }, 3],
+    ["a network failure", { message: "Network Error" }, 3],
+  ])(
+    "asks again only after a server or network failure: %s",
+    async (_, error, calls) => {
+      axios.get.mockRejectedValue(error);
+      const { result } = renderHook(() => useRunPlan("env-1", {}), { wrapper });
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(axios.get).toHaveBeenCalledTimes(calls);
+    },
+  );
 });
 
 describe("errors", () => {

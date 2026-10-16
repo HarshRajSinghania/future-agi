@@ -89,6 +89,46 @@ def _label(version_number: int | None) -> str | None:
     return f"v{version_number}" if version_number is not None else None
 
 
+def _agent_label(name: str | None, version_number: int | None) -> str | None:
+    return name or _label(version_number)
+
+
+def _message_label(label: str | None) -> str:
+    """A version's label as a message names it; never ``None``."""
+    return label or "an unnumbered version"
+
+
+def version_refs(
+    agent_version: Any, environment_version: Any, suite_version: Any
+) -> dict[str, dict[str, Any] | None]:
+    """Each pinned version as ``{id, label}``, or ``None`` when that piece has none."""
+    return {
+        "agent": (
+            {
+                "id": str(agent_version.id),
+                "label": _agent_label(
+                    agent_version.version_name, agent_version.version_number
+                ),
+            }
+            if agent_version is not None
+            else None
+        ),
+        "environment": (
+            {
+                "id": str(environment_version.id),
+                "label": _label(environment_version.version_number),
+            }
+            if environment_version is not None
+            else None
+        ),
+        "suite": (
+            {"id": str(suite_version.id), "label": _label(suite_version.version_number)}
+            if suite_version is not None
+            else None
+        ),
+    }
+
+
 def _summary_line(text: str | None) -> str:
     lines = (text or "").strip().splitlines()
     return (lines[0] if lines else "")[:1024]
@@ -221,7 +261,7 @@ def _agent_item(
     )
     return {
         "id": str(version.id),
-        "label": version.version_name or _label(version.version_number),
+        "label": _agent_label(version.version_name, version.version_number),
         "status": (
             _AGENT_STATUS.get(runtime.preflight_status, "active")
             if runtime is not None
@@ -460,11 +500,12 @@ def suite_members(job: HostedHarnessJob, version_id: Any) -> list[dict[str, Any]
 
 
 def run_version_labels(execution_ids: Iterable[Any]) -> dict[str, dict[str, Any]]:
-    """Each hosted run's pinned environment and suite version, by test execution.
+    """Each hosted run's pinned agent, environment and suite version, by test execution.
 
     Read from the run job's own pins only, never the environment's defaults; an
     unpinned run is absent, so callers show it as before versioning. The newest live
-    pinned job wins, as in the run's results.
+    pinned job wins, as in the run's results. ``agent_differs`` says the run's agent is
+    not the one its environment version was built with.
     """
     ids = [one for one in execution_ids if one]
     if not ids:
@@ -479,6 +520,10 @@ def run_version_labels(execution_ids: Iterable[Any]) -> dict[str, dict[str, Any]
             "environment_version__version_number",
             "suite_version_id",
             "suite_version__version_number",
+            "agent_version_id",
+            "agent_version__version_name",
+            "agent_version__version_number",
+            "environment_version__agent_version_id",
         )
     )
     return {
@@ -491,6 +536,22 @@ def run_version_labels(execution_ids: Iterable[Any]) -> dict[str, dict[str, Any]
                 if suite_id
                 else None
             ),
+            "agent_version": (
+                {"id": str(agent_id), "label": _agent_label(agent_name, agent_number)}
+                if agent_id
+                else None
+            ),
+            "agent_differs": bool(agent_id and built_with and agent_id != built_with),
         }
-        for execution_id, env_id, env_number, suite_id, suite_number in rows
+        for (
+            execution_id,
+            env_id,
+            env_number,
+            suite_id,
+            suite_number,
+            agent_id,
+            agent_name,
+            agent_number,
+            built_with,
+        ) in rows
     }

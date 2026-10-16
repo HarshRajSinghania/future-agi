@@ -150,6 +150,19 @@ describe("RunsSummary", () => {
     expect(screen.queryByText(/× env/)).toBeNull();
   });
 
+  it("tags a run whose agent differs from its environment version's", () => {
+    renderSummary({}, [
+      {
+        ...RUNS[0],
+        pinnedAgentVersion: { id: "a4", label: "v4" },
+        environmentVersion: { id: "e2", label: "v2" },
+        agentDiffers: true,
+      },
+      RUNS[1],
+    ]);
+    expect(screen.getAllByText("A4 differs from E2")).toHaveLength(1);
+  });
+
   it("opens a run when its row is clicked", () => {
     const onOpenRun = vi.fn();
     renderSummary({ onOpenRun });

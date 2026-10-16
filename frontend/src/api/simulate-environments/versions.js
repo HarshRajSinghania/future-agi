@@ -25,6 +25,19 @@ const suiteMembersPath = (envId, versionId) =>
     { id: envId, version_id: versionId },
   );
 
+const runPlanPath = (envId) =>
+  apiPath("/simulate/api/harness-environments/{id}/run-plan/", { id: envId });
+
+// A run's version picks ({agent, environment, suite} → version id) as request
+// fields; a piece left unpicked is left out, so the server uses its default.
+export const versionPickFields = (picks = {}) =>
+  Object.fromEntries(
+    VERSION_PIECES.filter((piece) => picks?.[piece]).map((piece) => [
+      `${piece}_version_id`,
+      picks[piece],
+    ]),
+  );
+
 export const getEnvironmentVersions = async (envId) =>
   (await axios.get(versionsPath(envId))).data;
 
@@ -37,6 +50,11 @@ export const getVersionDiff = async (envId, piece, versionId, against) =>
 
 export const getSuiteMembers = async (envId, versionId) =>
   (await axios.get(suiteMembersPath(envId, versionId))).data;
+
+// What a run of these picks would use and what to warn about.
+export const getRunPlan = async (envId, picks) =>
+  (await axios.get(runPlanPath(envId), { params: versionPickFields(picks) }))
+    .data;
 
 export const environmentVersionsKey = (envId) => [
   "harness-env-versions",
@@ -55,6 +73,12 @@ export const suiteMembersKey = (envId, versionId) => [
   versionId,
 ];
 
+export const runPlanKey = (envId, picks = {}) => [
+  ...environmentVersionsKey(envId),
+  "run-plan",
+  ...VERSION_PIECES.map((piece) => picks?.[piece] || null),
+];
+
 const errorStatus = (error) => error?.statusCode ?? error?.response?.status;
 
 // The server switched versioning off after this page loaded: treat it as off,
@@ -64,6 +88,12 @@ export const isVersioningDisabled = (error) =>
 // A 404 means versioning is off or the environment is gone; asking again won't help.
 const retryUnlessNotFound = (failureCount, error) =>
   errorStatus(error) !== 404 && failureCount < 2;
+// A refused plan answers the same way every time; only a server or network
+// failure is worth asking again.
+const retryServerFailures = (failureCount, error) => {
+  const status = errorStatus(error);
+  return (status === undefined || status >= 500) && failureCount < 2;
+};
 
 export const versionFromApi = (item = {}) => ({
   id: item.id,
@@ -133,6 +163,16 @@ export function useSuiteMembers(envId, versionId, { enabled = true } = {}) {
     select: (data) => (Array.isArray(data) ? data : []),
     enabled: Boolean(envId && versionId) && enabled,
     retry: retryUnlessNotFound,
+    meta: { errorHandled: true },
+  });
+}
+
+export function useRunPlan(envId, picks, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: runPlanKey(envId, picks),
+    queryFn: () => getRunPlan(envId, picks),
+    enabled: Boolean(envId) && enabled,
+    retry: retryServerFailures,
     meta: { errorHandled: true },
   });
 }

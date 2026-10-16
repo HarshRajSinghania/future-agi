@@ -50905,6 +50905,62 @@
                 }
             ]
         },
+        "/simulate/api/harness-environments/{id}/run-plan/": {
+            "get": {
+                "operationId": "simulate_api_harness-environments_run_plan",
+                "description": "The versions a run of these picks would use and what to warn about; no\nwrites. An absent pick is the environment's default.",
+                "parameters": [
+                    {
+                        "name": "agent_version_id",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    {
+                        "name": "environment_version_id",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    {
+                        "name": "suite_version_id",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessRunPlan"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/harness-environments/{id}/run/": {
             "post": {
                 "operationId": "simulate_api_harness-environments_run",
@@ -124377,6 +124433,99 @@
                 }
             }
         },
+        "RunVersionLabel": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "format": "uuid",
+                    "readOnly": true
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1,
+                    "x-nullable": true
+                }
+            },
+            "x-nullable": true
+        },
+        "HarnessRunPinnedVersions": {
+            "required": [
+                "agent",
+                "environment",
+                "suite"
+            ],
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "$ref": "#/definitions/RunVersionLabel"
+                },
+                "environment": {
+                    "$ref": "#/definitions/RunVersionLabel"
+                },
+                "suite": {
+                    "$ref": "#/definitions/RunVersionLabel"
+                }
+            }
+        },
+        "HarnessRunWarning": {
+            "required": [
+                "code",
+                "message",
+                "piece"
+            ],
+            "type": "object",
+            "properties": {
+                "code": {
+                    "title": "Code",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "message": {
+                    "title": "Message",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "piece": {
+                    "title": "Piece",
+                    "type": "string",
+                    "enum": [
+                        "agent",
+                        "environment",
+                        "suite"
+                    ],
+                    "x-nullable": true
+                }
+            }
+        },
+        "HarnessRunPlan": {
+            "required": [
+                "versions",
+                "warnings",
+                "bundle_cached"
+            ],
+            "type": "object",
+            "properties": {
+                "versions": {
+                    "$ref": "#/definitions/HarnessRunPinnedVersions"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessRunWarning"
+                    }
+                },
+                "bundle_cached": {
+                    "title": "Bundle cached",
+                    "description": "Whether the run replays a cached bundle (true) or prepares one (false); null when it runs without one, as the defaults do before their bundle is cached.",
+                    "type": "boolean",
+                    "x-nullable": true
+                }
+            }
+        },
         "HarnessRunCreate": {
             "required": [
                 "scenario_ids"
@@ -124398,6 +124547,24 @@
                     "default": 1,
                     "maximum": 20,
                     "minimum": 1
+                },
+                "agent_version_id": {
+                    "title": "Agent version id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                },
+                "environment_version_id": {
+                    "title": "Environment version id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                },
+                "suite_version_id": {
+                    "title": "Suite version id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
                 }
             }
         },
@@ -124412,7 +124579,9 @@
                 "trials",
                 "total_calls",
                 "state",
-                "stage"
+                "stage",
+                "versions",
+                "warnings"
             ],
             "type": "object",
             "properties": {
@@ -124466,6 +124635,15 @@
                     "title": "Stage",
                     "type": "string",
                     "minLength": 1
+                },
+                "versions": {
+                    "$ref": "#/definitions/HarnessRunPinnedVersions"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessRunWarning"
+                    }
                 }
             }
         },
@@ -132076,25 +132254,6 @@
                 }
             }
         },
-        "RunVersionLabel": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "type": "string",
-                    "format": "uuid",
-                    "readOnly": true
-                },
-                "label": {
-                    "title": "Label",
-                    "type": "string",
-                    "readOnly": true,
-                    "minLength": 1,
-                    "x-nullable": true
-                }
-            },
-            "x-nullable": true
-        },
         "TestExecutionItemResponse": {
             "type": "object",
             "properties": {
@@ -132267,6 +132426,14 @@
                 },
                 "suite_version": {
                     "$ref": "#/definitions/RunVersionLabel"
+                },
+                "pinned_agent_version": {
+                    "$ref": "#/definitions/RunVersionLabel"
+                },
+                "agent_differs": {
+                    "title": "Agent differs",
+                    "type": "boolean",
+                    "readOnly": true
                 }
             }
         },
@@ -137696,6 +137863,14 @@
                 },
                 "suite_version": {
                     "$ref": "#/definitions/RunVersionLabel"
+                },
+                "pinned_agent_version": {
+                    "$ref": "#/definitions/RunVersionLabel"
+                },
+                "agent_differs": {
+                    "title": "Agent differs",
+                    "type": "boolean",
+                    "default": false
                 },
                 "selected_scenario_keys": {
                     "type": "array",

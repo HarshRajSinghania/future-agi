@@ -27,6 +27,7 @@ import {
   runSimulationTarget,
 } from "src/api/simulate-environments/runs";
 import { listAllScenarioKeys } from "src/api/simulate-environments/scenarioSelection";
+import { environmentVersionsKey } from "src/api/simulate-environments/versions";
 import { CreditExhaustionBanner } from "src/components/CreditExhaustionBanner";
 import { useCreditExhaustion } from "src/hooks/use-credit-exhaustion";
 
@@ -44,6 +45,8 @@ import SystemBanners from "./SystemBanners";
 import VersionBar from "./VersionBar";
 import TemplateLockBanner from "./TemplateLockBanner";
 import WorkspacePanels from "./WorkspacePanels";
+import RunDialog from "./run/RunDialog";
+import { inlineRunError } from "./run/runErrors";
 import useWorkspaceTab from "./helpers/useWorkspaceTab";
 import { gapsByTab, counts } from "./helpers/workspaceGaps";
 import { forkEnvironment as buildFork } from "./helpers/forkEnvironment";
@@ -111,13 +114,24 @@ export default function EnvironmentWorkspace() {
   const selection = useScenarioSelection();
   const queryClient = useQueryClient();
   const pendingSubmission = useRef(null);
+  // The run awaiting its version picks: { ids, trials, initialPicks }.
+  const [runDialog, setRunDialog] = useState(null);
   const runMutation = useMutation({
     meta: { errorHandled: true },
-    mutationFn: async ({ ids, trials }) => {
+    // `resolved` is every version the dialog resolved, defaults included; only
+    // the changed `picks` are sent.
+    mutationFn: async ({ ids, trials, picks, resolved }) => {
       // Run-all reads the keys from the server list: the bootstrap
       // `envState.scenarios` is seeded once and keeps a key an amend dropped.
       const scenarioIds = ids === undefined ? await listAllScenarioKeys(env.id) : ids;
-      const selection = JSON.stringify([env.id, scenarioIds, trials || 1]);
+      const selection = JSON.stringify([
+        env.id,
+        scenarioIds,
+        trials || 1,
+        resolved?.agent ?? picks?.agent ?? null,
+        resolved?.environment ?? picks?.environment ?? null,
+        resolved?.suite ?? picks?.suite ?? null,
+      ]);
       if (pendingSubmission.current?.selection !== selection) {
         pendingSubmission.current = {
           selection,
@@ -129,10 +143,12 @@ export default function EnvironmentWorkspace() {
         scenarioIds,
         trials || 1,
         pendingSubmission.current.key,
+        picks,
       );
     },
     onSuccess: (run) => {
       pendingSubmission.current = null;
+      setRunDialog(null);
       refreshAfterRunStart(queryClient, env.id, run.run_test_id);
       navigate(
         paths.dashboard.simulate.environments.execution(
@@ -142,21 +158,51 @@ export default function EnvironmentWorkspace() {
         ),
       );
     },
-    onError: (error) => {
+    onError: (error, { picks }) => {
       if (error?.statusCode >= 400 && error.statusCode < 500) {
         pendingSubmission.current = null;
       }
+      // The defaults moved since the dialog read them; show the current ones.
+      if (error?.error === "idempotency_key_reused") {
+        queryClient.invalidateQueries({
+          queryKey: environmentVersionsKey(env.id),
+        });
+      }
+      // The open run dialog explains its own refusals.
+      if (picks !== undefined && inlineRunError(error)) return;
       handleCreditError(error);
       enqueueSnackbar(errorMessage(error), { variant: "error" });
     },
   });
-  const startRun = (ids, trials) => {
+  // With versioning on, a run first asks which versions to use; a re-run
+  // pre-selects the versions it ran with.
+  const startRun = (ids, trials, { initialPicks } = {}) => {
     if (source !== "harness") {
       navigate(runSimulationTarget(env));
       return;
     }
+    if (env?.versioning?.enabled) {
+      runMutation.reset();
+      setRunDialog({ ids, trials, initialPicks });
+      return;
+    }
     runMutation.mutate({ ids, trials });
   };
+  const runDialogEl = runDialog && (
+    <RunDialog
+      open
+      env={env}
+      scenarioIds={runDialog.ids}
+      trials={runDialog.trials || 1}
+      initialPicks={runDialog.initialPicks}
+      onClose={() => setRunDialog(null)}
+      onSubmit={(picks, ids, resolved) =>
+        runMutation.mutate({ ids, trials: runDialog.trials, picks, resolved })
+      }
+      submitting={runMutation.isPending}
+      error={runMutation.error}
+    />
+  );
 
   // While the job is still deriving, this page IS the build experience: the same
   // milestone poll the /build page used, now keyed off the resolved env id. The
@@ -312,6 +358,7 @@ export default function EnvironmentWorkspace() {
             creditBanner,
           }}
         />
+        {runDialogEl}
       </Box>
     );
   }
@@ -459,6 +506,7 @@ export default function EnvironmentWorkspace() {
           />
         </ChatSplitPane>
       </Box>
+      {runDialogEl}
     </Box>
   );
 }

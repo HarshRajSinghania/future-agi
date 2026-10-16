@@ -176,6 +176,10 @@ class TestExecutionItemResponseSerializer(serializers.Serializer):
     outcome_skipped = serializers.IntegerField(read_only=True, allow_null=True)
     environment_version = RunVersionLabelSerializer(read_only=True, allow_null=True)
     suite_version = RunVersionLabelSerializer(read_only=True, allow_null=True)
+    # ``agent_version`` is the version's name; this is the run's agent pin.
+    pinned_agent_version = RunVersionLabelSerializer(read_only=True, allow_null=True)
+    # The run's agent is not the one its environment version was built with.
+    agent_differs = serializers.BooleanField(read_only=True)
 
 
 class RunTestExecutionsResponseSerializer(serializers.Serializer):

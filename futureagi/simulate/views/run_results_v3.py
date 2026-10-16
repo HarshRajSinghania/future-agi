@@ -205,6 +205,9 @@ class RunExecutionSerializer(serializers.Serializer):
     agent_version = serializers.CharField(allow_null=True)
     environment_version = RunVersionLabelSerializer(allow_null=True, required=False)
     suite_version = RunVersionLabelSerializer(allow_null=True, required=False)
+    # ``agent_version`` is the version's name; this is the run's agent pin.
+    pinned_agent_version = RunVersionLabelSerializer(allow_null=True, required=False)
+    agent_differs = serializers.BooleanField(required=False, default=False)
     selected_scenario_keys = serializers.ListField(
         child=serializers.CharField(), required=False, default=list
     )
@@ -537,6 +540,8 @@ def _execution_payload(
         "agent_version": getattr(version, "version_name", None),
         "environment_version": pinned.get("environment_version"),
         "suite_version": pinned.get("suite_version"),
+        "pinned_agent_version": pinned.get("agent_version"),
+        "agent_differs": bool(pinned.get("agent_differs")),
         "agent_type": (
             execution.agent_definition.agent_type
             if execution.agent_definition

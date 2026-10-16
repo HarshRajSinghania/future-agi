@@ -5,7 +5,7 @@
 export const API_SURFACE_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1062,
+  endpointCount: 1063,
   groups: {
     accounts: {
       "/accounts/2fa/recovery-codes/": ["get"],
@@ -853,6 +853,7 @@ export const API_SURFACE_CONTRACT = Object.freeze({
         "delete",
         "patch",
       ],
+      "/simulate/api/harness-environments/{id}/run-plan/": ["get"],
       "/simulate/api/harness-environments/{id}/run/": ["post"],
       "/simulate/api/harness-environments/{id}/runs/{execution_id}/evaluations/":
         ["post"],
@@ -2138,6 +2139,7 @@ export const API_SURFACE_PATHS = Object.freeze({
     "delete",
     "patch",
   ],
+  "/simulate/api/harness-environments/{id}/run-plan/": ["get"],
   "/simulate/api/harness-environments/{id}/run/": ["post"],
   "/simulate/api/harness-environments/{id}/runs/{execution_id}/evaluations/": [
     "post",

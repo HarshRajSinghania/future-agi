@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1062,
+  endpointCount: 1063,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28238,6 +28238,45 @@ export const OPENAPI_CONTRACT = Object.freeze({
         requestBody: null,
         queryParameters: {},
         responses: {
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/run-plan/": {
+      get: {
+        operationId: "simulate_api_harness-environments_run_plan",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          agent_version_id: {
+            required: false,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          environment_version_id: {
+            required: false,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          suite_version_id: {
+            required: false,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/HarnessRunPlan",
+          },
           default: {
             $ref: "#/definitions/ManagementAPIErrorResponse",
           },
@@ -63532,6 +63571,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
           maximum: 20,
           minimum: 1,
         },
+        agent_version_id: {
+          title: "Agent version id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        environment_version_id: {
+          title: "Environment version id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        suite_version_id: {
+          title: "Suite version id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
       },
     },
     HarnessRunCreateResponse: {
@@ -63546,6 +63603,8 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "total_calls",
         "state",
         "stage",
+        "versions",
+        "warnings",
       ],
       type: "object",
       properties: {
@@ -63599,6 +63658,37 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Stage",
           type: "string",
           minLength: 1,
+        },
+        versions: {
+          $ref: "#/definitions/HarnessRunPinnedVersions",
+        },
+        warnings: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessRunWarning",
+          },
+        },
+      },
+    },
+    HarnessRunPlan: {
+      required: ["versions", "warnings", "bundle_cached"],
+      type: "object",
+      properties: {
+        versions: {
+          $ref: "#/definitions/HarnessRunPinnedVersions",
+        },
+        warnings: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessRunWarning",
+          },
+        },
+        bundle_cached: {
+          title: "Bundle cached",
+          description:
+            "Whether the run replays a cached bundle (true) or prepares one (false); null when it runs without one, as the defaults do before their bundle is cached.",
+          type: "boolean",
+          "x-nullable": true,
         },
       },
     },
@@ -93604,6 +93694,43 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessRunPinnedVersions: {
+      required: ["agent", "environment", "suite"],
+      type: "object",
+      properties: {
+        agent: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        environment: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        suite: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+      },
+    },
+    HarnessRunWarning: {
+      required: ["code", "message", "piece"],
+      type: "object",
+      properties: {
+        code: {
+          title: "Code",
+          type: "string",
+          minLength: 1,
+        },
+        message: {
+          title: "Message",
+          type: "string",
+          minLength: 1,
+        },
+        piece: {
+          title: "Piece",
+          type: "string",
+          enum: ["agent", "environment", "suite"],
+          "x-nullable": true,
+        },
+      },
+    },
     HarnessScenarioChange: {
       required: ["op"],
       type: "object",
@@ -99818,6 +99945,14 @@ export const OPENAPI_CONTRACT = Object.freeze({
         suite_version: {
           $ref: "#/definitions/RunVersionLabel",
         },
+        pinned_agent_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        agent_differs: {
+          title: "Agent differs",
+          type: "boolean",
+          default: false,
+        },
         selected_scenario_keys: {
           type: "array",
           items: {
@@ -100258,6 +100393,14 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         suite_version: {
           $ref: "#/definitions/RunVersionLabel",
+        },
+        pinned_agent_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        agent_differs: {
+          title: "Agent differs",
+          type: "boolean",
+          readOnly: true,
         },
       },
     },
@@ -110085,6 +110228,25 @@ export const OPENAPI_CONTRACT = Object.freeze({
       },
       "x-nullable": true,
     },
+    RunVersionLabel: {
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+          readOnly: true,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          readOnly: true,
+          minLength: 1,
+          "x-nullable": true,
+        },
+      },
+      "x-nullable": true,
+    },
     HarnessScenarioRegistrationResponse: {
       required: ["scenario_key", "scenario_id"],
       type: "object",
@@ -113475,25 +113637,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           minLength: 1,
         },
       },
-    },
-    RunVersionLabel: {
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          format: "uuid",
-          readOnly: true,
-        },
-        label: {
-          title: "Label",
-          type: "string",
-          readOnly: true,
-          minLength: 1,
-          "x-nullable": true,
-        },
-      },
-      "x-nullable": true,
     },
     FacetValue: {
       required: ["value", "count"],

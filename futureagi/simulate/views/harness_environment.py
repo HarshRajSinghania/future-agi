@@ -20,6 +20,8 @@ from simulate.serializers.harness_environment import (
     HarnessEnvironmentRunEvaluationsQueuedSerializer,
     HarnessEnvironmentRunEvaluationsSerializer,
     HarnessEnvironmentToolCallEvaluationSerializer,
+    HarnessRunPlanQuerySerializer,
+    HarnessRunPlanSerializer,
     HarnessSuiteMemberSerializer,
     HarnessVersionDiffQuerySerializer,
     HarnessVersionDiffSerializer,
@@ -44,7 +46,7 @@ from simulate.services.harness_provider import (
     scope_jobs,
 )
 from simulate.services.harness_versioning import read as version_reads
-from simulate.services.hosted_harness import HostedHarnessError
+from simulate.services.hosted_harness import HostedHarnessError, VersionPicks
 from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_errors import build_error_envelope
 from tfc.utils.pagination import ExtendedPageNumberPagination
@@ -197,6 +199,29 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         if identifier is None:
             raise version_reads.version_not_found()
         return Response(version_reads.suite_members(job, identifier))
+
+    @validated_request(
+        query_serializer=HarnessRunPlanQuerySerializer,
+        responses={200: HarnessRunPlanSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(detail=True, methods=["get"], url_path="run-plan")
+    def run_plan(self, request, pk=None):
+        """The versions a run of these picks would use and what to warn about; no
+        writes. An absent pick is the environment's default."""
+        from simulate.services.harness_versioning.run_warnings import preview_run
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        query = request.validated_query_data
+        picks = VersionPicks(
+            agent_version_id=query.get("agent_version_id"),
+            environment_version_id=query.get("environment_version_id"),
+            suite_version_id=query.get("suite_version_id"),
+        )
+        return Response(preview_run(job, picks))
 
     @validated_request(
         query_serializer=HarnessEnvironmentListQuerySerializer,

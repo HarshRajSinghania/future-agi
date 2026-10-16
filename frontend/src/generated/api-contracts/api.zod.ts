@@ -36138,6 +36138,56 @@ export const SimulateApiHarnessEnvironmentsRemoveEvaluationParams = zod.object({
 });
 
 /**
+ * The versions a run of these picks would use and what to warn about; no
+writes. An absent pick is the environment's default.
+ */
+export const SimulateApiHarnessEnvironmentsRunPlanParams = zod.object({
+  id: zod.string(),
+});
+
+export const SimulateApiHarnessEnvironmentsRunPlanQueryParams = zod.object({
+  agent_version_id: zod.string().uuid().optional(),
+  environment_version_id: zod.string().uuid().optional(),
+  suite_version_id: zod.string().uuid().optional(),
+});
+
+export const SimulateApiHarnessEnvironmentsRunPlanResponse = zod.object({
+  versions: zod.object({
+    agent: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullish(),
+      })
+      .nullable(),
+    environment: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullish(),
+      })
+      .nullable(),
+    suite: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullish(),
+      })
+      .nullable(),
+  }),
+  warnings: zod.array(
+    zod.object({
+      code: zod.string().min(1),
+      message: zod.string().min(1),
+      piece: zod.enum(["agent", "environment", "suite"]).nullable(),
+    }),
+  ),
+  bundle_cached: zod
+    .boolean()
+    .nullable()
+    .describe(
+      "Whether the run replays a cached bundle (true) or prepares one (false); null when it runs without one, as the defaults do before their bundle is cached.",
+    ),
+});
+
+/**
  * Create one new Run for the selected scenarios and trial count.
  */
 export const SimulateApiHarnessEnvironmentsRunParams = zod.object({
@@ -36165,6 +36215,9 @@ export const SimulateApiHarnessEnvironmentsRunBody = zod.object({
     .min(1)
     .max(simulateApiHarnessEnvironmentsRunBodyTrialsMax)
     .default(simulateApiHarnessEnvironmentsRunBodyTrialsDefault),
+  agent_version_id: zod.string().uuid().nullish(),
+  environment_version_id: zod.string().uuid().nullish(),
+  suite_version_id: zod.string().uuid().nullish(),
 });
 
 /**
@@ -37779,6 +37832,9 @@ export const SimulateApiHarnessJobsRunsBody = zod.object({
     .min(1)
     .max(simulateApiHarnessJobsRunsBodyTrialsMax)
     .default(simulateApiHarnessJobsRunsBodyTrialsDefault),
+  agent_version_id: zod.string().uuid().nullish(),
+  environment_version_id: zod.string().uuid().nullish(),
+  suite_version_id: zod.string().uuid().nullish(),
 });
 
 /**
@@ -44900,15 +44956,22 @@ export const SimulateRunTestsExecutionsListResponse = zod.object({
         environment_version: zod
           .object({
             id: zod.string().uuid().optional(),
-            label: zod.string().min(1).optional(),
+            label: zod.string().min(1).nullish(),
           })
-          .optional(),
+          .nullish(),
         suite_version: zod
           .object({
             id: zod.string().uuid().optional(),
-            label: zod.string().min(1).optional(),
+            label: zod.string().min(1).nullish(),
           })
-          .optional(),
+          .nullish(),
+        pinned_agent_version: zod
+          .object({
+            id: zod.string().uuid().optional(),
+            label: zod.string().min(1).nullish(),
+          })
+          .nullish(),
+        agent_differs: zod.boolean().optional(),
       }),
     )
     .optional(),
@@ -47972,6 +48035,8 @@ export const SimulateV3TestExecutionCallsQueryParams = zod.object({
   group_key: zod.string().optional(),
 });
 
+export const simulateV3TestExecutionCallsResponseExecutionAgentDiffersDefault =
+  false;
 export const simulateV3TestExecutionCallsResponseExecutionSelectedScenarioKeysDefault =
   [];
 export const simulateV3TestExecutionCallsResponseExecutionTrialsDefault = 1;
@@ -47989,15 +48054,26 @@ export const SimulateV3TestExecutionCallsResponse = zod.object({
     environment_version: zod
       .object({
         id: zod.string().uuid().optional(),
-        label: zod.string().min(1).optional(),
+        label: zod.string().min(1).nullish(),
       })
-      .optional(),
+      .nullish(),
     suite_version: zod
       .object({
         id: zod.string().uuid().optional(),
-        label: zod.string().min(1).optional(),
+        label: zod.string().min(1).nullish(),
       })
-      .optional(),
+      .nullish(),
+    pinned_agent_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullish(),
+      })
+      .nullish(),
+    agent_differs: zod
+      .boolean()
+      .default(
+        simulateV3TestExecutionCallsResponseExecutionAgentDiffersDefault,
+      ),
     selected_scenario_keys: zod
       .array(zod.string().min(1))
       .default(

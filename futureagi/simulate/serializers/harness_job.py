@@ -12,6 +12,7 @@ from simulate.serializers.hosted_harness_conversation import (
 )
 
 from simulate.models.hosted_harness import MAX_SCENARIOS_PER_JOB
+from simulate.serializers.response.run_test import RunVersionLabelSerializer
 
 # Port-generic loopback pattern for the C4 §7 Channel-1 literal-endpoint scan.
 # The declared fixed port is unknowable platform-side (the bundle is authored
@@ -696,6 +697,26 @@ class HarnessRunCreateSerializer(serializers.Serializer):
         max_length=1000,
     )
     trials = serializers.IntegerField(min_value=1, max_value=20, default=1)
+    # Absent or null runs the environment's default for that piece.
+    agent_version_id = serializers.UUIDField(required=False, allow_null=True)
+    environment_version_id = serializers.UUIDField(required=False, allow_null=True)
+    suite_version_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class HarnessRunPinnedVersionsSerializer(serializers.Serializer):
+    """The versions a run is pinned to; null for a piece it has none of."""
+
+    agent = RunVersionLabelSerializer(allow_null=True)
+    environment = RunVersionLabelSerializer(allow_null=True)
+    suite = RunVersionLabelSerializer(allow_null=True)
+
+
+class HarnessRunWarningSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    message = serializers.CharField()
+    piece = serializers.ChoiceField(
+        choices=("agent", "environment", "suite"), allow_null=True
+    )
 
 
 class HarnessRunCreateResponseSerializer(serializers.Serializer):
@@ -709,6 +730,8 @@ class HarnessRunCreateResponseSerializer(serializers.Serializer):
     total_calls = serializers.IntegerField(min_value=1)
     state = serializers.CharField()
     stage = serializers.CharField()
+    versions = HarnessRunPinnedVersionsSerializer()
+    warnings = HarnessRunWarningSerializer(many=True)
 
 
 class HarnessPreflightSerializer(HarnessJobCreateSerializer):

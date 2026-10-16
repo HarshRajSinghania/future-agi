@@ -640,6 +640,62 @@ export type ${jsonAlias} = JsonValueApi;`,
       "diff: HarnessVersionDiffApiDiff | null;",
       "HarnessVersionDiffApi.diff nullable",
     );
+    // A run's pinned versions are null for a piece it has none of; a bundle-wide
+    // warning names no piece; and the cache does not apply to an unassembled run.
+    for (const piece of ["agent", "environment", "suite"]) {
+      schemas = assertReplaceInNamedBlock(
+        schemas,
+        "export interface HarnessRunPinnedVersionsApi {",
+        `${piece}: RunVersionLabelApi;`,
+        `${piece}: RunVersionLabelApi | null;`,
+        `HarnessRunPinnedVersionsApi.${piece} nullable`,
+      );
+      schemas = assertReplaceInNamedBlock(
+        schemas,
+        "export interface HarnessRunCreateApi {",
+        `${piece}_version_id?: string;`,
+        `${piece}_version_id?: string | null;`,
+        `HarnessRunCreateApi.${piece}_version_id nullable`,
+      );
+    }
+    schemas = assertReplaceInNamedBlock(
+      schemas,
+      "export interface HarnessRunWarningApi {",
+      "piece: HarnessRunWarningApiPiece;",
+      "piece: HarnessRunWarningApiPiece | null;",
+      "HarnessRunWarningApi.piece nullable",
+    );
+    schemas = assertReplaceInNamedBlock(
+      schemas,
+      "export interface HarnessRunPlanApi {",
+      "bundle_cached: boolean;",
+      "bundle_cached: boolean | null;",
+      "HarnessRunPlanApi.bundle_cached nullable",
+    );
+    // A run's version labels are null for an unnumbered version, and its pins null
+    // when it has none.
+    schemas = assertReplaceInNamedBlock(
+      schemas,
+      "export interface RunVersionLabelApi {",
+      "readonly label?: string;",
+      "readonly label?: string | null;",
+      "RunVersionLabelApi.label nullable",
+    );
+    for (const typeName of ["TestExecutionItemResponseApi", "RunExecutionApi"]) {
+      for (const field of [
+        "environment_version",
+        "suite_version",
+        "pinned_agent_version",
+      ]) {
+        schemas = assertReplaceInNamedBlock(
+          schemas,
+          `export interface ${typeName} {`,
+          `${field}?: RunVersionLabelApi;`,
+          `${field}?: RunVersionLabelApi | null;`,
+          `${typeName}.${field} nullable`,
+        );
+      }
+    }
 
     for (const metadataType of [
       "SpanListMetadataApi",
@@ -850,6 +906,53 @@ export type ${jsonAlias} = JsonValueApi;`,
 }).passthrough().nullable()`,
       "SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse.diff nullable",
     );
+    // The same nullable run-plan fields, and picks a run may send as null.
+    zod = assertReplaceRegexInNamedBlock(
+      zod,
+      "export const SimulateApiHarnessEnvironmentsRunPlanResponse =",
+      /("(?:agent|environment|suite)": zod\.object\(\{[^{}]*\}\))/g,
+      "$1.nullable()",
+      "SimulateApiHarnessEnvironmentsRunPlanResponse.versions nullable",
+    );
+    for (const [anchor, label] of [
+      ['"label": zod.string().min(1).optional()', "label"],
+      [`"piece": zod.enum(['agent', 'environment', 'suite'])`, "piece"],
+      ['"bundle_cached": zod.boolean()', "bundle_cached"],
+    ]) {
+      zod = assertReplaceInNamedBlock(
+        zod,
+        "export const SimulateApiHarnessEnvironmentsRunPlanResponse =",
+        anchor,
+        anchor.endsWith(".optional()")
+          ? anchor.replace(/\.optional\(\)$/, ".nullish()")
+          : `${anchor}.nullable()`,
+        `SimulateApiHarnessEnvironmentsRunPlanResponse.${label} nullable`,
+      );
+    }
+    for (const response of [
+      "SimulateRunTestsExecutionsListResponse",
+      "SimulateV3TestExecutionCallsResponse",
+    ]) {
+      zod = assertReplaceRegexInNamedBlock(
+        zod,
+        `export const ${response} = zod.object({`,
+        /("(?:environment_version|suite_version|pinned_agent_version)": zod\.object\(\{[^{}]*"label": zod\.string\(\)\.min\(1\))\.optional\(\)([^{}]*\}\))\.optional\(\)/g,
+        "$1.nullish()$2.nullish()",
+        `${response} run versions nullable`,
+      );
+    }
+    for (const body of [
+      "SimulateApiHarnessEnvironmentsRunBody",
+      "SimulateApiHarnessJobsRunsBody",
+    ]) {
+      zod = assertReplaceRegexInNamedBlock(
+        zod,
+        `export const ${body} = zod.object({`,
+        /("(?:agent|environment|suite)_version_id": zod\.string\(\)\.uuid\(\))\.optional\(\)/g,
+        "$1.nullish()",
+        `${body} version picks nullable`,
+      );
+    }
 
     zod = assertReplace(
       zod,

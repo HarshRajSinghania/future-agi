@@ -5516,11 +5516,13 @@ def _covered_scenario_count(run_test) -> int:
 
 
 def _version_labels(labels: dict[str, Any], execution_id: Any) -> dict[str, Any]:
-    """A run's pinned environment and suite versions; null before versioning."""
+    """A run's pinned versions; null before versioning."""
     held = labels.get(str(execution_id)) or {}
     return {
         "environment_version": held.get("environment_version"),
         "suite_version": held.get("suite_version"),
+        "pinned_agent_version": held.get("agent_version"),
+        "agent_differs": bool(held.get("agent_differs")),
     }
 
 

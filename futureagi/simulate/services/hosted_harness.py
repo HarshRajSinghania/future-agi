@@ -70,18 +70,22 @@ class HostedHarnessError(Exception):
         *,
         status_code: int = 400,
         retryable: bool = False,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
         self.retryable = retryable
+        # Extra fields an error's payload carries beside the standard three.
+        self.details = details
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "error": self.code,
             "message": self.message,
             "retryable": self.retryable,
+            **(self.details or {}),
         }
 
 
@@ -228,10 +232,12 @@ def create_selected_harness_run(
     trials: int,
     idempotency_key: str,
     rerun_of: HostedHarnessJob | None = None,
+    picks: VersionPicks | None = None,
 ) -> tuple[HostedHarnessJob, bool]:
     """Freeze and preallocate one selected-scenario Run for an authored environment.
 
-    A rerun of a pinned run (``rerun_of``) keeps that run's pins.
+    A rerun of a pinned run (``rerun_of``) keeps that run's pins; ``picks`` win over
+    both, per piece.
     """
 
     if environment.environment_id is not None:
@@ -303,7 +309,17 @@ def create_selected_harness_run(
                 "environment changed while submitting this Run",
                 status_code=409,
             )
-        pins = _pinned_versions(environment, rerun_of=rerun_of)
+        idempotency_digest = hashlib.sha256(idempotency_key.encode()).hexdigest()
+        child_idempotency_key = f"run:{environment.id}:{idempotency_digest}"
+        resolved = resolve_run_pins(environment, rerun_of=rerun_of, picks=picks)
+        if resolved is not None:
+            # A repeated request is answered before anything is written.
+            replayed = _replayed_run(
+                environment, child_idempotency_key, resolved, scenario_keys, trials
+            )
+            if replayed is not None:
+                return replayed, False
+        pins = _pinned_versions(environment, resolved)
         if pins is None:
             registrations = list(
                 HostedHarnessScenario.no_workspace_objects.filter(
@@ -321,12 +337,23 @@ def create_selected_harness_run(
         if missing and pins is not None:
             # A rerun of an environment or of an unpinned run selects keys the default
             # suite may have dropped since; a rerun of a pinned run keeps its suite.
+            from simulate.services.harness_versioning.read import (
+                _label,
+                _message_label,
+            )
+
+            suite_label = _message_label(_label(pins.suite_version.version_number))
+            where = (
+                "this environment's current scenarios; select from those it has now"
+                if pins.suite_version.id == environment.suite_version_id
+                else f"scenario version {suite_label};"
+                " select from the scenarios that version has"
+            )
             raise HostedHarnessError(
                 "scenario_selection_unknown",
                 ", ".join(missing)
                 + (" is" if len(missing) == 1 else " are")
-                + " not in this environment's current scenarios; select from"
-                " those it has now",
+                + f" not in {where}",
                 status_code=400,
             )
         if missing:
@@ -338,8 +365,6 @@ def create_selected_harness_run(
         if pins is not None and pins.assembles:
             _refuse_ungradable(pins, scenario_keys)
 
-        idempotency_digest = hashlib.sha256(idempotency_key.encode()).hexdigest()
-        child_idempotency_key = f"run:{environment.id}:{idempotency_digest}"
         manifest: list[dict[str, Any]] = []
         for scenario_key in scenario_keys:
             registration = by_key[scenario_key]
@@ -369,7 +394,12 @@ def create_selected_harness_run(
         # descriptor once agent versions carry their own (step 9); legacy agent versions
         # mirror this payload.
         child_payload = json.loads(json.dumps(environment.payload))
-        if pins is not None and pins.rerun_of is not None and rerun_of is not None:
+        if (
+            pins is not None
+            and pins.rerun_of is not None
+            and rerun_of is not None
+            and pins.agent_version_id == rerun_of.agent_version_id
+        ):
             # The agent source and config the pinned bundle was built from.
             for name in ("source", "agent"):
                 value = (rerun_of.payload or {}).get(name)
@@ -533,6 +563,7 @@ class _RunPins:
     agent_hash: str | None
     assembly: Any = None
     rerun_of: str | None = None
+    agent_version_id: Any = None
 
     @property
     def assembled_bundle(self) -> Any:
@@ -592,25 +623,70 @@ class _RunPins:
         return kept + list(pinned.values())
 
 
-def _pinned_versions(
-    environment: HostedHarnessJob, *, rerun_of: HostedHarnessJob | None = None
-) -> _RunPins | None:
-    """The environment's default versions, when it has them and versioning is on.
+@dataclass(frozen=True)
+class VersionPicks:
+    """Versions a new run asks for in place of the environment's defaults."""
 
-    With the flag off a run is created exactly as before, versions or not, so turning
-    versioning on is what changes which agent and suite a run uses. A rerun of a pinned
-    run keeps that run's versions when they can run: they are the defaults, their bundle
-    is cached, or certifying is on. Otherwise it runs the defaults.
+    agent_version_id: Any = None
+    environment_version_id: Any = None
+    suite_version_id: Any = None
+
+    @property
+    def chosen(self) -> bool:
+        return any(self.ids())
+
+    def ids(self) -> tuple[Any, Any, Any]:
+        return (
+            self.agent_version_id,
+            self.environment_version_id,
+            self.suite_version_id,
+        )
+
+
+@dataclass(frozen=True)
+class ResolvedPins:
+    """The versions a new run resolves to, read without writing anything."""
+
+    agent_version: Any
+    environment_version: Any
+    suite_version: Any
+    runtime: Any
+    # The pinned agent id, kept when its version was soft-deleted since.
+    agent_version_id: Any
+    defaults: bool
+    # Whether the combination's bundle is cached; ``None`` without an agent side row.
+    cached: bool | None
+    rerun_of: str | None = None
+
+
+def resolve_run_pins(
+    environment: HostedHarnessJob,
+    *,
+    rerun_of: HostedHarnessJob | None = None,
+    picks: VersionPicks | None = None,
+) -> ResolvedPins | None:
+    """The versions a new run would be pinned to, when versioning pins runs.
+
+    Per piece a pick wins, then a rerun's kept pin, then the environment's default. A
+    rerun keeps its source's pins when they can run: they are the defaults, their
+    bundle is cached, or certifying is on; otherwise it runs the defaults. Picks that
+    cannot run are refused rather than run as the defaults.
     """
-    from simulate.models import HarnessSuiteMember
     from simulate.services.harness_versioning.assembly import (
         bundle_ready,
         certify_enabled,
-        run_assembly,
     )
     from simulate.services.harness_versioning.versions import pins_runs
 
+    chosen = picks is not None and picks.chosen
     if not pins_runs(environment):
+        if chosen:
+            raise HostedHarnessError(
+                "version_not_pickable",
+                "Versions can't be picked for this environment",
+                status_code=422,
+                details={"piece": None},
+            )
         return None
     defaults = _pin_ids(environment)
     source, loaded = environment, None
@@ -639,29 +715,232 @@ def _pinned_versions(
                 environment_id=str(environment.id),
                 rerun_of=str(rerun_of.id),
             )
+    ids = _pin_ids(source)
+    if chosen:
+        _check_picks(environment, picks, defaults)
+        picked = tuple(
+            pick or kept for pick, kept in zip(picks.ids(), ids, strict=True)
+        )
+        if picked != ids:
+            ids, loaded = picked, None
     if loaded is None:
-        loaded = _load_pins(environment, environment)
+        loaded = _load_ids(environment, ids)
     agent_version, environment_version, suite_version, runtime = loaded
-    members = {
-        member.scenario_key: member
-        for member in HarnessSuiteMember.no_workspace_objects.filter(
-            suite_version=suite_version
-        ).order_by("number", "scenario_key")
-    }
-    return _RunPins(
+    cached = (
+        bundle_ready(environment, runtime, environment_version, suite_version)
+        if runtime is not None
+        else None
+    )
+    at_defaults = ids == defaults
+    runnable = bool(cached) or (runtime is not None and certify_enabled())
+    if chosen and not at_defaults and not runnable:
+        raise HostedHarnessError(
+            "version_not_runnable",
+            (
+                "These versions can't be run together yet"
+                if runtime is None
+                else "These versions haven't been run together yet and building"
+                " them is turned off"
+            ),
+            status_code=422,
+        )
+    return ResolvedPins(
         agent_version=agent_version,
         environment_version=environment_version,
         suite_version=suite_version,
+        runtime=runtime,
+        agent_version_id=ids[0],
+        defaults=at_defaults,
+        cached=cached,
+        rerun_of=str(rerun_of.id) if source is rerun_of else None,
+    )
+
+
+def _not_pickable(piece: str) -> HostedHarnessError:
+    # Every refused agent pick reads the same, so its reason is not revealed.
+    message = (
+        "Only the environment's current agent version can be picked for now"
+        if piece == "agent"
+        else f"This {piece} version can't be picked for this environment"
+    )
+    return HostedHarnessError(
+        "version_not_pickable", message, status_code=422, details={"piece": piece}
+    )
+
+
+def _check_picks(
+    environment: HostedHarnessJob, picks: VersionPicks, defaults: tuple[Any, Any, Any]
+) -> None:
+    """Refuse a pick that is not one of this environment's runnable versions.
+
+    A pick of the default is the default, so a dialog that sends it back always runs.
+    """
+    from simulate.models import (
+        AgentVersion,
+        HarnessAgentVersionRuntime,
+        HarnessEnvironmentVersion,
+        HarnessSuiteVersion,
+    )
+    from simulate.models.harness_versioning import VersionStatus
+    from simulate.services.harness_versioning.read import _agent_definition_id
+
+    agent_id, environment_id, suite_id = picks.ids()
+    for piece, model, pick, default in (
+        ("environment", HarnessEnvironmentVersion, environment_id, defaults[1]),
+        ("suite", HarnessSuiteVersion, suite_id, defaults[2]),
+    ):
+        if pick and pick != default:
+            if not model.no_workspace_objects.filter(
+                job=environment, id=pick, status=VersionStatus.ACTIVE
+            ).exists():
+                raise _not_pickable(piece)
+    if not agent_id or agent_id == defaults[0]:
+        return
+    definition_id = _agent_definition_id(environment)
+    if (
+        definition_id is None
+        or not AgentVersion.no_workspace_objects.filter(
+            id=agent_id,
+            organization_id=environment.organization_id,
+            agent_definition_id=definition_id,
+        ).exists()
+    ):
+        raise _not_pickable("agent")
+    status = (
+        HarnessAgentVersionRuntime.no_workspace_objects.filter(
+            agent_version_id=agent_id
+        )
+        .values_list("preflight_status", flat=True)
+        .first()
+    )
+    if status is not None and status not in (
+        HarnessAgentVersionRuntime.PreflightStatus.PASSED,
+        HarnessAgentVersionRuntime.PreflightStatus.LEGACY,
+    ):
+        raise _not_pickable("agent")
+    # TODO: lift once a run carries its pinned agent version's own payload (step 9);
+    # until then it would run the current agent config under another agent's label.
+    raise _not_pickable("agent")
+
+
+def job_pins(
+    environment: HostedHarnessJob, job: HostedHarnessJob
+) -> ResolvedPins | None:
+    """The versions a run job was pinned to, read like a resolved run; ``None`` when
+    it was not pinned.
+
+    Whether they were the defaults and cached is read as the run recorded it when
+    created, so a repeated request reads the same.
+    """
+    from simulate.services.harness_versioning.assembly import bundle_ready
+
+    if job.environment_version_id is None or job.suite_version_id is None:
+        return None
+    ids = _pin_ids(job)
+    agent_version, environment_version, suite_version, runtime = _load_ids(
+        environment, ids
+    )
+    recorded = ((job.payload or {}).get("metadata") or {}).get("assembly") or {}
+    defaults = recorded.get("defaults")
+    cached = recorded.get("cached")
+    return ResolvedPins(
+        agent_version=agent_version,
+        environment_version=environment_version,
+        suite_version=suite_version,
+        runtime=runtime,
+        agent_version_id=ids[0],
+        defaults=(
+            defaults if isinstance(defaults, bool) else ids == _pin_ids(environment)
+        ),
+        cached=(
+            cached
+            if isinstance(cached, bool) or runtime is None
+            else bundle_ready(environment, runtime, environment_version, suite_version)
+        ),
+    )
+
+
+def _replayed_run(
+    environment: HostedHarnessJob,
+    idempotency_key: str,
+    resolved: ResolvedPins,
+    scenario_keys: list[str],
+    trials: int,
+) -> HostedHarnessJob | None:
+    """The run an earlier request with this key created, when this one repeats it.
+
+    A key reused for other versions, scenarios or trials is refused.
+    """
+    existing = HostedHarnessJob.no_workspace_objects.filter(
+        organization_id=environment.organization_id, idempotency_key=idempotency_key
+    ).first()
+    if existing is None:
+        return None
+    # By id, so an agent soft-deleted since still reads as the same pin; a run created
+    # after the deletion pinned no agent.
+    same_agent = existing.agent_version_id in (
+        resolved.agent_version_id,
+        getattr(resolved.agent_version, "id", None),
+    )
+    if not same_agent or _pin_ids(existing)[1:] != (
+        resolved.environment_version.id,
+        resolved.suite_version.id,
+    ):
+        raise HostedHarnessError(
+            "idempotency_key_reused",
+            "This request key was already used for a run of other versions; start a"
+            " new run",
+            status_code=409,
+        )
+    metadata = (existing.payload or {}).get("metadata") or {}
+    if (
+        existing.workspace_id != environment.workspace_id
+        or metadata.get("selected_scenario_keys") != scenario_keys
+        or metadata.get("trials") != trials
+    ):
+        raise HostedHarnessError(
+            "idempotency_conflict",
+            "the idempotency key was already used for a different request",
+            status_code=409,
+        )
+    return existing
+
+
+def _pinned_versions(
+    environment: HostedHarnessJob, resolved: ResolvedPins | None
+) -> _RunPins | None:
+    """The versions a new run is pinned to, with its bundle's cache row.
+
+    With the flag off a run is created exactly as before, versions or not, so turning
+    versioning on is what changes which agent and suite a run uses. Call under the
+    environment's lock: the cache row is created when the combination is new.
+    """
+    from simulate.models import HarnessSuiteMember
+    from simulate.services.harness_versioning.assembly import run_assembly
+
+    if resolved is None:
+        return None
+    members = {
+        member.scenario_key: member
+        for member in HarnessSuiteMember.no_workspace_objects.filter(
+            suite_version=resolved.suite_version
+        ).order_by("number", "scenario_key")
+    }
+    return _RunPins(
+        agent_version=resolved.agent_version,
+        environment_version=resolved.environment_version,
+        suite_version=resolved.suite_version,
         members=members,
-        agent_hash=runtime.hash if runtime is not None else None,
+        agent_hash=resolved.runtime.hash if resolved.runtime is not None else None,
         assembly=run_assembly(
             environment,
-            runtime,
-            environment_version,
-            suite_version,
-            defaults=_pin_ids(source) == defaults,
+            resolved.runtime,
+            resolved.environment_version,
+            resolved.suite_version,
+            defaults=resolved.defaults,
         ),
-        rerun_of=str(rerun_of.id) if source is rerun_of else None,
+        rerun_of=resolved.rerun_of,
+        agent_version_id=resolved.agent_version_id,
     )
 
 
@@ -674,6 +953,14 @@ def _load_pins(
 ) -> tuple[Any, Any, Any, Any]:
     """The agent, environment and suite versions ``source`` is pinned to, and the agent's
     side row."""
+    return _load_ids(environment, _pin_ids(source))
+
+
+def _load_ids(
+    environment: HostedHarnessJob, ids: tuple[Any, Any, Any]
+) -> tuple[Any, Any, Any, Any]:
+    """The agent, environment and suite versions of these ids, and the agent's side
+    row."""
     from simulate.models import (
         AgentVersion,
         HarnessAgentVersionRuntime,
@@ -681,23 +968,24 @@ def _load_pins(
         HarnessSuiteVersion,
     )
 
+    agent_version_id, environment_version_id, suite_version_id = ids
     environment_version = HarnessEnvironmentVersion._base_manager.get(
-        id=source.environment_version_id
+        id=environment_version_id
     )
-    suite_version = HarnessSuiteVersion._base_manager.get(id=source.suite_version_id)
+    suite_version = HarnessSuiteVersion._base_manager.get(id=suite_version_id)
     # A soft-deleted agent version is never pinned onto a run.
     agent_version = (
         AgentVersion.no_workspace_objects.select_related("agent_definition")
-        .filter(id=source.agent_version_id)
+        .filter(id=agent_version_id)
         .first()
-        if source.agent_version_id
+        if agent_version_id
         else None
     )
-    if source.agent_version_id and agent_version is None:
+    if agent_version_id and agent_version is None:
         logger.warning(
             "harness_run_agent_pin_missing",
             environment_id=str(environment.id),
-            agent_version_id=str(source.agent_version_id),
+            agent_version_id=str(agent_version_id),
         )
     runtime = (
         HarnessAgentVersionRuntime.no_workspace_objects.filter(
