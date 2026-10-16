@@ -17521,6 +17521,102 @@ export interface HarnessEnvironmentRenameApi {
   name: string;
 }
 
+export type HarnessComparePairApiBand =
+  (typeof HarnessComparePairApiBand)[keyof typeof HarnessComparePairApiBand];
+
+export const HarnessComparePairApiBand = {
+  paired: "paired",
+  criteria_changed: "criteria_changed",
+  new: "new",
+  not_applicable: "not_applicable",
+} as const;
+
+export type HarnessComparePairApiVerdict =
+  (typeof HarnessComparePairApiVerdict)[keyof typeof HarnessComparePairApiVerdict];
+
+export const HarnessComparePairApiVerdict = {
+  improved: "improved",
+  regressed: "regressed",
+  no_meaningful_change: "no_meaningful_change",
+  inconclusive: "inconclusive",
+} as const;
+
+/**
+ * Newcombe 95% interval of the difference.
+ */
+export interface HarnessCompareIntervalApi {
+  low: number;
+  high: number;
+}
+
+export interface HarnessCompareSideApi {
+  passed: number;
+  /** Trials a verdict was reached on. */
+  trials: number;
+  /** Trials that ran to an end but a sub-goal check was undecided. */
+  undecided: number;
+  pass_rate: number | null;
+  /** Context only; never decides the verdict. */
+  eval_pass_rate: number | null;
+}
+
+export interface RunVersionLabelApi {
+  readonly id?: string;
+  /** @minLength 1 */
+  readonly label?: string | null;
+}
+
+export interface HarnessComparePairApi {
+  /** @minLength 1 */
+  scenario_key: string;
+  /** @minLength 1 */
+  scenario: string;
+  band: HarnessComparePairApiBand;
+  verdict: HarnessComparePairApiVerdict | null;
+  /** Pass-rate change in percentage points. */
+  difference: number | null;
+  interval: HarnessCompareIntervalApi | null;
+  current: HarnessCompareSideApi | null;
+  against: HarnessCompareSideApi | null;
+  changed_sub_goals: string[];
+  /** @minLength 1 */
+  reason: string | null;
+  removed_in: RunVersionLabelApi | null;
+}
+
+export interface HarnessCompareSummaryApi {
+  paired: number;
+  improved: number;
+  regressed: number;
+  no_meaningful_change: number;
+  inconclusive: number;
+  criteria_changed: number;
+  new: number;
+  not_applicable: number;
+  current_pass_rate: number | null;
+  against_pass_rate: number | null;
+  margin: number;
+}
+
+export interface HarnessRunPinnedVersionsApi {
+  agent: RunVersionLabelApi | null;
+  environment: RunVersionLabelApi | null;
+  suite: RunVersionLabelApi | null;
+}
+
+export interface HarnessCompareVersionsApi {
+  current: HarnessRunPinnedVersionsApi;
+  against: HarnessRunPinnedVersionsApi | null;
+}
+
+export interface HarnessCompareApi {
+  execution_id: string;
+  against_execution_id: string | null;
+  pairs: HarnessComparePairApi[];
+  summary: HarnessCompareSummaryApi;
+  versions: HarnessCompareVersionsApi;
+}
+
 export interface HarnessEnvironmentAddEvaluationApi {
   /**
    * @minLength 1
@@ -17706,18 +17802,6 @@ export interface SimulateEvalConfigResponseApi {
   readonly eval_type?: string;
   readonly regradable?: boolean;
   readonly editable?: boolean;
-}
-
-export interface RunVersionLabelApi {
-  readonly id?: string;
-  /** @minLength 1 */
-  readonly label?: string | null;
-}
-
-export interface HarnessRunPinnedVersionsApi {
-  agent: RunVersionLabelApi | null;
-  environment: RunVersionLabelApi | null;
-  suite: RunVersionLabelApi | null;
 }
 
 export type HarnessRunWarningApiPiece =
@@ -35069,6 +35153,14 @@ export type SimulateApiHarnessEnvironmentsListParams = {
    * @maximum 100
    */
   limit?: number;
+};
+
+export type SimulateApiHarnessEnvironmentsCompareParams = {
+  execution_id: string;
+  /**
+   * The run to compare against; the previous completed run if absent.
+   */
+  against_execution_id?: string;
 };
 
 export type SimulateApiHarnessEnvironmentsRunPlanParams = {

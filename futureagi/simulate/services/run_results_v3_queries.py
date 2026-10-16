@@ -1261,29 +1261,64 @@ def _breakdown_run_calls(queryset: QuerySet, field: str) -> list[dict[str, Any]]
 
 
 def build_run_comparison(
-    execution: TestExecution, queryset: QuerySet
+    execution: TestExecution,
+    queryset: QuerySet,
+    *,
+    against: TestExecution | None = None,
+    with_pairs: bool = False,
 ) -> dict[str, Any]:
-    """Compare scenario verdicts with the immediately preceding completed run.
+    """Compare scenario verdicts with ``against``, else the immediately preceding
+    completed run.
 
     Only scenarios evaluated in both runs participate. A scenario passes when every
     evaluated trial passed; any evaluated failure makes it failing. Infrastructure
     errors and unevaluated trials do not invent a verdict.
-    """
 
-    def verdicts(calls: QuerySet) -> tuple[dict[str, bool], dict[str, str]]:
+    ``with_pairs`` also judges each scenario on its pass rate over trials, where a
+    trial passes when all its sub-goal checks held (see ``run_compare``), and adds
+    ``pairs``, ``summary`` and ``versions``.
+    """
+    from simulate.services import run_compare
+
+    def verdicts(
+        calls: QuerySet,
+    ) -> tuple[dict[str, bool], dict[str, str], dict[str, run_compare.ScenarioTrials]]:
         counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
         labels: dict[str, str] = {}
-        for scenario_key, scenario_label, outcome in (
-            calls.order_by()
-            .values_list("result_scenario_key", "result_scenario", "result_outcome")
-            .iterator(chunk_size=2000)
-        ):
+        trials: dict[str, run_compare.ScenarioTrials] = {}
+        fields = ["result_scenario_key", "result_scenario", "result_outcome"]
+        calls = calls.order_by()
+        if with_pairs:
+            calls = calls.annotate(
+                result_receipt_sub_goals=_json_value(
+                    "call_metadata", "hosted_harness_receipt", "sub_goals"
+                ),
+                result_harness_status=_json_text(
+                    "call_metadata", "harness_outcome_status"
+                ),
+            )
+            fields += [
+                "result_eval_outcome",
+                "result_receipt_sub_goals",
+                "result_harness_status",
+            ]
+        for scenario_key, scenario_label, outcome, *trial in calls.values_list(
+            *fields
+        ).iterator(chunk_size=2000):
             key = str(scenario_key)
             labels[key] = str(scenario_label or key)
             if outcome == "passed":
                 counts[key][0] += 1
             elif outcome == "failed":
                 counts[key][1] += 1
+            if trial:
+                eval_outcome, sub_goals, harness_status = trial
+                trials.setdefault(key, run_compare.ScenarioTrials(labels[key])).add(
+                    sub_goals if isinstance(sub_goals, list) else None,
+                    harness_status,
+                    outcome,
+                    eval_outcome,
+                )
         return (
             {
                 scenario: failed == 0
@@ -1291,9 +1326,10 @@ def build_run_comparison(
                 if passed or failed
             },
             labels,
+            trials,
         )
 
-    previous = (
+    previous = against or (
         TestExecution.objects.filter(
             run_test=execution.run_test,
             status=TestExecution.ExecutionStatus.COMPLETED,
@@ -1303,17 +1339,31 @@ def build_run_comparison(
         .first()
     )
     if previous is None:
-        return {
+        comparison: dict[str, Any] = {
             "available": False,
             "previous_execution_id": None,
             "shared_scenarios": 0,
             "newly_passing": [],
             "newly_failing": [],
         }
-    current_verdicts, current_labels = verdicts(queryset)
-    previous_verdicts, _ = verdicts(run_calls_queryset(previous))
+        if with_pairs:
+            current_trials = verdicts(queryset)[2]
+            pairs, summary = run_compare.scenario_pairs(current_trials, {})
+            comparison.update(
+                pairs=pairs,
+                summary=summary,
+                versions={
+                    "current": run_compare.run_versions([execution.id])[
+                        str(execution.id)
+                    ],
+                    "against": None,
+                },
+            )
+        return comparison
+    current_verdicts, current_labels, current_trials = verdicts(queryset)
+    previous_verdicts, _, previous_trials = verdicts(run_calls_queryset(previous))
     shared = sorted(current_verdicts.keys() & previous_verdicts.keys())
-    return {
+    comparison = {
         "available": True,
         "previous_execution_id": str(previous.id),
         "shared_scenarios": len(shared),
@@ -1327,6 +1377,70 @@ def build_run_comparison(
             for scenario in shared
             if not current_verdicts[scenario] and previous_verdicts[scenario]
         ],
+    }
+    if with_pairs:
+        comparison.update(
+            _run_pairs(execution, previous, current_trials, previous_trials)
+        )
+    return comparison
+
+
+def _run_pairs(
+    execution: TestExecution,
+    previous: TestExecution,
+    current_trials: dict[str, Any],
+    previous_trials: dict[str, Any],
+) -> dict[str, Any]:
+    """The pairs of two runs, with the bands read from their suite versions."""
+    from simulate.services import run_compare
+
+    versions = run_compare.run_versions([execution.id, previous.id])
+    current_versions = versions[str(execution.id)]
+    previous_versions = versions[str(previous.id)]
+    environments = [
+        (one["environment"] or {}).get("id")
+        for one in (current_versions, previous_versions)
+    ]
+    digests = (
+        run_compare.sub_goal_digests(environments)
+        if all(environments) and environments[0] != environments[1]
+        else {}
+    )
+    current_suite, previous_suite = (
+        (pinned["suite"] or {}).get("id")
+        for pinned in (current_versions, previous_versions)
+    )
+    # Bands read from the older run to the newer, whichever one is compared against:
+    # by suite lineage, as a rerun or a picked version can pin an older suite, else
+    # by when the runs were made.
+    against_is_newer = run_compare.suite_is_newer(previous_suite, current_suite)
+    if against_is_newer is None:
+        against_is_newer = previous.created_at > execution.created_at
+    newer, older = (
+        (previous_trials, current_trials)
+        if against_is_newer
+        else (current_trials, previous_trials)
+    )
+    newer_suite, older_suite = (
+        (previous_suite, current_suite)
+        if against_is_newer
+        else (current_suite, previous_suite)
+    )
+    pairs, summary = run_compare.scenario_pairs(
+        current_trials,
+        previous_trials,
+        digests=digests.get(environments[0]),
+        against_digests=digests.get(environments[1]),
+        removed=run_compare.removed_keys(
+            older_suite, newer_suite, older.keys() - newer.keys()
+        ),
+        not_run=run_compare.suite_members(older_suite, newer.keys() - older.keys()),
+        against_is_newer=against_is_newer,
+    )
+    return {
+        "pairs": pairs,
+        "summary": summary,
+        "versions": {"current": current_versions, "against": previous_versions},
     }
 
 

@@ -691,6 +691,42 @@ export type ${jsonAlias} = JsonValueApi;`,
       "bundle_cached: boolean | null;",
       "HarnessRunPlanApi.bundle_cached nullable",
     );
+    // A compare side with no decided trials has no rate; a pair missing from one
+    // run has no verdict, interval or side; only a removed key has a reason.
+    for (const [typeName, fields] of [
+      [
+        "HarnessCompareSideApi",
+        ["  pass_rate: number;", "  eval_pass_rate: number;"],
+      ],
+      [
+        "HarnessComparePairApi",
+        [
+          "verdict: HarnessComparePairApiVerdict;",
+          "difference: number;",
+          "interval: HarnessCompareIntervalApi;",
+          "current: HarnessCompareSideApi;",
+          "against: HarnessCompareSideApi;",
+          "reason: string;",
+          "removed_in: RunVersionLabelApi;",
+        ],
+      ],
+      [
+        "HarnessCompareSummaryApi",
+        ["current_pass_rate: number;", "against_pass_rate: number;"],
+      ],
+      ["HarnessCompareVersionsApi", ["against: HarnessRunPinnedVersionsApi;"]],
+      ["HarnessCompareApi", ["against_execution_id: string;"]],
+    ]) {
+      for (const field of fields) {
+        schemas = assertReplaceInNamedBlock(
+          schemas,
+          `export interface ${typeName} {`,
+          field,
+          field.replace(/;$/, " | null;"),
+          `${typeName}.${field.split(":")[0].trim()} nullable`,
+        );
+      }
+    }
     // A run's version labels are null for an unnumbered version, and its pins null
     // when it has none.
     schemas = assertReplaceInNamedBlock(
@@ -1011,6 +1047,53 @@ export type ${jsonAlias} = JsonValueApi;`,
           ? anchor.replace(/\.optional\(\)$/, ".nullish()")
           : `${anchor}.nullable()`,
         `SimulateApiHarnessEnvironmentsRunPlanResponse.${label} nullable`,
+      );
+    }
+    // The same nullable compare fields. Only a pair's sides have no nested object,
+    // and only the against run's versions may be null as a whole.
+    const compareResponse =
+      "export const SimulateApiHarnessEnvironmentsCompareResponse =";
+    for (const [pattern, label] of [
+      [
+        /("(?:interval|current|removed_in)": zod\.object\(\{[^{}]*\}\))/g,
+        "pair",
+      ],
+      [/("against": zod\.object\(\{(?:[^{}]|\{[^{}]*\})*\}\))/g, "against"],
+      [
+        /("(?:agent|environment|suite)": zod\.object\(\{[^{}]*\}\))/g,
+        "versions",
+      ],
+    ]) {
+      zod = assertReplaceRegexInNamedBlock(
+        zod,
+        compareResponse,
+        pattern,
+        "$1.nullable()",
+        `SimulateApiHarnessEnvironmentsCompareResponse.${label} nullable`,
+      );
+    }
+    for (const [anchor, label] of [
+      ['"against_execution_id": zod.string().uuid()', "against_execution_id"],
+      [
+        `"verdict": zod.enum(['improved', 'regressed', 'no_meaningful_change', 'inconclusive'])`,
+        "verdict",
+      ],
+      ['"difference": zod.number()', "difference"],
+      ['"pass_rate": zod.number()', "pass_rate"],
+      ['"eval_pass_rate": zod.number()', "eval_pass_rate"],
+      ['"reason": zod.string().min(1)', "reason"],
+      ['"current_pass_rate": zod.number()', "current_pass_rate"],
+      ['"against_pass_rate": zod.number()', "against_pass_rate"],
+      ['"label": zod.string().min(1).optional()', "label"],
+    ]) {
+      zod = assertReplaceInNamedBlock(
+        zod,
+        compareResponse,
+        anchor,
+        anchor.endsWith(".optional()")
+          ? anchor.replace(/\.optional\(\)$/, ".nullish()")
+          : `${anchor}.nullable()`,
+        `SimulateApiHarnessEnvironmentsCompareResponse.${label} nullable`,
       );
     }
     for (const response of [

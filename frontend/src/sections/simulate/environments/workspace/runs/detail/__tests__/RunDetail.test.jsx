@@ -241,17 +241,21 @@ vi.mock("../CallDrawer", () => ({
 }));
 
 // Analytics opens a call on its own, with no list behind it.
-function RunAnalyticsStub({ onOpenCall }) {
+function RunAnalyticsStub({ onOpenCall, executionStatus }) {
   return (
     <button
       type="button"
+      data-status={executionStatus}
       onClick={() => onOpenCall({ id: "c9", simulationCallType: "voice" })}
     >
       open from chart
     </button>
   );
 }
-RunAnalyticsStub.propTypes = { onOpenCall: PropTypes.func };
+RunAnalyticsStub.propTypes = {
+  onOpenCall: PropTypes.func,
+  executionStatus: PropTypes.string,
+};
 vi.mock("../RunAnalytics", () => ({ default: RunAnalyticsStub }));
 
 function CallDrawerStub({ task, hasPrev, hasNext, onPrev, onNext, onClose }) {
@@ -804,6 +808,9 @@ describe("RunDetail", () => {
       queryKey: ["simulation-run-analytics-v3", "ex1"],
     });
     expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["harness-run-compare"],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
       queryKey: ["simulation-call-detail-v3"],
     });
   });
@@ -1321,6 +1328,22 @@ describe("RunDetail", () => {
       "ex1",
       expect.objectContaining({ callsShown: false }),
     );
+  });
+
+  it("tells Analytics where the run is, so a live run is not compared", async () => {
+    useRunDetail.mockReturnValue({
+      identity: { ...IDENTITY, executionStatus: "running" },
+      stats: STATS,
+      isLoading: false,
+    });
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole("tab", { name: "Analytics" }));
+
+    expect(
+      screen.getByRole("button", { name: "open from chart" }),
+    ).toHaveAttribute("data-status", "running");
   });
 
   it("marks a call opened from Analytics as not from the table", async () => {

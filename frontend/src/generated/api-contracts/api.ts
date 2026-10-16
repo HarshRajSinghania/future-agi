@@ -578,6 +578,7 @@ import type {
   HarnessAgentCredentialsResponseApi,
   HarnessAgentVersionCreateApi,
   HarnessArtifactUploadResponseApi,
+  HarnessCompareApi,
   HarnessConversationAdjustmentApi,
   HarnessConversationAdjustmentResponseApi,
   HarnessConversationEventAckApi,
@@ -1147,6 +1148,7 @@ import type {
   SimulateApiCallExecutionsListParams,
   SimulateApiHarnessConversationsCommandsParams,
   SimulateApiHarnessConversationsSessionStoreParams,
+  SimulateApiHarnessEnvironmentsCompareParams,
   SimulateApiHarnessEnvironmentsListParams,
   SimulateApiHarnessEnvironmentsRunPlanParams,
   SimulateApiHarnessEnvironmentsVersionsVersionDiffParams,
@@ -58737,6 +58739,71 @@ export const simulateApiHarnessEnvironmentsDelete = async (
   );
 };
 
+export type simulateApiHarnessEnvironmentsCompareResponse200 = {
+  data: HarnessCompareApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsCompareResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsCompareResponseSuccess =
+  simulateApiHarnessEnvironmentsCompareResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsCompareResponseError =
+  simulateApiHarnessEnvironmentsCompareResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsCompareResponse =
+  | simulateApiHarnessEnvironmentsCompareResponseSuccess
+  | simulateApiHarnessEnvironmentsCompareResponseError;
+
+export const getSimulateApiHarnessEnvironmentsCompareUrl = (
+  id: string,
+  params: SimulateApiHarnessEnvironmentsCompareParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/simulate/api/harness-environments/${id}/compare/?${stringifiedParams}`
+    : `/simulate/api/harness-environments/${id}/compare/`;
+};
+
+/**
+ * Two runs of this environment, scenario by scenario; against defaults to
+the previous completed run. Not gated on versioning: a run from before
+versioning compares too, with null versions.
+ */
+export const simulateApiHarnessEnvironmentsCompare = async (
+  id: string,
+  params: SimulateApiHarnessEnvironmentsCompareParams,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsCompareResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsCompareResponse>(
+    getSimulateApiHarnessEnvironmentsCompareUrl(id, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
 export type simulateApiHarnessEnvironmentsAddEvaluationResponse201 = {
   data: HarnessEnvironmentDetailApi;
   status: 201;
@@ -65545,6 +65612,8 @@ Query Parameters:
 - status: filter by execution status
 - limit: number of items per page (default: 10)
 - page: page number (default: 1)
+- summary: when true, each item carries only id, status and the pinned
+  versions, without reading the calls; search does not apply
  */
 export const simulateRunTestsExecutionsList = async (
   runTestId: string,

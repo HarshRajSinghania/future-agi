@@ -35683,6 +35683,149 @@ export const SimulateApiHarnessEnvironmentsDeleteParams = zod.object({
 });
 
 /**
+ * Two runs of this environment, scenario by scenario; against defaults to
+the previous completed run. Not gated on versioning: a run from before
+versioning compares too, with null versions.
+ */
+export const SimulateApiHarnessEnvironmentsCompareParams = zod.object({
+  id: zod.string(),
+});
+
+export const SimulateApiHarnessEnvironmentsCompareQueryParams = zod.object({
+  execution_id: zod.string().uuid(),
+  against_execution_id: zod
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      "The run to compare against; the previous completed run if absent.",
+    ),
+});
+
+export const SimulateApiHarnessEnvironmentsCompareResponse = zod.object({
+  execution_id: zod.string().uuid(),
+  against_execution_id: zod.string().uuid().nullable(),
+  pairs: zod.array(
+    zod.object({
+      scenario_key: zod.string().min(1),
+      scenario: zod.string().min(1),
+      band: zod.enum(["paired", "criteria_changed", "new", "not_applicable"]),
+      verdict: zod
+        .enum(["improved", "regressed", "no_meaningful_change", "inconclusive"])
+        .nullable(),
+      difference: zod
+        .number()
+        .nullable()
+        .describe("Pass-rate change in percentage points."),
+      interval: zod
+        .object({
+          low: zod.number(),
+          high: zod.number(),
+        })
+        .nullable()
+        .describe("Newcombe 95% interval of the difference."),
+      current: zod
+        .object({
+          passed: zod.number(),
+          trials: zod.number().describe("Trials a verdict was reached on."),
+          undecided: zod
+            .number()
+            .describe(
+              "Trials that ran to an end but a sub-goal check was undecided.",
+            ),
+          pass_rate: zod.number().nullable(),
+          eval_pass_rate: zod
+            .number()
+            .nullable()
+            .describe("Context only; never decides the verdict."),
+        })
+        .nullable(),
+      against: zod
+        .object({
+          passed: zod.number(),
+          trials: zod.number().describe("Trials a verdict was reached on."),
+          undecided: zod
+            .number()
+            .describe(
+              "Trials that ran to an end but a sub-goal check was undecided.",
+            ),
+          pass_rate: zod.number().nullable(),
+          eval_pass_rate: zod
+            .number()
+            .nullable()
+            .describe("Context only; never decides the verdict."),
+        })
+        .nullable(),
+      changed_sub_goals: zod.array(zod.string().min(1)),
+      reason: zod.string().min(1).nullable(),
+      removed_in: zod
+        .object({
+          id: zod.string().uuid().optional(),
+          label: zod.string().min(1).nullish(),
+        })
+        .nullable(),
+    }),
+  ),
+  summary: zod.object({
+    paired: zod.number(),
+    improved: zod.number(),
+    regressed: zod.number(),
+    no_meaningful_change: zod.number(),
+    inconclusive: zod.number(),
+    criteria_changed: zod.number(),
+    new: zod.number(),
+    not_applicable: zod.number(),
+    current_pass_rate: zod.number().nullable(),
+    against_pass_rate: zod.number().nullable(),
+    margin: zod.number(),
+  }),
+  versions: zod.object({
+    current: zod.object({
+      agent: zod
+        .object({
+          id: zod.string().uuid().optional(),
+          label: zod.string().min(1).nullish(),
+        })
+        .nullable(),
+      environment: zod
+        .object({
+          id: zod.string().uuid().optional(),
+          label: zod.string().min(1).nullish(),
+        })
+        .nullable(),
+      suite: zod
+        .object({
+          id: zod.string().uuid().optional(),
+          label: zod.string().min(1).nullish(),
+        })
+        .nullable(),
+    }),
+    against: zod
+      .object({
+        agent: zod
+          .object({
+            id: zod.string().uuid().optional(),
+            label: zod.string().min(1).nullish(),
+          })
+          .nullable(),
+        environment: zod
+          .object({
+            id: zod.string().uuid().optional(),
+            label: zod.string().min(1).nullish(),
+          })
+          .nullable(),
+        suite: zod
+          .object({
+            id: zod.string().uuid().optional(),
+            label: zod.string().min(1).nullish(),
+          })
+          .nullable(),
+      })
+      .nullable(),
+  }),
+});
+
+/**
  * Applies to scenarios graded from here on. Calls that already ran keep
 the verdicts they were given, so adding an eval does not backfill a
 column onto past results.
@@ -45867,6 +46010,8 @@ Query Parameters:
 - status: filter by execution status
 - limit: number of items per page (default: 10)
 - page: page number (default: 1)
+- summary: when true, each item carries only id, status and the pinned
+  versions, without reading the calls; search does not apply
  */
 export const SimulateRunTestsExecutionsListParams = zod.object({
   run_test_id: zod.string(),

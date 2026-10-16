@@ -5526,6 +5526,30 @@ def _version_labels(labels: dict[str, Any], execution_id: Any) -> dict[str, Any]
     }
 
 
+def _execution_summaries(request, run_test, status_filter: str) -> Response:
+    """A page of the run test's executions, newest first, as id, status and pins."""
+    executions = (
+        TestExecution.objects.filter(run_test=run_test, deleted=False)
+        .only("id", "status", "created_at")
+        .order_by("-created_at")
+    )
+    if status_filter:
+        executions = executions.filter(status=status_filter)
+    paginator = ExtendedPageNumberPagination()
+    page = paginator.paginate_queryset(executions, request)
+    labels = run_version_labels([execution.id for execution in page])
+    return paginator.get_paginated_response(
+        [
+            {
+                "id": str(execution.id),
+                "status": execution.status.title(),
+                **_version_labels(labels, execution.id),
+            }
+            for execution in page
+        ]
+    )
+
+
 class RunTestExecutionsView(APIView):
     """
     API View to get test execution data for a specific run test with search and pagination
@@ -5548,6 +5572,8 @@ class RunTestExecutionsView(APIView):
         - status: filter by execution status
         - limit: number of items per page (default: 10)
         - page: page number (default: 1)
+        - summary: when true, each item carries only id, status and the pinned
+          versions, without reading the calls; search does not apply
         """
         try:
             # Get the organization of the logged-in user
@@ -5570,6 +5596,8 @@ class RunTestExecutionsView(APIView):
             # Get query parameters
             search_query = request.query_params.get("search", "").strip()
             status_filter = request.query_params.get("status", "").strip()
+            if request.query_params.get("summary", "").lower() in ("1", "true"):
+                return _execution_summaries(request, run_test, status_filter)
 
             # Get test executions for this run test with annotations to avoid N+1 queries
             # Use annotations to calculate call metrics in a single query

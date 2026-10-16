@@ -11,6 +11,8 @@ from simulate.models import AgentDefinition, HostedHarnessJob
 from simulate.serializers.harness_environment import (
     HarnessAgentCredentialsResponseSerializer,
     HarnessAgentVersionCreateSerializer,
+    HarnessCompareQuerySerializer,
+    HarnessCompareSerializer,
     HarnessDefaultMoveSerializer,
     HarnessEnvironmentAddEvaluationSerializer,
     HarnessEnvironmentAvailableEvalsSerializer,
@@ -348,6 +350,78 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
             suite_version_id=query.get("suite_version_id"),
         )
         return Response(preview_run(job, picks))
+
+    @validated_request(
+        query_serializer=HarnessCompareQuerySerializer,
+        responses={200: HarnessCompareSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(detail=True, methods=["get"], url_path="compare")
+    def compare(self, request, pk=None):
+        """Two runs of this environment, scenario by scenario; against defaults to
+        the previous completed run. Not gated on versioning: a run from before
+        versioning compares too, with null versions."""
+        from simulate.models import TestExecution
+        from simulate.services.run_results_v3_queries import (
+            build_run_comparison,
+            run_calls_queryset,
+        )
+
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        query = request.validated_query_data
+        wanted = [query["execution_id"], query.get("against_execution_id")]
+        # A run of this environment is one of its run test's executions.
+        runs = (
+            {
+                one.id: one
+                for one in TestExecution.objects.filter(
+                    id__in=[one for one in wanted if one], run_test_id=job.run_test_id
+                )
+            }
+            if job.run_test_id
+            else {}
+        )
+        execution = runs.get(wanted[0])
+        against = runs.get(wanted[1]) if wanted[1] else None
+        if execution is None or (wanted[1] and against is None):
+            return Response(
+                {"detail": "Run not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+        if against is not None and against.id == execution.id:
+            return Response(
+                {"detail": "Pick another run to compare against"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Older or newer, as long as both finished: a run still going has no verdicts.
+        if execution.status != TestExecution.ExecutionStatus.COMPLETED:
+            raise HostedHarnessError(
+                "comparison_run_unfinished",
+                "Compare this run once it finishes",
+                details={"execution_id": str(execution.id)},
+            )
+        if (
+            against is not None
+            and against.status != TestExecution.ExecutionStatus.COMPLETED
+        ):
+            raise HostedHarnessError(
+                "comparison_run_unfinished",
+                "Pick a finished run to compare against",
+                details={"execution_id": str(against.id)},
+            )
+        comparison = build_run_comparison(
+            execution, run_calls_queryset(execution), against=against, with_pairs=True
+        )
+        return Response(
+            {
+                "execution_id": str(execution.id),
+                "against_execution_id": comparison["previous_execution_id"],
+                "pairs": comparison["pairs"],
+                "summary": comparison["summary"],
+                "versions": comparison["versions"],
+            }
+        )
 
     @validated_request(
         query_serializer=HarnessEnvironmentListQuerySerializer,

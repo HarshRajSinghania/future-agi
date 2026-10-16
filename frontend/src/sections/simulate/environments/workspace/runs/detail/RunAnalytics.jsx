@@ -31,6 +31,7 @@ import DashboardControls, {
   printDashboard,
 } from "./analytics/DashboardControls";
 import DashboardHistogram from "./analytics/DashboardHistogram";
+import RunCompare from "./analytics/RunCompare";
 import { CHART_GUIDE } from "./analytics/chartGuide";
 
 const WIDGETS = [
@@ -152,11 +153,19 @@ const tableSx = {
   "& tr:last-child td": { borderBottom: 0 },
 };
 
-export default function RunAnalytics({ executionId, onOpenCall, onOpenCalls }) {
+export default function RunAnalytics({
+  executionId,
+  env,
+  executionStatus,
+  onOpenCall,
+  onOpenCalls,
+}) {
   return (
     <AnalyticsDashboard
       key={executionId}
       executionId={executionId}
+      env={env}
+      executionStatus={executionStatus}
       onOpenCall={onOpenCall}
       onOpenCalls={onOpenCalls}
     />
@@ -164,11 +173,21 @@ export default function RunAnalytics({ executionId, onOpenCall, onOpenCalls }) {
 }
 RunAnalytics.propTypes = {
   executionId: PropTypes.string.isRequired,
+  // The run's environment; without it there is no run-to-run comparison.
+  env: PropTypes.object,
+  // The run's lifecycle status; a run still going is not compared yet.
+  executionStatus: PropTypes.string,
   onOpenCall: PropTypes.func,
   onOpenCalls: PropTypes.func,
 };
 
-function AnalyticsDashboard({ executionId, onOpenCall, onOpenCalls }) {
+function AnalyticsDashboard({
+  executionId,
+  env,
+  executionStatus,
+  onOpenCall,
+  onOpenCalls,
+}) {
   const { data, isPending, isError, refetch } = useRunAnalytics(executionId);
   const printable = useRef(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -840,6 +859,13 @@ function AnalyticsDashboard({ executionId, onOpenCall, onOpenCalls }) {
             </Typography>
           )}
         </Box>
+        {env?.id && env?.versioning?.enabled && (
+          <RunCompare
+            env={env}
+            executionId={executionId}
+            executionStatus={executionStatus}
+          />
+        )}
         {SECTIONS.map((section) => {
           const visible = widgets.filter(
             (widget) => widget.section === section,

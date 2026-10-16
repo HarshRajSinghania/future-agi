@@ -25,10 +25,16 @@ const STOPPABLE_RUN_STATUSES = STOPPABLE_STATUSES.filter(
 // endpoint is already registered — this adds no apiPath.
 export const RUNS_PAGE_SIZE = 10;
 
-export function listRunTestExecutions(runTestId, { page, limit } = {}) {
+// `summary` reads only each run's id, status and pinned versions, not its calls.
+export function listRunTestExecutions(
+  runTestId,
+  { page, limit, summary } = {},
+) {
   return axios
     .get(endpoints.runTests.detailExecutions(runTestId), {
-      params: page ? { page, limit } : undefined,
+      params: page
+        ? { page, limit, ...(summary ? { summary: true } : {}) }
+        : undefined,
     })
     .then((res) => res.data);
 }

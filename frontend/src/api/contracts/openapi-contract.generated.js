@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1073,
+  endpointCount: 1074,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28150,6 +28150,38 @@ export const OPENAPI_CONTRACT = Object.freeze({
         requestBody: null,
         queryParameters: {},
         responses: {
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/compare/": {
+      get: {
+        operationId: "simulate_api_harness-environments_compare",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          execution_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          against_execution_id: {
+            required: false,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/HarnessCompare",
+          },
           default: {
             $ref: "#/definitions/ManagementAPIErrorResponse",
           },
@@ -62610,6 +62642,41 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessCompare: {
+      required: [
+        "execution_id",
+        "against_execution_id",
+        "pairs",
+        "summary",
+        "versions",
+      ],
+      type: "object",
+      properties: {
+        execution_id: {
+          title: "Execution id",
+          type: "string",
+          format: "uuid",
+        },
+        against_execution_id: {
+          title: "Against execution id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        pairs: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessComparePair",
+          },
+        },
+        summary: {
+          $ref: "#/definitions/HarnessCompareSummary",
+        },
+        versions: {
+          $ref: "#/definitions/HarnessCompareVersions",
+        },
+      },
+    },
     HarnessConversationAdjustment: {
       required: ["instruction"],
       type: "object",
@@ -92573,6 +92640,157 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessComparePair: {
+      required: [
+        "scenario_key",
+        "scenario",
+        "band",
+        "verdict",
+        "difference",
+        "interval",
+        "current",
+        "against",
+        "changed_sub_goals",
+        "reason",
+        "removed_in",
+      ],
+      type: "object",
+      properties: {
+        scenario_key: {
+          title: "Scenario key",
+          type: "string",
+          minLength: 1,
+        },
+        scenario: {
+          title: "Scenario",
+          type: "string",
+          minLength: 1,
+        },
+        band: {
+          title: "Band",
+          type: "string",
+          enum: ["paired", "criteria_changed", "new", "not_applicable"],
+        },
+        verdict: {
+          title: "Verdict",
+          type: "string",
+          enum: [
+            "improved",
+            "regressed",
+            "no_meaningful_change",
+            "inconclusive",
+          ],
+          "x-nullable": true,
+        },
+        difference: {
+          title: "Difference",
+          description: "Pass-rate change in percentage points.",
+          type: "number",
+          "x-nullable": true,
+        },
+        interval: {
+          $ref: "#/definitions/HarnessCompareInterval",
+        },
+        current: {
+          $ref: "#/definitions/HarnessCompareSide",
+        },
+        against: {
+          $ref: "#/definitions/HarnessCompareSide",
+        },
+        changed_sub_goals: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        reason: {
+          title: "Reason",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        removed_in: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+      },
+    },
+    HarnessCompareSummary: {
+      required: [
+        "paired",
+        "improved",
+        "regressed",
+        "no_meaningful_change",
+        "inconclusive",
+        "criteria_changed",
+        "new",
+        "not_applicable",
+        "current_pass_rate",
+        "against_pass_rate",
+        "margin",
+      ],
+      type: "object",
+      properties: {
+        paired: {
+          title: "Paired",
+          type: "integer",
+        },
+        improved: {
+          title: "Improved",
+          type: "integer",
+        },
+        regressed: {
+          title: "Regressed",
+          type: "integer",
+        },
+        no_meaningful_change: {
+          title: "No meaningful change",
+          type: "integer",
+        },
+        inconclusive: {
+          title: "Inconclusive",
+          type: "integer",
+        },
+        criteria_changed: {
+          title: "Criteria changed",
+          type: "integer",
+        },
+        new: {
+          title: "New",
+          type: "integer",
+        },
+        not_applicable: {
+          title: "Not applicable",
+          type: "integer",
+        },
+        current_pass_rate: {
+          title: "Current pass rate",
+          type: "number",
+          "x-nullable": true,
+        },
+        against_pass_rate: {
+          title: "Against pass rate",
+          type: "number",
+          "x-nullable": true,
+        },
+        margin: {
+          title: "Margin",
+          type: "number",
+        },
+      },
+    },
+    HarnessCompareVersions: {
+      required: ["current", "against"],
+      type: "object",
+      properties: {
+        current: {
+          $ref: "#/definitions/HarnessRunPinnedVersions",
+        },
+        against: {
+          $ref: "#/definitions/HarnessRunPinnedVersions",
+        },
+      },
+    },
     HarnessConversationEvent: {
       required: [
         "schema_version",
@@ -110395,6 +110613,80 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessCompareInterval: {
+      description: "Newcombe 95% interval of the difference.",
+      required: ["low", "high"],
+      type: "object",
+      properties: {
+        low: {
+          title: "Low",
+          type: "number",
+        },
+        high: {
+          title: "High",
+          type: "number",
+        },
+      },
+      "x-nullable": true,
+    },
+    HarnessCompareSide: {
+      required: [
+        "passed",
+        "trials",
+        "undecided",
+        "pass_rate",
+        "eval_pass_rate",
+      ],
+      type: "object",
+      properties: {
+        passed: {
+          title: "Passed",
+          type: "integer",
+        },
+        trials: {
+          title: "Trials",
+          description: "Trials a verdict was reached on.",
+          type: "integer",
+        },
+        undecided: {
+          title: "Undecided",
+          description:
+            "Trials that ran to an end but a sub-goal check was undecided.",
+          type: "integer",
+        },
+        pass_rate: {
+          title: "Pass rate",
+          type: "number",
+          "x-nullable": true,
+        },
+        eval_pass_rate: {
+          title: "Eval pass rate",
+          description: "Context only; never decides the verdict.",
+          type: "number",
+          "x-nullable": true,
+        },
+      },
+      "x-nullable": true,
+    },
+    RunVersionLabel: {
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+          readOnly: true,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          readOnly: true,
+          minLength: 1,
+          "x-nullable": true,
+        },
+      },
+      "x-nullable": true,
+    },
     HarnessEnvironmentEvalInput: {
       required: ["key", "source", "label"],
       type: "object",
@@ -110920,25 +111212,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "string",
           maxLength: 255,
           minLength: 1,
-        },
-      },
-      "x-nullable": true,
-    },
-    RunVersionLabel: {
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          format: "uuid",
-          readOnly: true,
-        },
-        label: {
-          title: "Label",
-          type: "string",
-          readOnly: true,
-          minLength: 1,
-          "x-nullable": true,
         },
       },
       "x-nullable": true,

@@ -17,6 +17,7 @@ import {
 import { exportRunResults } from "src/api/simulate-environments/runAnalytics";
 import {
   callDetailKeyPrefix,
+  compareRunsKeyPrefix,
   runAnalyticsKey,
 } from "src/api/simulate-environments/runEvals";
 
@@ -127,6 +128,7 @@ export default function RunDetail({
       executionStatus !== "evaluating"
     ) {
       queryClient.invalidateQueries({ queryKey: runAnalyticsKey(executionId) });
+      queryClient.invalidateQueries({ queryKey: compareRunsKeyPrefix });
       queryClient.invalidateQueries({ queryKey: callDetailKeyPrefix });
     }
   }, [executionStatus, executionId, queryClient]);
@@ -464,6 +466,8 @@ export default function RunDetail({
           {tab === "analytics" && (
             <RunAnalytics
               executionId={executionId}
+              env={env}
+              executionStatus={executionStatus}
               onOpenCall={(task) =>
                 showCall({ task, source: "analytics", page: null })
               }

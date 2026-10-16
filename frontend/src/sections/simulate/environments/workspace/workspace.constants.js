@@ -57,21 +57,25 @@ export const WORKSPACE_COPY = {
   buildingLabel: "Building",
   finalizingLabel: "Finalizing",
   failedLabel: "Failed",
-  liveTooltip: "Environment is ready to run. You can edit via the builder or inline.",
+  liveTooltip:
+    "Environment is ready to run. You can edit via the builder or inline.",
   buildingTooltip: "Environment is still being built…",
   finalizingTooltip: "Wrapping up the build…",
   cancellingLabel: "Cancelling",
   cancellingTooltip: "Stopping the build and cleaning up its sandbox.",
   cancelledLabel: "Cancelled",
   cancelledTooltip: "You cancelled this build.",
-  runningTooltip: "A simulation is running. Results land under Runs when it finishes.",
+  runningTooltip:
+    "A simulation is running. Results land under Runs when it finishes.",
   failedTooltip: "This environment failed to build.",
   run: "Run simulation",
   moreActions: "More actions",
   fork: "Fork environment",
-  forkHint: "Duplicate the world for a different agent or team. Agent + runs reset.",
+  forkHint:
+    "Duplicate the world for a different agent or team. Agent + runs reset.",
   deleteEnv: "Delete environment",
-  deleteEnvHint: "Remove this environment and cancel any live run. This can't be undone.",
+  deleteEnvHint:
+    "Remove this environment and cancel any live run. This can't be undone.",
   notFound: {
     title: "Environment not found",
     body: "It may have been removed from your workspace.",
@@ -215,7 +219,8 @@ export const VERSIONS_COPY = {
     changes: (label) => `What changed in ${label}`,
     compareWith: "Compared with",
     previous: "Its previous version",
-    first: "This is the first version, so there is nothing earlier to compare with.",
+    first:
+      "This is the first version, so there is nothing earlier to compare with.",
     noChange: "Nothing changed.",
     noRecord: "No change record for this version.",
     notComparable: "These two versions can't be compared.",
@@ -231,7 +236,8 @@ export const VERSIONS_COPY = {
     modality: "Modality",
     subGoals: "Sub-goals",
     files: "World files",
-    filesUnknown: "World files of the earlier version aren't known, so file changes aren't shown.",
+    filesUnknown:
+      "World files of the earlier version aren't known, so file changes aren't shown.",
     added: "Added",
     removed: "Removed",
     changed: "Changed",
@@ -425,6 +431,68 @@ export const RUN_DIALOG_COPY = {
   run: "Run",
   runAnyway: "Run anyway",
   starting: "Starting…",
+};
+
+// Comparing a run with another run of the same environment, scenario by
+// scenario, on pass rates over trials.
+export const COMPARE_COPY = {
+  heading: "Compare runs",
+  subtitle: (margin) =>
+    `Pass rate over trials, per scenario. Changes within ±${margin} points are not meaningful; evals are shown for context only.`,
+  picker: "Compare against",
+  previousRun: "Previous run",
+  thisRun: "This run",
+  loading: "Comparing runs…",
+  error: "Couldn't compare these runs. Try another run.",
+  nothingBefore: "There is no earlier run to compare against.",
+  unfinished: "Compare is available when this run finishes.",
+  versions: (label, pieces) => `${label}: ${pieces || "before versioning"}`,
+  beforeVersioning: "before versioning",
+  pieces: { agent: "Agent", environment: "Env", suite: "Scenarios" },
+  verdicts: {
+    improved: "Improved",
+    regressed: "Regressed",
+    no_meaningful_change: "No meaningful change",
+    inconclusive: "Inconclusive",
+  },
+  bands: {
+    new: "New",
+    not_applicable: "N/A",
+    criteria_changed: "Criteria changed",
+  },
+  interval: (low, high) => `95% range ${low} to ${high} pts`,
+  newHint: "Only in this run",
+  newInComparedHint: "Only in the compared run",
+  notApplicableHint: "Not in this run",
+  notRunInComparedHint: "Not in the compared run",
+  removed: (reason, label) =>
+    [reason, label ? `in Scenarios ${label}` : null].filter(Boolean).join(" "),
+  loadMore: "Load older runs",
+  loadingMore: "Loading older runs…",
+  noOlderRuns: "No older runs",
+  loadingRuns: "Loading runs…",
+  runsError: "Couldn't load runs. Try again",
+  noOtherRuns: "No other finished runs",
+  criteriaHint: (names) => `Sub-goal changed: ${names.join(", ")}`,
+  columns: {
+    scenario: "Scenario",
+    current: "This run",
+    against: "Compared run",
+    change: "Change",
+    verdict: "Verdict",
+    evals: "Evals",
+  },
+  passed: (passed, trials, undecided) =>
+    `${passed} / ${trials} trials${undecided ? ` · ${undecided} undecided` : ""}`,
+  summary: {
+    improved: "improved",
+    regressed: "regressed",
+    no_meaningful_change: "no meaningful change",
+    inconclusive: "inconclusive",
+    new: "new",
+    not_applicable: "n/a",
+    criteria_changed: "criteria changed",
+  },
 };
 
 // The run's agent is not the one its environment version was built with.
