@@ -228,3 +228,19 @@ def test_an_async_run_records_the_jev_message(user, workspace, jev_template):
         "TypeSafe's rate limit was reached. Try again shortly."
     )
     emit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "model,warns", [("jev-latest", False), ("jev-1.13.0", False), ("gpt-5", True)]
+)
+def test_only_unknown_non_jev_models_warn_on_the_legacy_call_type(model, warns):
+    from structlog.testing import capture_logs
+
+    from sdk.utils.helpers import _get_api_call_type
+    from tfc.constants.api_calls import APICallTypeChoices
+
+    with capture_logs() as logs:
+        api_call_type = _get_api_call_type(model)
+    assert api_call_type == APICallTypeChoices.TURING_LARGE_EVALUATOR.value
+    warned = any(e["event"] == "unknown_model_for_api_call_type" for e in logs)
+    assert warned is warns

@@ -26,7 +26,12 @@ def _get_api_call_type(model: str):
                 # Non-Turing/Protect models (e.g. "gpt-5", "gemini-...") are
                 # legitimate user input but not part of ModelChoices. This is
                 # expected, not an error: fall back to the default api call type.
-                logger.warning("unknown_model_for_api_call_type", model=model)
+                # Jev models take this row on purpose (there is no Jev
+                # APICallType), so they don't warn on every run.
+                from tfc.ee_gates import is_jev_model
+
+                if not is_jev_model(model):
+                    logger.warning("unknown_model_for_api_call_type", model=model)
                 return APICallTypeChoices.TURING_LARGE_EVALUATOR.value
 
         return model_to_api_call_type.get(
