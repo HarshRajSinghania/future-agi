@@ -32,6 +32,7 @@ import {
   runOutcome,
   CLOSED_GROUP_VIEW,
   neutralCheckboxSx,
+  pinnedLeftSx,
 } from "./traceTable.constants";
 import {
   SubTasksCell,
@@ -83,6 +84,8 @@ const textCellSx = (width) => ({
 // The narrow first column that holds a call's tick when rows can be selected.
 const checkboxCellSx = {
   ...bodyCellSx,
+  ...pinnedLeftSx,
+  zIndex: 1,
   width: 44,
   minWidth: 44,
   px: 1,
@@ -124,6 +127,7 @@ export default function TraceTable({
   onGroupViewChange,
   expandedForRef: expandedForRefProp,
   runActive = false,
+  renderEvalHeaderAction = null,
   selection = null,
 }) {
   // A parent that unmounts this table (a filter's loading or empty state)
@@ -235,7 +239,16 @@ export default function TraceTable({
         {selection && (
           // The tick is its own control: this cell has no open-the-call click,
           // and a row click elsewhere opens the call without touching it.
-          <TableCell sx={checkboxCellSx}>
+          <TableCell
+            sx={{
+              ...checkboxCellSx,
+              // The row's open-call tint, layered over the opaque base.
+              ...(active && {
+                backgroundImage: (th) =>
+                  `linear-gradient(${th.palette.action.selected}, ${th.palette.action.selected})`,
+              }),
+            }}
+          >
             {selection.canSelect(t) && (
               <Checkbox
                 size="small"
@@ -525,7 +538,11 @@ export default function TraceTable({
           <TableHead>
             {bandSegments.length > 0 && (
               <TableRow>
-                {selection && <TableCell sx={bandCellSx} />}
+                {selection && (
+                  <TableCell
+                    sx={{ ...bandCellSx, ...pinnedLeftSx, zIndex: 4 }}
+                  />
+                )}
                 {bandSegments.map((segment) => (
                   <TableCell
                     key={segment.name}
@@ -539,7 +556,14 @@ export default function TraceTable({
             )}
             <TableRow>
               {selection && (
-                <TableCell sx={{ ...headSx, ...checkboxHeadSx }}>
+                <TableCell
+                  sx={{
+                    ...headSx,
+                    ...checkboxHeadSx,
+                    ...pinnedLeftSx,
+                    zIndex: 4,
+                  }}
+                >
                   <Checkbox
                     size="small"
                     checked={selection.pageChecked}
@@ -608,20 +632,39 @@ export default function TraceTable({
               {show("tokens") && (
                 <TableCell sx={{ ...headSx, width: 120 }}>Tokens</TableCell>
               )}
-              {scoredColumns.map((e) => (
-                <TableCell key={e.id} sx={{ ...headSx, width: 150 }}>
+              {scoredColumns.map((e) => {
+                // Sub-goal columns share this row but aren't evals, so only
+                // an eval's own column gets the action.
+                const action =
+                  renderEvalHeaderAction && evals.includes(e)
+                    ? renderEvalHeaderAction(e)
+                    : null;
+                const name = (
                   <Typography
                     noWrap
                     sx={{
                       typography: "s2",
                       fontWeight: "fontWeightMedium",
                       color: "text.secondary",
+                      ...(action && { flex: 1, minWidth: 0 }),
                     }}
                   >
                     {e.name}
                   </Typography>
-                </TableCell>
-              ))}
+                );
+                return (
+                  <TableCell key={e.id} sx={{ ...headSx, width: 150 }}>
+                    {action ? (
+                      <Stack direction="row" alignItems="center" spacing={0.5}>
+                        {name}
+                        <Box sx={{ flexShrink: 0 }}>{action}</Box>
+                      </Stack>
+                    ) : (
+                      name
+                    )}
+                  </TableCell>
+                );
+              })}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -675,6 +718,8 @@ TraceTable.propTypes = {
   onGroupViewChange: PropTypes.func,
   expandedForRef: PropTypes.shape({ current: PropTypes.any }),
   runActive: PropTypes.bool,
+  // Optional per-eval node shown after the eval's name in its header cell.
+  renderEvalHeaderAction: PropTypes.func,
   // Present when calls can be ticked: adds a checkbox column. `canSelect`
   // decides per call; the page box covers this page's selectable calls.
   selection: PropTypes.shape({
