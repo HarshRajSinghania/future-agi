@@ -32149,6 +32149,33 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    "/simulate/v3/test-executions/{test_execution_id}/traces/": {
+      get: {
+        operationId: "simulate_v3_test_execution_traces",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          call_execution_id: {
+            required: false,
+            schema: {
+              type: "string",
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/RunTracesV3Response",
+          },
+          503: {
+            $ref: "#/definitions/ApiDetailErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
     "/telemetry/heartbeat/": {
       post: {
         operationId: "telemetry_heartbeat_create",
@@ -74224,6 +74251,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    RunTracesV3Response: {
+      required: ["project_id", "traces"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        traces: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/RunTrace",
+          },
+        },
+      },
+    },
     SAMLErrorResponse: {
       required: ["status"],
       type: "object",
@@ -100450,6 +100495,51 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Run test name",
           type: "string",
           minLength: 1,
+        },
+      },
+    },
+    RunTrace: {
+      required: [
+        "trace_id",
+        "name",
+        "start_time",
+        "status",
+        "latency_ms",
+        "call_execution_id",
+      ],
+      type: "object",
+      properties: {
+        trace_id: {
+          title: "Trace id",
+          type: "string",
+          minLength: 1,
+        },
+        name: {
+          title: "Name",
+          type: "string",
+          "x-nullable": true,
+        },
+        start_time: {
+          title: "Start time",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          "x-nullable": true,
+        },
+        latency_ms: {
+          title: "Latency ms",
+          type: "integer",
+          "x-nullable": true,
+        },
+        call_execution_id: {
+          title: "Call execution id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
         },
       },
     },

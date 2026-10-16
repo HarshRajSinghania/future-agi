@@ -1027,6 +1027,7 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/simulate/v3/test-executions/{test_execution_id}/analytics/": ["get"],
       "/simulate/v3/test-executions/{test_execution_id}/calls/": ["get"],
       "/simulate/v3/test-executions/{test_execution_id}/export/": ["post"],
+      "/simulate/v3/test-executions/{test_execution_id}/traces/": ["get"],
     },
     telemetry: {
       "/telemetry/heartbeat/": ["post"],
@@ -2303,6 +2304,7 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/simulate/v3/test-executions/{test_execution_id}/analytics/": ["get"],
   "/simulate/v3/test-executions/{test_execution_id}/calls/": ["get"],
   "/simulate/v3/test-executions/{test_execution_id}/export/": ["post"],
+  "/simulate/v3/test-executions/{test_execution_id}/traces/": ["get"],
   "/telemetry/heartbeat/": ["post"],
   "/telemetry/register/": ["post"],
   "/tracer/bulk-annotation/": ["post"],
