@@ -360,6 +360,14 @@ const TurnRow = React.forwardRef(
             </Typography>
           )}
 
+          {turn.role === "sub_actor" && (
+            <Typography
+              sx={{ fontSize: 10, color: "text.secondary", fontWeight: 500 }}
+            >
+              {turn.speakerName || "Someone else"} · not the customer
+            </Typography>
+          )}
+
           {showTemporalMetadata &&
             turn.duration != null &&
             turn.duration > 0 && (

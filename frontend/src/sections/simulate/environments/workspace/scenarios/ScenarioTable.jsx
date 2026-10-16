@@ -335,6 +335,11 @@ export default function ScenarioTable({ rows, groups, onEdit, onRemove, onHideGr
                       <TruncTooltip title={row.summary || row.title}>
                         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{row.summary || row.title}</Typography>
                       </TruncTooltip>
+                      {row.subActors?.length > 0 && (
+                        <Typography noWrap sx={{ typography: "s3", color: "text.secondary" }}>
+                          With {row.subActors.join(", ")}
+                        </Typography>
+                      )}
                     </TableCell>
 
                     <TableCell sx={{ overflow: "hidden", verticalAlign: "top" }}>

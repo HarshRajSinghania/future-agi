@@ -33,6 +33,9 @@ export const OVERVIEW_COPY = {
   dependsTitle: "What it depends on",
   dependsSubtitle: "Built and torn down with the environment",
   dependsEmpty: "No dependencies recorded for this environment.",
+  castTitle: "Who else is in the world",
+  castSubtitle: "Besides the agent and the person it serves",
+  castUsedBy: (count) => `${count} scenario${count === 1 ? "" : "s"}`,
   seedBlurb: (rows) =>
     `${rows.toLocaleString()} rows that fill this environment before your agent arrives: the world it actually works in. Rebuilt for every task, so nothing carries over.`,
   usedBy: (name) => `used by ${Array.isArray(name) ? name.join(", ") : name}`,

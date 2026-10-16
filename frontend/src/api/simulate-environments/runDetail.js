@@ -384,7 +384,8 @@ function relativeTime(row, end = false) {
 export function functionCallTranscriptRows(calls = []) {
   return (Array.isArray(calls) ? calls : []).map((call, index) => {
     const duration = call.duration_ms ?? call.durationMs;
-    const heading = `Function call · ${call.name || call.function?.name || "tool"}${duration != null ? ` · ${duration}ms` : ""}`;
+    const fault = call.fault || (String(call.error || "").startsWith("fault:") ? String(call.error).split(":")[1] : "");
+    const heading = `Function call · ${call.name || call.function?.name || "tool"}${duration != null ? ` · ${duration}ms` : ""}${fault ? ` · injected ${fault}` : ""}`;
     const args = call.arguments ?? call.function?.arguments;
     const result = call.result ?? call.output;
     return {
@@ -510,6 +511,7 @@ export function mapCallDetail(raw) {
   const isChat = raw.simulation_call_type === "text";
   const turns = callTranscript(raw).map((t) => ({
     role: normalizeRole(t.speaker_role ?? t.role),
+    speakerName: t.speaker_name ?? t.name ?? "",
     text: messageText(t.content),
     at: t.start_time_seconds ?? null,
     toolCalls: t.tool_calls ?? null,
