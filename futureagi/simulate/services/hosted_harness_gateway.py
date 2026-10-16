@@ -2400,6 +2400,7 @@ class HostedHarnessGateway:
                 "ALK_CLAUDE_GATEWAY_URL",
                 "ALK_CLAUDE_GATEWAY_API_KEY",
                 "CLAUDE_CODE_USE_VERTEX",
+                "HARNESS_SUB_ACTORS",
                 "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
                 "ALK_CAB_GUEST_POC_PIN",
             }
@@ -2728,6 +2729,7 @@ class HostedHarnessGateway:
                     "ALK_CLAUDE_GATEWAY_URL",
                     "ALK_CLAUDE_GATEWAY_API_KEY",
                     "CLAUDE_CODE_USE_VERTEX",
+                    "HARNESS_SUB_ACTORS",
                     "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
                     "ALK_CAB_GUEST_POC_PIN",
                 }
