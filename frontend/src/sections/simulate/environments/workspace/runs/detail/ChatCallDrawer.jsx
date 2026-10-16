@@ -205,6 +205,7 @@ export default function ChatCallDrawer({
                 <CallTracesPanel
                   traces={callTraces.traces}
                   projectId={callTraces.projectId}
+                  testExecutionId={executionId}
                   isError={callTraces.isError}
                 />
               </Box>

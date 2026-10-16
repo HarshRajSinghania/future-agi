@@ -14,6 +14,7 @@ const MONO = "ui-monospace, Menlo, monospace";
 export default function CallTracesPanel({
   traces,
   projectId,
+  testExecutionId,
   isError = false,
 }) {
   const { setTraceDetailDrawerOpen, setVisibleTraces, resetStates } =
@@ -59,7 +60,11 @@ export default function CallTracesPanel({
               key={trace.traceId}
               trace={trace}
               onOpen={() =>
-                setTraceDetailDrawerOpen({ traceId: trace.traceId, projectId })
+                setTraceDetailDrawerOpen({
+                  traceId: trace.traceId,
+                  projectId,
+                  testExecutionId,
+                })
               }
             />
           ))}
@@ -80,6 +85,7 @@ CallTracesPanel.propTypes = {
     }),
   ).isRequired,
   projectId: PropTypes.string,
+  testExecutionId: PropTypes.string,
   isError: PropTypes.bool,
 };
 

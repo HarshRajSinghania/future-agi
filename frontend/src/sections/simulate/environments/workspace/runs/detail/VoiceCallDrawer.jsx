@@ -103,13 +103,14 @@ export default function VoiceCallDrawer({
                 <CallTracesPanel
                   traces={callTraces.traces}
                   projectId={callTraces.projectId}
+                  testExecutionId={executionId}
                   isError={callTraces.isError}
                 />
               ),
             },
           ]
         : undefined,
-    [callTraces.projectId, callTraces.isError, callTraces.traces],
+    [callTraces.projectId, callTraces.isError, callTraces.traces, executionId],
   );
 
   if (isError) {
