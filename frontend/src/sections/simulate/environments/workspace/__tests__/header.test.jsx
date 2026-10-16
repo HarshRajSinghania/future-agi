@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -15,10 +15,37 @@ import VersionBar from "../VersionBar";
 // server switching versioning off after the page loaded: the last answer is
 // still cached, but the refetch failed with versioning_disabled.
 const versionsResponse = { current: undefined };
+// What a move of the default answers: "pending", { error } or { versions } (the
+// list the server returns, which the stubbed versions query then serves).
+const moveAnswer = { current: undefined };
+const moveCalls = [];
 vi.mock("src/api/simulate-environments/versions", async () => {
-  const actual = await vi.importActual("src/api/simulate-environments/versions");
+  const actual = await vi.importActual(
+    "src/api/simulate-environments/versions",
+  );
+  const { useState } = await import("react");
   return {
     ...actual,
+    useMoveDefault: vi.fn(() => {
+      const [status, setStatus] = useState({});
+      return {
+        isPending: Boolean(status.pending),
+        isError: Boolean(status.error),
+        error: status.error || null,
+        reset: () => setStatus({}),
+        mutate: (variables, { onSettled } = {}) => {
+          moveCalls.push(variables);
+          const answer = moveAnswer.current;
+          if (answer === "pending") {
+            setStatus({ pending: true });
+            return;
+          }
+          if (answer?.versions) versionsResponse.current = answer.versions;
+          setStatus(answer?.error ? { error: answer.error } : {});
+          onSettled?.();
+        },
+      };
+    }),
     useEnvironmentVersions: vi.fn((envId, { enabled } = {}) => {
       const answer = versionsResponse.current;
       if (!enabled || !answer) return { data: undefined, isSuccess: false };
@@ -124,6 +151,8 @@ describe("LivePill", () => {
 describe("EnvVersionPin", () => {
   afterEach(() => {
     versionsResponse.current = undefined;
+    moveAnswer.current = undefined;
+    moveCalls.length = 0;
   });
 
   it("renders nothing while versioning is off", () => {
@@ -183,7 +212,7 @@ describe("EnvVersionPin", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("names the default version and lists every version, read only", async () => {
+  it("names the default version and lists every version", async () => {
     const user = userEvent.setup();
     versionsResponse.current = VERSIONS;
     render(<EnvVersionPin env={VERSIONED_ENV} />);
@@ -198,10 +227,185 @@ describe("EnvVersionPin", () => {
     expect(items[0]).toHaveTextContent("1 tool added");
     expect(items[0]).toHaveTextContent("by Asha");
     expect(items[1]).toHaveTextContent("v1");
-    expect(items[1]).not.toHaveTextContent("default");
-    // Changing the default isn't offered: no item is an action.
-    expect(screen.queryByRole("menuitem")).toBeNull();
-    expect(screen.getByText(/Changing the default isn't available yet/)).toBeInTheDocument();
+    expect(items[1]).not.toHaveTextContent(/\bdefault\b/);
+    expect(
+      screen.getByText(/You can roll back to an earlier one/),
+    ).toBeInTheDocument();
+  });
+
+  const openPin = async (user) => {
+    render(<EnvVersionPin env={VERSIONED_ENV} />);
+    await user.click(screen.getByRole("button", { name: /env v2/i }));
+  };
+  const rollBackToV1 = async (user) => {
+    await openPin(user);
+    await user.click(screen.getByRole("button", { name: "Roll back to v1" }));
+  };
+  const confirmButton = () =>
+    screen.getByRole("button", { name: /^Mak(e|ing) default/ });
+
+  it("offers a move only on active versions that aren't the default", async () => {
+    const user = userEvent.setup();
+    versionsResponse.current = {
+      ...VERSIONS,
+      environment: [
+        item({ id: "e3", label: "v3" }),
+        ...VERSIONS.environment,
+        item({ id: "e0", label: "v0", status: "discarded" }),
+        item({ id: "e4", label: "v4", status: "draft" }),
+      ],
+    };
+    await openPin(user);
+
+    const items = screen.getAllByTestId("env-version-item");
+    // Newer than the default is a plain move; older is a roll back.
+    expect(
+      within(items[0]).getByRole("button", { name: "Make v3 the default" }),
+    ).toBeInTheDocument();
+    expect(within(items[1]).queryByRole("button")).toBeNull();
+    expect(
+      within(items[2]).getByRole("button", { name: "Roll back to v1" }),
+    ).toBeInTheDocument();
+    expect(within(items[3]).queryByRole("button")).toBeNull();
+    expect(within(items[4]).queryByRole("button")).toBeNull();
+  });
+
+  it("asks first, then makes the version the default against the default shown", async () => {
+    const user = userEvent.setup();
+    versionsResponse.current = VERSIONS;
+    moveAnswer.current = {
+      versions: {
+        ...VERSIONS,
+        environment: [
+          { ...VERSIONS.environment[0], is_default: false },
+          { ...VERSIONS.environment[1], is_default: true },
+        ],
+      },
+    };
+    await rollBackToV1(user);
+
+    const confirm = screen.getByRole("dialog", {
+      name: "Make v1 the default environment?",
+    });
+    expect(confirm).toHaveTextContent(
+      "New runs use it. If this combination hasn't run before, the next run prepares it first.",
+    );
+    expect(moveCalls).toEqual([]);
+
+    await user.click(confirmButton());
+
+    expect(moveCalls).toEqual([
+      { piece: "environment", versionId: "e1", expectedDefaultId: "e2" },
+    ]);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Make v1 the default environment?",
+        }),
+      ).toBeNull(),
+    );
+    const items = screen.getAllByTestId("env-version-item");
+    expect(items[1]).toHaveTextContent("default");
+    expect(within(items[1]).queryByRole("button")).toBeNull();
+    // The pin under the open list names the new default.
+    expect(
+      screen.getByRole("button", { name: "env v1", hidden: true }),
+    ).toBeInTheDocument();
+  });
+
+  it("does nothing when the confirmation is cancelled", async () => {
+    const user = userEvent.setup();
+    versionsResponse.current = VERSIONS;
+    await rollBackToV1(user);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Make v1 the default environment?",
+        }),
+      ).toBeNull(),
+    );
+    expect(moveCalls).toEqual([]);
+  });
+
+  it("keeps the confirmation open and busy while the move is pending", async () => {
+    const user = userEvent.setup();
+    versionsResponse.current = VERSIONS;
+    moveAnswer.current = "pending";
+    await rollBackToV1(user);
+    await user.click(confirmButton());
+
+    expect(
+      screen.getByRole("dialog", { name: "Make v1 the default environment?" }),
+    ).toBeInTheDocument();
+    expect(confirmButton()).toHaveTextContent("Making default…");
+    expect(confirmButton()).toBeDisabled();
+    // Cancel and the close X are visibly off too, not just ignored.
+    const dialog = screen.getByRole("dialog", {
+      name: "Make v1 the default environment?",
+    });
+    const buttons = within(dialog).getAllByRole("button");
+    expect(buttons).toHaveLength(3);
+    for (const button of buttons) {
+      expect(button).toBeDisabled();
+    }
+  });
+
+  it.each([
+    [
+      "the default moved since the list was opened",
+      {
+        statusCode: 409,
+        error: "version_conflict",
+        message: "The default changed to v3 since you opened this; pick again",
+        piece: "environment",
+      },
+      "The default changed to v3 since you opened this; pick again",
+    ],
+    [
+      "the combination isn't prepared",
+      {
+        statusCode: 422,
+        error: "rollback_unavailable",
+        message: "This combination hasn't been prepared yet",
+        piece: "environment",
+      },
+      "This combination hasn't been prepared yet",
+    ],
+    [
+      "the environment is being built or extended",
+      {
+        statusCode: 409,
+        error: "environment_busy",
+        message:
+          "The environment is being built or extended; try again when it finishes",
+      },
+      "The environment is being built or extended; try again when it finishes",
+    ],
+    [
+      "the server gives no reason",
+      { statusCode: 500 },
+      "Couldn't change the default. Try again in a moment.",
+    ],
+  ])("says why in the list when %s", async (_, error, text) => {
+    const user = userEvent.setup();
+    versionsResponse.current = VERSIONS;
+    moveAnswer.current = { error };
+    await rollBackToV1(user);
+    await user.click(confirmButton());
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Make v1 the default environment?",
+        }),
+      ).toBeNull(),
+    );
+    const list = screen.getByRole("dialog", { name: "Environment versions" });
+    expect(within(list).getByRole("alert")).toHaveTextContent(text);
+    expect(screen.getAllByTestId("env-version-item")[0]).toHaveTextContent(
+      "default",
+    );
   });
 
   it("announces the list it opens and marks draft or discarded versions", async () => {

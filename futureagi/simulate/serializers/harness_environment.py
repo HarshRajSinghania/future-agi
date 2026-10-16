@@ -515,6 +515,13 @@ class HarnessVersionsSerializer(serializers.Serializer):
     suite = HarnessVersionSerializer(many=True)
 
 
+class HarnessDefaultMoveSerializer(serializers.Serializer):
+    expected_default_id = serializers.UUIDField(
+        allow_null=True,
+        help_text="The default the caller saw; a newer default refuses the move.",
+    )
+
+
 class HarnessVersionDiffQuerySerializer(serializers.Serializer):
     against = serializers.UUIDField(required=False)
 

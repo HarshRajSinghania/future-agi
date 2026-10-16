@@ -13,14 +13,18 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
+from minio.error import S3Error
 
 from simulate.models import (
+    HarnessAgentVersionRuntime,
+    HarnessAssembledBundle,
     HarnessEnvironmentVersion,
     HarnessSuiteMember,
     HarnessSuiteValidation,
     HarnessSuiteVersion,
     HostedHarnessJob,
     HostedHarnessScenario,
+    HostedHarnessStageOutput,
 )
 from simulate.models.harness_versioning import ArchiveLayout, HashKind, VersionStatus
 from simulate.models.hosted_harness import MAX_SCENARIOS_PER_JOB
@@ -46,6 +50,13 @@ REMOVED_REASONS = {
 }
 SUITE_OUTPUT_KINDS = frozenset({"scenarios", "coverage"})
 SEALED_MANIFEST = "environment-bundle/manifest.json"
+# The pairs an environment was last defaulted to, so a roll back reuses their archive.
+DEFAULT_PAIRS_KEPT = 20
+# Not busy, but with nothing ready to move a default on.
+UNREADY_STATES = frozenset(
+    {HostedHarnessJob.State.FAILED, HostedHarnessJob.State.CANCELED}
+)
+MOVABLE_PIECES = ("environment", "suite")
 MEMBER_FIELDS = (
     "name",
     "instruction",
@@ -725,11 +736,39 @@ def record_authoring(
 
         payload = dict(locked.payload or {})
         metadata = dict(payload.get("metadata") or {})
+        if (
+            base_environment is not None
+            and base_suite is not None
+            and metadata.get("authoring_object_key")
+            and _recorded_against(metadata, base_environment, base_suite)
+        ):
+            _remember_pair(
+                metadata,
+                base_environment,
+                base_suite,
+                _outgoing_pair(metadata),
+                agent_version_id=locked.agent_version_id,
+                replace=False,
+            )
         metadata["authoring_object_key"] = pair_key
         # TODO: chat compares this content digest; it can become the version pair at step 13.
         metadata["authoring_revision"] = revision
         if sealed_key:
             metadata["sealed_bundle_object_key"] = sealed_key
+        # ``sealed`` already falls back to the kept copy, so this is what runs replay.
+        metadata["default_pair_sealed"] = SEALED_MANIFEST in sealed
+        _remember_pair(
+            metadata,
+            environment_version,
+            suite_version,
+            _Pair(
+                key=pair_key,
+                revision=revision,
+                sealed=metadata["default_pair_sealed"],
+                sealed_key=sealed_key,
+            ),
+            agent_version_id=locked.agent_version_id,
+        )
         payload["metadata"] = metadata
         if prepare_payload is not None:
             payload = prepare_payload(payload)
@@ -774,3 +813,410 @@ def record_authoring_quietly(
     except Exception:  # noqa: BLE001 - the legacy archive stays authoritative
         logger.exception("could not record versions job=%s origin=%s", job.id, origin)
         return None
+
+
+@dataclass(frozen=True)
+class _Pair:
+    """A runnable authoring archive for one environment and suite version."""
+
+    key: str
+    revision: str
+    # Whether it holds a sealed bundle a run replays; without one a run certifies.
+    sealed: bool
+    # The sealed files kept apart, so an edit on top of the pair carries them.
+    sealed_key: str = ""
+
+
+def _pair_name(environment_version: Any, suite_version: Any) -> str:
+    return f"{environment_version.id}:{suite_version.id}"
+
+
+def _outgoing_pair(metadata: Mapping[str, Any]) -> _Pair:
+    """The default pair's archive as the metadata knows it; a legacy one is sealed."""
+    return _Pair(
+        key=str(metadata["authoring_object_key"]),
+        revision=str(metadata.get("authoring_revision") or ""),
+        sealed=metadata.get("default_pair_sealed") is not False,
+        sealed_key=str(metadata.get("sealed_bundle_object_key") or ""),
+    )
+
+
+def _recorded_against(
+    metadata: Mapping[str, Any], environment_version: Any, suite_version: Any
+) -> bool:
+    """Whether the default archive is one the default versions were recorded from; a
+    legacy freeze racing a backfill can store another one under them.
+    """
+    revision = str(metadata.get("authoring_revision") or "")
+    return bool(revision) and all(
+        revision in recorded_revisions(version)
+        for version in (environment_version, suite_version)
+    )
+
+
+def _kept_agent_matches(kept: Mapping[str, Any], job: HostedHarnessJob) -> bool:
+    agent_version_id = kept.get("agent_version_id")
+    # TODO: entries kept before agents were named are trusted; step 9's agent default
+    # move must reseal the default pair or mark it unsealed.
+    if not agent_version_id:
+        return True
+    return str(agent_version_id) == str(job.agent_version_id or "")
+
+
+def _remember_pair(
+    metadata: dict[str, Any],
+    environment_version: Any,
+    suite_version: Any,
+    pair: _Pair,
+    *,
+    agent_version_id: Any = None,
+    replace: bool = True,
+) -> None:
+    """Keep the pair's archive for a later roll back; only the newest pairs are kept.
+
+    Entries carry their own time: a JSON column does not keep key order. A sealed
+    bundle is the default agent's, so the entry names that agent.
+    """
+    pairs = {
+        name: entry
+        for name, entry in (metadata.get("default_pairs") or {}).items()
+        if isinstance(entry, dict)
+    }
+    name = _pair_name(environment_version, suite_version)
+    if name in pairs and not replace:
+        return
+    entry = {
+        "key": pair.key,
+        "revision": pair.revision,
+        "sealed": pair.sealed,
+        "at": timezone.now().isoformat(),
+    }
+    if pair.sealed_key:
+        entry["sealed_key"] = pair.sealed_key
+    if agent_version_id:
+        entry["agent_version_id"] = str(agent_version_id)
+    pairs[name] = entry
+    newest = sorted(pairs.items(), key=lambda item: str(item[1].get("at") or ""))
+    metadata["default_pairs"] = dict(newest[-DEFAULT_PAIRS_KEPT:])
+
+
+def _rollback_unavailable(piece: str) -> HostedHarnessError:
+    return HostedHarnessError(
+        "rollback_unavailable",
+        "This combination hasn't been prepared yet",
+        status_code=422,
+        details={"piece": piece},
+    )
+
+
+def _default_runtime(job: HostedHarnessJob) -> HarnessAgentVersionRuntime | None:
+    if not job.agent_version_id:
+        return None
+    return HarnessAgentVersionRuntime.no_workspace_objects.filter(
+        agent_version_id=job.agent_version_id
+    ).first()
+
+
+def _cached_sealed(
+    job: HostedHarnessJob,
+    environment_version: HarnessEnvironmentVersion,
+    suite_version: HarnessSuiteVersion,
+) -> tuple[dict[str, bytes] | None, str]:
+    """The sealed files of a ready bundle the default agent has for this pair."""
+    from simulate.services.harness_versioning import assembly
+
+    runtime = _default_runtime(job)
+    if runtime is None:
+        return None, ""
+    bundle = HarnessAssembledBundle._base_manager.filter(
+        job_id=job.id,
+        assembly_key=assembly.bundle_key(runtime, environment_version, suite_version),
+        state=HarnessAssembledBundle.State.READY,
+        object_key__isnull=False,
+    ).first()
+    files = assembly._cached_files(bundle) if bundle is not None else None
+    return (files, bundle.object_key) if files is not None else (None, "")
+
+
+def _default_pair(
+    job: HostedHarnessJob,
+    metadata: Mapping[str, Any],
+    environment_version: HarnessEnvironmentVersion,
+    suite_version: HarnessSuiteVersion,
+    piece: str,
+) -> _Pair:
+    """The archive a run of this pair replays: one kept from when it was the default,
+    else composed with a cached bundle, else composed bare for runs to certify.
+    """
+    from simulate.services.harness_versioning import assembly
+    from simulate.services.hosted_harness_gateway import authoring_content_digest
+
+    kept = (metadata.get("default_pairs") or {}).get(
+        _pair_name(environment_version, suite_version)
+    )
+    pair = None
+    if (
+        isinstance(kept, dict)
+        and kept.get("key")
+        # A bundle sealed for another agent is not this agent's to replay.
+        and (kept.get("sealed") is False or _kept_agent_matches(kept, job))
+        and archives.archive_exists(str(kept["key"]))
+    ):
+        sealed_key = str(kept.get("sealed_key") or "")
+        if sealed_key and not archives.archive_exists(sealed_key):
+            # The pair still holds its bundle; only the copy an edit carries is gone.
+            sealed_key = ""
+        pair = _Pair(
+            key=str(kept["key"]),
+            revision=str(kept.get("revision") or ""),
+            sealed=kept.get("sealed") is not False,
+            sealed_key=sealed_key,
+        )
+        if pair.sealed:
+            return pair
+    sealed, sealed_key = _cached_sealed(job, environment_version, suite_version)
+    if sealed is None:
+        # A bare pair is certified by a run, which needs the default agent's side row.
+        if not assembly.certify_enabled() or _default_runtime(job) is None:
+            raise _rollback_unavailable(piece)
+        if pair is not None:
+            return pair
+    try:
+        # A backfilled combined archive may be gone.
+        tree = archives.compose(
+            archives.read_archive(
+                archives.get_archive(environment_version.archive_object_key)
+            ),
+            archives.read_archive(
+                archives.get_archive(suite_version.archive_object_key)
+            ),
+            sealed,
+        )
+    except S3Error as exc:
+        if assembly.is_transient(exc):
+            raise
+        raise _rollback_unavailable(piece) from exc
+    except HostedHarnessError as exc:
+        raise _rollback_unavailable(piece) from exc
+    body = archives.pack_archive(tree)
+    key = archives.pair_key(job.organization_id, job.id, body)
+    archives.put_archive(key, body)
+    return _Pair(
+        key=key,
+        revision=authoring_content_digest(body),
+        sealed=sealed is not None,
+        sealed_key=sealed_key,
+    )
+
+
+def _default_outputs(
+    job: HostedHarnessJob,
+    environment_version: HarnessEnvironmentVersion,
+    suite_version: HarnessSuiteVersion,
+) -> None:
+    """Show the new defaults' authored snapshots; the environment output is kept."""
+    from simulate.services.hosted_harness import (
+        overlay_stage_outputs,
+        pinned_stage_outputs,
+    )
+    from simulate.services.hosted_harness_conversation import _CHECKPOINT_STAGE_KINDS
+
+    pinned = pinned_stage_outputs(environment_version, suite_version)
+    job.stage_outputs = overlay_stage_outputs(
+        list(job.stage_outputs or []), pinned, drop=_CHECKPOINT_STAGE_KINDS
+    )
+    rows = list(
+        HostedHarnessStageOutput._base_manager.filter(
+            job=job, kind__in=_CHECKPOINT_STAGE_KINDS
+        ).order_by("deleted", "-created_at")
+    )
+    now = timezone.now()
+    shown: set[str] = set()
+    for row in rows:
+        output = pinned.get(row.kind)
+        if output is None:
+            if not row.deleted:
+                row.deleted, row.deleted_at = True, now
+                row.save(update_fields=["deleted", "deleted_at", "updated_at"])
+            continue
+        if row.deleted and row.kind in shown:
+            continue
+        shown.add(row.kind)
+        row.data = output.get("data")
+        row.summary = str(output.get("summary") or "")[:1024]
+        row.deleted, row.deleted_at = False, None
+        row.save(
+            update_fields=["data", "summary", "deleted", "deleted_at", "updated_at"]
+        )
+    # A job without rows reads its outputs from the job itself.
+    if rows or HostedHarnessStageOutput.no_workspace_objects.filter(job=job).exists():
+        HostedHarnessStageOutput.no_workspace_objects.bulk_create(
+            [
+                HostedHarnessStageOutput(
+                    job=job,
+                    kind=kind,
+                    title=str(output.get("title") or kind)[:255],
+                    summary=str(output.get("summary") or "")[:1024],
+                    data=output.get("data"),
+                )
+                for kind, output in pinned.items()
+                if kind not in shown
+            ]
+        )
+
+
+def _conflict(piece: str, current: Any) -> HostedHarnessError:
+    from simulate.services.harness_versioning.read import _label, _message_label
+
+    return HostedHarnessError(
+        "version_conflict",
+        "The default changed to "
+        + _message_label(_label(getattr(current, "version_number", None)))
+        + " since you opened this; pick again",
+        status_code=409,
+        details={"piece": piece},
+    )
+
+
+def move_default(
+    environment: HostedHarnessJob,
+    piece: str,
+    version_id: Any,
+    *,
+    expected_default_id: Any,
+    user: Any = None,
+) -> HostedHarnessJob:
+    """Make an active environment or suite version the environment's default.
+
+    ``expected_default_id`` is the default the caller saw; a newer one refuses the move.
+    The pair's runnable archive is found before anything moves, and the whole move is
+    one transaction.
+    """
+    from simulate.services import harness_scenarios
+    from simulate.services.hosted_harness import _not_pickable
+    from simulate.services.hosted_harness_conversation import _bind_added_scenarios
+
+    model = HarnessEnvironmentVersion if piece == "environment" else HarnessSuiteVersion
+    with transaction.atomic():
+        locked = (
+            HostedHarnessJob.no_workspace_objects.select_for_update()
+            .filter(id=environment.id)
+            .first()
+        )
+        if locked is None:
+            raise HostedHarnessError(
+                "environment_not_found", "Environment not found", status_code=404
+            )
+        if locked.state != HostedHarnessJob.State.COMPLETED or (
+            (locked.payload or {}).get("metadata") or {}
+        ).get("scenario_extend"):
+            raise HostedHarnessError(
+                "environment_busy",
+                (
+                    "The environment isn't ready; the default can't be changed now"
+                    if locked.state in UNREADY_STATES
+                    else "The environment is being built or extended; try again "
+                    "when it finishes"
+                ),
+                status_code=409,
+                details={"piece": piece},
+            )
+        version = model.no_workspace_objects.filter(
+            job=locked, id=version_id, status=VersionStatus.ACTIVE
+        ).first()
+        if version is None:
+            raise _not_pickable(piece)
+        current = getattr(locked, f"{piece}_version")
+        # A repeated click after the move succeeded is the same no-op.
+        if current is not None and current.id == version.id:
+            return locked
+        if (current.id if current is not None else None) != expected_default_id:
+            raise _conflict(piece, current)
+        environment_version = (
+            version if piece == "environment" else locked.environment_version
+        )
+        suite_version = version if piece == "suite" else locked.suite_version
+        if suite_version is None:
+            raise HostedHarnessError(
+                "version_not_pickable",
+                "This environment has no scenario version yet",
+                status_code=422,
+                details={"piece": piece},
+            )
+        if environment_version is None:
+            raise _not_pickable(piece)
+        payload = dict(locked.payload or {})
+        metadata = dict(payload.get("metadata") or {})
+        if (
+            current is not None
+            and metadata.get("authoring_object_key")
+            and _recorded_against(
+                metadata, locked.environment_version, locked.suite_version
+            )
+        ):
+            _remember_pair(
+                metadata,
+                locked.environment_version,
+                locked.suite_version,
+                _outgoing_pair(metadata),
+                agent_version_id=locked.agent_version_id,
+                replace=False,
+            )
+        pair = _default_pair(
+            locked, metadata, environment_version, suite_version, piece
+        )
+
+        locked.environment_version = environment_version
+        locked.suite_version = suite_version
+        if piece == "suite":
+            # Reads the new default's members off the job: its rows come back.
+            harness_scenarios.index_scenarios(
+                locked,
+                (suite_version.documents or {}).get("scenarios") or [],
+                prune=True,
+            )
+            _bind_added_scenarios(locked)
+        _default_outputs(locked, environment_version, suite_version)
+        update_fields = [
+            "payload",
+            "environment_version",
+            "suite_version",
+            "stage_outputs",
+            "content_updated_at",
+            "updated_at",
+        ]
+        if 1 <= suite_version.scenario_count <= MAX_SCENARIOS_PER_JOB:
+            payload["scenario_count"] = suite_version.scenario_count
+            locked.scenario_count = suite_version.scenario_count
+            update_fields.append("scenario_count")
+        metadata["authoring_object_key"] = pair.key
+        metadata["authoring_revision"] = pair.revision
+        metadata["default_pair_sealed"] = pair.sealed
+        if pair.sealed_key:
+            metadata["sealed_bundle_object_key"] = pair.sealed_key
+        else:
+            # An edit on top must not carry another pair's bundle.
+            metadata.pop("sealed_bundle_object_key", None)
+        _remember_pair(
+            metadata,
+            environment_version,
+            suite_version,
+            pair,
+            agent_version_id=locked.agent_version_id,
+        )
+        payload["metadata"] = metadata
+        locked.payload = payload
+        locked.content_updated_at = timezone.now()
+        locked.save(update_fields=update_fields)
+        # TODO: offer the suite nudge after an environment move (step 12).
+        # TODO: refuse with rebuild_running while a build or extend runs (step 14).
+        # TODO: offer to re-apply a version's draft edits (includes_draft_edits) once
+        # drafts exist (steps 13/14).
+    logger.info(
+        "harness_default_moved piece=%s from=%s to=%s actor=%s",
+        piece,
+        current.id if current is not None else None,
+        version.id,
+        getattr(user, "id", None),
+    )
+    return locked

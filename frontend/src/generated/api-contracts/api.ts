@@ -587,6 +587,7 @@ import type {
   HarnessConversationTranscriptAppendApi,
   HarnessConversationTranscriptAppendResponseApi,
   HarnessConversationWorkspaceResponseApi,
+  HarnessDefaultMoveApi,
   HarnessEnvironmentAddEvaluationApi,
   HarnessEnvironmentAvailableEvalsApi,
   HarnessEnvironmentDetailApi,
@@ -59292,6 +59293,62 @@ export const simulateApiHarnessEnvironmentsVersionsSuiteSuiteMembers = async (
     {
       ...options,
       method: "GET",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsVersionsMoveDefaultResponse200 = {
+  data: HarnessVersionsApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsVersionsMoveDefaultResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsVersionsMoveDefaultResponseSuccess =
+  simulateApiHarnessEnvironmentsVersionsMoveDefaultResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsVersionsMoveDefaultResponseError =
+  simulateApiHarnessEnvironmentsVersionsMoveDefaultResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsVersionsMoveDefaultResponse =
+  | simulateApiHarnessEnvironmentsVersionsMoveDefaultResponseSuccess
+  | simulateApiHarnessEnvironmentsVersionsMoveDefaultResponseError;
+
+export const getSimulateApiHarnessEnvironmentsVersionsMoveDefaultUrl = (
+  id: string,
+  piece: string,
+  versionId: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/versions/${piece}/${versionId}/default/`;
+};
+
+/**
+ * Make an environment or suite version the default; returns every version.
+ */
+export const simulateApiHarnessEnvironmentsVersionsMoveDefault = async (
+  id: string,
+  piece: string,
+  versionId: string,
+  harnessDefaultMoveApi: HarnessDefaultMoveApi,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsVersionsMoveDefaultResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsVersionsMoveDefaultResponse>(
+    getSimulateApiHarnessEnvironmentsVersionsMoveDefaultUrl(
+      id,
+      piece,
+      versionId,
+    ),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(harnessDefaultMoveApi),
     },
   );
 };

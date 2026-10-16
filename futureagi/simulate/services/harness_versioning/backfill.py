@@ -44,6 +44,8 @@ from simulate.services.harness_versioning.versions import (
     SEALED_MANIFEST,
     SUITE_OUTPUT_KINDS,
     _land,
+    _outgoing_pair,
+    _remember_pair,
     note_revision,
     prepare_pieces,
     recorded_revisions,
@@ -1130,6 +1132,24 @@ def _backfill_once(models: Models, job: Any, result: BackfillResult) -> bool:
                 locked.payload = payload
                 locked.scenario_count = count
                 update_fields += ["payload", "scenario_count"]
+            if key and _settled(locked):
+                # A roll back to the pinned pair replays the archive runs replayed; a
+                # busy environment's payload is its build's, so an edit remembers it.
+                payload = dict(locked.payload or {})
+                metadata = _metadata(locked)
+                _remember_pair(
+                    metadata,
+                    environment_version,
+                    suite_version,
+                    _outgoing_pair(metadata),
+                    # The agent this save pins: runs replayed the archive with it.
+                    agent_version_id=locked.agent_version_id
+                    or getattr(agent, "id", None),
+                    replace=False,
+                )
+                payload["metadata"] = metadata
+                locked.payload = payload
+                update_fields.append("payload")
             if runtime is not None:
                 bundle = _bundle(
                     models,

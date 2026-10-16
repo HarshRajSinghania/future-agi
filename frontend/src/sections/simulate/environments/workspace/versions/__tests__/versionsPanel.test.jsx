@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "src/utils/test-utils";
+import { render, screen, waitFor, within } from "src/utils/test-utils";
 import userEvent from "@testing-library/user-event";
 
 // Each hook is stubbed; tests set what the server answered.
@@ -17,12 +17,34 @@ const state = {
   membersRefreshFailed: false,
 };
 const diffCalls = [];
+// What a move of the default answers: "pending", { error } or { versions }.
+const move = { answer: undefined, calls: [] };
 vi.mock("src/api/simulate-environments/versions", async () => {
   const actual = await vi.importActual(
     "src/api/simulate-environments/versions",
   );
+  const { useState } = await import("react");
   return {
     ...actual,
+    useMoveDefault: vi.fn(() => {
+      const [status, setStatus] = useState({});
+      return {
+        isPending: Boolean(status.pending),
+        isError: Boolean(status.error),
+        error: status.error || null,
+        reset: () => setStatus({}),
+        mutate: (variables, { onSettled } = {}) => {
+          move.calls.push(variables);
+          if (move.answer === "pending") {
+            setStatus({ pending: true });
+            return;
+          }
+          if (move.answer?.versions) state.versions = move.answer.versions;
+          setStatus(move.answer?.error ? { error: move.answer.error } : {});
+          onSettled?.();
+        },
+      };
+    }),
     useEnvironmentVersions: vi.fn((envId, { enabled } = {}) => {
       if (!enabled)
         return { data: undefined, isLoading: false, isError: false };
@@ -161,6 +183,8 @@ beforeEach(() => {
   state.diffRefreshFailed = false;
   state.membersRefreshFailed = false;
   diffCalls.length = 0;
+  move.answer = undefined;
+  move.calls.length = 0;
 });
 
 // A version row's accessible name starts with its label.
@@ -573,5 +597,196 @@ describe("VersionsPanel", () => {
       screen.getByText("1 scenario in Unnumbered version"),
     ).toBeInTheDocument();
     expect(screen.queryByText(/null/)).toBeNull();
+  });
+
+  describe("making a version the default", () => {
+    const makeDefault = () =>
+      screen.getByRole("button", { name: "Make default" });
+    const confirmDialog = (name) => screen.queryByRole("dialog", { name });
+
+    it("makes an earlier environment version the default after asking", async () => {
+      const user = userEvent.setup();
+      move.answer = {
+        versions: {
+          ...VERSIONS,
+          environment: [
+            { ...VERSIONS.environment[0], is_default: false },
+            { ...VERSIONS.environment[1], is_default: true },
+          ],
+        },
+      };
+      const { rerender } = render(<VersionsPanel env={ENV} />);
+      // The default itself offers nothing.
+      expect(
+        within(screen.getByTestId("version-detail")).queryByRole("button", {
+          name: "Make default",
+        }),
+      ).toBeNull();
+
+      await user.click(row("environment", "v1"));
+      await user.click(makeDefault());
+      const dialog = confirmDialog("Make v1 the default environment?");
+      expect(dialog).toHaveTextContent(
+        "New runs use it. If this combination hasn't run before, the next run prepares it first.",
+      );
+      await user.click(
+        within(dialog).getByRole("button", { name: "Make default" }),
+      );
+
+      expect(move.calls).toEqual([
+        { piece: "environment", versionId: "e1", expectedDefaultId: "e2" },
+      ]);
+      await waitFor(() =>
+        expect(confirmDialog("Make v1 the default environment?")).toBeNull(),
+      );
+      // The versions query now answers with the moved default.
+      rerender(<VersionsPanel env={ENV} />);
+      const environment = screen.getByTestId("versions-environment");
+      expect(row("environment", "v1")).toHaveTextContent("default");
+      expect(within(environment).getAllByText("default")).toHaveLength(1);
+      expect(screen.queryByRole("button", { name: "Make default" })).toBeNull();
+    });
+
+    it("makes another scenario version the default", async () => {
+      const user = userEvent.setup();
+      state.versions = {
+        ...VERSIONS,
+        suite: [...VERSIONS.suite, item({ id: "s0", label: "v0" })],
+      };
+      render(<VersionsPanel env={ENV} />);
+
+      await user.click(row("suite", "v0"));
+      await user.click(makeDefault());
+      const dialog = confirmDialog("Make v0 the default scenario version?");
+      await user.click(
+        within(dialog).getByRole("button", { name: "Make default" }),
+      );
+
+      expect(move.calls).toEqual([
+        { piece: "suite", versionId: "s0", expectedDefaultId: "s2" },
+      ]);
+    });
+
+    it("offers nothing on a discarded version or an agent version", async () => {
+      const user = userEvent.setup();
+      state.versions = {
+        ...VERSIONS,
+        agent: [...VERSIONS.agent, item({ id: "a0", label: "v3" })],
+      };
+      render(<VersionsPanel env={ENV} />);
+
+      await user.click(row("suite", "v1"));
+      expect(screen.queryByRole("button", { name: "Make default" })).toBeNull();
+      await user.click(row("agent", "v3"));
+      expect(screen.queryByRole("button", { name: "Make default" })).toBeNull();
+    });
+
+    it("keeps the confirmation busy while the move is pending", async () => {
+      const user = userEvent.setup();
+      move.answer = "pending";
+      render(<VersionsPanel env={ENV} />);
+      await user.click(row("environment", "v1"));
+      await user.click(makeDefault());
+      const dialog = confirmDialog("Make v1 the default environment?");
+      await user.click(
+        within(dialog).getByRole("button", { name: "Make default" }),
+      );
+
+      expect(
+        within(dialog).getByRole("button", { name: "Making default…" }),
+      ).toBeDisabled();
+      // Cancel and the close X are visibly off too, not just ignored.
+      const buttons = within(dialog).getAllByRole("button");
+      expect(buttons).toHaveLength(3);
+      for (const button of buttons) {
+        expect(button).toBeDisabled();
+      }
+    });
+
+    it("keeps the conflict in view after the refresh removes the action", async () => {
+      const user = userEvent.setup();
+      const message =
+        "The default changed to v1 since you opened this; pick again";
+      move.answer = {
+        error: { statusCode: 409, error: "version_conflict", message },
+        // Someone else made v1 the default meanwhile.
+        versions: {
+          ...VERSIONS,
+          environment: [
+            { ...VERSIONS.environment[0], is_default: false },
+            { ...VERSIONS.environment[1], is_default: true },
+          ],
+        },
+      };
+      const { rerender } = render(<VersionsPanel env={ENV} />);
+      await user.click(row("environment", "v1"));
+      await user.click(makeDefault());
+      const dialog = confirmDialog("Make v1 the default environment?");
+      await user.click(
+        within(dialog).getByRole("button", { name: "Make default" }),
+      );
+
+      rerender(<VersionsPanel env={ENV} />);
+      const detail = screen.getByTestId("version-detail");
+      expect(
+        within(detail).queryByRole("button", { name: "Make default" }),
+      ).toBeNull();
+      expect(within(detail).getByRole("alert")).toHaveTextContent(message);
+
+      // Picking a version again clears it.
+      await user.click(row("environment", "v2"));
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it.each([
+      [
+        "the default moved meanwhile",
+        {
+          statusCode: 409,
+          error: "version_conflict",
+          message:
+            "The default changed to v3 since you opened this; pick again",
+          piece: "environment",
+        },
+        "The default changed to v3 since you opened this; pick again",
+      ],
+      [
+        "the combination isn't prepared",
+        {
+          statusCode: 422,
+          error: "rollback_unavailable",
+          message: "This combination hasn't been prepared yet",
+          piece: "environment",
+        },
+        "This combination hasn't been prepared yet",
+      ],
+      [
+        "the environment is being built or extended",
+        {
+          statusCode: 409,
+          error: "environment_busy",
+          message:
+            "The environment is being built or extended; try again when it finishes",
+        },
+        "The environment is being built or extended; try again when it finishes",
+      ],
+    ])("says why when %s", async (_, error, text) => {
+      const user = userEvent.setup();
+      move.answer = { error };
+      render(<VersionsPanel env={ENV} />);
+      await user.click(row("environment", "v1"));
+      await user.click(makeDefault());
+      const dialog = confirmDialog("Make v1 the default environment?");
+      await user.click(
+        within(dialog).getByRole("button", { name: "Make default" }),
+      );
+
+      await waitFor(() =>
+        expect(confirmDialog("Make v1 the default environment?")).toBeNull(),
+      );
+      expect(
+        within(screen.getByTestId("version-detail")).getByRole("alert"),
+      ).toHaveTextContent(text);
+    });
   });
 });

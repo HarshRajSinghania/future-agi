@@ -640,6 +640,14 @@ export type ${jsonAlias} = JsonValueApi;`,
       "diff: HarnessVersionDiffApiDiff | null;",
       "HarnessVersionDiffApi.diff nullable",
     );
+    // A move sends the default it saw, which is null for a piece without one.
+    schemas = assertReplaceInNamedBlock(
+      schemas,
+      "export interface HarnessDefaultMoveApi {",
+      "expected_default_id: string;",
+      "expected_default_id: string | null;",
+      "HarnessDefaultMoveApi.expected_default_id nullable",
+    );
     // A run's pinned versions are null for a piece it has none of; a bundle-wide
     // warning names no piece; and the cache does not apply to an unassembled run.
     for (const piece of ["agent", "environment", "suite"]) {
@@ -867,7 +875,7 @@ export type ${jsonAlias} = JsonValueApi;`,
       );
     }
 
-    // The same nullable version fields, in every list of the versions response.
+    // The same nullable version fields, in every list of the versions responses.
     for (const [anchor, label] of [
       ['"label": zod.string().min(1)', "label"],
       ['"origin": zod.string().min(1)', "origin"],
@@ -887,14 +895,26 @@ export type ${jsonAlias} = JsonValueApi;`,
         "created_by",
       ],
     ]) {
-      zod = assertReplaceInNamedBlock(
-        zod,
-        "export const SimulateApiHarnessEnvironmentsVersionsResponse =",
-        anchor,
-        `${anchor}.nullable()`,
-        `SimulateApiHarnessEnvironmentsVersionsResponse.${label} nullable`,
-      );
+      for (const response of [
+        "SimulateApiHarnessEnvironmentsVersionsResponse",
+        "SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse",
+      ]) {
+        zod = assertReplaceInNamedBlock(
+          zod,
+          `export const ${response} =`,
+          anchor,
+          `${anchor}.nullable()`,
+          `${response}.${label} nullable`,
+        );
+      }
     }
+    zod = assertReplaceInNamedBlock(
+      zod,
+      "export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultBody =",
+      '"expected_default_id": zod.string().uuid()',
+      '"expected_default_id": zod.string().uuid().nullable()',
+      "SimulateApiHarnessEnvironmentsVersionsMoveDefaultBody.expected_default_id nullable",
+    );
     zod = assertReplaceInNamedBlock(
       zod,
       "export const SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse =",

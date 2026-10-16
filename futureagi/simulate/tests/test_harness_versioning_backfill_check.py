@@ -213,6 +213,10 @@ def _assert_prediction(report, result, environment):
         assert facts["scenario_count_after"] == environment.scenario_count
     if "bundle_row_eligible" in facts:
         assert facts["bundle_row_eligible"] == result.bundle_recorded
+    if "default_pair_kept" in facts:
+        pair = f"{environment.environment_version_id}:{environment.suite_version_id}"
+        kept = environment.payload["metadata"].get("default_pairs") or {}
+        assert facts["default_pair_kept"] == (pair in kept)
     if "hash_kind" in facts:
         assert facts["hash_kind"] == environment.environment_version.hash_kind
         assert effects["created"]["HarnessSuiteVersion"] == int(

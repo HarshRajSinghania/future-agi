@@ -295,6 +295,8 @@ class RunAssembly:
     defaults: bool = True
     # The row was failed until this run reset it, so the run warns as run-plan did.
     failed_before: bool = False
+    # The default pair holds no sealed bundle, so the run certifies one on a miss.
+    unsealed: bool = False
 
     def as_metadata(self) -> dict[str, Any]:
         data = {
@@ -305,6 +307,8 @@ class RunAssembly:
         }
         if self.failed_before:
             data["failed_before"] = True
+        if self.unsealed:
+            data["default_pair_sealed"] = False
         return data
 
 
@@ -315,6 +319,7 @@ def run_assembly(
     suite_version: HarnessSuiteVersion,
     *,
     defaults: bool = True,
+    unsealed: bool = False,
 ) -> RunAssembly | None:
     """The cache row for this combination, created pending when it is new.
 
@@ -349,6 +354,7 @@ def run_assembly(
         cached=cached,
         defaults=defaults,
         failed_before=failed_before,
+        unsealed=unsealed,
     )
 
 
@@ -448,6 +454,17 @@ def pins_are_defaults(job: HostedHarnessJob) -> bool:
         .first()
     )
     return defaults == (job.environment_version_id, job.suite_version_id)
+
+
+def runs_unsealed(job: HostedHarnessJob) -> bool:
+    """Whether the run was created at a default pair without a sealed bundle, which
+    has no path but certifying."""
+    return (_assembly(job) or {}).get("default_pair_sealed") is False
+
+
+def falls_back(job: HostedHarnessJob) -> bool:
+    """Whether the run may take today's path: the default pair, sealed or legacy."""
+    return pins_are_defaults(job) and not runs_unsealed(job)
 
 
 def overlay_agent_prompt(
@@ -555,15 +572,29 @@ def _hit_source_digest(
     return found
 
 
+def _assembly_unavailable() -> HostedHarnessError:
+    return HostedHarnessError(
+        "assembly_unavailable",
+        "the bundle for this run's pinned versions is no longer available "
+        "and building it is turned off; start a new run",
+        status_code=422,
+    )
+
+
 def prepare_launch(job: HostedHarnessJob) -> LaunchAssembly | None:
     """Point a pinned run at its assembled authoring archive, building it once.
 
     ``None`` keeps today's path: the run is not assembled, or it missed the cache while
-    certifying is off and is pinned to the default pair; a run pinned off it raises
-    ``assembly_unavailable``. The archive's key is stored on the run, so a retry reuses it.
+    certifying is off and is pinned to the default pair; a run pinned off it, or to a
+    default pair without a sealed bundle, raises ``assembly_unavailable``. The archive's
+    key is stored on the run, so a retry reuses it.
     """
     assembly = _assembly(job)
-    if assembly is None or job.assembled_bundle_id is None:
+    if assembly is None:
+        return None
+    if job.assembled_bundle_id is None:
+        if runs_unsealed(job):
+            raise _assembly_unavailable()
         return None
     if _memoised(job, assembly):
         return LaunchAssembly(
@@ -576,6 +607,8 @@ def prepare_launch(job: HostedHarnessJob) -> LaunchAssembly | None:
         id=job.assembled_bundle_id
     ).first()
     if bundle is None or job.environment_version_id is None:
+        if runs_unsealed(job):
+            raise _assembly_unavailable()
         return None
     log = {
         "run_id": str(job.id),
@@ -584,20 +617,17 @@ def prepare_launch(job: HostedHarnessJob) -> LaunchAssembly | None:
     }
 
     defaults = pins_are_defaults(job)
+    unsealed = defaults and runs_unsealed(job)
 
     def fallback() -> None:
         # Today's path runs the default pair, so only a run pinned to it may take it.
-        if not defaults:
-            raise HostedHarnessError(
-                "assembly_unavailable",
-                "the bundle for this run's pinned versions is no longer available "
-                "and building it is turned off; start a new run",
-                status_code=422,
-            )
+        if not defaults or unsealed:
+            raise _assembly_unavailable()
         logger.info("harness_bundle_cache", outcome="miss_fallback", **log)
 
-    # Only a run pinned off the defaults certifies; a default-pair miss runs as today.
-    certifies = certify_enabled() and not defaults
+    # Only a run pinned off the defaults certifies; a default-pair miss runs as today,
+    # unless that pair was made without a sealed bundle.
+    certifies = certify_enabled() and (not defaults or unsealed)
     hit = bundle.state == HarnessAssembledBundle.State.READY and bool(bundle.object_key)
     if not hit and not certifies:
         return fallback()

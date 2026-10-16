@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1063,
+  endpointCount: 1064,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28376,6 +28376,27 @@ export const OPENAPI_CONTRACT = Object.freeze({
               items: {
                 $ref: "#/definitions/HarnessSuiteMember",
               },
+            },
+            default: {
+              $ref: "#/definitions/ManagementAPIErrorResponse",
+            },
+          },
+        },
+      },
+    "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/default/":
+      {
+        post: {
+          operationId:
+            "simulate_api_harness-environments_versions_move_default",
+          runtimeRequestValidation: true,
+          runtimeResponseValidation: true,
+          requestBody: {
+            $ref: "#/definitions/HarnessDefaultMove",
+          },
+          queryParameters: {},
+          responses: {
+            200: {
+              $ref: "#/definitions/HarnessVersions",
             },
             default: {
               $ref: "#/definitions/ManagementAPIErrorResponse",
@@ -62702,6 +62723,20 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Size",
           type: "integer",
           minimum: 0,
+        },
+      },
+    },
+    HarnessDefaultMove: {
+      required: ["expected_default_id"],
+      type: "object",
+      properties: {
+        expected_default_id: {
+          title: "Expected default id",
+          description:
+            "The default the caller saw; a newer default refuses the move.",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
         },
       },
     },

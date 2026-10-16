@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import PropTypes from "prop-types";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-vi.mock("src/utils/axios", () => ({ default: { get: vi.fn() } }));
+vi.mock("src/utils/axios", () => ({
+  default: { get: vi.fn(), post: vi.fn() },
+}));
 
 const { default: axios } = await import("src/utils/axios");
 const {
@@ -11,6 +13,8 @@ const {
   useVersionDiff,
   useSuiteMembers,
   useRunPlan,
+  useMoveDefault,
+  canMakeDefault,
   runPlanKey,
   environmentVersionsKey,
   versionDiffKey,
@@ -19,6 +23,10 @@ const {
   versionFromApi,
   isVersioningDisabled,
 } = await import("../versions");
+const { harnessEnvironmentKey, harnessJobQuery } = await import(
+  "../environment"
+);
+const { harnessScenariosListKey } = await import("../scenariosHooks");
 
 let client;
 const wrapper = ({ children }) => (
@@ -73,6 +81,7 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false, retryDelay: 0 } },
   });
   axios.get.mockReset();
+  axios.post.mockReset();
 });
 
 describe("versionFromApi / toVersions", () => {
@@ -294,6 +303,200 @@ describe("useRunPlan", () => {
       expect(axios.get).toHaveBeenCalledTimes(calls);
     },
   );
+});
+
+describe("useMoveDefault", () => {
+  const PATH =
+    "/simulate/api/harness-environments/env-1/versions/environment/e1/default/";
+  // The factories the followers' queries use, so a drifted literal fails here.
+  const FOLLOWERS = [
+    environmentVersionsKey("env-1"),
+    harnessEnvironmentKey("env-1"),
+    harnessJobQuery("env-1").queryKey,
+    harnessScenariosListKey("env-1"),
+  ];
+  const invalidated = (spy) => spy.mock.calls.map(([filters]) => filters);
+
+  it("posts the default the user saw and seeds the versions with the answer", async () => {
+    axios.post.mockResolvedValue({ data: RESPONSE });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+
+    await act(() =>
+      result.current.mutateAsync({
+        piece: "environment",
+        versionId: "e1",
+        expectedDefaultId: "e2",
+      }),
+    );
+
+    expect(axios.post).toHaveBeenCalledWith(PATH, {
+      expected_default_id: "e2",
+    });
+    expect(client.getQueryData(environmentVersionsKey("env-1"))).toEqual(
+      RESPONSE,
+    );
+    // Prefixes, never exact: the run plan, diffs and members sit under them.
+    expect(invalidated(spy)).toEqual(
+      FOLLOWERS.map((queryKey) => ({ queryKey })),
+    );
+  });
+
+  it("refreshes the nested queries a move makes stale", async () => {
+    axios.post.mockResolvedValue({ data: RESPONSE });
+    const planKey = runPlanKey("env-1", { environment: "e1" });
+    client.setQueryData(planKey, { warnings: [] });
+    client.setQueryData(["harness-scenarios", "env-1", { page: 0 }], {});
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+
+    await act(() =>
+      result.current.mutateAsync({
+        piece: "suite",
+        versionId: "s1",
+        expectedDefaultId: null,
+      }),
+    );
+
+    expect(client.getQueryState(planKey).isInvalidated).toBe(true);
+    expect(
+      client.getQueryState(["harness-scenarios", "env-1", { page: 0 }])
+        .isInvalidated,
+    ).toBe(true);
+  });
+
+  it("sends a null default when none was shown", async () => {
+    axios.post.mockResolvedValue({ data: RESPONSE });
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+    await act(() =>
+      result.current.mutateAsync({ piece: "environment", versionId: "e1" }),
+    );
+    expect(axios.post).toHaveBeenCalledWith(PATH, {
+      expected_default_id: null,
+    });
+  });
+
+  it("refreshes after a conflict so the user picks from what is current", async () => {
+    const conflict = {
+      statusCode: 409,
+      error: "version_conflict",
+      message: "The default changed to v3 since you opened this; pick again",
+      piece: "environment",
+    };
+    axios.post.mockRejectedValue(conflict);
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+
+    await act(() =>
+      result.current
+        .mutateAsync({
+          piece: "environment",
+          versionId: "e1",
+          expectedDefaultId: "e2",
+        })
+        .catch(() => {}),
+    );
+
+    await waitFor(() => expect(result.current.error).toEqual(conflict));
+    expect(invalidated(spy)).toEqual(
+      FOLLOWERS.map((queryKey) => ({ queryKey })),
+    );
+  });
+
+  it("refreshes the versions when the version can no longer be picked", async () => {
+    axios.post.mockRejectedValue({
+      statusCode: 422,
+      error: "version_not_pickable",
+      message: "This version was discarded",
+      piece: "environment",
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+
+    await act(() =>
+      result.current
+        .mutateAsync({
+          piece: "environment",
+          versionId: "e1",
+          expectedDefaultId: "e2",
+        })
+        .catch(() => {}),
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(invalidated(spy)).toEqual([
+      { queryKey: environmentVersionsKey("env-1") },
+    ]);
+  });
+
+  it.each([
+    [
+      "the combination isn't prepared",
+      {
+        statusCode: 422,
+        error: "rollback_unavailable",
+        message: "This combination hasn't been prepared yet",
+        piece: "environment",
+      },
+    ],
+    [
+      "the environment is busy",
+      {
+        statusCode: 409,
+        error: "environment_busy",
+        message:
+          "The environment is being built or extended; try again when it finishes",
+      },
+    ],
+  ])("leaves the cache alone when %s", async (_, refusal) => {
+    axios.post.mockRejectedValue(refusal);
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+
+    await act(() =>
+      result.current
+        .mutateAsync({
+          piece: "environment",
+          versionId: "e1",
+          expectedDefaultId: "e2",
+        })
+        .catch(() => {}),
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("handles its own errors, so no generic toast shows", () => {
+    const { result } = renderHook(() => useMoveDefault("env-1"), { wrapper });
+    act(() => {
+      result.current.mutate({ piece: "environment", versionId: "e1" });
+    });
+    const [mutation] = client.getMutationCache().getAll();
+    expect(mutation.options.meta).toEqual({ errorHandled: true });
+  });
+});
+
+describe("canMakeDefault", () => {
+  const version = (overrides) =>
+    versionFromApi({ id: "x", status: "active", ...overrides });
+
+  it("offers an active environment or suite version that isn't the default", () => {
+    expect(canMakeDefault("environment", version())).toBe(true);
+    expect(canMakeDefault("suite", version())).toBe(true);
+  });
+
+  it("offers nothing for the default, a draft, a discarded one or an agent", () => {
+    expect(canMakeDefault("environment", version({ is_default: true }))).toBe(
+      false,
+    );
+    expect(canMakeDefault("environment", version({ status: "draft" }))).toBe(
+      false,
+    );
+    expect(canMakeDefault("suite", version({ status: "discarded" }))).toBe(
+      false,
+    );
+    expect(canMakeDefault("agent", version())).toBe(false);
+  });
 });
 
 describe("errors", () => {

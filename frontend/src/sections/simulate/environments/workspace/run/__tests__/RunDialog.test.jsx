@@ -375,6 +375,25 @@ describe("RunDialog", () => {
     expect(screen.queryByTestId("rerun-fallback")).toBeNull();
   });
 
+  it("explains on first open that the defaults can't run and keeps Run off", () => {
+    // An unsealed default pair while building is off.
+    state.plans[JSON.stringify({})] = {
+      error: refusal(
+        "version_not_runnable",
+        "These versions haven't been run together yet",
+      ),
+    };
+    renderDialog();
+    expect(planCalls.at(-1)).toEqual({ picks: {}, enabled: true });
+    expect(screen.getByTestId("run-error")).toHaveTextContent(
+      "These versions haven't been run together yet",
+    );
+    expect(
+      screen.queryByText("Couldn't check these versions for warnings."),
+    ).toBeNull();
+    expect(runButton()).toBeDisabled();
+  });
+
   it("shows a refusal of the defaults for a re-run that pinned nothing", () => {
     state.plans[JSON.stringify({})] = {
       error: refusal("version_not_runnable", "Not run together yet"),

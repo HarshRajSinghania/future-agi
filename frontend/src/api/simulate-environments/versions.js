@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "src/utils/axios";
 import { apiPath } from "src/api/contracts/api-surface";
 
@@ -6,11 +6,14 @@ import { apiPath } from "src/api/contracts/api-surface";
  * The version history of one environment: its agent, environment and scenario
  * suite versions, each version's diff, and a suite version's scenarios.
  *
- * Read-only. The endpoints answer 404 while versioning is switched off, so every
- * hook is gated on `enabled` — the workspace passes `env.versioning.enabled`.
+ * The endpoints answer 404 while versioning is switched off, so every read is
+ * gated on `enabled` — the workspace passes `env.versioning.enabled`. The one
+ * write moves an environment or suite default back to an earlier version.
  */
 
 export const VERSION_PIECES = ["agent", "environment", "suite"];
+// TODO: step 9 moves the agent default too.
+export const MOVABLE_PIECES = ["environment", "suite"];
 
 const versionsPath = (envId) =>
   apiPath("/simulate/api/harness-environments/{id}/versions/", { id: envId });
@@ -23,6 +26,12 @@ const suiteMembersPath = (envId, versionId) =>
   apiPath(
     "/simulate/api/harness-environments/{id}/versions/suite/{version_id}/members/",
     { id: envId, version_id: versionId },
+  );
+
+const moveDefaultPath = (envId, piece, versionId) =>
+  apiPath(
+    "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/default/",
+    { id: envId, piece, version_id: versionId },
   );
 
 const runPlanPath = (envId) =>
@@ -50,6 +59,14 @@ export const getVersionDiff = async (envId, piece, versionId, against) =>
 
 export const getSuiteMembers = async (envId, versionId) =>
   (await axios.get(suiteMembersPath(envId, versionId))).data;
+
+// The default the user saw rides along; a newer one refuses the move (409).
+export const moveDefault = async (envId, piece, versionId, expectedDefaultId) =>
+  (
+    await axios.post(moveDefaultPath(envId, piece, versionId), {
+      expected_default_id: expectedDefaultId ?? null,
+    })
+  ).data;
 
 // What a run of these picks would use and what to warn about.
 export const getRunPlan = async (envId, picks) =>
@@ -110,6 +127,12 @@ export const versionFromApi = (item = {}) => ({
   scenarioCount: item.scenario_count ?? null,
   preflightStatus: item.preflight_status || null,
 });
+
+// Only an active version that is not already the default can become it.
+export const canMakeDefault = (piece, version) =>
+  MOVABLE_PIECES.includes(piece) &&
+  version?.status === "active" &&
+  !version.isDefault;
 
 // The three lists plus each piece's default, so readers never search for it.
 export const toVersions = (data = {}) => {
@@ -174,5 +197,42 @@ export function useRunPlan(envId, picks, { enabled = true } = {}) {
     enabled: Boolean(envId) && enabled,
     retry: retryServerFailures,
     meta: { errorHandled: true },
+  });
+}
+
+// Make a version the default. The answer is every version, so it seeds the list;
+// the environment detail, the job and the scenarios follow the default, so they
+// are asked again too. A conflict means the default moved elsewhere: refresh so
+// the user picks again from what is current. Keys are environment.js's and
+// scenariosHooks.js's literals, which import this module.
+export function useMoveDefault(envId) {
+  const queryClient = useQueryClient();
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: environmentVersionsKey(envId) });
+    queryClient.invalidateQueries({ queryKey: ["harness-environment", envId] });
+    queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
+    queryClient.invalidateQueries({ queryKey: ["harness-scenarios", envId] });
+  };
+  return useMutation({
+    meta: { errorHandled: true },
+    mutationFn: ({ piece, versionId, expectedDefaultId }) =>
+      moveDefault(envId, piece, versionId, expectedDefaultId),
+    onSuccess: (data) => {
+      if (data) queryClient.setQueryData(environmentVersionsKey(envId), data);
+      refresh();
+    },
+    onError: (error) => {
+      if (errorStatus(error) === 409 && error?.error === "version_conflict") {
+        refresh();
+      } else if (
+        errorStatus(error) === 422 &&
+        error?.error === "version_not_pickable"
+      ) {
+        // Discarded meanwhile: refresh the list so the action goes away.
+        queryClient.invalidateQueries({
+          queryKey: environmentVersionsKey(envId),
+        });
+      }
+    },
   });
 }

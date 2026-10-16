@@ -396,7 +396,12 @@ def _finish(
             and bundle_certificate(archive, HashKind.TREE_V1) is not None
             and certifies_bundle(archive.sealed or {})
         )
-        report.fact(bundle_row_eligible=eligible, suite_version_new=suite_created)
+        report.fact(
+            bundle_row_eligible=eligible,
+            suite_version_new=suite_created,
+            # A settled environment's default pair is kept for a roll back.
+            default_pair_kept=_settled(job),
+        )
     _check_runs(models, job, agent, runtime, predicted, report)
 
 

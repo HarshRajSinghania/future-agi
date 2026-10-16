@@ -2,6 +2,7 @@ import PropTypes from "prop-types";
 import { useMemo, useState } from "react";
 import {
   Box,
+  Button,
   CircularProgress,
   List,
   ListItem,
@@ -19,14 +20,18 @@ import {
 import { fDateTime } from "src/utils/format-time";
 import {
   VERSION_PIECES,
+  canMakeDefault,
   isVersioningDisabled,
   useEnvironmentVersions,
+  useMoveDefault,
   useSuiteMembers,
   useVersionDiff,
 } from "src/api/simulate-environments/versions";
 import { BUILD_TONES } from "../../buildEnvironment/buildTones";
 import { VersionBadge } from "../EnvVersionPin";
 import { VERSIONS_COPY } from "../workspace.constants";
+import { refusalText } from "../evals/refusalText";
+import MakeDefaultConfirm from "./MakeDefaultConfirm";
 import VersionDiff from "./VersionDiff";
 import { isEmptyDiff } from "./isEmptyDiff";
 
@@ -237,7 +242,45 @@ const isFirst = (version, siblings) =>
   siblings.length > 0 &&
   siblings[siblings.length - 1].id === version.id;
 
-function VersionDetail({ envId, piece, version, siblings }) {
+// TODO: step 9 offers this for agent versions too.
+function MakeDefault({ move, piece, version, defaultId }) {
+  const [confirming, setConfirming] = useState(false);
+  const { makeDefault } = VERSIONS_COPY;
+  const confirm = () =>
+    move.mutate(
+      { piece, versionId: version.id, expectedDefaultId: defaultId },
+      { onSettled: () => setConfirming(false) },
+    );
+  return (
+    <>
+      <Button
+        size="small"
+        variant="outlined"
+        color="inherit"
+        disabled={move.isPending}
+        onClick={() => setConfirming(true)}
+        sx={{ textTransform: "none", flexShrink: 0 }}
+      >
+        {makeDefault.action}
+      </Button>
+      <MakeDefaultConfirm
+        piece={piece}
+        version={confirming ? version : null}
+        pending={move.isPending}
+        onConfirm={confirm}
+        onClose={() => setConfirming(false)}
+      />
+    </>
+  );
+}
+MakeDefault.propTypes = {
+  move: PropTypes.object.isRequired,
+  piece: PropTypes.oneOf(VERSION_PIECES).isRequired,
+  version: PropTypes.object.isRequired,
+  defaultId: PropTypes.string,
+};
+
+function VersionDetail({ envId, move, piece, version, siblings, defaultId }) {
   const [picked, setAgainst] = useState("");
   const { detail } = VERSIONS_COPY;
   const others = siblings.filter((one) => one.id !== version.id);
@@ -298,6 +341,8 @@ function VersionDetail({ envId, piece, version, siblings }) {
         direction={{ xs: "column", sm: "row" }}
         spacing={2}
         alignItems={{ sm: "center" }}
+        flexWrap="wrap"
+        useFlexGap
       >
         <Typography
           sx={{ typography: "s1", fontWeight: "fontWeightBold", flex: 1 }}
@@ -325,7 +370,20 @@ function VersionDetail({ envId, piece, version, siblings }) {
             ))}
           </TextField>
         )}
+        {canMakeDefault(piece, version) && (
+          <MakeDefault
+            move={move}
+            piece={piece}
+            version={version}
+            defaultId={defaultId}
+          />
+        )}
       </Stack>
+      {move.isError && (
+        <Typography role="alert" sx={{ typography: "s2", color: "error.main" }}>
+          {refusalText(move.error, VERSIONS_COPY.makeDefault.error)}
+        </Typography>
+      )}
       {data?.summary && !first && !empty && (
         <Typography sx={{ typography: "s2", color: "text.secondary" }}>
           {data.summary}
@@ -343,19 +401,24 @@ function VersionDetail({ envId, piece, version, siblings }) {
 }
 VersionDetail.propTypes = {
   envId: PropTypes.string.isRequired,
+  move: PropTypes.object.isRequired,
   piece: PropTypes.oneOf(VERSION_PIECES).isRequired,
   version: PropTypes.object.isRequired,
   siblings: PropTypes.arrayOf(PropTypes.object).isRequired,
+  defaultId: PropTypes.string,
 };
 
 // The Versions tab: the agent, environment and scenario versions side by side,
-// and, for the version picked, what changed in it. Read only.
+// and, for the version picked, what changed in it and a way to make it the
+// default.
 export default function VersionsPanel({ env }) {
   const enabled = Boolean(env?.versioning?.enabled);
   const { data, isLoading, error } = useEnvironmentVersions(env?.id, {
     enabled,
   });
   const [picked, setPicked] = useState(null);
+  // Held here so a refusal outlives the refresh that re-renders the detail.
+  const move = useMoveDefault(env?.id);
 
   // Until the reader picks one, show the default environment version.
   const selection = useMemo(() => {
@@ -438,7 +501,10 @@ export default function VersionsPanel({ env }) {
             piece={piece}
             versions={data[piece]}
             selectedId={selection?.piece === piece ? selection.id : null}
-            onSelect={(p, id) => setPicked({ piece: p, id })}
+            onSelect={(p, id) => {
+              move.reset();
+              setPicked({ piece: p, id });
+            }}
           />
         ))}
       </Stack>
@@ -446,9 +512,11 @@ export default function VersionsPanel({ env }) {
         <VersionDetail
           key={`${selection.piece}-${selected.id}`}
           envId={env.id}
+          move={move}
           piece={selection.piece}
           version={selected}
           siblings={data[selection.piece]}
+          defaultId={data.defaults[selection.piece]?.id ?? null}
         />
       ) : (
         <Typography sx={{ typography: "s2", color: "text.subtitle" }}>

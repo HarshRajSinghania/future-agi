@@ -17850,6 +17850,11 @@ export interface HarnessSuiteMemberApi {
   use_case: string;
 }
 
+export interface HarnessDefaultMoveApi {
+  /** The default the caller saw; a newer default refuses the move. */
+  expected_default_id: string | null;
+}
+
 export type HarnessVersionDiffApiDiff = { [key: string]: unknown };
 
 export interface HarnessVersionDiffApi {

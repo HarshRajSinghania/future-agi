@@ -4,6 +4,7 @@ import hashlib
 import json
 import secrets
 import uuid
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -418,6 +419,8 @@ def create_selected_harness_run(
             "authoring_usage_reports",
             "usage_reports",
             "sandbox_runtime",
+            "default_pairs",
+            "default_pair_sealed",
         ):
             child_metadata.pop(key, None)
         child_metadata.update(
@@ -572,11 +575,15 @@ class _RunPins:
     @property
     def assembles(self) -> bool:
         """Whether the run replays or certifies an assembled bundle; a miss of the
-        default pins runs them as before."""
+        default pins runs them as before, unless their pair holds no sealed bundle."""
         from simulate.services.harness_versioning.assembly import certify_enabled
 
         return self.assembly is not None and (
-            self.assembly.cached or (not self.assembly.defaults and certify_enabled())
+            self.assembly.cached
+            or (
+                (not self.assembly.defaults or self.assembly.unsealed)
+                and certify_enabled()
+            )
         )
 
     def as_metadata(self) -> dict[str, Any]:
@@ -600,27 +607,44 @@ class _RunPins:
         Only the kinds a chat save replaces are overlaid; the environment output keeps the
         sealed bundle's manifest the run replays.
         """
-        from simulate.services.hosted_harness_conversation import (
-            _CHECKPOINT_STAGE_KINDS,
+        return overlay_stage_outputs(
+            current, pinned_stage_outputs(self.environment_version, self.suite_version)
         )
 
-        pinned: dict[str, Any] = {}
-        for version in (self.environment_version, self.suite_version):
-            for output in (version.documents or {}).get("stage_outputs") or []:
-                if (
-                    isinstance(output, dict)
-                    and output.get("kind") in _CHECKPOINT_STAGE_KINDS
-                ):
-                    pinned[output["kind"]] = output
-        kept = [
-            (
-                pinned.pop(item["kind"])
-                if isinstance(item, dict) and item.get("kind") in pinned
-                else item
-            )
-            for item in current
-        ]
-        return kept + list(pinned.values())
+
+def pinned_stage_outputs(
+    environment_version: Any, suite_version: Any
+) -> dict[str, dict[str, Any]]:
+    """The versions' authored snapshots of the kinds a chat save replaces, by kind."""
+    from simulate.services.hosted_harness_conversation import _CHECKPOINT_STAGE_KINDS
+
+    pinned: dict[str, dict[str, Any]] = {}
+    for version in (environment_version, suite_version):
+        for output in (version.documents or {}).get("stage_outputs") or []:
+            if (
+                isinstance(output, dict)
+                and output.get("kind") in _CHECKPOINT_STAGE_KINDS
+            ):
+                pinned[output["kind"]] = output
+    return pinned
+
+
+def overlay_stage_outputs(
+    current: list[Any], pinned: Mapping[str, Any], *, drop: Iterable[str] = ()
+) -> list[Any]:
+    """``current`` with each pinned kind in place; other kinds in ``drop`` are left out."""
+    pinned = dict(pinned)
+    dropped = set(drop) - set(pinned)
+    kept = [
+        (
+            pinned.pop(item["kind"])
+            if isinstance(item, dict) and item.get("kind") in pinned
+            else item
+        )
+        for item in current
+        if not (isinstance(item, dict) and item.get("kind") in dropped)
+    ]
+    return kept + list(pinned.values())
 
 
 @dataclass(frozen=True)
@@ -657,6 +681,8 @@ class ResolvedPins:
     # Whether the combination's bundle is cached; ``None`` without an agent side row.
     cached: bool | None
     rerun_of: str | None = None
+    # The defaults' pair holds no sealed bundle, so a run of them certifies it.
+    unsealed: bool = False
 
 
 def resolve_run_pins(
@@ -732,7 +758,19 @@ def resolve_run_pins(
         else None
     )
     at_defaults = ids == defaults
+    unsealed = at_defaults and default_pair_unsealed(environment)
     runnable = bool(cached) or (runtime is not None and certify_enabled())
+    if unsealed and not runnable:
+        raise HostedHarnessError(
+            "version_not_runnable",
+            (
+                "These versions can't be run together yet"
+                if runtime is None
+                else "These versions haven't been prepared yet and building them is"
+                " turned off"
+            ),
+            status_code=422,
+        )
     if chosen and not at_defaults and not runnable:
         raise HostedHarnessError(
             "version_not_runnable",
@@ -753,7 +791,14 @@ def resolve_run_pins(
         defaults=at_defaults,
         cached=cached,
         rerun_of=str(rerun_of.id) if source is rerun_of else None,
+        unsealed=unsealed,
     )
+
+
+def default_pair_unsealed(environment: HostedHarnessJob) -> bool:
+    """Whether the environment's default pair was made without a sealed bundle."""
+    metadata = (environment.payload or {}).get("metadata") or {}
+    return metadata.get("default_pair_sealed") is False
 
 
 def _not_pickable(piece: str) -> HostedHarnessError:
@@ -844,6 +889,7 @@ def job_pins(
     defaults = recorded.get("defaults")
     cached = recorded.get("cached")
     return ResolvedPins(
+        unsealed=recorded.get("default_pair_sealed") is False,
         agent_version=agent_version,
         environment_version=environment_version,
         suite_version=suite_version,
@@ -938,6 +984,7 @@ def _pinned_versions(
             resolved.environment_version,
             resolved.suite_version,
             defaults=resolved.defaults,
+            unsealed=resolved.unsealed,
         ),
         rerun_of=resolved.rerun_of,
         agent_version_id=resolved.agent_version_id,

@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from simulate.models import AgentDefinition, HostedHarnessJob
 from simulate.serializers.harness_environment import (
+    HarnessDefaultMoveSerializer,
     HarnessEnvironmentAddEvaluationSerializer,
     HarnessEnvironmentAvailableEvalsSerializer,
     HarnessEnvironmentDetailSerializer,
@@ -182,6 +183,49 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
             raise version_reads.version_not_found()
         against = request.validated_query_data.get("against")
         return Response(version_reads.version_diff(job, piece, identifier, against))
+
+    @validated_request(
+        request_serializer=HarnessDefaultMoveSerializer,
+        responses={200: HarnessVersionsSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=(
+            r"versions/(?P<piece>[a-z]+)/(?P<version_id>[0-9a-fA-F-]{36})/default"
+        ),
+    )
+    def move_default(self, request, pk=None, piece=None, version_id=None):
+        """Make an environment or suite version the default; returns every version."""
+        from simulate.services.harness_versioning.versions import (
+            MOVABLE_PIECES,
+            move_default,
+        )
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        if piece == "agent":
+            # TODO: move the agent default with agent versions (step 9).
+            raise HostedHarnessError(
+                "version_not_pickable",
+                "The agent's default can't be changed here yet",
+                status_code=422,
+                details={"piece": "agent"},
+            )
+        identifier = _uuid_or_none(version_id)
+        if piece not in MOVABLE_PIECES or identifier is None:
+            raise version_reads.version_not_found()
+        moved = move_default(
+            job,
+            piece,
+            identifier,
+            expected_default_id=request.validated_data["expected_default_id"],
+            user=request.user,
+        )
+        return Response(version_reads.list_versions(moved))
 
     @validated_request(responses={200: HarnessSuiteMemberSerializer(many=True)})
     @action(

@@ -1,25 +1,32 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, Popover } from "@mui/material";
+import { Box, Button, Stack, Typography, Popover } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { fDateTime } from "src/utils/format-time";
 import {
+  canMakeDefault,
   isVersioningDisabled,
   useEnvironmentVersions,
+  useMoveDefault,
 } from "src/api/simulate-environments/versions";
 import { BUILD_TONES } from "../buildEnvironment/buildTones";
 import { VERSIONS_COPY, WORKSPACE_COPY } from "./workspace.constants";
+import { refusalText } from "./evals/refusalText";
+import MakeDefaultConfirm from "./versions/MakeDefaultConfirm";
 
 const ACCENT = BUILD_TONES.accent;
 
 // The environment-version pin: the header names the default environment version,
-// and clicking it lists every version of the world. Read only — runs replay the
-// default, and changing it is not offered here yet. Shown once the server has
-// answered (a failed refresh keeps the last answer); hidden when versioning is
-// off, has just been switched off, or the environment has no versions.
+// and clicking it lists every version of the world, where an earlier active one
+// can be made the default. Shown once the server has answered (a failed refresh
+// keeps the last answer); hidden when versioning is off, has just been switched
+// off, or the environment has no versions.
 export default function EnvVersionPin({ env }) {
   const [anchor, setAnchor] = useState(null);
+  // The version waiting on the user's confirmation.
+  const [confirming, setConfirming] = useState(null);
+  const move = useMoveDefault(env?.id);
   const enabled = Boolean(env?.versioning?.enabled);
   const { data, error } = useEnvironmentVersions(env?.id, {
     enabled,
@@ -33,8 +40,29 @@ export default function EnvVersionPin({ env }) {
   const currentLabel = current.label || VERSIONS_COPY.unlabelled;
 
   const open = (e) => setAnchor(e.currentTarget);
-  const close = () => setAnchor(null);
+  const close = () => {
+    setAnchor(null);
+    move.reset();
+  };
   const { pin, versionBar } = WORKSPACE_COPY;
+  const { makeDefault } = VERSIONS_COPY;
+  const defaultIndex = versions.findIndex((v) => v.id === current.id);
+  // Versions are newest first, so one listed after the default is older.
+  const actionLabel = (v, index) => {
+    const label = v.label || VERSIONS_COPY.unlabelled;
+    return index > defaultIndex
+      ? pin.rollBack(label)
+      : makeDefault.actionFor(label);
+  };
+  const confirmMove = () =>
+    move.mutate(
+      {
+        piece: "environment",
+        versionId: confirming.id,
+        expectedDefaultId: current.id,
+      },
+      { onSettled: () => setConfirming(null) },
+    );
 
   return (
     <>
@@ -120,6 +148,14 @@ export default function EnvVersionPin({ env }) {
           <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
             {pin.subtitle}
           </Typography>
+          {move.isError && (
+            <Typography
+              role="alert"
+              sx={{ typography: "s3", color: "error.main", mt: 0.75 }}
+            >
+              {refusalText(move.error, makeDefault.error)}
+            </Typography>
+          )}
         </Box>
 
         <Stack
@@ -128,7 +164,7 @@ export default function EnvVersionPin({ env }) {
           aria-labelledby="env-version-list-heading"
           sx={{ listStyle: "none", m: 0, p: 0 }}
         >
-          {versions.map((v) => (
+          {versions.map((v, index) => (
             <Box
               component="li"
               key={v.id}
@@ -175,10 +211,29 @@ export default function EnvVersionPin({ env }) {
                   .filter(Boolean)
                   .join(" · ")}
               </Typography>
+              {canMakeDefault("environment", v) && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="inherit"
+                  disabled={move.isPending}
+                  onClick={() => setConfirming(v)}
+                  sx={{ mt: 0.75, height: 24, textTransform: "none" }}
+                >
+                  {actionLabel(v, index)}
+                </Button>
+              )}
             </Box>
           ))}
         </Stack>
       </Popover>
+      <MakeDefaultConfirm
+        piece="environment"
+        version={confirming}
+        pending={move.isPending}
+        onConfirm={confirmMove}
+        onClose={() => setConfirming(null)}
+      />
     </>
   );
 }

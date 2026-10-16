@@ -75,12 +75,14 @@ export const WORKSPACE_COPY = {
     evals: "Add at least one evaluation on the Evaluations tab",
     generic: "Setup incomplete",
   },
-  // The env-version pin: lists every version of the world. Read only for now —
-  // runs replay the default, and changing it is not offered.
+  // The env-version pin: lists every version of the world, and makes an
+  // earlier one the default.
   pin: {
     heading: "Environment versions",
-    subtitle: "Runs replay the default version. Changing the default isn't available yet.",
+    subtitle:
+      "Runs use the default version. You can roll back to an earlier one.",
     default: "default",
+    rollBack: (label) => `Roll back to ${label}`,
   },
   // Banner shown while the derivation is still in flight — the panels below are
   // loading and this explains why.
@@ -171,6 +173,17 @@ export const VERSIONS_COPY = {
     provider_sync: "Synced from provider",
   },
   by: (name) => `by ${name}`,
+  // Making a version the default; the move itself rebuilds nothing.
+  makeDefault: {
+    action: "Make default",
+    actionFor: (label) => `Make ${label} the default`,
+    title: (label, piece) => `Make ${label} the default ${piece}?`,
+    pieces: { environment: "environment", suite: "scenario version" },
+    body: "New runs use it. If this combination hasn't run before, the next run prepares it first.",
+    confirm: "Make default",
+    pending: "Making default…",
+    error: "Couldn't change the default. Try again in a moment.",
+  },
   detail: {
     pick: "Pick a version to see what changed in it.",
     changes: (label) => `What changed in ${label}`,

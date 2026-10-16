@@ -42,7 +42,7 @@ def _prepares(pins: ResolvedPins) -> bool:
     return (
         pins.runtime is not None
         and not pins.cached
-        and not pins.defaults
+        and (not pins.defaults or pins.unsealed)
         and certify_enabled()
     )
 

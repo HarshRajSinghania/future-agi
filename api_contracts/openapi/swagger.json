@@ -51177,6 +51177,61 @@
                 }
             ]
         },
+        "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/default/": {
+            "post": {
+                "operationId": "simulate_api_harness-environments_versions_move_default",
+                "description": "Make an environment or suite version the default; returns every version.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessDefaultMove"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessVersions"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "piece",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "version_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/harness-environments/{id}/versions/{piece}/{version_id}/diff/": {
             "get": {
                 "operationId": "simulate_api_harness-environments_versions_version_diff",
@@ -124878,6 +124933,21 @@
                 "use_case": {
                     "title": "Use case",
                     "type": "string"
+                }
+            }
+        },
+        "HarnessDefaultMove": {
+            "required": [
+                "expected_default_id"
+            ],
+            "type": "object",
+            "properties": {
+                "expected_default_id": {
+                    "title": "Expected default id",
+                    "description": "The default the caller saw; a newer default refuses the move.",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
                 }
             }
         },

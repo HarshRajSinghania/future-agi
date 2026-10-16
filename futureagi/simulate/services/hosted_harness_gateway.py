@@ -1472,7 +1472,7 @@ def _prepare_assembly(job: HostedHarnessJob) -> tuple[Any, HostedHarnessError | 
     except Exception as exc:
         if bundle_cache.is_transient(exc):
             raise
-        if bundle_cache.pins_are_defaults(job):
+        if bundle_cache.falls_back(job):
             logger.warning(
                 "could not assemble run=%s; it runs the default pair",
                 job.id,

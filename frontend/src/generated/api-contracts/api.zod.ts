@@ -36357,6 +36357,98 @@ export const SimulateApiHarnessEnvironmentsVersionsSuiteSuiteMembersResponse =
   );
 
 /**
+ * Make an environment or suite version the default; returns every version.
+ */
+export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultParams =
+  zod.object({
+    id: zod.string(),
+    piece: zod.string(),
+    version_id: zod.string(),
+  });
+
+export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultBody = zod.object(
+  {
+    expected_default_id: zod
+      .string()
+      .uuid()
+      .nullable()
+      .describe(
+        "The default the caller saw; a newer default refuses the move.",
+      ),
+  },
+);
+
+export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse =
+  zod.object({
+    agent: zod.array(
+      zod.object({
+        id: zod.string().uuid(),
+        label: zod.string().min(1).nullable(),
+        status: zod.enum(["draft", "active", "discarded"]),
+        is_default: zod.boolean(),
+        created_at: zod.string().datetime({ offset: true }),
+        created_by: zod
+          .object({
+            id: zod.string().min(1),
+            name: zod.string(),
+          })
+          .nullable(),
+        origin: zod.string().min(1).nullable(),
+        summary: zod.string(),
+        hash: zod.string().min(1).nullable(),
+        parent_id: zod.string().uuid().nullable(),
+        derived_from_agent_version_id: zod.string().uuid().nullable(),
+        scenario_count: zod.number().nullable(),
+        preflight_status: zod.string().min(1).nullable(),
+      }),
+    ),
+    environment: zod.array(
+      zod.object({
+        id: zod.string().uuid(),
+        label: zod.string().min(1).nullable(),
+        status: zod.enum(["draft", "active", "discarded"]),
+        is_default: zod.boolean(),
+        created_at: zod.string().datetime({ offset: true }),
+        created_by: zod
+          .object({
+            id: zod.string().min(1),
+            name: zod.string(),
+          })
+          .nullable(),
+        origin: zod.string().min(1).nullable(),
+        summary: zod.string(),
+        hash: zod.string().min(1).nullable(),
+        parent_id: zod.string().uuid().nullable(),
+        derived_from_agent_version_id: zod.string().uuid().nullable(),
+        scenario_count: zod.number().nullable(),
+        preflight_status: zod.string().min(1).nullable(),
+      }),
+    ),
+    suite: zod.array(
+      zod.object({
+        id: zod.string().uuid(),
+        label: zod.string().min(1).nullable(),
+        status: zod.enum(["draft", "active", "discarded"]),
+        is_default: zod.boolean(),
+        created_at: zod.string().datetime({ offset: true }),
+        created_by: zod
+          .object({
+            id: zod.string().min(1),
+            name: zod.string(),
+          })
+          .nullable(),
+        origin: zod.string().min(1).nullable(),
+        summary: zod.string(),
+        hash: zod.string().min(1).nullable(),
+        parent_id: zod.string().uuid().nullable(),
+        derived_from_agent_version_id: zod.string().uuid().nullable(),
+        scenario_count: zod.number().nullable(),
+        preflight_status: zod.string().min(1).nullable(),
+      }),
+    ),
+  });
+
+/**
  * What one version changed, against its parent or the ``against`` version.
  */
 export const SimulateApiHarnessEnvironmentsVersionsVersionDiffParams =
