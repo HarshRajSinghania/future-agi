@@ -1421,7 +1421,11 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
                     CallTranscript(
                         call_execution=call_execution,
                         speaker_role=seg["speaker_role"],
-                        speaker_name=str(seg.get("speaker_name") or "")[:255],
+                        speaker_name=(
+                            seg.get("speaker_name") or ""
+                            if seg["speaker_role"] == CallTranscript.SpeakerRole.SUB_ACTOR
+                            else ""
+                        ),
                         content=seg["content"],
                         start_time_ms=seg.get("start_time_ms") or 0,
                         end_time_ms=seg.get("end_time_ms") or 0,
@@ -1485,7 +1489,6 @@ def _store_alk_chat_messages(
             current = {"user": seg, "agent": []}
             exchanges.append(current)
         elif role == ChatRole.SUB_ACTOR:
-            # Its own turn, so the person's and the agent's turns are never merged with it.
             exchanges.append({"sub_actor": seg, "user": None, "agent": []})
             current = None
         elif role in _CHAT_AGENT_SPEAKER_ROLES:
@@ -1499,11 +1502,11 @@ def _store_alk_chat_messages(
         content_items: list[dict] = []
         for seg in segs:
             item = {"role": role_str, "content": seg.get("content") or ""}
-            if seg.get("speaker_name"):
-                item["name"] = seg["speaker_name"]
             if seg.get("tool_calls"):
                 item["tool_calls"] = seg["tool_calls"]
             speaker = (seg.get("speaker_role") or "").lower()
+            if speaker == ChatRole.SUB_ACTOR and seg.get("speaker_name"):
+                item["name"] = seg["speaker_name"]
             if speaker in {"tool_calls", "tool_call_result"}:
                 item["kind"] = speaker
             content_items.append(item)

@@ -391,8 +391,6 @@ def _orm_path(field: str) -> str:
     return _ALIASES.get(head, head)
 
 
-# A sub-actors filter value meaning "any sub-actor", and its opposite, the person alone.
-ANY_SUB_ACTOR = "any"
 NO_SUB_ACTOR = "none"
 
 
@@ -411,8 +409,6 @@ def _bindings(raw: Any) -> list[dict[str, Any]] | None:
 def _sub_actor_match(value: str) -> Q:
     if value == NO_SUB_ACTOR:
         return Q(sub_actors__isnull=True) | Q(sub_actors=[])
-    if value == ANY_SUB_ACTOR:
-        return Q(sub_actors__isnull=False) & ~Q(sub_actors=[])
     return Q(sub_actors__contains=[{"id": value}])
 
 
@@ -577,7 +573,6 @@ def field_catalogue(queryset: QuerySet, spoken: bool = True) -> list[dict[str, A
                     counts = tally[value]
                     counts[text] = counts.get(text, 0) + 1
 
-    # A suite where nobody binds a sub-actor has nothing to filter by.
     if set(tally["sub_actors"]) <= {NO_SUB_ACTOR}:
         tally["sub_actors"] = {}
     catalogue: list[dict[str, Any]] = []

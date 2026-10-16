@@ -75,7 +75,6 @@ def test_a_suite_indexes_each_scenarios_sub_actors_and_filters_by_them(
 
     assert filtered("sub_actors=subactor_bystander") == ["with-bystander"]
     assert filtered("sub_actors=none") == ["alone"]
-    assert filtered("sub_actors=any") == ["with-bystander", "with-service"]
     assert filtered("sub_actors_not=subactor_service") == ["alone", "with-bystander"]
 
     field = next(one for one in field_catalogue(rows) if one["value"] == "sub_actors")
@@ -99,13 +98,9 @@ def test_a_suite_with_no_sub_actors_offers_no_sub_actor_filter(organization, wor
     assert not any(one["value"] == "sub_actors" for one in field_catalogue(rows))
 
 
-@pytest.mark.django_db
-def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
+def _ingest(organization, workspace, key, call_type, messages):
     job, _ = create_hosted_job(
-        organization,
-        _payload(),
-        idempotency_key="sub-actor-transcript",
-        workspace=workspace,
+        organization, _payload(), idempotency_key=key, workspace=workspace
     )
     capability = register_attempt(job.id, endpoint_base_url="https://platform.example")
     client = APIClient()
@@ -113,11 +108,11 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
         f"{BASE}/{capability.attempt.id}/scenarios/",
         {
             "operation": "provision",
-            "name": "Sub-actor transcript",
+            "name": key,
             "modality": "text",
             "personas": [
                 {
-                    "scenario_key": "voice-one",
+                    "scenario_key": key,
                     "name": "Customer",
                     "situation": "Book it",
                     "outcome": "Booked",
@@ -132,18 +127,36 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
         {
             "operation": "begin",
             "run_test_id": provision.json()["result"]["run_test_id"],
-            "scenario_keys": ["voice-one"],
+            "scenario_keys": [key],
         },
         format="json",
         **_headers(capability),
     )
-    call = CallExecution.objects.get(hosted_registration__scenario_key="voice-one")
-    call.simulation_call_type = CallExecution.SimulationCallType.VOICE
-    at = datetime(2026, 9, 29, 9, 0, tzinfo=UTC).timestamp()
+    call = CallExecution.objects.get(hosted_registration__scenario_key=key)
+    call.simulation_call_type = call_type
     call.started_at = datetime(2026, 9, 29, 9, 0, tzinfo=UTC)
     call.save(update_fields=["simulation_call_type", "started_at"])
-    document = {
-        "messages": [
+    response = MagicMock()
+    response.read.return_value = json.dumps({"messages": messages}).encode()
+    storage = MagicMock()
+    storage.get_object.return_value = response
+    with patch(
+        "simulate.services.hosted_harness_ingestion.get_storage_client",
+        return_value=storage,
+    ):
+        _ingest_hosted_transcript(call, SimpleNamespace(object_key="transcript.json"))
+    return call
+
+
+@pytest.mark.django_db
+def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
+    at = datetime(2026, 9, 29, 9, 0, tzinfo=UTC).timestamp()
+    call = _ingest(
+        organization,
+        workspace,
+        "voice-one",
+        CallExecution.SimulationCallType.VOICE,
+        [
             {
                 "role": "assistant",
                 "content": "Where to?",
@@ -164,17 +177,8 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
                 "started_speaking_at": at + 4,
                 "stopped_speaking_at": at + 5,
             },
-        ]
-    }
-    response = MagicMock()
-    response.read.return_value = json.dumps(document).encode()
-    storage = MagicMock()
-    storage.get_object.return_value = response
-    with patch(
-        "simulate.services.hosted_harness_ingestion.get_storage_client",
-        return_value=storage,
-    ):
-        _ingest_hosted_transcript(call, SimpleNamespace(object_key="transcript.json"))
+        ],
+    )
 
     rows = list(call.transcripts.order_by("start_time_ms"))
     assert [(row.speaker_role, row.speaker_name) for row in rows] == [
@@ -182,7 +186,6 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
         ("sub_actor", "Bystander"),
         ("user", ""),
     ]
-    # What CSAT and evals read: the sub-actor is named, never scored as the agent.
     from simulate.tasks.alk_sim import _build_transcript_text
 
     assert _build_transcript_text(call).splitlines() == [
@@ -198,45 +201,14 @@ def test_a_second_chat_participant_is_its_own_message_with_its_name(
 ):
     from simulate.models.chat_message import ChatMessageModel
 
-    job, _ = create_hosted_job(
-        organization, _payload(), idempotency_key="sub-actor-chat", workspace=workspace
-    )
-    capability = register_attempt(job.id, endpoint_base_url="https://platform.example")
-    client = APIClient()
-    provision = client.post(
-        f"{BASE}/{capability.attempt.id}/scenarios/",
-        {
-            "operation": "provision",
-            "name": "Sub-actor chat",
-            "modality": "text",
-            "personas": [
-                {
-                    "scenario_key": "chat-one",
-                    "name": "Customer",
-                    "situation": "Order",
-                    "outcome": "Ordered",
-                }
-            ],
-        },
-        format="json",
-        **_headers(capability),
-    )
-    client.post(
-        f"{BASE}/{capability.attempt.id}/scenarios/",
-        {
-            "operation": "begin",
-            "run_test_id": provision.json()["result"]["run_test_id"],
-            "scenario_keys": ["chat-one"],
-        },
-        format="json",
-        **_headers(capability),
-    )
-    call = CallExecution.objects.get(hosted_registration__scenario_key="chat-one")
-    call.simulation_call_type = CallExecution.SimulationCallType.TEXT
-    call.save(update_fields=["simulation_call_type"])
-    document = {
-        "messages": [
+    call = _ingest(
+        organization,
+        workspace,
+        "chat-one",
+        CallExecution.SimulationCallType.TEXT,
+        [
             {"role": "user", "content": "One item please."},
+            {"role": "tool_call_result", "name": "lookup", "content": "In stock."},
             {"role": "assistant", "content": "Added."},
             {
                 "role": "sub_actor",
@@ -246,17 +218,8 @@ def test_a_second_chat_participant_is_its_own_message_with_its_name(
             },
             {"role": "user", "content": "Just the one."},
             {"role": "assistant", "content": "Done."},
-        ]
-    }
-    response = MagicMock()
-    response.read.return_value = json.dumps(document).encode()
-    storage = MagicMock()
-    storage.get_object.return_value = response
-    with patch(
-        "simulate.services.hosted_harness_ingestion.get_storage_client",
-        return_value=storage,
-    ):
-        _ingest_hosted_transcript(call, SimpleNamespace(object_key="transcript.json"))
+        ],
+    )
 
     rows = list(
         ChatMessageModel.objects.filter(call_execution=call).order_by(
@@ -274,6 +237,12 @@ def test_a_second_chat_participant_is_its_own_message_with_its_name(
     assert friend.content == [
         {"role": "sub_actor", "content": "Add one more.", "name": "Friend"}
     ]
+    assert not any(
+        "name" in item
+        for row in rows
+        if row.role != "sub_actor"
+        for item in row.content
+    )
     from simulate.tasks.alk_sim import _build_transcript_text
 
     assert "Friend (not the customer): Add one more." in _build_transcript_text(call)

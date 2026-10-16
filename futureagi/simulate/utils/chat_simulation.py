@@ -61,6 +61,10 @@ def _calculate_tokens_from_messages(messages: list[str], content: list[dict]) ->
     return total_tokens
 
 
+def sub_actor_label(name: str | None) -> str:
+    return f"{name or 'Someone else'} (not the customer)"
+
+
 def _build_chat_transcript(chat_messages: list[ChatMessageModel]) -> str:
     """
     Build a transcript string from chat messages for evaluation purposes.
@@ -69,16 +73,10 @@ def _build_chat_transcript(chat_messages: list[ChatMessageModel]) -> str:
     transcript_lines = []
     for msg in chat_messages:
         if msg.role == ChatRole.SUB_ACTOR:
-            # Someone other than the person and the agent: never scored as either.
-            named = next(
-                (
-                    item.get("name")
-                    for item in msg.content or []
-                    if isinstance(item, dict) and item.get("name")
-                ),
-                "Someone else",
-            )
-            role_label = f"{named} (not the customer)"
+            names = [
+                item.get("name") for item in msg.content or [] if isinstance(item, dict)
+            ]
+            role_label = sub_actor_label(next(filter(None, names), None))
         else:
             role_label = "User" if msg.role == ChatRole.USER else "Assistant"
         # Extract text content from messages list or content dict

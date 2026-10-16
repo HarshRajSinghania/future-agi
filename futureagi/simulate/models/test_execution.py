@@ -674,7 +674,6 @@ class CallTranscript(BaseModel):
         default=SpeakerRole.UNKNOWN,
         help_text="Role of the speaker (user or assistant)",
     )
-    # Who spoke, for a speaker other than the person and the agent.
     speaker_name = models.CharField(max_length=255, blank=True, default="")
 
     content = models.TextField(help_text="Transcript content")
