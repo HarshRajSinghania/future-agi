@@ -1421,6 +1421,7 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
                     CallTranscript(
                         call_execution=call_execution,
                         speaker_role=seg["speaker_role"],
+                        speaker_name=str(seg.get("speaker_name") or "")[:255],
                         content=seg["content"],
                         start_time_ms=seg.get("start_time_ms") or 0,
                         end_time_ms=seg.get("end_time_ms") or 0,

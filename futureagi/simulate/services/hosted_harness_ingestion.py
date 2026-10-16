@@ -1442,6 +1442,9 @@ def _ingest_hosted_transcript(
                     CallTranscript(
                         call_execution=call,
                         speaker_role=role if role in valid_roles else "unknown",
+                        speaker_name=str(message.get("name") or "")[:255]
+                        if role == CallTranscript.SpeakerRole.SUB_ACTOR
+                        else "",
                         content=str(content),
                         start_time_ms=start_ms,
                         end_time_ms=end_ms,
