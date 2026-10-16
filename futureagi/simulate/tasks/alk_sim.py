@@ -207,11 +207,13 @@ def _build_transcript_text(call: CallExecution) -> str | None:
         return None
     lines: list[str] = []
     for seg in segments:
-        role = (
-            "Customer"
-            if seg.speaker_role == CallTranscript.SpeakerRole.USER
-            else "Agent"
-        )
+        if seg.speaker_role == CallTranscript.SpeakerRole.SUB_ACTOR:
+            # Someone other than the person and the agent: never scored as either.
+            role = f"{seg.speaker_name or 'Someone else'} (not the customer)"
+        elif seg.speaker_role == CallTranscript.SpeakerRole.USER:
+            role = "Customer"
+        else:
+            role = "Agent"
         content = (seg.content or "").strip()
         if content:
             lines.append(f"{role}: {content}")

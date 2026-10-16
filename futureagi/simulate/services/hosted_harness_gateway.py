@@ -1590,7 +1590,7 @@ def _persist_bundle_stage_outputs(
                 HostedHarnessStageOutput(
                     job=job,
                     title="Cast",
-                    summary=f"{len(cast['sub_actors'])} sub-actors",
+                    summary=cast_summary(cast),
                     kind="cast",
                     data=cast,
                 )
@@ -4557,6 +4557,11 @@ def _record_harness_spend(
     job.save(update_fields=["payload", "updated_at"])
 
 
+def cast_summary(cast: dict[str, Any]) -> str:
+    count = len(cast.get("sub_actors") or [])
+    return f"{count} sub-actor" + ("" if count == 1 else "s")
+
+
 def authoring_stage_outputs(
     contract: Any,
     environment: Any,
@@ -4627,7 +4632,7 @@ def authoring_stage_outputs(
                 "id": "00000000-0000-0000-0000-000000000007",
                 "kind": "cast",
                 "title": "Cast",
-                "summary": f"{len(cast['sub_actors'])} sub-actors",
+                "summary": cast_summary(cast),
                 "data": _secret_safe(cast),
             }
         )

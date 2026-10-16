@@ -68,7 +68,19 @@ def _build_chat_transcript(chat_messages: list[ChatMessageModel]) -> str:
     """
     transcript_lines = []
     for msg in chat_messages:
-        role_label = "User" if msg.role == ChatRole.USER else "Assistant"
+        if msg.role == ChatRole.SUB_ACTOR:
+            # Someone other than the person and the agent: never scored as either.
+            named = next(
+                (
+                    item.get("name")
+                    for item in msg.content or []
+                    if isinstance(item, dict) and item.get("name")
+                ),
+                "Someone else",
+            )
+            role_label = f"{named} (not the customer)"
+        else:
+            role_label = "User" if msg.role == ChatRole.USER else "Assistant"
         # Extract text content from messages list or content dict
         content_parts = []
 
