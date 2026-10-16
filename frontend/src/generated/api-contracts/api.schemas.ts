@@ -17147,6 +17147,7 @@ export interface HarnessEnvironmentListResponseApi {
   total_pages: number;
   current_page: number;
   results: HarnessEnvironmentApi[];
+  sub_actors: boolean;
 }
 
 export type HarnessEnvironmentOverviewApiAgentType =

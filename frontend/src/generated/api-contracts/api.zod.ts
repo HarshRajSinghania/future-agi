@@ -35269,6 +35269,7 @@ export const SimulateApiHarnessEnvironmentsListResponse = zod.object({
       created_at: zod.string().datetime({ offset: true }),
     }),
   ),
+  sub_actors: zod.boolean(),
 });
 
 /**

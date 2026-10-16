@@ -63141,6 +63141,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "total_pages",
         "current_page",
         "results",
+        "sub_actors",
       ],
       type: "object",
       properties: {
@@ -63173,6 +63174,10 @@ export const OPENAPI_CONTRACT = Object.freeze({
           items: {
             $ref: "#/definitions/HarnessEnvironment",
           },
+        },
+        sub_actors: {
+          title: "Sub actors",
+          type: "boolean",
         },
       },
     },
