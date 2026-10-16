@@ -89,6 +89,13 @@ class InstantEvalAnswerSerializer(serializers.Serializer):
     counts = serializers.DictField(child=serializers.IntegerField(), required=False)
 
 
+class InstantEvalRowFacetsSerializer(serializers.Serializer):
+    model = serializers.CharField(allow_null=True, allow_blank=True)
+    turns = serializers.IntegerField(allow_null=True)
+    duration_ms = serializers.IntegerField(allow_null=True)
+    error = serializers.BooleanField()
+
+
 class InstantEvalAnswerRowSerializer(serializers.Serializer):
     id = serializers.CharField()
     label = serializers.CharField(allow_blank=True)
@@ -98,6 +105,7 @@ class InstantEvalAnswerRowSerializer(serializers.Serializer):
     end_user_id = serializers.CharField(allow_blank=True, allow_null=True)
     sessions = serializers.IntegerField(required=False)
     trace_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    facets = InstantEvalRowFacetsSerializer(required=False)
     answers = serializers.DictField(child=InstantEvalAnswerSerializer())
 
 
@@ -182,6 +190,35 @@ def _latest_logs(eval_task_id: str, config_ids: list[str], key: str):
     return latest
 
 
+def _is_error(span) -> bool:
+    return str(getattr(span, "status", "") or "").upper() == "ERROR"
+
+
+def _span_model(span) -> str | None:
+    attrs = getattr(span, "attrs_string", None) or {}
+    return getattr(span, "model", None) or attrs.get("llm.model_name") or None
+
+
+def _facets(model=None, turns=None, duration_ms=None, error=False) -> dict:
+    """What a row can be grouped by on the Ask page: the model that answered,
+    how many turns a session had, how long it took and whether any of it
+    errored. Any of them may be unknown (None)."""
+    return {
+        "model": model or None,
+        "turns": turns,
+        "duration_ms": int(duration_ms) if duration_ms is not None else None,
+        "error": bool(error),
+    }
+
+
+def _models(reader, column: str, ids: list[str], project_id: str) -> dict[str, str]:
+    try:
+        return reader.models_by_group(column, ids, project_id=project_id)
+    except Exception:
+        logger.exception("instant_eval_models_failed")
+        return {}
+
+
 def _session_display(project_id: str, session_ids: list[str]) -> dict[str, dict]:
     from ee.agenthub.insights.units import _message_text, _user_labels
     from tracer.services.clickhouse.v2 import get_reader
@@ -190,9 +227,12 @@ def _session_display(project_id: str, session_ids: list[str]) -> dict[str, dict]
         return {}
     with get_reader() as reader:
         roots = reader.roots_by_session_ids(session_ids, project_id=project_id)
+        models = _models(reader, "trace_session_id", session_ids, project_id)
     by_session: dict[str, dict] = {}
+    spans_of: dict[str, list] = defaultdict(list)
     for span in roots:
         sid = str(span.trace_session_id)
+        spans_of[sid].append(span)
         entry = by_session.setdefault(
             sid,
             {
@@ -206,6 +246,17 @@ def _session_display(project_id: str, session_ids: list[str]) -> dict[str, dict]
         if not entry["excerpt"]:
             attrs = span.attrs_string or {}
             entry["excerpt"] = _clip(_message_text(attrs.get("input.value") or span.input))
+    for sid, entry in by_session.items():
+        spans = spans_of[sid]
+        start = min(s.start_time for s in spans)
+        ends = [s.end_time for s in spans if s.end_time]
+        duration = (max(ends) - start).total_seconds() * 1000 if ends else None
+        entry["facets"] = _facets(
+            model=models.get(sid) or next((_span_model(s) for s in spans if _span_model(s)), None),
+            turns=entry["turns"],
+            duration_ms=duration if duration is None or duration >= 0 else None,
+            error=any(_is_error(s) for s in spans),
+        )
     labels = _user_labels(e["end_user_id"] for e in by_session.values())
     for entry in by_session.values():
         entry["user_id"] = labels.get(entry["end_user_id"] or "", "")
@@ -220,13 +271,20 @@ def _trace_display(project_id: str, trace_ids: list[str]) -> dict[str, dict]:
         return {}
     with get_reader() as reader:
         roots = reader.roots_by_trace_ids(trace_ids, project_id=project_id)
+        models = _models(reader, "trace_id", trace_ids, project_id)
     out: dict[str, dict] = {}
     for span in roots:
         attrs = span.attrs_string or {}
-        out[str(span.trace_id)] = {
+        tid = str(span.trace_id)
+        out[tid] = {
             "time": _iso(span.start_time),
             "end_user_id": str(span.end_user_id) if span.end_user_id else None,
             "excerpt": _clip(_message_text(attrs.get("input.value") or span.input)),
+            "facets": _facets(
+                model=models.get(tid) or _span_model(span),
+                duration_ms=span.latency_ms,
+                error=_is_error(span),
+            ),
         }
     labels = _user_labels(e["end_user_id"] for e in out.values())
     for entry in out.values():
@@ -252,6 +310,11 @@ def _span_display(project_id: str, span_ids: list[str]) -> dict[str, dict]:
             "end_user_id": str(span.end_user_id) if span.end_user_id else None,
             "excerpt": f"{kind} · {span.name}: {text}" if text else f"{kind} · {span.name}",
             "trace_id": str(span.trace_id),
+            "facets": _facets(
+                model=_span_model(span),
+                duration_ms=span.latency_ms,
+                error=_is_error(span),
+            ),
         }
     labels = _user_labels(e["end_user_id"] for e in out.values())
     for entry in out.values():
@@ -270,6 +333,21 @@ def _tally(rows: list[dict], config_ids: list[str]) -> dict[str, dict[str, int]]
             elif answer["answer"] is not None:
                 counts.setdefault(config_id, Counter())[answer["answer"]] += 1
     return {c: dict(v) for c, v in counts.items()}
+
+
+def _user_facets(rows: list[dict]) -> dict:
+    """A user's sessions as one row: their most used model, every turn, the
+    time all their sessions took, and whether any of them errored."""
+    facets = [r.get("facets") or {} for r in rows]
+    models = Counter(f["model"] for f in facets if f.get("model"))
+    turns = [f["turns"] for f in facets if f.get("turns") is not None]
+    durations = [f["duration_ms"] for f in facets if f.get("duration_ms") is not None]
+    return _facets(
+        model=models.most_common(1)[0][0] if models else None,
+        turns=sum(turns) if turns else None,
+        duration_ms=sum(durations) if durations else None,
+        error=any(f.get("error") for f in facets),
+    )
 
 
 def _user_rollup(session_rows: list[dict]) -> list[dict]:
@@ -291,8 +369,11 @@ def _user_rollup(session_rows: list[dict]) -> list[dict]:
                 if config_id in r["answers"] and r["answers"][config_id]["answer"]
             )
             top = [label for label, _ in labels.most_common() if not label.startswith("__")]
+            # A session not read yet keeps its user in flight too.
             in_flight = any(
-                r["answers"].get(config_id, {}).get("status") in IN_FLIGHT for r in rows
+                config_id not in r["answers"]
+                or r["answers"][config_id].get("status") in IN_FLIGHT
+                for r in rows
             )
             answers[config_id] = {
                 "answer": top[0] if top else (next(iter(labels), None)),
@@ -309,6 +390,7 @@ def _user_rollup(session_rows: list[dict]) -> list[dict]:
                 "user_id": rows[0]["user_id"],
                 "end_user_id": end_user_id,
                 "sessions": len(rows),
+                "facets": _user_facets(rows),
                 "answers": answers,
             }
         )
@@ -323,7 +405,7 @@ def _cached_display(project_id: str, unit: str, row_ids: list[str]) -> dict[str,
     """What each row shows (excerpt, time, user) never changes during a run,
     so it is read from ClickHouse once and cached; polls only read answers."""
     kind = {"traces": "traces", "spans": "spans"}.get(unit, "sessions")
-    keys = {row_id: f"ie-display:{project_id}:{kind}:{row_id}" for row_id in row_ids}
+    keys = {row_id: f"ie-display:v2:{project_id}:{kind}:{row_id}" for row_id in row_ids}
     cached = cache.get_many(list(keys.values()))
     display = {row_id: cached[key] for row_id, key in keys.items() if key in cached}
     missing = [row_id for row_id in row_ids if row_id not in display]
@@ -340,12 +422,27 @@ def _cached_display(project_id: str, unit: str, row_ids: list[str]) -> dict[str,
     return display
 
 
-def _summary(unit: str, shown_rows: list[dict], all_rows: list[dict], config_ids) -> dict:
-    settled = sum(
-        1
-        for row in all_rows
-        if all(a.get("status") not in IN_FLIGHT for a in row["answers"].values())
+def _row_settled(row: dict, config_ids: list[str]) -> bool:
+    """Every question of the row has its answer. A row with no answer yet
+    (named by the task, not read so far) is still pending."""
+    answers = row["answers"]
+    wanted = config_ids or list(answers)
+    return bool(wanted) and all(
+        c in answers and answers[c].get("status") not in IN_FLIGHT for c in wanted
     )
+
+
+def _task_ids(task, unit: str) -> list[str]:
+    """The rows a task named outright, in the order it named them."""
+    key = {"traces": "trace_id", "spans": "span_id"}.get(unit, "session_id")
+    raw = (task.filters or {}).get(key)
+    if not isinstance(raw, list | tuple):
+        return []
+    return list(dict.fromkeys(str(v) for v in raw if v not in (None, "")))
+
+
+def _summary(unit: str, shown_rows: list[dict], all_rows: list[dict], config_ids) -> dict:
+    settled = sum(1 for row in all_rows if _row_settled(row, config_ids))
     return {
         "unit": unit,
         "rows": shown_rows,
@@ -440,9 +537,14 @@ class InstantEvalAnswersView(APIView):
                 "confidence": confidence_of(log),
                 "status": log.status,
             }
-        row_ids = list(answers)[:MAX_ANSWER_ROWS]
+        # A task that named its rows answers for all of them from the start:
+        # rows not read yet come back with no answers, so a run reopened from
+        # History shows its whole population.
+        row_ids = list(dict.fromkeys(_task_ids(task, unit) + list(answers)))[
+            :MAX_ANSWER_ROWS
+        ]
         if params.get("counts_only") and unit != "users":
-            rows = [{"answers": answers[r]} for r in row_ids]
+            rows = [{"answers": answers.get(r, {})} for r in row_ids]
             return self._gm.success_response(_summary(unit, [], rows, config_ids))
         display = _cached_display(str(project.id), unit, row_ids)
         rows = []
@@ -457,7 +559,8 @@ class InstantEvalAnswersView(APIView):
                     "user_id": shown.get("user_id", ""),
                     "end_user_id": shown.get("end_user_id"),
                     "trace_id": shown.get("trace_id"),
-                    "answers": answers[row_id],
+                    "facets": shown.get("facets") or _facets(),
+                    "answers": answers.get(row_id, {}),
                 }
             )
         if unit == "users":
@@ -479,6 +582,8 @@ class InstantEvalRunsQuerySerializer(serializers.Serializer):
         choices=["traces", "spans", "sessions", "users"], required=False
     )
     search = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    # One run, for a page that opens it by id.
+    task_id = serializers.UUIDField(required=False)
     page_number = serializers.IntegerField(min_value=0, required=False, default=0)
     page_size = serializers.IntegerField(min_value=1, max_value=50, required=False, default=20)
 
@@ -497,6 +602,8 @@ class InstantEvalRunSerializer(serializers.Serializer):
     counts = serializers.DictField(child=serializers.DictField(child=serializers.IntegerField()))
     answered = serializers.IntegerField()
     pending = serializers.IntegerField()
+    # When the last answer landed, once every row has one.
+    finished_at = serializers.CharField(allow_null=True, required=False)
 
 
 class InstantEvalRunsResultSerializer(serializers.Serializer):
@@ -534,6 +641,8 @@ class InstantEvalRunsView(APIView):
         tasks = EvalTask.objects.filter(
             project=project, deleted=False, name__startswith=INSTANT_TASK_PREFIX
         )
+        if params.get("task_id"):
+            tasks = tasks.filter(id=params["task_id"])
         if params.get("search"):
             tasks = tasks.filter(name__icontains=params["search"])
         tasks = list(tasks.order_by("-created_at").prefetch_related("evals")[:HISTORY_SCAN])
@@ -559,11 +668,17 @@ class InstantEvalRunsView(APIView):
         ).only(
             "eval_task_id", "custom_eval_config_id", "status", "error", "skipped_reason",
             "output_str_list", "output_str", "trace_id", "trace_session_id",
-            "observation_span_id",
+            "observation_span_id", "updated_at",
         )
+        last_update: dict[str, datetime] = {}
         for log in logs:
             row = log.trace_session_id or log.trace_id or log.observation_span_id
             rows_seen[log.eval_task_id].add(row)
+            if log.updated_at and (
+                log.eval_task_id not in last_update
+                or log.updated_at > last_update[log.eval_task_id]
+            ):
+                last_update[log.eval_task_id] = log.updated_at
             answer = answer_of(log)
             if answer is not None:
                 counts[log.eval_task_id][str(log.custom_eval_config_id)][answer] += 1
@@ -571,6 +686,11 @@ class InstantEvalRunsView(APIView):
         out = []
         for task, unit, metas in page:
             tid = str(task.id)
+            rows = _task_rows(task)
+            # Rows the task named but hasn't logged yet are pending too; a
+            # task that ran on filters only knows the rows it has logged.
+            named = len(_task_ids(task, unit)) or len(rows_seen[tid])
+            pending = max(0, max(named, len(rows_seen[tid])) - len(settled[tid]))
             out.append({
                 "task_id": tid,
                 "name": task.name or "",
@@ -579,12 +699,13 @@ class InstantEvalRunsView(APIView):
                 "run_type": str(task.run_type),
                 "unit": unit,
                 "reads": metas[0][1].get("reads"),
-                "rows": _task_rows(task),
+                "rows": rows,
                 "config_ids": [cid for cid, _ in metas],
                 "questions": [m["question"] for _, m in metas],
                 "counts": {cid: dict(c) for cid, c in counts[tid].items()},
                 "answered": len(settled[tid]),
-                "pending": max(0, len(rows_seen[tid]) - len(settled[tid])),
+                "pending": pending,
+                "finished_at": _iso(last_update.get(tid)) if not pending else None,
             })
         return self._gm.success_response(
             {"runs": out, "has_more": start + params["page_size"] < len(runs)}

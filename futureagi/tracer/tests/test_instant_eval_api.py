@@ -223,3 +223,189 @@ def test_transcript_renders_ordered_turns_and_keeps_the_ends_when_long():
     assert len(clipped) <= 60000 + 200
     assert clipped.startswith("[Turn 1]") and "[Turn 30]" in clipped
     assert "turns omitted" in clipped
+
+
+# ─── The Ask page: whole population, facets, one run by id ─────────────────
+RUNS = "/tracer/instant-eval/runs/"
+
+
+@pytest.fixture
+def named_task(observe_project, question, sessions):
+    """A run that named its three sessions outright, as the Ask page does."""
+    task = EvalTask.objects.create(
+        project=observe_project,
+        name="Instant eval · q",
+        filters={"project_id": str(observe_project.id), "session_id": sessions},
+        sampling_rate=100,
+        spans_limit=len(sessions),
+        run_type=RunType.HISTORICAL,
+        status=EvalTaskStatus.RUNNING,
+        row_type=RowType.SESSIONS,
+    )
+    task.evals.add(question)
+    return task
+
+
+@pytest.mark.django_db
+def test_a_named_run_answers_for_its_whole_population_from_the_start(
+    auth_client, observe_project, named_task, question, sessions
+):
+    EvalLogger.objects.bulk_create([log(named_task, question, sessions[0], "Yes")])
+    result = auth_client.get(ANSWERS, {
+        "project_id": str(observe_project.id),
+        "eval_task_id": str(named_task.id),
+        "unit": "sessions",
+        "config_ids": str(question.id),
+    }).json()["result"]
+    by_id = {r["id"]: r for r in result["rows"]}
+    assert set(by_id) == set(sessions)
+    # Rows not read yet come back with no answers and count as pending.
+    assert by_id[sessions[1]]["answers"] == {}
+    assert by_id[sessions[2]]["time"]
+    assert (result["answered"], result["pending"]) == (1, 2)
+    counts = auth_client.get(ANSWERS, {
+        "project_id": str(observe_project.id),
+        "eval_task_id": str(named_task.id),
+        "unit": "sessions",
+        "counts_only": "true",
+    }).json()["result"]
+    assert (counts["answered"], counts["pending"], counts["rows"]) == (1, 2, [])
+
+
+@pytest.mark.django_db
+def test_a_user_stays_in_flight_until_every_session_is_read(
+    auth_client, observe_project, named_task, question, sessions
+):
+    # eu-1 has two sessions, only one answered; eu-2's one session answered.
+    EvalLogger.objects.bulk_create([
+        log(named_task, question, sessions[0], "Yes"),
+        log(named_task, question, sessions[2], "No"),
+    ])
+    result = auth_client.get(ANSWERS, {
+        "project_id": str(observe_project.id),
+        "eval_task_id": str(named_task.id),
+        "unit": "users",
+        "config_ids": str(question.id),
+    }).json()["result"]
+    by_user = {r["id"]: r for r in result["rows"]}
+    assert by_user["eu-1"]["answers"][str(question.id)]["status"] == "running"
+    assert by_user["eu-2"]["answers"][str(question.id)]["status"] == "completed"
+    assert (result["answered"], result["pending"]) == (1, 1)
+
+
+@pytest.mark.django_db
+def test_rows_carry_facets_and_users_combine_their_sessions(
+    auth_client, observe_project, named_task, question, sessions, monkeypatch
+):
+    facets = [
+        {"model": "gpt-4o-mini", "turns": 2, "duration_ms": 1000, "error": False},
+        {"model": "gpt-4o-mini", "turns": 3, "duration_ms": 2500, "error": True},
+        {"model": "gpt-4.1-mini", "turns": 1, "duration_ms": None, "error": False},
+    ]
+    shown = {
+        sid: {
+            "time": datetime(2026, 10, 14, 10 + i).isoformat(),
+            "end_user_id": ["eu-1", "eu-1", "eu-2"][i],
+            "user_id": "cust",
+            "excerpt": "hi",
+            "facets": facets[i],
+        }
+        for i, sid in enumerate(sessions)
+    }
+    monkeypatch.setattr(instant_eval, "_session_display", lambda project_id, row_ids: shown)
+    params = {
+        "project_id": str(observe_project.id),
+        "eval_task_id": str(named_task.id),
+        "config_ids": str(question.id),
+    }
+    rows = auth_client.get(ANSWERS, {**params, "unit": "sessions"}).json()["result"]["rows"]
+    assert {r["id"]: r["facets"] for r in rows} == dict(zip(sessions, facets))
+    users = auth_client.get(ANSWERS, {**params, "unit": "users"}).json()["result"]["rows"]
+    assert {u["id"]: u["facets"] for u in users}["eu-1"] == {
+        "model": "gpt-4o-mini",
+        "turns": 5,
+        "duration_ms": 3500,
+        "error": True,
+    }
+
+
+class _DisplayReader:
+    """Roots of two sessions (one errored, three turns) and their models."""
+
+    def __init__(self, roots, models):
+        self.roots, self.models, self.grouped = roots, models, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def roots_by_session_ids(self, ids, *, project_id):
+        return self.roots
+
+    def models_by_group(self, column, ids, *, project_id):
+        self.grouped.append(column)
+        return self.models
+
+
+def test_session_facets_come_from_its_root_spans_and_its_first_model(monkeypatch):
+    base = datetime(2026, 10, 13, 14)
+
+    def root(sid, minute, *, seconds, error=False):
+        start = base + timedelta(minutes=minute)
+        return SimpleNamespace(
+            trace_session_id=sid,
+            start_time=start,
+            end_time=start + timedelta(seconds=seconds),
+            end_user_id=None,
+            attrs_string={"input.value": f"turn {minute}"},
+            input="",
+            status="ERROR" if error else "OK",
+            model="",
+        )
+
+    reader = _DisplayReader(
+        [root("a", 0, seconds=2), root("a", 1, seconds=10, error=True), root("a", 5, seconds=3),
+         root("b", 30, seconds=4)],
+        {"a": "gpt-4o-mini"},
+    )
+    monkeypatch.setattr("tracer.services.clickhouse.v2.get_reader", lambda: reader)
+    monkeypatch.setattr("ee.agenthub.insights.units._user_labels", lambda ids: {})
+    shown = instant_eval._session_display("p1", ["a", "b"])
+    assert shown["a"]["facets"] == {
+        "model": "gpt-4o-mini",
+        "turns": 3,
+        "duration_ms": 5 * 60 * 1000 + 3000,  # first start to last end
+        "error": True,
+    }
+    assert shown["b"]["facets"] == {
+        "model": None, "turns": 1, "duration_ms": 4000, "error": False,
+    }
+    assert reader.grouped == ["trace_session_id"]
+
+
+@pytest.mark.django_db
+def test_runs_opens_one_run_by_id_with_its_pending_rows(
+    auth_client, observe_project, named_task, session_task, question, sessions
+):
+    EvalLogger.objects.bulk_create([log(named_task, question, sessions[0], "Yes")])
+    runs = auth_client.get(RUNS, {
+        "project_id": str(observe_project.id),
+        "task_id": str(named_task.id),
+    }).json()["result"]["runs"]
+    assert [r["task_id"] for r in runs] == [str(named_task.id)]
+    # Named rows without a log yet are pending; it isn't finished.
+    assert (runs[0]["rows"], runs[0]["answered"], runs[0]["pending"]) == (3, 1, 2)
+    assert runs[0]["finished_at"] is None
+
+    EvalLogger.objects.bulk_create([
+        log(named_task, question, sessions[1], "No"),
+        log(named_task, question, sessions[2], "No"),
+    ])
+    done = auth_client.get(RUNS, {
+        "project_id": str(observe_project.id),
+        "task_id": str(named_task.id),
+    }).json()["result"]["runs"][0]
+    assert done["pending"] == 0
+    assert done["finished_at"]

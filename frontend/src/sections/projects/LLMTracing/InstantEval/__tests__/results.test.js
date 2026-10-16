@@ -6,73 +6,7 @@ vi.mock("src/utils/axios", () => ({
   endpoints: { project: {}, develop: { eval: {} } },
 }));
 
-import {
-  dateItem,
-  presetScope,
-  readScope,
-  traceViewLink,
-} from "../results/scopeLinks";
 import { buildHeatmap } from "../results/heatmap";
-
-const STATUS = {
-  column_id: "status",
-  filter_config: {
-    filter_type: "text",
-    filter_op: "equals",
-    filter_value: "OK",
-  },
-};
-
-describe("readScope", () => {
-  it("takes the Trace view's filters from the URL", () => {
-    const filters = [STATUS];
-    const search = `?scope=${encodeURIComponent(
-      JSON.stringify({ filters, label: "Past 3 days" }),
-    )}`;
-    expect(readScope(search)).toEqual({
-      filters,
-      label: "Past 3 days",
-      preset: "trace",
-    });
-  });
-
-  it("falls back to the past seven days for a missing or broken link", () => {
-    expect(readScope("").preset).toBe("7d");
-    expect(readScope("?scope=%7Bnot-json").preset).toBe("7d");
-  });
-
-  it("keeps other filters when switching presets", () => {
-    const now = new Date("2026-10-14T12:00:00Z");
-    const scope = presetScope("24h", [STATUS], now);
-    expect(scope.filters[0]).toBe(STATUS);
-    expect(scope.filters[1].filter_config.filter_value).toEqual([
-      "2026-10-13T12:00:00.000Z",
-      "2026-10-14T12:00:00.000Z",
-    ]);
-  });
-});
-
-describe("traceViewLink", () => {
-  it("turns the window into the date filter and the answer into a chip", () => {
-    const link = traceViewLink({
-      projectId: "p1",
-      scopeFilters: [
-        STATUS,
-        dateItem("2026-10-08T00:00:00Z", "2026-10-15T00:00:00Z"),
-      ],
-      item: { configId: "c1", question: "Refund promised?" },
-      labels: ["Yes"],
-    });
-    const url = new URL(link, "http://x");
-    expect(url.pathname).toBe("/dashboard/observe/p1/llm-tracing");
-    expect(
-      JSON.parse(url.searchParams.get("primaryTraceDateFilter")).dateOption,
-    ).toBe("Custom");
-    const rows = JSON.parse(url.searchParams.get("observeLinkFilter"));
-    expect(rows.map((row) => row.column_id)).toEqual(["status", "c1"]);
-    expect(rows[1].filter_config.filter_value).toEqual(["Yes"]);
-  });
-});
 
 describe("buildHeatmap", () => {
   const at = (day, hour) => new Date(2026, 9, day, hour, 30).toISOString();

@@ -1089,6 +1089,29 @@ class CHSpanReader:
             for tid, lat, pt, ct in rows
         }
 
+    def models_by_group(
+        self, column: str, ids: list[str], *, project_id: str
+    ) -> dict[str, str]:
+        """{trace_id or trace_session_id: the model its first LLM call used},
+        for the traces or sessions given. The root of an agent trace rarely
+        names a model; its LLM child spans do.
+
+        No FINAL: a model name is the same on every version of a span, so an
+        unmerged duplicate cannot change the answer."""
+        if column not in ("trace_id", "trace_session_id"):
+            raise ValueError(f"cannot group models by {column}")
+        if not ids:
+            return {}
+        rows = self._client.query(
+            f"SELECT {column} AS k, argMin(model, start_time) AS m "
+            "FROM spans "
+            f"WHERE project_id = %(pid)s AND {column} IN %(ids)s "
+            "AND model != '' AND is_deleted = 0 "
+            "GROUP BY k",
+            parameters={"pid": str(project_id), "ids": tuple(map(str, ids))},
+        ).result_rows
+        return {str(key): str(model) for key, model in rows if key and model}
+
     # ─── Children of a parent span ────────────────────────────────────────────
     def list_by_parent(
         self, parent_span_id: str, *, limit: int | None = None

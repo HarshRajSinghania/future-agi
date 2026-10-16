@@ -42,12 +42,8 @@ const PrimaryGraph = lazy(
 );
 
 // Instant eval / Insights
-import { useInstantEvalLauncher } from "../LLMTracing/InstantEval/useInstantEvalLauncher";
 import { scopeLabel } from "../LLMTracing/InstantEval/instantEvalUnits";
-import { insightsReportLink } from "../observeHandoff";
-const InstantEvalDrawer = lazy(
-  () => import("../LLMTracing/InstantEval/InstantEvalDrawer"),
-);
+import { askLink, insightsReportLink } from "../observeHandoff";
 
 // User-specific
 import useUsersStore from "./Store/usersStore";
@@ -289,10 +285,16 @@ const UsersView = ({
     }),
     [finalFilters, dateFilter],
   );
-  const instantEval = useInstantEvalLauncher({
-    enabled: Boolean(observeId),
-    navigate,
-  });
+  // Evaluate → Ask a question: the Ask page, about the users in view.
+  const openAsk = useCallback(() => {
+    navigate(
+      askLink(observeId, {
+        unit: "users",
+        filters: userViewScope.filters,
+        label: scopeLabel(userViewScope),
+      }),
+    );
+  }, [observeId, userViewScope, navigate]);
   const openInsights = useCallback(() => {
     navigate(
       insightsReportLink(observeId, {
@@ -302,15 +304,6 @@ const UsersView = ({
       }),
     );
   }, [observeId, userViewScope, navigate]);
-  // The same user page a grid row opens.
-  const openInstantEvalUser = useCallback(
-    (row) => {
-      const userId = row.userId || row.label;
-      if (userId) navigate(`/dashboard/users/${encodeURIComponent(userId)}`);
-    },
-    [navigate],
-  );
-
   // --- Row height ---
   const [cellHeight, setCellHeight] = useUrlState("userCellHeight", "Short");
 
@@ -915,7 +908,7 @@ const UsersView = ({
               }
             : undefined
         }
-        onInstantEval={observeId ? instantEval.openDrawer : undefined}
+        onInstantEval={observeId ? openAsk : undefined}
         onInsights={observeId ? openInsights : undefined}
       />
 
@@ -1025,21 +1018,6 @@ const UsersView = ({
         onAttributeSearchChange={setCustomAttributeSearch}
         inventoryControlProps={inventoryControlProps}
       />
-
-      {observeId && instantEval.mounted && (
-        <Suspense fallback={null}>
-          <InstantEvalDrawer
-            open={instantEval.open}
-            onClose={instantEval.close}
-            projectId={observeId}
-            unit="users"
-            scope={userViewScope}
-            seed={instantEval.seed}
-            seedKey={instantEval.seedKey}
-            onOpenRow={openInstantEvalUser}
-          />
-        </Suspense>
-      )}
     </>
   );
 };

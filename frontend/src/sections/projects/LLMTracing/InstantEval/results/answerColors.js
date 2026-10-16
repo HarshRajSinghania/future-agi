@@ -16,7 +16,13 @@ export const CATEGORY_COLORS = [
   "#64748B",
 ];
 
-// One answer's color: Yes in the accent, No in grey, categories by position,
+// Yes and No get two strong hues that judge neither: the brand purple and an
+// amber. Not red (that means failed) and not green ("No" is not always bad:
+// "Did the customer ask for a human?").
+export const YES_COLOR = "#7857FC";
+export const NO_COLOR = "#F97316";
+
+// One answer's color: Yes in purple, No in amber, categories by position,
 // failures and skips muted.
 export function answerColor(item, answer, theme) {
   if (answer === ERROR_ANSWER) return alpha(theme.palette.error.main, 0.45);
@@ -27,9 +33,7 @@ export function answerColor(item, answer, theme) {
       (index >= 0 ? index : item.labels.length) % CATEGORY_COLORS.length
     ];
   }
-  return answer === "Yes"
-    ? theme.palette.primary.main
-    : theme.palette.grey[500];
+  return answer === "Yes" ? YES_COLOR : NO_COLOR;
 }
 
 // The distribution's entries in display order: labels, then failures, then

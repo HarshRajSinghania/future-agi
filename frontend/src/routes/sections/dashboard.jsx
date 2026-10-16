@@ -237,6 +237,9 @@ const SessionsView = lazyWithRetry(
 const InsightsView = lazyWithRetry(
   () => import("src/sections/projects/Insights/InsightsView"),
 );
+const AskPage = lazyWithRetry(
+  () => import("src/sections/projects/LLMTracing/InstantEval/page/AskPage"),
+);
 const LLMTracingView = lazyWithRetry(
   () => import("src/sections/projects/LLMTracing/LLMTracingView"),
 );
@@ -1145,6 +1148,11 @@ export const dashboardRoutes = (
         {
           path: "insights",
           element: <InsightsView />,
+        },
+        // Instant eval: a question answered for every row of a view.
+        {
+          path: "ask",
+          element: <AskPage />,
         },
         // Insights was called Analyse; keep old links working.
         {

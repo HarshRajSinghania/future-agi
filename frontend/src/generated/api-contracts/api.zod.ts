@@ -56377,6 +56377,14 @@ export const TracerInstantEvalAnswersListResponse = zod.object({
         end_user_id: zod.string(),
         sessions: zod.number().optional(),
         trace_id: zod.string().optional(),
+        facets: zod
+          .object({
+            model: zod.string(),
+            turns: zod.number(),
+            duration_ms: zod.number(),
+            error: zod.boolean(),
+          })
+          .optional(),
         answers: zod.record(
           zod.string(),
           zod.object({
@@ -56410,6 +56418,7 @@ export const TracerInstantEvalRunsListQueryParams = zod.object({
   project_id: zod.string().uuid(),
   unit: zod.enum(["traces", "spans", "sessions", "users"]).optional(),
   search: zod.string().max(tracerInstantEvalRunsListQuerySearchMax).optional(),
+  task_id: zod.string().uuid().optional(),
   page_number: zod
     .number()
     .min(tracerInstantEvalRunsListQueryPageNumberMin)
@@ -56444,6 +56453,7 @@ export const TracerInstantEvalRunsListResponse = zod.object({
         ),
         answered: zod.number(),
         pending: zod.number(),
+        finished_at: zod.string().min(1).optional(),
       }),
     ),
     has_more: zod.boolean(),

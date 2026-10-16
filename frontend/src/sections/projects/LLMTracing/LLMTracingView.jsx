@@ -145,10 +145,8 @@ import axios, { endpoints } from "src/utils/axios";
 
 import { PROJECT_SOURCE } from "src/utils/constants";
 import { OBSERVE_LIST_REFRESH_EVENT } from "../observeEvents";
-import { insightsReportLink } from "../observeHandoff";
-import { useInstantEvalLauncher } from "./InstantEval/useInstantEvalLauncher";
+import { askLink, insightsReportLink } from "../observeHandoff";
 import { scopeLabel } from "./InstantEval/instantEvalUnits";
-import { tracePageLink } from "./InstantEval/results/scopeLinks";
 import { useLLMTracingFilters } from "./useLLMTracingFilters";
 import { isTraceListProjectReady } from "./projectSourceMode";
 import { canonicalObserveViewMode } from "./viewMode";
@@ -336,7 +334,6 @@ const CallLogsGrid = lazy(
   () => import("src/sections/agents/CallLogs/CallLogsGrid"),
 );
 const LLMFiltersDrawer = lazy(() => import("./LLMFiltersDrawer"));
-const InstantEvalDrawer = lazy(() => import("./InstantEval/InstantEvalDrawer"));
 const AddDataset = lazy(
   () => import("src/components/traceDetailDrawer/addToDataset/add-dataset"),
 );
@@ -912,19 +909,13 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
   const [_urlRowIndex, setUrlRowIndex, _removeUrlRowIndex] =
     useUrlState("rowIndex");
 
-  const {
-    resetStates,
-    viewMode,
-    setViewMode,
-    setTraceDetailDrawerOpen,
-    setSpanDetailDrawerOpen,
-  } = useLLMTracingStoreShallow((state) => ({
-    resetStates: state.resetStates,
-    viewMode: state.viewMode,
-    setViewMode: state.setViewMode,
-    setTraceDetailDrawerOpen: state.setTraceDetailDrawerOpen,
-    setSpanDetailDrawerOpen: state.setSpanDetailDrawerOpen,
-  }));
+  const { resetStates, viewMode, setViewMode } = useLLMTracingStoreShallow(
+    (state) => ({
+      resetStates: state.resetStates,
+      viewMode: state.viewMode,
+      setViewMode: state.setViewMode,
+    }),
+  );
   const {
     selectedTraces,
     allTracesSelected,
@@ -2957,11 +2948,18 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
       dateLabel,
     ],
   );
-  const instantEvalUnit = selectedTab === "spans" ? "spans" : "traces";
-  const instantEval = useInstantEvalLauncher({
-    enabled: Boolean(observeId),
-    navigate,
-  });
+  // Evaluate → Ask a question: the Ask page, about the rows this tab shows.
+  const openAsk = useCallback(() => {
+    const spans = selectedTab === "spans";
+    const scope = spans ? spanViewScope : traceViewScope;
+    navigate(
+      askLink(observeId, {
+        unit: spans ? "spans" : "traces",
+        filters: scope.filters,
+        label: scopeLabel(scope),
+      }),
+    );
+  }, [selectedTab, spanViewScope, traceViewScope, observeId, navigate]);
   const openInsights = useCallback(() => {
     navigate(
       insightsReportLink(observeId, {
@@ -2971,46 +2969,6 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
       }),
     );
   }, [observeId, traceViewScope, navigate]);
-  // "Show in grid": the answer becomes a filter chip on this grid.
-  const showInstantEvalAnswers = useCallback(
-    (filter) =>
-      setExtraFilters((prev) => [
-        ...(prev || []).filter((item) => item.column_id !== filter.column_id),
-        filter,
-      ]),
-    [setExtraFilters],
-  );
-  const openInstantEvalTrace = useCallback(
-    (row) => {
-      if (
-        projectSource === PROJECT_SOURCE.SIMULATOR ||
-        !setTraceDetailDrawerOpen
-      )
-        navigate(tracePageLink(observeId, row.id));
-      else setTraceDetailDrawerOpen({ traceId: row.id });
-    },
-    [projectSource, setTraceDetailDrawerOpen, navigate, observeId],
-  );
-  // A span answer opens the trace at that span, as a Spans grid row click.
-  const openInstantEvalSpan = useCallback(
-    (row) => {
-      if (!row.traceId) return;
-      setSpanDetailDrawerOpen({
-        trace_id: row.traceId,
-        span_id: row.id,
-        ...(observeId ? { project_id: observeId } : {}),
-        fromSpansView: true,
-      });
-    },
-    [observeId, setSpanDetailDrawerOpen],
-  );
-  // A finished run's answers become an eval column on the grid.
-  const refreshAfterInstantEval = useCallback(() => {
-    if (instantEvalUnit === "spans") refreshGridRef(primarySpanGridRef);
-    else if (projectSource === PROJECT_SOURCE.SIMULATOR)
-      primaryCallLogsGridRef.current?.refresh?.();
-    else refreshGridRef(primaryTraceGridRef);
-  }, [instantEvalUnit, projectSource]);
 
   const handleResetView = useCallback(() => {
     setViewMode(DEFAULT_DISPLAY_CONFIG.viewMode);
@@ -4561,7 +4519,7 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
               onAddEvals={handleAddEvals}
               // Instant eval and Insights are per project: not in the
               // cross-project user view. Insights doesn't read spans.
-              onInstantEval={observeId ? instantEval.openDrawer : undefined}
+              onInstantEval={observeId ? openAsk : undefined}
               onInsights={
                 observeId && selectedTab !== "spans" ? openInsights : undefined
               }
@@ -5434,27 +5392,6 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
         </Box>
       </Box>
       {/* Old LLMFiltersDrawer removed — replaced by FilterPanel in ObserveToolbar */}
-      {observeId && instantEval.mounted && (
-        <Suspense fallback={null}>
-          <InstantEvalDrawer
-            key={instantEvalUnit}
-            open={instantEval.open}
-            onClose={instantEval.close}
-            projectId={observeId}
-            unit={instantEvalUnit}
-            scope={instantEvalUnit === "spans" ? spanViewScope : traceViewScope}
-            seed={instantEval.seed}
-            seedKey={instantEval.seedKey}
-            onOpenRow={
-              instantEvalUnit === "spans"
-                ? openInstantEvalSpan
-                : openInstantEvalTrace
-            }
-            onShowInGrid={showInstantEvalAnswers}
-            onRunFinished={refreshAfterInstantEval}
-          />
-        </Suspense>
-      )}
     </Box>
   );
 };

@@ -33,9 +33,8 @@ import SelectAllBanner from "../LLMTracing/SelectAllBanner";
 import { getSelectionCountState } from "../LLMTracing/listTotalMetadata";
 import { singleProjectIdFromFilters } from "../LLMTracing/GraphSection/graphFilterUtils";
 import { toBackendFilters } from "../LLMTracing/common";
-import { useInstantEvalLauncher } from "../LLMTracing/InstantEval/useInstantEvalLauncher";
 import { scopeLabel } from "../LLMTracing/InstantEval/instantEvalUnits";
-import { insightsReportLink } from "../observeHandoff";
+import { askLink, insightsReportLink } from "../observeHandoff";
 
 // Lazy-load graph
 const PrimaryGraph = lazy(
@@ -45,10 +44,6 @@ const AddToQueueDialog = lazy(
   () =>
     import("src/sections/annotations/queues/components/add-to-queue-dialog"),
 );
-const InstantEvalDrawer = lazy(
-  () => import("../LLMTracing/InstantEval/InstantEvalDrawer"),
-);
-const TracesDrawer = lazy(() => import("../TracesDrawer/TracesDrawer"));
 
 const SESSION_BULK_ACTIONS = [
   {
@@ -317,10 +312,16 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
     }),
     [finalFilters, dateFilter],
   );
-  const instantEval = useInstantEvalLauncher({
-    enabled: Boolean(observeId),
-    navigate,
-  });
+  // Evaluate → Ask a question: the Ask page, about the sessions in view.
+  const openAsk = useCallback(() => {
+    navigate(
+      askLink(observeId, {
+        unit: "sessions",
+        filters: sessionViewScope.filters,
+        label: scopeLabel(sessionViewScope),
+      }),
+    );
+  }, [observeId, sessionViewScope, navigate]);
   const openInsights = useCallback(() => {
     navigate(
       insightsReportLink(observeId, {
@@ -330,9 +331,6 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
       }),
     );
   }, [observeId, sessionViewScope, navigate]);
-  // A session opened from Instant eval's answers, in the same drawer the
-  // grid opens on a row click.
-  const [instantEvalSession, setInstantEvalSession] = useState(null);
 
   // --- Column visibility ---
   const [updateObj, setUpdateObj] = useState(initialVisibility);
@@ -1137,7 +1135,7 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
         bulkActions={SESSION_BULK_ACTIONS}
         onAddEvals={handleAddEvals}
         onAddCustomColumn={() => setOpenCustomColumn(true)}
-        onInstantEval={observeId ? instantEval.openDrawer : undefined}
+        onInstantEval={observeId ? openAsk : undefined}
         onInsights={observeId ? openInsights : undefined}
       />
 
@@ -1278,31 +1276,6 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
         onAttributeSearchChange={setCustomAttributeSearch}
         inventoryControlProps={inventoryControlProps}
       />
-
-      {observeId && instantEval.mounted && (
-        <Suspense fallback={null}>
-          <InstantEvalDrawer
-            open={instantEval.open}
-            onClose={instantEval.close}
-            projectId={observeId}
-            unit="sessions"
-            scope={sessionViewScope}
-            seed={instantEval.seed}
-            seedKey={instantEval.seedKey}
-            onOpenRow={(row) => setInstantEvalSession({ session_id: row.id })}
-          />
-        </Suspense>
-      )}
-      {instantEvalSession && (
-        <Suspense fallback={null}>
-          <TracesDrawer
-            key={instantEvalSession.session_id}
-            open
-            onClose={() => setInstantEvalSession(null)}
-            rowData={instantEvalSession}
-          />
-        </Suspense>
-      )}
     </>
   );
 };

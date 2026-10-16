@@ -26205,6 +26205,13 @@ export interface InsightUnitsResponseApi {
   result: InsightUnitsResultApi;
 }
 
+export interface InstantEvalRowFacetsApi {
+  model: string;
+  turns: number;
+  duration_ms: number;
+  error: boolean;
+}
+
 export type InstantEvalAnswerApiCounts = { [key: string]: number };
 
 export interface InstantEvalAnswerApi {
@@ -26231,6 +26238,7 @@ export interface InstantEvalAnswerRowApi {
   end_user_id: string;
   sessions?: number;
   trace_id?: string;
+  facets?: InstantEvalRowFacetsApi;
   answers: InstantEvalAnswerRowApiAnswers;
 }
 
@@ -26275,6 +26283,8 @@ export interface InstantEvalRunApi {
   counts: InstantEvalRunApiCounts;
   answered: number;
   pending: number;
+  /** @minLength 1 */
+  finished_at?: string;
 }
 
 export interface InstantEvalRunsResultApi {
@@ -36261,6 +36271,7 @@ export type TracerInstantEvalRunsListParams = {
    * @maxLength 200
    */
   search?: string;
+  task_id?: string;
   /**
    * @minimum 0
    */

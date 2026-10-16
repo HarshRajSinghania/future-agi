@@ -391,6 +391,8 @@ const ObservePage = React.memo(() => {
           activeTab={activeTab}
           onTabChange={handleTabChange}
           projectSource={projectDetail?.source}
+          // The Ask page (Instant eval) has no list config to save as a view.
+          canSaveView={currentRouteSegment !== "ask"}
         />
       </Paper>
 

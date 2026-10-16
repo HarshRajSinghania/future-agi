@@ -102,6 +102,7 @@ const ObserveTabBar = ({
   onTabChange,
   renderRight,
   projectSource,
+  canSaveView = true,
 }) => {
   // Hide Sessions/Users tabs for voice (simulator) projects
   const visibleFixedTabs = useMemo(() => {
@@ -424,9 +425,10 @@ const ObserveTabBar = ({
           </DndContext>
         </Box>
 
-        {/* Create view button — pinned after scrollable area. Insights has no
-            list config to save as a view. */}
-        {activeTab !== "insights" && (
+        {/* Create view button — pinned after scrollable area. Insights and
+            pages without a list (canSaveView false) have no list config to
+            save as a view. */}
+        {canSaveView && activeTab !== "insights" && (
           <CustomTooltip
             show
             title="Create new view"
@@ -493,6 +495,7 @@ ObserveTabBar.propTypes = {
   onTabChange: PropTypes.func.isRequired,
   renderRight: PropTypes.node,
   projectSource: PropTypes.string,
+  canSaveView: PropTypes.bool,
 };
 
 export default React.memo(ObserveTabBar);

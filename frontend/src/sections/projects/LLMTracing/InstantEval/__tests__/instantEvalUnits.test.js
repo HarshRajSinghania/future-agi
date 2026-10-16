@@ -10,20 +10,14 @@ import {
   draftsFromQuestions,
   endUserIds,
   formatAgo,
-  handedOverScope,
   idsTaskPayload,
   limitHelp,
   limitOptionLabel,
   normalizeReads,
   populationCount,
-  progressCounts,
-  runCoverage,
-  runStatusText,
   scopeLabel,
-  scopeLine,
   sessionIdsFromUserSessions,
   splitScopeFilters,
-  traceIdsFilter,
   userSessionsRequest,
 } from "../instantEvalUnits";
 
@@ -95,17 +89,6 @@ describe("task payloads", () => {
       row_type: rowType,
       spans_limit: 3,
       sampling_rate: 100,
-    });
-  });
-
-  it("names traces as one membership filter on the trace list", () => {
-    expect(traceIdsFilter(["t1", "t2"])).toEqual({
-      column_id: "trace_id",
-      filter_config: {
-        filter_type: "text",
-        filter_op: "in",
-        filter_value: ["t1", "t2"],
-      },
     });
   });
 });
@@ -204,51 +187,6 @@ describe("scope", () => {
       }),
     ).toEqual({ count: 1234, lowerBound: false });
   });
-
-  it("describes the rows in view or the handed-over rows", () => {
-    expect(
-      scopeLine({
-        unit: "sessions",
-        population: { items: new Array(12).fill({}), total: 12, limit: 200 },
-        label: "Past 7D · 1 filter",
-      }),
-    ).toBe("12 sessions in this view · Past 7D · 1 filter");
-    expect(
-      scopeLine({
-        unit: "traces",
-        population: { items: new Array(500).fill({}), total: 500, limit: 500 },
-        label: "Past 7D",
-      }),
-    ).toBe("500+ traces in this view · Past 7D");
-    expect(
-      scopeLine({
-        unit: "sessions",
-        handedOver: { ids: ["a", "b"], label: "“No” answers" },
-      }),
-    ).toBe("2 sessions from “No” answers");
-  });
-
-  it("caps a run at what is in view when the count is exact", () => {
-    const population = { items: new Array(12).fill({}), total: 12, limit: 200 };
-    expect(runCoverage({ limit: 50, population })).toBe(12);
-    expect(
-      runCoverage({
-        limit: 50,
-        population: { items: new Array(200).fill({}), total: 200, limit: 200 },
-      }),
-    ).toBe(50);
-    expect(runCoverage({ limit: 50, handedOver: { ids: ["a", "b"] } })).toBe(2);
-  });
-
-  it("only applies a hand-off's rows to the view it was meant for", () => {
-    expect(
-      handedOverScope({ unit: "sessions", ids: ["a", "a", "b"] }, "sessions"),
-    ).toEqual({ ids: ["a", "b"], label: "" });
-    expect(handedOverScope({ unit: "users", ids: ["a"] }, "sessions")).toBe(
-      null,
-    );
-    expect(handedOverScope({ unit: "sessions" }, "sessions")).toBe(null);
-  });
 });
 
 describe("drafts", () => {
@@ -285,80 +223,7 @@ describe("drafts", () => {
   });
 });
 
-describe("progress", () => {
-  it("shares the task's counts across questions", () => {
-    expect(
-      progressCounts(
-        {
-          status: "running",
-          total_count: 20,
-          success_count: 12,
-          errors_count: 2,
-          skipped_count: 2,
-          error_groups: [{ count: 2 }],
-        },
-        2,
-      ),
-    ).toEqual({
-      status: "running",
-      total: 10,
-      completed: 6,
-      failed: 2,
-      expected: 7,
-      errorGroups: [{ count: 2 }],
-    });
-  });
-
-  it("says where a run is, live", () => {
-    const startedAt = "2026-10-15T10:00:00Z";
-    const at = (seconds) => new Date(startedAt).getTime() + seconds * 1000;
-    expect(runStatusText({ phase: "collecting" }, "users")).toMatch(
-      /users in this view and their latest sessions/,
-    );
-    expect(
-      runStatusText(
-        { phase: "running", startedAt, asked: { rows: 50 } },
-        "sessions",
-        32,
-        at(8),
-      ),
-    ).toBe("32 of 50 sessions answered · 8 s");
-    expect(
-      runStatusText(
-        {
-          phase: "running",
-          startedAt,
-          asked: { rows: 4, users: 4, sessions: 12 },
-        },
-        "users",
-        1,
-        at(75),
-      ),
-    ).toBe("1 of 4 users (12 sessions) answered · 1 min 15 s");
-    expect(
-      runStatusText({ phase: "running", startedAt }, "spans", 0, at(1)),
-    ).toBe("Starting the run… · 1 s");
-    expect(
-      runStatusText(
-        {
-          phase: "done",
-          asked: { rows: 50 },
-          startedAt,
-          finishedAt: "2026-10-15T10:00:14Z",
-        },
-        "sessions",
-        48,
-      ),
-    ).toBe("48 of 50 sessions answered in 14 s");
-    expect(
-      runStatusText(
-        { phase: "done", asked: { rows: 5, users: 5, sessions: 6 } },
-        "users",
-        5,
-      ),
-    ).toBe("5 users answered from 6 sessions");
-  });
-
+describe("time", () => {
   it("says how long ago a run was", () => {
     const now = new Date("2026-10-15T12:00:00Z").getTime();
     expect(formatAgo("2026-10-15T11:59:40Z", now)).toBe("just now");

@@ -35274,6 +35274,13 @@ export const OPENAPI_CONTRACT = Object.freeze({
               maxLength: 200,
             },
           },
+          task_id: {
+            required: false,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
           page_number: {
             required: false,
             schema: {
@@ -111744,6 +111751,9 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "string",
           "x-nullable": true,
         },
+        facets: {
+          $ref: "#/definitions/InstantEvalRowFacets",
+        },
         answers: {
           title: "Answers",
           type: "object",
@@ -111841,6 +111851,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
         pending: {
           title: "Pending",
           type: "integer",
+        },
+        finished_at: {
+          title: "Finished at",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
         },
       },
     },
@@ -119006,6 +119022,31 @@ export const OPENAPI_CONTRACT = Object.freeze({
           additionalProperties: {
             type: "integer",
           },
+        },
+      },
+    },
+    InstantEvalRowFacets: {
+      required: ["model", "turns", "duration_ms", "error"],
+      type: "object",
+      properties: {
+        model: {
+          title: "Model",
+          type: "string",
+          "x-nullable": true,
+        },
+        turns: {
+          title: "Turns",
+          type: "integer",
+          "x-nullable": true,
+        },
+        duration_ms: {
+          title: "Duration ms",
+          type: "integer",
+          "x-nullable": true,
+        },
+        error: {
+          title: "Error",
+          type: "boolean",
         },
       },
     },

@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import axios, { endpoints, readQuery } from "src/utils/axios";
-import { getSafeActionErrorMessage } from "src/utils/errorUtils";
-import { collectPopulation } from "src/sections/projects/observePopulation";
+import axios, { endpoints } from "src/utils/axios";
 import {
   ANSWER_TYPES,
   INSTANT_EVAL_MODEL,
@@ -16,96 +14,16 @@ import {
   endUserIds,
   idsTaskPayload,
   normalizeReads,
-  progressCounts,
   sessionIdsFromUserSessions,
   splitScopeFilters,
-  traceIdsFilter,
   unitMeta,
   userSessionsRequest,
 } from "./instantEvalUnits";
-import {
-  EMPTY_ANSWERS,
-  ERROR_ANSWER,
-  normalizeAnswers,
-  traceMetrics,
-} from "./instantEvalAnswers";
+import { ERROR_ANSWER } from "./instantEvalAnswers";
 
 export { ERROR_ANSWER };
 
-// Answers are read from the first second and then every 2 s, so they fill in
-// while Jev works; the task's progress (for failures and its end) with every
-// other read. A poll starts only once the previous one has finished.
-const FIRST_POLL_MS = 1000;
-const POLL_MS = 2000;
-const PROGRESS_EVERY = 2;
-// A run that hasn't finished after this long is shown as stalled rather than
-// polled forever (a paused or stuck task never reaches a terminal status).
-const MAX_FOLLOW_MS = 30 * 60 * 1000;
-// How long answers may be unreadable (a restart, a dropped connection)
-// before the run is reported as lost; reads back off meanwhile.
-const MAX_SILENT_MS = 3 * 60 * 1000;
-const RETRY_MS = 3000;
-// Answers land a few reads after the task finishes.
-const ANSWER_SETTLE_ATTEMPTS = 6;
-const MAX_METRIC_ROWS = 500;
-const TERMINAL_TASK_STATUSES = new Set([
-  "completed",
-  "failed",
-  "deleted",
-  "paused",
-]);
-const storageKey = (projectId, unit) => `instant-eval-run:${projectId}:${unit}`;
-
-const IDLE = {
-  phase: "idle",
-  items: [],
-  answers: EMPTY_ANSWERS,
-  progress: null,
-};
-
 const result = (response) => response?.data?.result;
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const readStored = (projectId, unit) => {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(storageKey(projectId, unit));
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-};
-
-const writeStored = (projectId, unit, value) => {
-  try {
-    if (value)
-      globalThis.sessionStorage?.setItem(
-        storageKey(projectId, unit),
-        JSON.stringify(value),
-      );
-    else globalThis.sessionStorage?.removeItem(storageKey(projectId, unit));
-  } catch {
-    // Session storage unavailable: the run still completes server-side.
-  }
-};
-
-// What survives closing the drawer or reloading the page: enough to resume
-// following the task, or to reload a finished run's answers.
-const storable = (run) => ({
-  phase: run.phase,
-  taskId: run.taskId,
-  items: run.items,
-  scopeFilters: run.scopeFilters,
-  scopeLabel: run.scopeLabel,
-  handedOver: run.handedOver,
-  limit: run.limit,
-  reads: run.reads,
-  asked: run.asked,
-  placeholders: run.placeholders,
-  startedAt: run.startedAt,
-  finishedAt: run.finishedAt,
-  error: run.error,
-  viewing: run.viewing,
-});
 
 export function buildAnswerFilter(item, labels) {
   return {
@@ -179,7 +97,7 @@ async function listProjectConfigs(projectId) {
 // Asking a question that already has an evaluator in this project (same
 // wording, answers, inputs and unit) reuses it, so its grid column and history
 // stay one series. Only new questions create a Jev template and an eval config.
-async function resolveEvaluators({ projectId, questions, reads, unit }) {
+export async function resolveEvaluators({ projectId, questions, reads, unit }) {
   const configs = await listProjectConfigs(projectId);
   const existing = configs.map(itemFromConfig).filter(Boolean).reverse();
   const taken = new Set(
@@ -253,30 +171,18 @@ async function resolveEvaluators({ projectId, questions, reads, unit }) {
 }
 
 /**
- * The rows a run asks about, named by id: the newest traces, spans or
- * sessions in view (or the rows handed over), or each user's latest sessions
- * in the view's window. `placeholders` are the rows the results list shows
- * from the start, before Jev has answered any of them.
+ * The rows a run names, by id. Traces, spans and sessions are the rows
+ * themselves; a user question asks about each user's latest sessions in the
+ * view's window. `items` are the rows the page shows from the start: for a
+ * user question, the users who had a session.
  */
-async function collectTarget({ projectId, unit, limit, scope }) {
-  const handedOver = scope?.handedOver;
-  const filters = scope?.filters || [];
+async function askedRows({ projectId, unit, items, filters, handedOver }) {
   const noun = unitMeta(unit).plural;
-  // The rows the drawer already read to count the view are the rows on
-  // screen when the question was asked; only without them is the list read.
-  const population = handedOver
-    ? null
-    : scope?.population?.items
-      ? scope.population
-      : await collectPopulation({ unit, projectId, filters, limit });
-  const items = handedOver
-    ? handedOver.ids.slice(0, limit).map((id) => ({ id }))
-    : population.items.slice(0, limit);
   const ids = items.map((item) => item.id);
   if (unit !== "users") {
     if (!ids.length)
       return { empty: `There are no ${noun} in this view to ask about.` };
-    return { ids, placeholders: items, asked: { rows: ids.length } };
+    return { ids, items };
   }
   const userIds = endUserIds(ids);
   if (!userIds.length)
@@ -295,26 +201,60 @@ async function collectTarget({ projectId, unit, limit, scope }) {
   const sessionIds = sessionIdsFromUserSessions(result(response));
   if (!sessionIds.length)
     return { empty: "None of these users had a session in this window." };
-  // Only users with a session in the window get an answer row.
-  const answeredUsers = new Set(sessions.map((session) => session.end_user_id));
-  const placeholders = items.filter((item) => answeredUsers.has(item.id));
+  const withSessions = new Set(sessions.map((session) => session.end_user_id));
   return {
     ids: sessionIds,
-    placeholders,
-    asked: {
-      rows: placeholders.length || answeredUsers.size,
-      users: result(response)?.users ?? answeredUsers.size,
-      sessions: sessionIds.length,
-    },
+    items: items.filter((item) => withSessions.has(item.id)),
+    sessions: sessionIds.length,
   };
 }
 
-async function createTask({ projectId, unit, items, ids }) {
+/**
+ * Ask Jev the questions about these rows: save each question as a Jev
+ * evaluator (or reuse the saved one) while the rows are named, then start one
+ * eval task over exactly those ids, which the backend answers on its fast
+ * path. Returns the task, the rows the page shows, or `empty` when there is
+ * nothing to ask about.
+ */
+export async function startAsk({
+  projectId,
+  unit,
+  questions,
+  existingItems,
+  reads,
+  items,
+  filters = [],
+  handedOver = false,
+}) {
+  const runReads = normalizeReads(unit, reads || existingItems?.[0]?.reads);
+  const evaluators = existingItems
+    ? Promise.resolve(existingItems)
+    : resolveEvaluators({ projectId, questions, reads: runReads, unit });
+  // Saving doesn't depend on the rows; a failure surfaces below.
+  evaluators.catch(() => {});
+  const target = await askedRows({
+    projectId,
+    unit,
+    items,
+    filters,
+    handedOver,
+  });
+  if (target.empty) return { empty: target.empty };
+  const saved = await evaluators;
+  if (saved.some((item) => !item.configId))
+    throw new Error("The question could not be saved as an evaluator.");
   const response = await axios.post(
     endpoints.project.createEvalTask(),
-    idsTaskPayload({ projectId, items, unit, ids }),
+    idsTaskPayload({ projectId, items: saved, unit, ids: target.ids }),
   );
-  return result(response)?.id;
+  const taskId = result(response)?.id;
+  if (!taskId) throw new Error("The run could not be started.");
+  return {
+    taskId,
+    questions: saved,
+    items: target.items,
+    sessions: target.sessions ?? null,
+  };
 }
 
 const LIVE_TASK_PREFIX = "Instant eval (live)";
@@ -340,47 +280,6 @@ export async function createContinuousTask({
     sampling_rate: 100,
   });
   return result(response)?.id;
-}
-
-async function fetchProgress(taskId) {
-  const response = await axios.get(endpoints.project.getEvalTaskLogs(), {
-    params: { eval_task_id: taskId },
-  });
-  return result(response) || {};
-}
-
-export async function fetchAnswers({ projectId, taskId, unit, items }) {
-  const response = await axios.get(endpoints.project.instantEvalAnswers(), {
-    params: {
-      project_id: projectId,
-      eval_task_id: taskId,
-      unit,
-      config_ids: items
-        .map((item) => item.configId)
-        .filter(Boolean)
-        .join(","),
-    },
-  });
-  return normalizeAnswers(result(response));
-}
-
-// Latency, cost and status of a trace run's rows, read from the trace list
-// by their ids.
-async function fetchTraceMetrics({ projectId, traceIds }) {
-  const ids = (traceIds || []).slice(0, MAX_METRIC_ROWS);
-  if (!ids.length) return new Map();
-  const response = await readQuery(
-    endpoints.project.getTracesForObserveProject(),
-    {
-      params: {
-        project_id: projectId,
-        page_number: 0,
-        page_size: ids.length,
-        filters: JSON.stringify([traceIdsFilter(ids)]),
-      },
-    },
-  );
-  return traceMetrics(result(response)?.table || []);
 }
 
 // One live task per set of questions: re-creating it would answer every new
@@ -412,405 +311,9 @@ export async function findContinuousTask({ projectId, items }) {
   return undefined;
 }
 
-// Plain-language reasons for the task's error groups (normalized messages
-// from get_eval_task_logs). Unknown reasons fall back to a generic line.
-export const AI_PROVIDERS_SETTINGS_PATH = "/dashboard/settings/ai-providers";
-
 // Jev runs on the organization's own TypeSafe key; key problems point to the
 // AI Providers settings where it is added or replaced.
-export function explainErrorGroups(groups = []) {
-  return groups.map((group) => {
-    const text = `${group?.normalized || ""} ${group?.sample || ""}`;
-    const count = group?.count || 0;
-    if (/JEV_KEY_MISSING|API key not configured for typesafe/i.test(text))
-      return {
-        count,
-        reason:
-          "were skipped because this workspace has no TypeSafe key. Add yours in Settings → AI Providers.",
-        settingsPath: AI_PROVIDERS_SETTINGS_PATH,
-      };
-    if (/JEV_KEY_INVALID/i.test(text))
-      return {
-        count,
-        reason:
-          "were rejected by TypeSafe because the key in Settings → AI Providers is invalid or revoked.",
-        settingsPath: AI_PROVIDERS_SETTINGS_PATH,
-      };
-    if (/rate_limited/i.test(text))
-      return {
-        count,
-        reason:
-          "hit your plan's evaluation rate limit and were not given. Rerun in a minute, or raise the limit on your plan.",
-      };
-    if (/ENTITLEMENT|jev_models|402/i.test(text))
-      return {
-        count,
-        reason: "were skipped because Jev isn't enabled for this workspace.",
-      };
-    if (/JEV_INPUT_TOO_LARGE/i.test(text))
-      return { count, reason: "were too long for Jev to read." };
-    if (
-      /JEV_RATE_LIMITED|JEV_TIMEOUT|JEV_PROVIDER_ERROR|JEV_RESPONSE_INVALID/i.test(
-        text,
-      )
-    )
-      return {
-        count,
-        reason: "failed while calling Jev. Rerun to retry them.",
-      };
-    if (/missing|not found|Required attribute/i.test(text))
-      return { count, reason: "had nothing for Jev to read." };
-    return { count, reason: "couldn't be evaluated." };
-  });
-}
-
-function endMessage({ stalled, lost, status, unit }) {
-  const noun = unitMeta(unit).noun;
-  if (lost)
-    return "Lost touch with this run. Jev keeps answering in the background; reopen Instant eval to see the rest.";
-  if (stalled)
-    return "This run is taking unusually long. Jev keeps answering in the background; reopen Instant eval later to see the rest.";
-  if (status === "paused")
-    return `This run was paused before every ${noun} was answered.`;
-  if (status === "failed")
-    return `The run stopped before every ${noun} was answered.`;
-  return undefined;
-}
-
-// Every row asked about has an answer row and none is still being read.
-const allAnswered = (answers, expected) =>
-  Boolean(answers?.loaded) &&
-  answers.pending === 0 &&
-  answers.rows.length > 0 &&
-  (!expected || answers.rows.length >= expected);
-
-/**
- * One Instant eval run in one view (traces, spans, sessions or users) of a
- * project. Answers stream in while Jev reads. The run in flight, or the last
- * one finished, is kept per project and unit in session storage, so closing
- * the drawer or reloading the page picks it up; `persist: false` keeps a
- * viewer of past runs out of that slot.
- */
-export function useInstantEvalRun(
-  projectId,
-  unit = "traces",
-  { persist = true } = {},
-) {
-  const [run, setRun] = useState(IDLE);
-  const cancelled = useRef(false);
-  // Bumped whenever the screen moves on (new run, past run, reset, project
-  // switch), so an older run still being created or polled can't take the
-  // screen back.
-  const generation = useRef(0);
-
-  const follow = useCallback(
-    async (base, mine) => {
-      const isCurrent = () => !cancelled.current && generation.current === mine;
-      const { taskId, items } = base;
-      // The answers endpoint returns users, not the sessions they were asked
-      // about; only an exact row count can end a run early.
-      const expected = base.asked?.rows || 0;
-      let progress = progressCounts({}, items.length);
-      let answers = null;
-      let stalled = false;
-      let lastRead = Date.now();
-      let failing = false;
-      let settleAttempts = 0;
-      let pollStarted = Date.now();
-      const deadline = Date.now() + MAX_FOLLOW_MS;
-      for (let tick = 0; isCurrent(); tick += 1) {
-        // Every 2 s from the start of the last poll, never overlapping it.
-        const wait =
-          tick === 0
-            ? base.viewing
-              ? 0
-              : FIRST_POLL_MS
-            : failing
-              ? RETRY_MS
-              : POLL_MS - (Date.now() - pollStarted);
-        // eslint-disable-next-line no-await-in-loop
-        await sleep(Math.max(0, wait));
-        if (!isCurrent()) return;
-        if (Date.now() > deadline) {
-          stalled = true;
-          break;
-        }
-        pollStarted = Date.now();
-        const readProgress =
-          tick % PROGRESS_EVERY === 0 || allAnswered(answers, expected);
-        // eslint-disable-next-line no-await-in-loop
-        const [nextProgress, nextAnswers] = await Promise.all([
-          readProgress ? fetchProgress(taskId).catch(() => null) : null,
-          fetchAnswers({ projectId, taskId, unit, items }).catch(() => null),
-        ]);
-        if (nextProgress) progress = progressCounts(nextProgress, items.length);
-        if (!isCurrent()) return;
-        failing = !nextAnswers;
-        if (nextAnswers) {
-          answers = nextAnswers;
-          lastRead = Date.now();
-        } else if (Date.now() - lastRead > MAX_SILENT_MS)
-          throw new Error("The run's answers could not be read.");
-        const snapshot = {
-          progress,
-          reconnecting: failing,
-          ...(answers ? { answers } : {}),
-        };
-        setRun((prev) => ({ ...prev, ...snapshot }));
-        const terminal = TERMINAL_TASK_STATUSES.has(progress.status);
-        const answered = allAnswered(answers, expected);
-        // Done as soon as every row named has its answer; a task that ended
-        // with rows missing gets a few more reads for late answers.
-        if (answered && (terminal || expected)) break;
-        if (terminal && (answered || settleAttempts >= ANSWER_SETTLE_ATTEMPTS))
-          break;
-        if (terminal) settleAttempts += 1;
-      }
-      if (!isCurrent()) return;
-      // Done as soon as the answers are in; the task's failure reasons and a
-      // trace run's latency and cost follow without holding the result back.
-      setRun((prev) => ({
-        ...prev,
-        phase: "done",
-        progress,
-        reconnecting: false,
-        finishedAt: prev.finishedAt || new Date().toISOString(),
-        error: endMessage({ stalled, status: progress.status, unit }),
-        ...(answers ? {} : { answers: { ...EMPTY_ANSWERS, loaded: true } }),
-      }));
-      const [last, metrics] = await Promise.all([
-        stalled || TERMINAL_TASK_STATUSES.has(progress.status)
-          ? null
-          : fetchProgress(taskId).catch(() => null),
-        unit === "traces" && answers?.rows.length
-          ? fetchTraceMetrics({
-              projectId,
-              traceIds: answers.rows.map((row) => row.id),
-            }).catch(() => null)
-          : null,
-      ]);
-      if (!isCurrent() || (!last && !metrics)) return;
-      setRun((prev) => ({
-        ...prev,
-        ...(last ? { progress: progressCounts(last, items.length) } : {}),
-        ...(metrics ? { metrics } : {}),
-      }));
-    },
-    [projectId, unit],
-  );
-
-  // Follows a run and turns a lost connection into a message on screen.
-  const followSafely = useCallback(
-    (base, mine, message) =>
-      follow(base, mine).catch(() => {
-        if (cancelled.current || generation.current !== mine) return;
-        setRun((prev) => ({
-          ...prev,
-          phase: "done",
-          finishedAt: prev.finishedAt || new Date().toISOString(),
-          answers: prev.answers?.loaded
-            ? prev.answers
-            : { ...EMPTY_ANSWERS, loaded: true },
-          error: message || endMessage({ lost: true, unit }),
-        }));
-      }),
-    [follow, unit],
-  );
-
-  // A finished run reopened from storage: read its answers once.
-  const reload = useCallback(
-    async (base, mine) => {
-      const isCurrent = () => !cancelled.current && generation.current === mine;
-      try {
-        const answers = await fetchAnswers({
-          projectId,
-          taskId: base.taskId,
-          unit,
-          items: base.items,
-        });
-        if (!isCurrent()) return;
-        setRun((prev) => ({ ...prev, answers }));
-        if (unit !== "traces" || !answers.rows.length) return;
-        const metrics = await fetchTraceMetrics({
-          projectId,
-          traceIds: answers.rows.map((row) => row.id),
-        }).catch(() => null);
-        if (!isCurrent() || !metrics) return;
-        setRun((prev) => ({ ...prev, metrics }));
-      } catch {
-        if (!isCurrent()) return;
-        setRun((prev) => ({
-          ...prev,
-          answers: { ...EMPTY_ANSWERS, loaded: true },
-          error: "The answers of this run could not be loaded.",
-        }));
-      }
-    },
-    [projectId, unit],
-  );
-
-  const launch = useCallback(
-    async ({ questions, existingItems, reads, limit, scope }) => {
-      generation.current += 1;
-      const mine = generation.current;
-      cancelled.current = false;
-      const stale = () => cancelled.current || generation.current !== mine;
-      // The previous run stops being the one to reopen.
-      if (persist) writeStored(projectId, unit, null);
-      const runReads = normalizeReads(unit, reads || existingItems?.[0]?.reads);
-      const pending =
-        existingItems ||
-        questions.map((q) => ({
-          question: q.question.trim(),
-          answerType: q.answerType,
-          labels: answerLabels(q),
-        }));
-      setRun({
-        ...IDLE,
-        phase: "collecting",
-        items: pending,
-        limit,
-        reads: runReads,
-        scopeFilters: scope?.filters || [],
-        scopeLabel: scope?.label,
-        handedOver: scope?.handedOver || null,
-        startedAt: new Date().toISOString(),
-      });
-      try {
-        // Saving the evaluators doesn't depend on the rows, so it runs while
-        // they are found.
-        const evaluators = existingItems
-          ? Promise.resolve(existingItems)
-          : resolveEvaluators({
-              projectId,
-              questions,
-              reads: runReads,
-              unit,
-            });
-        evaluators.catch(() => {});
-        const target = await collectTarget({ projectId, unit, limit, scope });
-        if (stale()) return;
-        if (target.empty) {
-          setRun((prev) => ({
-            ...prev,
-            phase: "done",
-            finishedAt: new Date().toISOString(),
-            answers: { ...EMPTY_ANSWERS, loaded: true },
-            empty: target.empty,
-          }));
-          return;
-        }
-        setRun((prev) => ({
-          ...prev,
-          phase: "creating",
-          asked: target.asked,
-          placeholders: target.placeholders,
-        }));
-        const items = await evaluators;
-        if (stale()) return;
-        if (items.some((item) => !item.configId))
-          throw new Error("The evaluator could not be saved.");
-        const taskId = await createTask({
-          projectId,
-          unit,
-          items,
-          ids: target.ids,
-        });
-        if (stale()) return;
-        if (!taskId) throw new Error("The run could not be started.");
-        setRun((prev) => ({ ...prev, phase: "running", items, taskId }));
-        await followSafely({ taskId, items, asked: target.asked }, mine);
-      } catch (error) {
-        if (stale()) return;
-        setRun((prev) => ({
-          ...prev,
-          phase: "failed",
-          error: getSafeActionErrorMessage(
-            error,
-            "Instant eval could not start. Check your filters and try again.",
-          ),
-        }));
-      }
-    },
-    [projectId, unit, persist, followSafely],
-  );
-
-  const start = useCallback(
-    ({ questions, reads, limit, scope }) =>
-      launch({ questions, reads, limit, scope }),
-    [launch],
-  );
-
-  const rerun = useCallback(
-    ({ items, limit, scope }) => launch({ existingItems: items, limit, scope }),
-    [launch],
-  );
-
-  // Open a past run: its evaluators, its stored scope.
-  const view = useCallback(
-    ({ taskId, items, scopeFilters, startedAt, asked }) => {
-      generation.current += 1;
-      const mine = generation.current;
-      cancelled.current = false;
-      const base = {
-        ...IDLE,
-        phase: "running",
-        items,
-        taskId,
-        scopeFilters,
-        startedAt,
-        asked: asked || null,
-        viewing: true,
-      };
-      setRun(base);
-      followSafely(base, mine, "This run could not be loaded.");
-    },
-    [followSafely],
-  );
-
-  const reset = useCallback(() => {
-    generation.current += 1;
-    if (persist) writeStored(projectId, unit, null);
-    setRun(IDLE);
-  }, [projectId, unit, persist]);
-
-  // Keep the run in flight (or the last one finished) for this project+unit.
-  useEffect(() => {
-    if (!persist || !projectId || !run.taskId) return;
-    if (run.phase === "running" || run.phase === "done")
-      writeStored(projectId, unit, storable(run));
-  }, [persist, projectId, unit, run]);
-
-  // Resume the run that was in flight, or show the last one finished, when the
-  // drawer or page opens again.
-  useEffect(() => {
-    generation.current += 1;
-    const mine = generation.current;
-    cancelled.current = false;
-    const stored = persist && projectId ? readStored(projectId, unit) : null;
-    if (!stored?.taskId || !Array.isArray(stored.items)) {
-      setRun(IDLE);
-    } else {
-      const base = { ...IDLE, ...stored, answers: EMPTY_ANSWERS };
-      if (stored.phase === "done") {
-        setRun({ ...base, phase: "done" });
-        reload(base, mine);
-      } else {
-        setRun({ ...base, phase: "running" });
-        followSafely(
-          base,
-          mine,
-          "The run that was in progress could not be resumed. Jev keeps answering in the background.",
-        );
-      }
-    }
-    return () => {
-      cancelled.current = true;
-    };
-  }, [persist, projectId, unit, followSafely, reload]);
-
-  return { run, start, rerun, view, reset };
-}
+export const AI_PROVIDERS_SETTINGS_PATH = "/dashboard/settings/ai-providers";
 
 /**
  * Questions saved by Instant eval in this project. `items` has one entry per
@@ -854,6 +357,7 @@ const HISTORY_PAGE_SIZE = 20;
 // A history page is read again this often while one of its runs is still
 // being answered.
 const HISTORY_LIVE_MS = 5000;
+export const HISTORY_KEY = "instant-eval-history";
 const LIVE_RUN_STATUSES = new Set(["pending", "running"]);
 
 export const isLiveRun = (runItem) =>
@@ -914,7 +418,7 @@ export function useInstantEvalHistory(
   { enabled = true, unit, search = "" } = {},
 ) {
   const query = useInfiniteQuery({
-    queryKey: ["instant-eval-history", projectId, unit || "", search],
+    queryKey: [HISTORY_KEY, projectId, unit || "", search],
     enabled: Boolean(projectId) && enabled,
     initialPageParam: 0,
     queryFn: async ({ pageParam, signal }) => {
