@@ -280,9 +280,13 @@ def test_a_second_chat_participant_is_its_own_message_with_its_name(
     assert "Assistant: Add one more." not in _build_transcript_text(call)
 
 
-def test_the_sandboxes_are_told_about_sub_actors_only_when_the_setting_is_on(settings):
+def test_the_sandboxes_are_told_about_sub_actors_only_when_the_setting_is_on(
+    settings, monkeypatch
+):
     from simulate.services.hosted_harness_gateway import _platform_simulator_material
 
+    monkeypatch.setenv("ALK_HOSTED_AGENTCC_BASE_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("AGENTCC_HARNESS_API_KEY", "harness-key")
     settings.ALK_SUB_ACTORS = False
     assert "HARNESS_SUB_ACTORS" not in _platform_simulator_material()
     settings.ALK_SUB_ACTORS = True
