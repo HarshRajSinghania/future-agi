@@ -482,13 +482,52 @@ def _jev_playground(auth_client):
     )
 
 
+@pytest.fixture
+def jev_gateway(monkeypatch):
+    """A gateway address and internal key for the default Jev transport. Every
+    test patches httpx.post, so neither is ever dialled."""
+    for name in ("AGENTCC_INTERNAL_URL", "AGENTCC_GATEWAY_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(
+        "AGENTCC_GATEWAY_INTERNAL_URL", "http://agentcc-gateway.test:8080"
+    )
+    monkeypatch.setenv("AGENTCC_INTERNAL_API_KEY", "internal-gateway-key")
+
+
 # The eval path calls close_old_connections(), so these need real transactions.
 @pytest.mark.django_db(transaction=True)
-def test_byok_playground_runs_on_the_org_typesafe_key(auth_client, user):
+@pytest.mark.parametrize(
+    "transport,url,headers,model",
+    [
+        (
+            "gateway",
+            "http://agentcc-gateway.test:8080/v1/systemone",
+            {
+                "Authorization": "Bearer internal-gateway-key",
+                "x-agentcc-provider-key": "org-typesafe-key",
+                "Content-Type": "application/json",
+            },
+            "typesafe/jev-latest",
+        ),
+        (
+            "direct",
+            "https://api.typesafe.ai/v1/systemone",
+            {
+                "Authorization": "Bearer org-typesafe-key",
+                "Content-Type": "application/json",
+            },
+            "jev-latest",
+        ),
+    ],
+)
+def test_byok_playground_runs_on_the_org_typesafe_key(
+    auth_client, user, settings, jev_gateway, transport, url, headers, model
+):
     import httpx
 
     from model_hub.models.api_key import ApiKey
 
+    settings.JEV_TRANSPORT = transport
     run = _jev_playground(auth_client)
     # Saved the way Settings -> AI Providers saves it.
     ApiKey.objects.create(
@@ -501,16 +540,57 @@ def test_byok_playground_runs_on_the_org_typesafe_key(auth_client, user):
     ):
         response = run()
     assert response.status_code == 200, response.data
-    assert post.call_args.args == ("https://api.typesafe.ai/v1/systemone",)
-    assert post.call_args.kwargs["headers"]["Authorization"] == (
-        "Bearer org-typesafe-key"
-    )
+    assert post.call_count == 1
+    assert post.call_args.args == (url,)
+    assert post.call_args.kwargs["headers"] == headers
+    assert post.call_args.kwargs["json"]["model"] == model
     assert "org-typesafe-key" not in str(response.data)
+    assert "internal-gateway-key" not in str(response.data)
 
 
 # The eval path calls close_old_connections(), so these need real transactions.
 @pytest.mark.django_db(transaction=True)
-def test_byok_playground_without_a_typesafe_key_says_which_key_to_add(auth_client):
+def test_byok_playground_rejected_key_through_the_gateway_is_not_retried(
+    auth_client, user, jev_gateway, caplog
+):
+    import httpx
+
+    from model_hub.models.api_key import ApiKey
+
+    run = _jev_playground(auth_client)
+    ApiKey.objects.create(
+        provider="typesafe", organization=user.organization, key="org-typesafe-key"
+    )
+    rejected = httpx.Response(
+        403,
+        json={
+            "error": {
+                "type": "authentication_error",
+                "code": "provider_key_rejected",
+                "message": "org-typesafe-key internal-gateway-key",
+                "param": None,
+            }
+        },
+    )
+    with (
+        patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False),
+        patch("tfc.capabilities.service.check_or_raise"),
+        patch("httpx.post", return_value=rejected) as post,
+    ):
+        response = run()
+    assert response.status_code == 400
+    assert post.call_count == 1
+    assert "JEV_KEY_INVALID" in caplog.text
+    for secret in ("org-typesafe-key", "internal-gateway-key"):
+        assert secret not in str(response.data)
+        assert secret not in caplog.text
+
+
+# The eval path calls close_old_connections(), so these need real transactions.
+@pytest.mark.django_db(transaction=True)
+def test_byok_playground_without_a_typesafe_key_says_which_key_to_add(
+    auth_client, jev_gateway
+):
     run = _jev_playground(auth_client)
     with (
         patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False),
@@ -521,3 +601,348 @@ def test_byok_playground_without_a_typesafe_key_says_which_key_to_add(auth_clien
     assert response.status_code == 400
     assert "API key not configured for typesafe" in str(response.data)
     post.assert_not_called()
+
+
+# The eval path calls close_old_connections(), so these need real transactions.
+@pytest.mark.django_db(transaction=True)
+def test_playground_bills_jev_with_the_metering_events(auth_client, user, jev_gateway):
+    """One Jev billing shape on every path: the playground emits the
+    ee.jev.metering event, keyed to its run, and returns a string reason."""
+    import httpx
+
+    from ee.jev.metering import usage_event_id
+    from ee.usage.services.config import BillingConfig
+    from model_hub.models.api_key import ApiKey
+
+    run = _jev_playground(auth_client)
+    ApiKey.objects.create(
+        provider="typesafe", organization=user.organization, key="org-typesafe-key"
+    )
+    with (
+        patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False),
+        patch("tfc.capabilities.service.check_or_raise"),
+        patch("httpx.post", return_value=httpx.Response(200, json=JEV_OK)),
+        patch("ee.usage.services.emitter.emit") as emit,
+    ):
+        response = run()
+    assert response.status_code == 200, response.data
+    result = response.data["result"]
+    assert result["reason"] == "Jev probability 0.91 vs threshold 0.50 → Pass"
+    # The declared response contract: reason is a string, never null.
+    from model_hub.serializers.contracts import EvalExecutionResponseSerializer
+
+    contract = EvalExecutionResponseSerializer(data=response.data)
+    assert contract.is_valid(), contract.errors
+    [event] = [call.args[0] for call in emit.call_args_list]
+    billing = BillingConfig.get()
+    assert event.event_type == "jev_evaluator"
+    assert event.amount == billing.calculate_ai_credits(billing.get_eval_per_run_fee())
+    assert event.event_id == usage_event_id(result["log_id"], 1)
+    assert event.org_id == str(user.organization.id)
+    assert event.properties["provider"] == "typesafe"
+    assert event.properties["requested_model"] == "jev-latest"
+    assert event.properties["actual_model"] == "jev-1.13.0"
+    assert event.properties["mapping_revision"].startswith("jev-map-v1:")
+    assert event.properties["attempt"] == 1
+
+
+# The eval path calls close_old_connections(), so these need real transactions.
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "answer,code,calls,message",
+    [
+        (
+            (403, "provider_key_rejected"),
+            "JEV_KEY_INVALID",
+            1,
+            "TypeSafe rejected the API key saved under Settings → AI Providers. "
+            "Update the key and try again.",
+        ),
+        (
+            (503, "provider_overloaded"),
+            "JEV_PROVIDER_ERROR",
+            3,
+            "TypeSafe couldn't complete this evaluation. Try again.",
+        ),
+    ],
+)
+def test_playground_says_what_went_wrong_with_typesafe(
+    auth_client, user, jev_gateway, answer, code, calls, message
+):
+    """The gateway's answer goes through the real client, so the failed
+    attempts are recorded and billing them by mistake would emit events."""
+    import httpx
+
+    from model_hub.models.api_key import ApiKey
+
+    run = _jev_playground(auth_client)
+    ApiKey.objects.create(
+        provider="typesafe", organization=user.organization, key="org-typesafe-key"
+    )
+    status, gateway_code = answer
+    gateway_answer = httpx.Response(
+        status,
+        json={"error": {"type": "upstream_error", "code": gateway_code}},
+        # A retried run stays instant.
+        headers={"Retry-After": "0"},
+    )
+    with (
+        patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False),
+        patch("tfc.capabilities.service.check_or_raise"),
+        patch("httpx.post", return_value=gateway_answer) as post,
+        patch("ee.usage.services.emitter.emit") as emit,
+    ):
+        response = run()
+    assert post.call_count == calls
+    assert response.status_code == 400
+    assert response.data["code"] == code
+    assert response.data["message"] == message
+    assert response.data["feature"] == "jev"
+    assert "org-typesafe-key" not in str(response.data)
+    # A failed Jev run emits no billing event.
+    emit.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_dataset_preview_gates_jev_like_the_dataset_run(
+    auth_client, organization, workspace
+):
+    """The dataset Test button: an unknown Jev model or an incompatible
+    binding is one 400, and no row runs."""
+    from model_hub.models.choices import DatasetSourceChoices
+    from model_hub.models.develop_dataset import Dataset, Row
+
+    dataset = Dataset.objects.create(
+        name="jev-preview",
+        organization=organization,
+        workspace=workspace,
+        source=DatasetSourceChoices.BUILD.value,
+    )
+    Row.objects.create(dataset=dataset, order=0)
+    with patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False):
+        created = auth_client.post(
+            "/model-hub/eval-templates/create-v2/", payload(), format="json"
+        )
+    assert created.status_code == 200, created.data
+    turing_score = EvalTemplate.objects.create(
+        name="turing-score",
+        organization=organization,
+        workspace=workspace,
+        model="turing_large",
+        config={
+            "eval_type_id": "CustomPromptEvaluator",
+            "output": "score",
+            "model": "turing_large",
+            "rule_prompt": "Judge {{input}}",
+        },
+    )
+    url = f"/model-hub/develops/{dataset.id}/preview_run_eval/"
+    with (
+        patch("tfc.ee_gates._jev_denied_off_cloud", return_value=False),
+        patch("model_hub.views.develop_dataset.process_eval_for_single_row") as row,
+        patch("ee.jev.client.JevSystemOneClient.evaluate") as client,
+    ):
+        unknown = auth_client.post(
+            url,
+            {
+                "template_id": created.data["result"]["id"],
+                "model": "jev-2.0.0",
+                "config": {"mapping": {"input": "x"}},
+            },
+            format="json",
+        )
+        unmapped = auth_client.post(
+            url,
+            {
+                "template_id": str(turing_score.id),
+                "model": "jev-latest",
+                "config": {"mapping": {"input": "x"}},
+            },
+            format="json",
+        )
+        # Gated first, as the dataset run is: before the dataset or template
+        # is even looked up.
+        unknown_first = auth_client.post(
+            f"/model-hub/develops/{uuid4()}/preview_run_eval/",
+            {
+                "template_id": str(uuid4()),
+                "model": "jev-2.0.0",
+                "config": {"mapping": {"input": "x"}},
+            },
+            format="json",
+        )
+    assert unknown.status_code == 400, unknown.data
+    assert unknown.data["code"] == "JEV_MODEL_UNKNOWN"
+    assert unknown_first.status_code == 400, unknown_first.data
+    assert unknown_first.data["code"] == "JEV_MODEL_UNKNOWN"
+    assert unmapped.status_code == 400, unmapped.data
+    assert unmapped.data["code"] == "JEV_MAPPING_INVALID"
+    assert unmapped.data["details"] == {
+        "jev_mapping.score.levels": ["JEV_SCORE_LEVELS_REQUIRED"]
+    }
+    row.assert_not_called()
+    client.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_usage_tab_reads_a_run_stored_with_a_null_reason(
+    auth_client, organization, workspace
+):
+    """Jev runs stored reason=null before reasons were strings; the Usage tab
+    must still load for them (and for any evaluator that does the same)."""
+    from ee.usage.models.usage import APICallLog, APICallStatusChoices
+
+    template = EvalTemplate.no_workspace_objects.create(
+        name="jev-null-reason",
+        organization=organization,
+        workspace=workspace,
+        owner="user",
+        config={"output": "Pass/Fail", "eval_type_id": "CustomPromptEvaluator"},
+        model="jev-latest",
+        visible_ui=True,
+    )
+    log = APICallLog.objects.create(
+        organization=organization,
+        workspace=workspace,
+        status=APICallStatusChoices.SUCCESS.value,
+        cost=0.01,
+        deducted_cost=0,
+        source="eval_playground",
+        source_id=str(template.id),
+        config={
+            "output": {"output": "Passed", "reason": None},
+            "mappings": {"input": "hello"},
+        },
+    )
+    response = auth_client.get(
+        f"/model-hub/eval-templates/{template.id}/usage/",
+        {"page": 0, "page_size": 25, "period": "30d"},
+    )
+    assert response.status_code == 200, response.content
+    [row] = response.json()["result"]["table"]
+    assert row["row_id"] == str(log.log_id)
+    assert row["reason"]["cell_value"] == ""
+
+
+@pytest.mark.django_db
+def test_ai_providers_names_typesafe_with_its_brand_casing(auth_client):
+    from model_hub.models.choices import LiteLlmModelProvider
+
+    response = auth_client.get("/model-hub/develops/provider-status/")
+    assert response.status_code == 200, response.data
+    providers = {row["provider"]: row for row in response.data["result"]["providers"]}
+    assert providers["typesafe"]["display_name"] == "TypeSafe"
+    # Only the label changes; the stored provider value stays lowercase.
+    assert LiteLlmModelProvider("typesafe").value == "typesafe"
+    assert providers["openai"]["display_name"] == "Openai"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "error,message",
+    [
+        (
+            ("JEV_TIMEOUT", True),
+            "TypeSafe didn't respond in time. Try again.",
+        ),
+        (
+            "missing-key",
+            "API key not configured for typesafe. Please add your API key in settings.",
+        ),
+    ],
+)
+def test_template_test_endpoint_says_what_went_wrong_with_typesafe(
+    auth_client, user, workspace, error, message
+):
+    from agentic_eval.core_evals.run_prompt.litellm_models import (
+        MissingProviderKeyError,
+    )
+    from ee.jev.client import JevGatewayError
+
+    template = EvalTemplate.no_workspace_objects.create(
+        name="jev-template-test",
+        organization=user.organization,
+        workspace=workspace,
+        owner="user",
+        eval_type="code",
+        config={
+            "code": "def evaluate(**kwargs): return True",
+            "output": "Pass/Fail",
+            "eval_type_id": "CustomCodeEval",
+            "required_keys": ["output"],
+        },
+    )
+    raised = (
+        MissingProviderKeyError("typesafe")
+        if error == "missing-key"
+        else JevGatewayError(*error)
+    )
+    with patch(
+        "model_hub.views.separate_evals.run_eval_func", side_effect=raised
+    ) as run:
+        response = auth_client.post(
+            "/model-hub/test-evaluation/",
+            {
+                "name": "jev-template-test",
+                "template_type": "Function",
+                "template_id": str(template.id),
+                "eval_type_id": "CustomCodeEval",
+                "model": "",
+                "output_type": "Pass/Fail",
+                "required_keys": ["output"],
+                "input_data_types": {"output": "text"},
+                "config": {
+                    "mapping": {"output": "same"},
+                    "config": {"code": "def evaluate(**kwargs): return True"},
+                },
+            },
+            format="json",
+        )
+    run.assert_called_once()
+    assert response.status_code == 400
+    assert response.data["message"] == message
+
+
+@pytest.mark.django_db
+def test_a_composite_child_shows_the_jev_message(organization, workspace):
+    """A Jev child that fails shows the fixed text, not the bare code."""
+    from ee.jev.client import JevGatewayError
+    from model_hub.models.evals_metric import CompositeEvalChild
+    from model_hub.utils.composite_execution import execute_composite_children_sync
+
+    child = EvalTemplate.no_workspace_objects.create(
+        name="jev-child",
+        organization=organization,
+        workspace=workspace,
+        owner="user",
+        model="jev-latest",
+        config={"output": "Pass/Fail", "eval_type_id": "CustomPromptEvaluator"},
+    )
+    parent = EvalTemplate.no_workspace_objects.create(
+        name="jev-composite",
+        organization=organization,
+        workspace=workspace,
+        owner="user",
+        template_type="composite",
+        config={},
+    )
+    link = CompositeEvalChild.objects.create(
+        parent=parent, child=child, order=0, weight=1.0
+    )
+    with patch(
+        "model_hub.views.utils.evals.run_eval_func",
+        side_effect=JevGatewayError("JEV_KEY_INVALID"),
+    ):
+        outcome = execute_composite_children_sync(
+            parent=parent,
+            child_links=[link],
+            mapping={"input": "hello"},
+            config={},
+            org=organization,
+        )
+    [child_result] = outcome.child_results
+    assert child_result.status == "failed"
+    assert child_result.error == (
+        "TypeSafe rejected the API key saved under Settings → AI Providers. "
+        "Update the key and try again."
+    )

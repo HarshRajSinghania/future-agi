@@ -60,6 +60,23 @@ def ee_model_gate_for_template(model_name: object, template_id=None, eval_type=N
     return turing_oss_gate_for_template(model_name, template_id, eval_type)
 
 
+def describe_jev_error(exc: BaseException) -> dict | None:
+    """The typed code and fixed user-facing text for a failed Jev run, as
+    ``{"code", "message", "attr", "details"}``. None when exc is not a Jev
+    failure, or when this build has no Jev."""
+    try:
+        from ee.jev.errors import describe
+    except ImportError:
+        return None
+    return describe(exc)
+
+
+def jev_error_message(exc: BaseException) -> str | None:
+    """The user-facing text for a failed Jev run, or None for any other error."""
+    described = describe_jev_error(exc)
+    return described["message"] if described else None
+
+
 _TURING_MODELS = frozenset(
     {
         "turing_large",

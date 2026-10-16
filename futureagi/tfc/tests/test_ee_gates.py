@@ -63,6 +63,20 @@ def test_r14_jev_cloud_defers_to_engine():
     check.assert_not_called()
 
 
+def test_jev_error_text_without_jev_falls_back_to_the_generic_handling(monkeypatch):
+    """A build without ee/jev reports no Jev error, so callers keep their own
+    text."""
+    import sys
+
+    from tfc.utils.error_codes import get_specific_error_message
+
+    monkeypatch.setitem(sys.modules, "ee.jev.errors", None)
+    error = ValueError("JEV_TIMEOUT")
+    assert ee_gates.describe_jev_error(error) is None
+    assert ee_gates.jev_error_message(error) is None
+    assert get_specific_error_message(error) == "JEV_TIMEOUT"
+
+
 def test_r18_combined_gate_preserves_turing():
     with patch("tfc.ee_gates._turing_denied_off_cloud", return_value=True):
         response = ee_gates.ee_model_gate_for_template("turing_large")

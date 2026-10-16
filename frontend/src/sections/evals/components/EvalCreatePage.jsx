@@ -27,6 +27,7 @@ import {
   buildJevMapping,
   getJevValidationErrors,
   hasExtraJevMessages,
+  orderChoiceScores,
 } from "../utils/jevMapping";
 
 import { useCreateEval } from "../hooks/useCreateEval";
@@ -316,7 +317,14 @@ const EvalCreatePage = () => {
             setModel(config.model || d.model || "turing_large");
             setOutputType(d.output_type_normalized || "pass_fail");
             setPassThreshold(d.pass_threshold ?? 0.5);
-            setChoiceScores(d.choice_scores || {});
+            // jsonb returns choice_scores keys shortest first; autosave them
+            // in the order the author saved.
+            setChoiceScores(
+              orderChoiceScores(
+                d.choice_scores || {},
+                config.jev_mapping?.choice?.labels || d.choices,
+              ),
+            );
             setMultiChoice(d.multi_choice ?? config.multi_choice ?? false);
             setDescription(d.description || "");
             setCheckInternet(config.check_internet ?? false);

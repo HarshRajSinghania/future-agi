@@ -132,6 +132,43 @@ describe("EvalCreatePage with a Jev model", () => {
     );
   });
 
+  it("autosaves a reopened draft's choices in the authored order", async () => {
+    // choice_scores is jsonb, which returns keys shortest first; the mapping
+    // labels and `choices` keep the order the author saved.
+    const authored = ["Resolved", "Unresolved", "Escalated"];
+    mocks.draft = {
+      ...mocks.draft,
+      output_type_normalized: "deterministic",
+      choice_scores: { Resolved: 1, Escalated: 0.5, Unresolved: 0 },
+      choices: authored,
+      config: {
+        model: "jev-latest",
+        choices: authored,
+        jev_mapping: {
+          revision: "jev-map-v1",
+          question_type: "choice",
+          choice: { labels: authored, descriptions: {} },
+        },
+      },
+    };
+    render(<EvalCreatePage />);
+    await userEvent.type(
+      await screen.findByLabelText("Description for Unresolved"),
+      "Still open",
+    );
+    await waitFor(
+      () =>
+        expect(lastPayload()?.jev_mapping?.choice?.descriptions).toEqual({
+          Resolved: "",
+          Unresolved: "Still open",
+          Escalated: "",
+        }),
+      { timeout: 4000 },
+    );
+    expect(lastPayload().jev_mapping.choice.labels).toEqual(authored);
+    expect(Object.keys(lastPayload().choice_scores)).toEqual(authored);
+  });
+
   it("sends no jev_mapping for non-Jev models", async () => {
     render(<EvalCreatePage />);
     await userEvent.selectOptions(

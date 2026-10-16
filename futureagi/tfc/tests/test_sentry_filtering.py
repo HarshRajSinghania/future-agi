@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from tfc.logging.sentry import (
     _REDACTED,
+    _event_scrubber,
     _get_before_send,
     _is_sensitive_key,
     _scrub,
@@ -46,6 +47,14 @@ def test_drops_opentelemetry_logger_events():
 def test_drops_opentelemetry_child_loggers_by_prefix():
     event = {"logger": "opentelemetry.exporter.otlp.proto.grpc.exporter"}
     assert before_send(event, {}) is None
+
+
+def test_drops_saml_dependency_loggers_but_keeps_saml2_auth():
+    """The pysaml2 prefix must not swallow the app's own saml2_auth loggers."""
+
+    assert before_send({"logger": "saml2.response", "message": "x"}, {}) is None
+    for name in ("saml2_auth.views", "saml2_auth.security"):
+        assert before_send({"logger": name, "message": "boom"}, {}) is not None
 
 
 def test_drops_ignored_exception_types():
@@ -116,6 +125,31 @@ def test_before_send_scrubs_request_and_extra():
     assert out["request"]["cookies"] == _REDACTED  # cookies redacted wholesale
     assert out["extra"]["api_key"] == _REDACTED
     assert out["extra"]["count"] == 5
+
+
+def test_scrubber_redacts_the_gateway_provider_key_in_frame_locals():
+    """The scrubber init_sentry installs matches whole key names, so the AgentCC
+    header that carries an org's own provider key must be listed in full."""
+    headers = {
+        "Authorization": "Bearer internal-secret",
+        "X-AgentCC-Provider-Key": "org-provider-secret",
+        "Content-Type": "application/json",
+    }
+    event = {
+        "exception": {
+            "values": [{"stacktrace": {"frames": [{"vars": {"headers": headers}}]}}]
+        },
+        "request": {"headers": dict(headers)},
+    }
+    _event_scrubber().scrub_event(event)
+    [value] = event["exception"]["values"]
+    scrubbed = value["stacktrace"]["frames"][0]["vars"]["headers"]
+    assert scrubbed["Content-Type"] == "application/json"
+    for sent in (scrubbed, event["request"]["headers"]):
+        assert "internal-secret" not in str(sent)
+        assert "org-provider-secret" not in str(sent)
+    # The substring scrubber used by before_send agrees.
+    assert _scrub(headers)["X-AgentCC-Provider-Key"] == _REDACTED
 
 
 def test_scrub_event_is_resilient_to_unexpected_shapes():

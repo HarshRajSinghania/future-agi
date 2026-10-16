@@ -1380,7 +1380,19 @@ class LiteLlmModelProvider(Enum):
 
     @classmethod
     def get_choices(cls):
-        return [(tag.value, tag.name.replace("_", " ").title()) for tag in cls]
+        return [
+            (
+                tag.value,
+                _PROVIDER_DISPLAY_NAMES.get(
+                    tag.value, tag.name.replace("_", " ").title()
+                ),
+            )
+            for tag in cls
+        ]
+
+
+# Brand casing that title() gets wrong. Labels only; stored values are unchanged.
+_PROVIDER_DISPLAY_NAMES = {LiteLlmModelProvider.TYPESAFE.value: "TypeSafe"}
 
 
 class ProviderLogoUrls(Enum):

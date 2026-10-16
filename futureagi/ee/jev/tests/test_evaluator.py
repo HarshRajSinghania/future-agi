@@ -105,11 +105,12 @@ def test_r09_reference_rubric_normalizes_once(reverse, failure):
     assert json.loads(result["metadata"])["jev"]["normalized_score"] == 0.525
 
 
-def test_r06_r13_result_metadata_actual_alias_and_no_reason(caplog):
+def test_r06_r13_result_metadata_actual_alias_and_factual_reason(caplog):
     instance, _ = evaluator(actual="jev-future", model="jev-latest")
     result = instance._evaluate(input="PRIVATE-CANARY")
     assert result["model"] == "jev-future"
-    assert result["reason"] is None
+    # Built from the typed answer alone; TypeSafe returns no rationale.
+    assert result["reason"] == "Jev probability 0.80 vs threshold 0.50 → Pass"
     meta = json.loads(result["metadata"])
     assert "explanation" not in meta
     assert meta["jev"]["reasoning_available"] is False
@@ -219,3 +220,163 @@ def test_r15_template_syntax_error_is_sanitized_before_client(caplog):
     assert "PRIVATE_CANARY" not in str(error.value)
     assert "PRIVATE_CANARY" not in caplog.text
     client.evaluate.assert_not_called()
+
+
+def test_r17_gateway_run_keeps_both_keys_out_of_results(monkeypatch, settings):
+    """End to end on the real client: the org's key reaches only the gateway
+    header, and neither it nor the internal key reaches the result."""
+    import httpx
+
+    monkeypatch.setenv("AGENTCC_GATEWAY_INTERNAL_URL", "http://agentcc-gateway.test")
+    monkeypatch.setenv("AGENTCC_INTERNAL_API_KEY", "internal-key-CANARY")
+    settings.JEV_TRANSPORT = "gateway"
+    instance = JevEvaluator(
+        model="jev-latest",
+        rule_prompt="Judge {{input}}",
+        required_keys=["input"],
+        api_key="org-key-CANARY",
+    )
+    ok = {
+        "model": "jev-1.13.0",
+        "answers": {"q1": {"type": "noul", "noul": 0.8}},
+        "usage": {"input_tokens": 412, "output_tokens": 6},
+    }
+    with patch("httpx.post", return_value=httpx.Response(200, json=ok)) as post:
+        result = instance.run(input="text").eval_results[0]
+    assert post.call_args.kwargs["json"]["model"] == "typesafe/jev-latest"
+    assert post.call_args.kwargs["headers"]["x-agentcc-provider-key"] == (
+        "org-key-CANARY"
+    )
+    assert result["data"]["result"] == "Pass"
+    assert json.loads(result["metadata"])["jev"]["actual_model"] == "jev-1.13.0"
+    recorded = json.dumps(
+        [result, instance.last_jev, instance.client.attempts], default=repr
+    )
+    assert "CANARY" not in recorded
+
+
+@pytest.mark.parametrize(
+    "answer,config,reason",
+    [
+        (
+            {"type": "noul", "noul": 0.98},
+            {},
+            "Jev probability 0.98 vs threshold 0.50 → Pass",
+        ),
+        (
+            {"type": "noul", "noul": 0.3},
+            {"pass_threshold": 0.25},
+            "Jev probability 0.30 vs threshold 0.25 → Pass",
+        ),
+        (
+            {"type": "noul", "noul": 0.98},
+            {"reverse_output": True},
+            "Jev probability 0.98 vs threshold 0.50 → Fail (reversed)",
+        ),
+        (
+            {
+                "type": "choice",
+                "choice": "Resolved",
+                "probabilities": {"Resolved": 1.0, "Escalated": 0.0},
+                "confidence": 0.9,
+            },
+            {
+                "output_type": "choices",
+                "choice_scores": {"Resolved": 1, "Escalated": 0},
+            },
+            'Jev chose "Resolved" (probability 1.00)',
+        ),
+        (
+            {
+                "type": "score",
+                "score": 3,
+                "legend": {"0": "Poor", "1": "Fair", "2": "Good", "3": "Excellent"},
+                "probabilities": {"0": 0.0, "1": 0.0, "2": 0.1, "3": 0.9},
+                "confidence": 0.9,
+            },
+            {
+                "output_type": "score",
+                "jev_mapping": {
+                    "score": {"levels": ["Poor", "Fair", "Good", "Excellent"]}
+                },
+            },
+            'Jev scored level 3 of 4 "Excellent" (normalized 1.00)',
+        ),
+        (
+            {
+                "type": "score",
+                "score": 1.05,
+                "legend": {"0": "bad", "1": "ok", "2": "good"},
+                "probabilities": {"0": 0.2, "1": 0.55, "2": 0.25},
+                "confidence": 0.55,
+            },
+            {
+                "output_type": "score",
+                "jev_mapping": {"score": {"levels": ["bad", "ok", "good"]}},
+            },
+            "Jev scored level 1.05 of 3 (normalized 0.53)",
+        ),
+    ],
+)
+def test_reason_restates_the_typed_answer(answer, config, reason):
+    instance, _ = evaluator(answer, **config)
+    result = instance.run(input="text").eval_results[0]
+    assert result["reason"] == reason
+
+
+# One rule for every media type: a value that is itself a media link is
+# rejected; a link inside prose is text.
+_MEDIA_LINKS = [
+    "https://example.invalid/a/photo.png",
+    "https://example.invalid/a/photo.jpg",
+    "https://example.invalid/a/photo.jpeg",
+    "https://example.invalid/a/anim.gif",
+    "https://example.invalid/a/photo.webp",
+    "https://example.invalid/a/icon.svg",
+    "https://example.invalid/a/scan.bmp",
+    "https://example.invalid/a/scan.tiff",
+    "https://example.invalid/files/invoice.pdf",
+    "https://example.invalid/a/call.mp3",
+    "https://example.invalid/a/call.wav",
+    "https://example.invalid/a/call.ogg",
+    "https://example.invalid/a/call.m4a",
+    "https://example.invalid/a/call.flac",
+    "https://example.invalid/a/clip.mp4",
+    "https://example.invalid/a/clip.webm",
+]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        *_MEDIA_LINKS,
+        "  https://example.invalid/files/INVOICE.PDF\n",
+        "https://example.invalid/a/photo.png?token=fake#page=2",
+        "data:image/png;base64,ZmFrZQ==",
+        "DATA:application/pdf;base64,ZmFrZQ==",
+        {"attachment": "https://example.invalid/a/clip.mp4"},
+        ["text", "https://example.invalid/a/call.wav"],
+    ],
+)
+def test_a_value_that_is_a_media_link_is_rejected(value):
+    instance, client = evaluator()
+    with pytest.raises(JevMappingError, match="JEV_INPUT_UNSUPPORTED"):
+        instance._evaluate(input=value)
+    client.evaluate.assert_not_called()
+
+
+@pytest.mark.parametrize("link", _MEDIA_LINKS)
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Customer: my file is at {link} and it is wrong. Agent: fixed it.",
+        "Customer: here is the file {link}\nAgent: Thanks, fixed.",
+        "Customer: see {link}?x=1 please",
+        "Customer: the file is {link}",
+    ],
+)
+def test_a_media_link_inside_prose_is_text(prose, link):
+    instance, client = evaluator()
+    value = prose.format(link=link)
+    instance._evaluate(input={"transcript": value})
+    assert client.evaluate.call_args.args[1] == {"transcript": value}

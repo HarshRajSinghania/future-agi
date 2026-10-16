@@ -2,7 +2,7 @@
 
 from rest_framework.response import Response
 
-from tfc.ee_gates import is_jev_model, jev_gate_for_template
+from tfc.ee_gates import describe_jev_error, is_jev_model, jev_gate_for_template
 from tfc.utils.api_errors import build_error_envelope
 
 
@@ -56,18 +56,28 @@ def validate_jev_template_save(
     return None
 
 
+def binding_model(template, *, model, runtime_config=None):
+    """The model a binding runs: a per-run override, else the caller's model,
+    else the template's."""
+    runtime = runtime_config or {}
+    overrides = runtime.get("run_config") or {}
+    return (
+        overrides.get("model")
+        or runtime.get("model")
+        or model
+        or (template.config or {}).get("model")
+        or template.model
+    )
+
+
 def validate_jev_binding(template, *, model, runtime_config=None):
     """Reject incompatible effective bindings before a view queues work."""
     from copy import deepcopy
 
     runtime = runtime_config or {}
     overrides = runtime.get("run_config") or {}
-    effective_model = (
-        overrides.get("model")
-        or runtime.get("model")
-        or model
-        or (template.config or {}).get("model")
-        or template.model
+    effective_model = binding_model(
+        template, model=model, runtime_config=runtime_config
     )
     gate = jev_gate_for_template(effective_model)
     if gate is not None:
@@ -85,4 +95,25 @@ def validate_jev_binding(template, *, model, runtime_config=None):
         previous_model=effective_model,
         choice_scores=overrides.get("choice_scores", template.choice_scores),
         multi_choice=bool(template.multi_choice or config.get("multi_choice")),
+    )
+
+
+def jev_error_response(exc):
+    """A 400 saying why a Jev run failed, with its typed code, or None for any
+    other error. The text is fixed per code, so it never carries a key or
+    TypeSafe's response body."""
+    described = describe_jev_error(exc)
+    if described is None:
+        return None
+    extra = {"feature": "jev"}
+    if described["attr"]:
+        extra["attr"] = described["attr"]
+    return Response(
+        build_error_envelope(
+            described["message"],
+            code=described["code"],
+            details=described["details"],
+            extra=extra,
+        ),
+        status=400,
     )

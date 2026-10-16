@@ -48,3 +48,17 @@ def build_usage_events(evaluator, *, org_id, cell_or_run_id, amount, attempt_off
             )
         )
     return events
+
+
+def emit_usage_events(evaluator, *, org_id, cell_or_run_id):
+    """Emit a completed run's events at the flat per-run eval fee in credits.
+    Jev runs on the org's own key, so no provider cost is added."""
+    from ee.usage.services.config import BillingConfig
+    from ee.usage.services.emitter import emit
+
+    billing_config = BillingConfig.get()
+    amount = billing_config.calculate_ai_credits(billing_config.get_eval_per_run_fee())
+    for event in build_usage_events(
+        evaluator, org_id=org_id, cell_or_run_id=cell_or_run_id, amount=amount
+    ):
+        emit(event)

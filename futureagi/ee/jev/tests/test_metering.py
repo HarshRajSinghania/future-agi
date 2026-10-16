@@ -179,3 +179,51 @@ def test_tracer_eval_billing_labels_jev_by_model_used():
     event = emit.call_args.args[0]
     assert event.event_type == "jev_evaluator"
     assert event.amount == 0.06
+
+
+def test_tracer_eval_billing_emits_the_jev_events_for_a_jev_run():
+    """Span, trace and session evals bill a Jev run with the metering events,
+    keyed to the run, whatever model name TypeSafe reported."""
+    from tracer.utils.eval import _emit_eval_billing
+
+    evaluator = instance()
+    result = SimpleNamespace(
+        model_used="jev-1.14.0",
+        cost={"total_cost": 0.0},
+        token_usage={"prompt_tokens": 412, "completion_tokens": 6},
+        evaluator=evaluator,
+    )
+    with (
+        patch("ee.usage.services.config.BillingConfig.get") as billing,
+        patch("ee.usage.services.emitter.emit") as emit,
+    ):
+        billing.return_value.get_eval_per_run_fee.return_value = 0.0005
+        billing.return_value.calculate_ai_credits.return_value = 0.06
+        _emit_eval_billing(
+            org_id="org",
+            api_call_type="turing_large_evaluator",
+            source_id="eval",
+            target_type="span",
+            result=result,
+            custom_eval_config=SimpleNamespace(model=None),
+            ws_id=None,
+            api_call_log_row=SimpleNamespace(log_id="run-1"),
+        )
+    billing.return_value.calculate_ai_credits.assert_called_once_with(0.0005)
+    events = [
+        call.args[0].model_dump(exclude={"timestamp"}) for call in emit.call_args_list
+    ]
+    expected = build_usage_events(
+        evaluator, org_id="org", cell_or_run_id="run-1", amount=0.06
+    )
+    assert events == [event.model_dump(exclude={"timestamp"}) for event in expected]
+    assert [event["amount"] for event in events] == [0, 0.06]
+
+
+def test_emit_jev_usage_leaves_other_evaluators_to_the_caller():
+    from sdk.utils.helpers import _emit_jev_usage
+
+    with patch("ee.usage.services.emitter.emit") as emit:
+        assert _emit_jev_usage(object(), org_id="org", run_id="run") is False
+        assert _emit_jev_usage(None, org_id="org", run_id="run") is False
+    emit.assert_not_called()
