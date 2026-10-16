@@ -19,6 +19,7 @@ from django.db import connection, transaction
 from simulate.models.harness_versioning import HashKind, VersionStatus
 from simulate.models.hosted_harness import MAX_SCENARIOS_PER_JOB
 from simulate.services.harness_versioning import archives
+from simulate.services.harness_versioning.assembly import certifies_bundle
 from simulate.services.harness_versioning.backfill import (
     READ_ATTEMPTS,
     SETTLED_STATES,
@@ -393,6 +394,7 @@ def _finish(
             archive is not None
             and runtime is not None
             and bundle_certificate(archive, HashKind.TREE_V1) is not None
+            and certifies_bundle(archive.sealed or {})
         )
         report.fact(bundle_row_eligible=eligible, suite_version_new=suite_created)
     _check_runs(models, job, agent, runtime, predicted, report)

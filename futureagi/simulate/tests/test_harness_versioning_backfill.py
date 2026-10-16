@@ -42,6 +42,17 @@ from simulate.tests.test_hosted_harness_conversation import _Storage
 
 pytestmark = pytest.mark.django_db
 
+_BUNDLE_DIGEST = "sha256:" + "d" * 64
+# A sealed bundle and the certificate for it.
+_CERTIFIED = {
+    "environment-bundle/manifest.json": json.dumps(
+        {"files": [], "digest": _BUNDLE_DIGEST}
+    ),
+    "runtime-validation.json": json.dumps(
+        {"status": "passed", "compiler": {"bundle_digest": _BUNDLE_DIGEST}}
+    ),
+}
+
 KEYED = "harness-authoring/org/env/" + "a" * 64 + ".tar.gz"
 
 
@@ -57,6 +68,11 @@ class _RealisticStorage(_Storage):
         if object_name not in self.objects:
             raise S3Error(None, "NoSuchKey", "missing", object_name, "request", "host")
         return super().get_object(bucket, object_name)
+
+    def stat_object(self, bucket, object_name):
+        if object_name not in self.objects:
+            raise S3Error(None, "NoSuchKey", "missing", object_name, "request", "host")
+        return object_name
 
 
 @pytest.fixture
@@ -637,7 +653,12 @@ class TestBundle:
         definition = _definition(user, workspace)
         a1 = _agent_version(definition)
         environment = _legacy(
-            user, workspace, "bf-bundle", storage, definition=definition
+            user,
+            workspace,
+            "bf-bundle",
+            storage,
+            definition=definition,
+            body=_authoring(**_CERTIFIED),
         )
 
         result = backfill_environment(environment.id)
@@ -649,7 +670,10 @@ class TestBundle:
         assert (bundle.state, bundle.agent_version_id) == ("ready", a1.id)
         assert bundle.environment_version_id == environment.environment_version_id
         assert bundle.suite_version_id == environment.suite_version_id
-        assert bundle.certificate == {"status": "passed"}
+        assert bundle.certificate == {
+            "status": "passed",
+            "compiler": {"bundle_digest": _BUNDLE_DIGEST},
+        }
         files = archives.read_archive(storage.objects[bundle.object_key])
         assert "environment-bundle/manifest.json" in files
         assert bundle.assembly_key.startswith("sha256:")
@@ -1243,8 +1267,7 @@ def _large_suite(scenarios, files_per_scenario):
         "contract.json": json.dumps({"agent": "support", "tools": []}),
         "sub_goals.json": json.dumps({"sub_goals": []}),
         "scenarios.json": json.dumps(documents),
-        "environment-bundle/manifest.json": json.dumps({"files": []}),
-        "runtime-validation.json": json.dumps({"status": "passed"}),
+        **_CERTIFIED,
     }
     for document in documents:
         folder = f"scenarios/{document['name']}"

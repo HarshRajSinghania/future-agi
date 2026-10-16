@@ -18,6 +18,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from minio.error import S3Error
+
 from simulate.services.hosted_harness import HostedHarnessError
 from tfc.settings.settings import UPLOAD_BUCKET_NAME
 from tfc.utils.storage_client import ensure_bucket, get_storage_client
@@ -254,6 +256,16 @@ def put_archive(key: str, body: bytes) -> None:
         length=len(body),
         content_type="application/gzip",
     )
+
+
+def archive_exists(key: str) -> bool:
+    try:
+        get_storage_client().stat_object(UPLOAD_BUCKET_NAME, key)
+    except S3Error as exc:
+        if exc.code in {"NoSuchKey", "NoSuchBucket"}:
+            return False
+        raise
+    return True
 
 
 def get_archive(key: str) -> bytes:

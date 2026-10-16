@@ -227,8 +227,12 @@ def create_selected_harness_run(
     scenario_keys: list[str],
     trials: int,
     idempotency_key: str,
+    rerun_of: HostedHarnessJob | None = None,
 ) -> tuple[HostedHarnessJob, bool]:
-    """Freeze and preallocate one selected-scenario Run for an authored environment."""
+    """Freeze and preallocate one selected-scenario Run for an authored environment.
+
+    A rerun of a pinned run (``rerun_of``) keeps that run's pins.
+    """
 
     if environment.environment_id is not None:
         raise HostedHarnessError(
@@ -299,7 +303,7 @@ def create_selected_harness_run(
                 "environment changed while submitting this Run",
                 status_code=409,
             )
-        pins = _pinned_versions(environment)
+        pins = _pinned_versions(environment, rerun_of=rerun_of)
         if pins is None:
             registrations = list(
                 HostedHarnessScenario.no_workspace_objects.filter(
@@ -315,7 +319,8 @@ def create_selected_harness_run(
         }
         missing = [key for key in scenario_keys if key not in by_key]
         if missing and pins is not None:
-            # A rerun selects its source run's keys, which may have left the suite since.
+            # A rerun of an environment or of an unpinned run selects keys the default
+            # suite may have dropped since; a rerun of a pinned run keeps its suite.
             raise HostedHarnessError(
                 "scenario_selection_unknown",
                 ", ".join(missing)
@@ -330,6 +335,8 @@ def create_selected_harness_run(
                 f"scenario keys do not belong to this environment: {missing}",
                 status_code=400,
             )
+        if pins is not None and pins.assembles:
+            _refuse_ungradable(pins, scenario_keys)
 
         idempotency_digest = hashlib.sha256(idempotency_key.encode()).hexdigest()
         child_idempotency_key = f"run:{environment.id}:{idempotency_digest}"
@@ -362,6 +369,12 @@ def create_selected_harness_run(
         # descriptor once agent versions carry their own (step 9); legacy agent versions
         # mirror this payload.
         child_payload = json.loads(json.dumps(environment.payload))
+        if pins is not None and pins.rerun_of is not None and rerun_of is not None:
+            # The agent source and config the pinned bundle was built from.
+            for name in ("source", "agent"):
+                value = (rerun_of.payload or {}).get(name)
+                if value:
+                    child_payload[name] = json.loads(json.dumps(value))
         child_payload["scenario_count"] = len(manifest)
         runtime = child_payload["runtime"]
         runtime["max_duration_seconds"] = max(
@@ -393,6 +406,10 @@ def create_selected_harness_run(
         )
         if pins is not None:
             child_metadata["version_pins"] = pins.as_metadata()
+            if pins.assembly is not None:
+                child_metadata["assembly"] = pins.assembly.as_metadata()
+            if pins.rerun_of is not None:
+                child_metadata["rerun_of"] = pins.rerun_of
         child_payload.pop("job_id", None)
         child_payload.pop("run_id", None)
 
@@ -513,11 +530,26 @@ class _RunPins:
     environment_version: Any
     suite_version: Any
     members: dict[str, Any]
-    assembled_bundle: Any
     agent_hash: str | None
+    assembly: Any = None
+    rerun_of: str | None = None
+
+    @property
+    def assembled_bundle(self) -> Any:
+        return self.assembly.bundle if self.assembly is not None else None
+
+    @property
+    def assembles(self) -> bool:
+        """Whether the run replays or certifies an assembled bundle; a miss of the
+        default pins runs them as before."""
+        from simulate.services.harness_versioning.assembly import certify_enabled
+
+        return self.assembly is not None and (
+            self.assembly.cached or (not self.assembly.defaults and certify_enabled())
+        )
 
     def as_metadata(self) -> dict[str, Any]:
-        return {
+        pins = {
             "agent_version_id": (
                 str(self.agent_version.id) if self.agent_version is not None else None
             ),
@@ -527,6 +559,9 @@ class _RunPins:
             "environment_hash": self.environment_version.hash,
             "suite_hash": self.suite_version.hash,
         }
+        if self.assembly is not None:
+            pins["assembly_key"] = self.assembly.key
+        return pins
 
     def stage_outputs(self, current: list[Any]) -> list[Any]:
         """The run's stage outputs, with the pinned versions' authored snapshots in place.
@@ -557,79 +592,157 @@ class _RunPins:
         return kept + list(pinned.values())
 
 
-def _pinned_versions(environment: HostedHarnessJob) -> _RunPins | None:
+def _pinned_versions(
+    environment: HostedHarnessJob, *, rerun_of: HostedHarnessJob | None = None
+) -> _RunPins | None:
     """The environment's default versions, when it has them and versioning is on.
 
     With the flag off a run is created exactly as before, versions or not, so turning
-    versioning on is what changes which agent and suite a run uses.
+    versioning on is what changes which agent and suite a run uses. A rerun of a pinned
+    run keeps that run's versions when they can run: they are the defaults, their bundle
+    is cached, or certifying is on. Otherwise it runs the defaults.
     """
-    from simulate.models import (
-        AgentVersion,
-        HarnessAgentVersionRuntime,
-        HarnessAssembledBundle,
-        HarnessEnvironmentVersion,
-        HarnessSuiteMember,
-        HarnessSuiteVersion,
+    from simulate.models import HarnessSuiteMember
+    from simulate.services.harness_versioning.assembly import (
+        bundle_ready,
+        certify_enabled,
+        run_assembly,
     )
     from simulate.services.harness_versioning.versions import pins_runs
 
     if not pins_runs(environment):
         return None
-    environment_version = HarnessEnvironmentVersion._base_manager.get(
-        id=environment.environment_version_id
-    )
-    suite_version = HarnessSuiteVersion._base_manager.get(
-        id=environment.suite_version_id
-    )
-    # A soft-deleted agent version is never pinned onto a run.
-    agent_version = (
-        AgentVersion.no_workspace_objects.select_related("agent_definition")
-        .filter(id=environment.agent_version_id)
-        .first()
-        if environment.agent_version_id
-        else None
-    )
-    if environment.agent_version_id and agent_version is None:
-        logger.warning(
-            "harness_run_agent_pin_missing",
-            environment_id=str(environment.id),
-            agent_version_id=str(environment.agent_version_id),
-        )
+    defaults = _pin_ids(environment)
+    source, loaded = environment, None
+    if (
+        rerun_of is not None
+        and rerun_of.environment_id == environment.id
+        and rerun_of.environment_version_id is not None
+        and rerun_of.suite_version_id is not None
+    ):
+        loaded = _load_pins(environment, rerun_of)
+        _, environment_version, suite_version, runtime = loaded
+        if _pin_ids(rerun_of) == defaults or (
+            runtime is not None
+            and (
+                certify_enabled()
+                or bundle_ready(
+                    environment, runtime, environment_version, suite_version
+                )
+            )
+        ):
+            source = rerun_of
+        else:
+            loaded = None
+            logger.info(
+                "harness_rerun_pins_fallback",
+                environment_id=str(environment.id),
+                rerun_of=str(rerun_of.id),
+            )
+    if loaded is None:
+        loaded = _load_pins(environment, environment)
+    agent_version, environment_version, suite_version, runtime = loaded
     members = {
         member.scenario_key: member
         for member in HarnessSuiteMember.no_workspace_objects.filter(
             suite_version=suite_version
         ).order_by("number", "scenario_key")
     }
-    bundle = None
-    agent_hash = None
-    if agent_version is not None:
-        bundle = (
-            HarnessAssembledBundle.no_workspace_objects.filter(
-                job=environment,
-                agent_version=agent_version,
-                environment_version=environment_version,
-                suite_version=suite_version,
-                state=HarnessAssembledBundle.State.READY,
-            )
-            .order_by("-updated_at", "-id")
-            .first()
-        )
-        agent_hash = (
-            HarnessAgentVersionRuntime.no_workspace_objects.filter(
-                agent_version=agent_version
-            )
-            .values_list("hash", flat=True)
-            .first()
-        )
     return _RunPins(
         agent_version=agent_version,
         environment_version=environment_version,
         suite_version=suite_version,
         members=members,
-        assembled_bundle=bundle,
-        agent_hash=agent_hash,
+        agent_hash=runtime.hash if runtime is not None else None,
+        assembly=run_assembly(
+            environment,
+            runtime,
+            environment_version,
+            suite_version,
+            defaults=_pin_ids(source) == defaults,
+        ),
+        rerun_of=str(rerun_of.id) if source is rerun_of else None,
     )
+
+
+def _pin_ids(job: HostedHarnessJob) -> tuple[Any, Any, Any]:
+    return (job.agent_version_id, job.environment_version_id, job.suite_version_id)
+
+
+def _load_pins(
+    environment: HostedHarnessJob, source: HostedHarnessJob
+) -> tuple[Any, Any, Any, Any]:
+    """The agent, environment and suite versions ``source`` is pinned to, and the agent's
+    side row."""
+    from simulate.models import (
+        AgentVersion,
+        HarnessAgentVersionRuntime,
+        HarnessEnvironmentVersion,
+        HarnessSuiteVersion,
+    )
+
+    environment_version = HarnessEnvironmentVersion._base_manager.get(
+        id=source.environment_version_id
+    )
+    suite_version = HarnessSuiteVersion._base_manager.get(id=source.suite_version_id)
+    # A soft-deleted agent version is never pinned onto a run.
+    agent_version = (
+        AgentVersion.no_workspace_objects.select_related("agent_definition")
+        .filter(id=source.agent_version_id)
+        .first()
+        if source.agent_version_id
+        else None
+    )
+    if source.agent_version_id and agent_version is None:
+        logger.warning(
+            "harness_run_agent_pin_missing",
+            environment_id=str(environment.id),
+            agent_version_id=str(source.agent_version_id),
+        )
+    runtime = (
+        HarnessAgentVersionRuntime.no_workspace_objects.filter(
+            agent_version=agent_version
+        ).first()
+        if agent_version is not None
+        else None
+    )
+    return agent_version, environment_version, suite_version, runtime
+
+
+def _refuse_ungradable(pins: _RunPins, scenario_keys: list[str]) -> None:
+    """Refuse selected scenarios that grade no sub-goal of the pinned environment.
+
+    Certifying drops them from the bundle, so the run could not play them. A member
+    without a ``sub_goals`` field predates them and is left to the run.
+    """
+    catalogue = {
+        str(goal.get("name"))
+        for goal in (pins.environment_version.documents or {}).get("sub_goals") or []
+        if isinstance(goal, dict) and goal.get("name")
+    }
+    if not catalogue:
+        return
+    ungradable = []
+    for key in scenario_keys:
+        sub_goals = (
+            (pins.members[key].content or {}) if key in pins.members else {}
+        ).get("sub_goals")
+        if not isinstance(sub_goals, list):
+            continue
+        names = {
+            str(goal.get("name") if isinstance(goal, dict) else goal)
+            for goal in sub_goals
+        }
+        if not names & catalogue:
+            ungradable.append(key)
+    if ungradable:
+        raise HostedHarnessError(
+            "scenario_ungradable",
+            ", ".join(ungradable)
+            + (" grades" if len(ungradable) == 1 else " grade")
+            + " no sub-goal of this environment version, so the run cannot score it",
+            status_code=422,
+        )
 
 
 def _member_registrations(

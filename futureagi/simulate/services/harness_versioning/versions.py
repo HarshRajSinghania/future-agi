@@ -595,6 +595,7 @@ def record_authoring(
     archives.put_archive(pieces.suite_key, pieces.suite_body)
     archives.put_archive(pair_key, pair_body)
     sealed_key = ""
+    sealed_body = b""
     if sealed:
         sealed_body = archives.pack_archive(sealed)
         sealed_key = archives.sealed_key(job.organization_id, job.id, sealed_body)
@@ -701,6 +702,26 @@ def record_authoring(
                 locked,
                 proved_since,
             )
+
+        if origin in PROVED_ORIGINS and SEALED_MANIFEST in split.sealed:
+            # Only a build seals a bundle for this pair; edits carry an older one.
+            from simulate.services.harness_versioning.assembly import seed_from_build
+
+            try:
+                with transaction.atomic():
+                    seed_from_build(
+                        locked,
+                        environment_version=environment_version,
+                        suite_version=suite_version,
+                        sealed=split.sealed,
+                        object_key=sealed_key,
+                        sha256=archives.sha256_hex(sealed_body),
+                        size=len(sealed_body),
+                    )
+            except Exception:  # noqa: BLE001 - the cache never fails the save
+                logger.exception(
+                    "could not cache the sealed bundle job=%s origin=%s", job.id, origin
+                )
 
         payload = dict(locked.payload or {})
         metadata = dict(payload.get("metadata") or {})

@@ -37,6 +37,7 @@ from simulate.tests.test_harness_versioning_backfill import (
     _legacy,
     _RealisticStorage,
 )
+from simulate.tests.test_harness_versioning_record import _authoring
 
 pytestmark = pytest.mark.django_db
 
@@ -99,12 +100,14 @@ def _suite_archive(documents):
     return archives.pack_archive(files)
 
 
-def _versioned(user, workspace, key, storage, *, definition=None):
+def _versioned(user, workspace, key, storage, *, definition=None, body=None):
     """A backfilled environment: E1, S1 and A1 are its defaults."""
     if definition is None:
         definition = _definition(user, workspace)
         _agent_version(definition)
-    environment = _legacy(user, workspace, key, storage, definition=definition)
+    environment = _legacy(
+        user, workspace, key, storage, definition=definition, body=body
+    )
     backfill_environment(environment.id)
     environment.refresh_from_db()
     assert environment.environment_version_id is not None
@@ -223,6 +226,7 @@ class TestPins:
             ).hash,
             "environment_hash": environment.environment_version.hash,
             "suite_hash": environment.suite_version.hash,
+            "assembly_key": run.assembled_bundle.assembly_key,
         }
 
     def test_the_sandbox_accepts_a_pinned_runs_payload(self, user, workspace, storage):
@@ -252,7 +256,18 @@ class TestPins:
     def test_the_default_bundle_is_pinned_when_one_exists(
         self, user, workspace, storage
     ):
-        environment = _versioned(user, workspace, "runs-bundle", storage)
+        digest = "sha256:" + "d" * 64
+        body = _authoring(
+            **{
+                "environment-bundle/manifest.json": json.dumps(
+                    {"files": [], "digest": digest}
+                ),
+                "runtime-validation.json": json.dumps(
+                    {"compiler": {"bundle_digest": digest}}
+                ),
+            }
+        )
+        environment = _versioned(user, workspace, "runs-bundle", storage, body=body)
         assert environment.assembled_bundle_id is not None
 
         run = _run(environment)
@@ -625,15 +640,13 @@ class TestManifest:
         assert run.suite_version_id is None
         assert "version_pins" not in run.payload["metadata"]
 
-    def test_a_rerun_names_the_scenarios_that_left_the_suite(
-        self, user, workspace, storage, settings
-    ):
+    def _rerun_dropped(self, user, workspace, storage, key):
+        """A rerun of a run whose scenario the environment's new suite dropped."""
         from unittest.mock import patch
 
         from simulate.services.harness_provider import HostedHarnessProvider
 
-        settings.HARNESS_PUBLIC_BASE_URL = "https://harness.example.test"
-        environment = _versioned(user, workspace, "runs-rerun-dropped", storage)
+        environment = _versioned(user, workspace, key, storage)
         source = _run(environment, [_key(NAMES[1])])
         HostedHarnessJob.no_workspace_objects.filter(id=source.id).update(
             state=HostedHarnessJob.State.COMPLETED
@@ -641,24 +654,45 @@ class TestManifest:
         record_authoring(
             environment, _suite_archive([_scenario(NAMES[0])]), origin="manual"
         )
-
-        with (
-            patch("simulate.temporal.client.start_hosted_harness_gateway_workflow"),
-            pytest.raises(HostedHarnessError) as error,
-        ):
-            HostedHarnessProvider().rerun_saved(
+        with patch("simulate.temporal.client.start_hosted_harness_gateway_workflow"):
+            result = HostedHarnessProvider().rerun_saved(
                 str(source.id),
                 organization=user.organization,
                 workspace=workspace,
                 environment_values={},
             )
+        environment.refresh_from_db()
+        return environment, source, result
+
+    def test_a_rerun_of_a_pinned_run_keeps_its_suite(
+        self, user, workspace, storage, settings
+    ):
+        settings.HARNESS_PUBLIC_BASE_URL = "https://harness.example.test"
+        # The source's versions are not cached, so the rerun certifies them.
+        settings.HARNESS_BUNDLE_CERTIFY_ENABLED = True
+
+        environment, source, result = self._rerun_dropped(
+            user, workspace, storage, "runs-rerun-dropped"
+        )
+
+        run = HostedHarnessJob.no_workspace_objects.get(id=result["job"]["job_id"])
+        assert run.suite_version_id == source.suite_version_id
+        assert run.suite_version_id != environment.suite_version_id
+        assert run.payload["metadata"]["selected_scenario_keys"] == [_key(NAMES[1])]
+        assert run.payload["metadata"]["rerun_of"] == str(source.id)
+
+    def test_a_rerun_that_cannot_run_its_sources_suite_selects_from_the_defaults(
+        self, user, workspace, storage, settings
+    ):
+        settings.HARNESS_PUBLIC_BASE_URL = "https://harness.example.test"
+        settings.HARNESS_BUNDLE_CERTIFY_ENABLED = False
+
+        with pytest.raises(HostedHarnessError) as error:
+            self._rerun_dropped(user, workspace, storage, "runs-rerun-uncached")
 
         assert (error.value.code, error.value.status_code) == (
             "scenario_selection_unknown",
             400,
-        )
-        assert error.value.message.startswith(
-            f"{_key(NAMES[1])} is not in this environment's current scenarios"
         )
 
     def test_the_environment_output_stays_the_sealed_bundles(

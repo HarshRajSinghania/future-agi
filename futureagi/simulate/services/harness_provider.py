@@ -1678,6 +1678,7 @@ class HostedHarnessProvider:
             scenario_keys=scenario_keys,
             trials=trials,
             idempotency_key=str(uuid4()),
+            rerun_of=job if job.environment_id is not None else None,
         )
 
         if environment_values:

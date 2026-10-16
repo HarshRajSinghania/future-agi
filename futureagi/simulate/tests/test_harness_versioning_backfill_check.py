@@ -417,6 +417,33 @@ class TestPredictionsMatchTheBackfill:
         _assert_prediction(report, result, environment)
         assert report["facts"]["bundle_row_eligible"] is False
 
+    @pytest.mark.parametrize("certified", ["same", "other", "none"])
+    def test_a_bundle_row_only_for_a_bundle_its_certificate_is_for(
+        self, certified, user, workspace, storage
+    ):
+        digest = "sha256:" + "d" * 64
+        compiler = {
+            "same": {"compiler": {"bundle_digest": digest}},
+            "other": {"compiler": {"bundle_digest": "sha256:" + "0" * 64}},
+            "none": {},
+        }[certified]
+        body = _authoring(
+            **{
+                "environment-bundle/manifest.json": json.dumps(
+                    {"files": [], "digest": digest}
+                ),
+                "runtime-validation.json": json.dumps({"status": "passed", **compiler}),
+            }
+        )
+        environment = _legacy(
+            user, workspace, f"chk-certified-{certified}", storage, body=body
+        )
+
+        report, result = _check_then_backfill(storage, environment)
+
+        _assert_prediction(report, result, environment)
+        assert report["facts"]["bundle_row_eligible"] is (certified == "same")
+
     def test_a_running_environment_is_flagged_busy(self, user, workspace, storage):
         environment = _legacy(user, workspace, "chk-busy", storage)
         HostedHarnessJob.no_workspace_objects.filter(id=environment.id).update(

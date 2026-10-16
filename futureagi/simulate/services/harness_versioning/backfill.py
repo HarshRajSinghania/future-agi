@@ -29,14 +29,16 @@ from simulate.models.agent_version import AgentVersion
 from simulate.models.harness_versioning import (
     ArchiveLayout,
     HarnessAgentVersionRuntime,
-    HarnessAssembledBundle,
     HashKind,
     VersionOrigin,
     VersionStatus,
 )
 from simulate.models.hosted_harness import MAX_SCENARIOS_PER_JOB, HostedHarnessJob
-from simulate.services.canonical_json import canonical_digest
 from simulate.services.harness_versioning import archives, diffs, hashing
+from simulate.services.harness_versioning.assembly import (
+    runtime_identity,
+    seed_ready_bundle,
+)
 from simulate.services.harness_versioning.versions import (
     MEMBER_FIELDS,
     SEALED_MANIFEST,
@@ -522,28 +524,6 @@ def _legacy_refs(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def runtime_identity(runtime: Any) -> hashing.AgentIdentity:
-    """The identity a legacy side row stands for, rebuilt from its stored facts."""
-    agent_payload = runtime.agent_payload or {}
-    refs = agent_payload.get("legacy_secret_refs") or {}
-    return hashing.AgentIdentity(
-        source=f"{runtime.source_kind}:"
-        + json.dumps(runtime.source or {}, sort_keys=True, separators=(",", ":")),
-        connector=str(agent_payload.get("connector") or ""),
-        mode=str(agent_payload.get("mode") or ""),
-        call_direction=str(agent_payload.get("call_direction") or ""),
-        target_speaks_first=agent_payload.get("target_speaks_first"),
-        config=agent_payload.get("config") or {},
-        prompt_hash=runtime.prompt_hash,
-        credential_fingerprints={
-            name: canonical_digest(ref) for name, ref in sorted(refs.items())
-        },
-        provider_alias_names=tuple(
-            sorted(set(refs) & hashing.PROVIDER_CREDENTIAL_ALIASES)
-        ),
-    )
-
-
 def _uuid(value: object) -> uuid.UUID | None:
     try:
         return uuid.UUID(str(value))
@@ -879,34 +859,20 @@ def _bundle(
     suite_version: Any,
 ) -> Any:
     """The bundle the environment's archive already carries, as the first cache row."""
-    from simulate.services.hosted_harness_gateway import _secret_safe
-
-    certificate = bundle_certificate(archive, environment_version.hash_kind)
-    if certificate is None or sealed is None:
+    if bundle_certificate(archive, environment_version.hash_kind) is None or not sealed:
         return None
-    # TODO: compute this key the same way when runs look bundles up by pinned agent.
-    key = hashing.assembly_key(
-        hashing.agent_cache_hash(runtime_identity(runtime)),
-        environment_version.hash,
-        suite_version.certify_hash,
+    return seed_ready_bundle(
+        models.HarnessAssembledBundle,
+        job=locked,
+        runtime=runtime,
+        environment_version=environment_version,
+        suite_version=suite_version,
+        sealed=archive.sealed or {},
+        object_key=sealed.object_key,
+        sha256=sealed.sha256,
+        size=sealed.size,
+        bundle_digest=locked.bundle_digest,
     )
-    bundle, _ = models.HarnessAssembledBundle._base_manager.get_or_create(
-        job_id=locked.id,
-        assembly_key=key,
-        defaults={
-            "organization_id": locked.organization_id,
-            "agent_version_id": runtime.agent_version_id,
-            "environment_version_id": environment_version.id,
-            "suite_version_id": suite_version.id,
-            "state": HarnessAssembledBundle.State.READY,
-            "bundle_digest": locked.bundle_digest,
-            "object_key": sealed.object_key,
-            "sha256": sealed.sha256,
-            "size": sealed.size,
-            "certificate": _secret_safe(certificate),
-        },
-    )
-    return bundle
 
 
 def _by_revision(model: Any, job: Any) -> dict[str, Any]:

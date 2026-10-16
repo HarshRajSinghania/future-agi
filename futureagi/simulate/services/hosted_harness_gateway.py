@@ -1390,6 +1390,107 @@ _KNOWN_SIMULATOR_CONFIG_NAMES = (
 )
 
 
+def _authoring_egress_domains(
+    simulator_env: Mapping[str, str], connector: str, *, provider_profile: bool
+) -> list[str]:
+    """What authoring reaches: the source host, AgentCC and package indexes.
+
+    AgentCC serves every authoring model; real-runtime validation installs packages.
+    Daytona caps the domain allow list at 20 entries, so this stays focused and excludes
+    call-time media domains (LiveKit/Deepgram) that only the execution sandbox needs.
+    """
+    default_authoring_egress = [
+        "github.com",
+        "codeload.github.com",
+        "api.github.com",
+        "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+    ]
+    gateway_host = _hostname_from_url(simulator_env.get("AGENTCC_BASE_URL"))
+    if gateway_host and gateway_host not in default_authoring_egress:
+        default_authoring_egress.insert(0, gateway_host)
+    allowed_domains = list(
+        dict.fromkeys(
+            getattr(
+                settings,
+                "ALK_HOSTED_AUTHORING_EGRESS_DOMAINS",
+                default_authoring_egress,
+            )
+        )
+    )
+    if provider_profile:
+        provider_domain = {
+            "vapi": "api.vapi.ai",
+            "retell": "api.retellai.com",
+            "retell_chat": "api.retellai.com",
+        }.get(connector)
+        if provider_domain and provider_domain not in allowed_domains:
+            allowed_domains.insert(0, provider_domain)
+    return allowed_domains
+
+
+def _with_certify_egress(
+    allowed_domains: Iterable[str],
+    simulator_env: Mapping[str, str],
+    *,
+    max_domains: int | None,
+) -> set[str]:
+    """A cache miss certifies in the run sandbox, so it also needs authoring's egress."""
+    merged = _normalize_egress_domains(
+        [
+            *allowed_domains,
+            *_authoring_egress_domains(simulator_env, "", provider_profile=False),
+        ]
+    )
+    if max_domains is not None and len(merged) > max_domains:
+        raise HostedHarnessError(
+            "bundle_cache_miss_egress",
+            "this run has to rebuild its environment bundle, which needs "
+            f"{len(merged)} egress domains; the sandbox provider allows {max_domains}",
+            status_code=422,
+        )
+    return merged
+
+
+# Launch failures of the bundle cache, recorded against the environment-validation stage.
+_BUNDLE_CACHE_FAILURES = frozenset({"bundle_cache_miss_egress", "assembly_unavailable"})
+
+
+def _prepare_assembly(job: HostedHarnessJob) -> tuple[Any, HostedHarnessError | None]:
+    """The run's assembly plan, or the typed failure its launch records.
+
+    A run pinned to the environment's default pair falls back to today's path when it
+    cannot be assembled; any other pin has no such path. A storage outage is raised, so
+    the launch is retried.
+    """
+    from simulate.services.harness_versioning import assembly as bundle_cache
+
+    try:
+        return bundle_cache.prepare_launch(job), None
+    except Exception as exc:
+        if bundle_cache.is_transient(exc):
+            raise
+        if bundle_cache.pins_are_defaults(job):
+            logger.warning(
+                "could not assemble run=%s; it runs the default pair",
+                job.id,
+                exc_info=True,
+            )
+            return None, None
+        if isinstance(exc, HostedHarnessError) and exc.code == "assembly_unavailable":
+            logger.warning("could not assemble run=%s: %s", job.id, exc.message)
+            return None, exc
+        logger.exception("could not assemble run=%s", job.id)
+        return None, HostedHarnessError(
+            "assembly_unavailable",
+            "this run's pinned environment and scenario versions could not be "
+            f"assembled: {type(exc).__name__}",
+            status_code=422,
+        )
+
+
 def _known_simulator_egress_inputs() -> dict[str, str]:
     """Read deployment env presence and non-secret selectors for admission checks."""
     values: dict[str, str] = {}
@@ -1609,39 +1710,9 @@ class HostedHarnessGateway:
         simulator_env = _platform_simulator_material()
         guest_pin_policy_released = _add_scoped_guest_pin_policy(simulator_env, job)
 
-        # Authoring reaches the source host, AgentCC (which serves every authoring model), and
-        # package indexes needed when real-runtime validation builds the generated environment.
-        # Daytona caps the domain allow list at 20 entries, so this stays focused and excludes
-        # call-time media domains (LiveKit/Deepgram) that only the execution sandbox needs.
-        default_authoring_egress = [
-            "github.com",
-            "codeload.github.com",
-            "api.github.com",
-            "objects.githubusercontent.com",
-            "raw.githubusercontent.com",
-            "pypi.org",
-            "files.pythonhosted.org",
-        ]
-        gateway_host = _hostname_from_url(simulator_env.get("AGENTCC_BASE_URL"))
-        if gateway_host and gateway_host not in default_authoring_egress:
-            default_authoring_egress.insert(0, gateway_host)
-        allowed_domains = list(
-            dict.fromkeys(
-                getattr(
-                    settings,
-                    "ALK_HOSTED_AUTHORING_EGRESS_DOMAINS",
-                    default_authoring_egress,
-                )
-            )
+        allowed_domains = _authoring_egress_domains(
+            simulator_env, connector, provider_profile=bool(authoring_target_secrets)
         )
-        if authoring_target_secrets:
-            provider_domain = {
-                "vapi": "api.vapi.ai",
-                "retell": "api.retellai.com",
-                "retell_chat": "api.retellai.com",
-            }.get(connector)
-            if provider_domain and provider_domain not in allowed_domains:
-                allowed_domains.insert(0, provider_domain)
         _validate_resolved_egress_domains(
             allowed_domains, max_domains=self.client.max_egress_domains
         )
@@ -1832,8 +1903,13 @@ class HostedHarnessGateway:
         self, job: HostedHarnessJob, *, endpoint_base_url: str
     ) -> HostedHarnessAttempt:
 
+        from simulate.services.harness_versioning import assembly as bundle_cache
+
         _mark_stage(job, "acquiring_source")
         source_archive, commit_sha = HostedSourceAcquirer().acquire(job)
+        # A pinned run replays its assembled pair; on a cache miss it certifies it first.
+        assembled, assembly_error = _prepare_assembly(job)
+        certify = assembled is not None and not assembled.hit
         authoring_archive = _authoring_archive_for(job)
         payload = dict(job.payload)
         if authoring_archive is not None:
@@ -1941,6 +2017,14 @@ class HostedHarnessGateway:
         allowed_cidrs = _webrtc_egress_cidrs(payload, secrets_map)
         sandbox = None
         try:
+            if assembly_error is not None:
+                raise assembly_error
+            if certify:
+                allowed_domains = _with_certify_egress(
+                    allowed_domains,
+                    simulator_env,
+                    max_domains=self.client.max_egress_domains,
+                )
             launch_spec = SandboxLaunchSpec(
                 cpu_units=capacity.cpu_units,
                 memory_mb=capacity.memory_mb,
@@ -1982,6 +2066,17 @@ class HostedHarnessGateway:
                 ).encode(),
                 "/work/job.json",
             )
+            if certify:
+                sandbox.fs.upload_file(
+                    json.dumps(
+                        bundle_cache.certify_job_payload(
+                            dispatch_payload, bundle_cache.certify_scenario_count(job)
+                        ),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode(),
+                    bundle_cache.CERTIFY_JOB_PATH,
+                )
             sandbox.fs.upload_file(
                 json.dumps(secrets_map, sort_keys=True, separators=(",", ":")).encode(),
                 "/run/futureagi/secrets.json",
@@ -2050,7 +2145,8 @@ class HostedHarnessGateway:
                 "/run/futureagi/capabilities.json "
                 f"{_CHAT_POLICY_PATH} "
                 f"{_SIMULATOR_SECRETS_PATH} "
-                + (authoring_secrets_path if authoring_target_secrets else ""),
+                + (authoring_secrets_path if authoring_target_secrets else "")
+                + (f" {bundle_cache.CERTIFY_JOB_PATH}" if certify else ""),
                 timeout=120,
             )
             if prepared.exit_code:
@@ -2107,6 +2203,13 @@ class HostedHarnessGateway:
                     "cp -a /work/bundle /work/authoring/environment-bundle"
                 )
             )
+            if certify:
+                bundle_command = bundle_cache.certify_command()
+            elif assembled is not None:
+                bundle_command = (
+                    bundle_cache.source_check_command(assembled.source_digest)
+                    + bundle_command
+                )
             command = sandbox.process.execute_session_command(
                 _ENTRYPOINT_SESSION,
                 SandboxCommandRequest(
@@ -2158,7 +2261,11 @@ class HostedHarnessGateway:
                 # user's environment to fix; keep its typed code instead of blaming the sandbox.
                 attempt.terminal_failure = {
                     "domain": "environment",
-                    "stage": "acquiring_source",
+                    "stage": (
+                        "validating_environment"
+                        if exc.code in _BUNDLE_CACHE_FAILURES
+                        else "acquiring_source"
+                    ),
                     "code": exc.code,
                     "message": exc.message,
                     "details": details,
@@ -3012,7 +3119,6 @@ class HostedHarnessGateway:
                 "/work/authoring/environment-bundle/environment-plan.json"
             )
         authored_bundle = _json("/work/authoring/environment-bundle/manifest.json")
-        scenarios = _json("/work/authoring/scenarios.json")
         sub_goals = _json("/work/authoring/sub_goals.json")
         bundle = _json("/work/bundle/manifest.json")
         # Written when the world is sealed, so it appears later than the authoring
@@ -3028,6 +3134,21 @@ class HostedHarnessGateway:
         metadata = (job.payload or {}).get("metadata") or {}
         if not metadata.get("simulation_only"):
             _record_harness_spend(job, spend, attempt.attempt_number)
+        from simulate.services.harness_versioning import assembly as bundle_cache
+
+        # Certifying prunes the suite index; a run reads the suite it was assembled with.
+        scenarios = _json(
+            bundle_cache.SUITE_INDEX_PATH
+            if bundle_cache.certifies_here(job)
+            else "/work/authoring/scenarios.json"
+        )
+        if (
+            bundle_cache.wants_fill(job, attempt.attempt_number)
+            and isinstance(bundle, dict)
+            and _json("/work/runtime-validation.json") is not None
+        ):
+            bundle_cache.fill_bundle(job, attempt, sandbox, bundle)
+            job.refresh_from_db(fields=["payload"])
         authoring_complete = (
             isinstance(bundle, dict)
             and isinstance(scenarios, list)
@@ -3765,6 +3886,15 @@ class HostedHarnessGateway:
             retry_pending = not authoring_invalid and self._should_retry(
                 attempt, "infrastructure"
             )
+            if exit_code == 78:
+                from simulate.services.harness_versioning.assembly import mark_failed
+
+                try:
+                    mark_failed(attempt.job, attempt.terminal_failure["message"])
+                except Exception:  # noqa: BLE001 - the cache never changes the outcome
+                    logger.exception(
+                        "could not mark the bundle cache failed attempt=%s", attempt.id
+                    )
         elif exit_code == 0 and (
             not attempt.terminal_event_received or not attempt.manifest_acked
         ):

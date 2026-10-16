@@ -1101,6 +1101,11 @@ HARNESS_VERSIONING_ENABLED = os.getenv("HARNESS_VERSIONING_ENABLED", "").lower()
     "true",
     "yes",
 )
+# A pinned run that misses the bundle cache certifies its own bundle; off, it runs the
+# environment's default pair as before.
+HARNESS_BUNDLE_CERTIFY_ENABLED = os.getenv(
+    "HARNESS_BUNDLE_CERTIFY_ENABLED", ""
+).lower() in ("1", "true", "yes")
 # Raising agent-change nudges; only takes effect while versioning is enabled.
 HARNESS_VERSIONING_NUDGES_ENABLED = os.getenv(
     "HARNESS_VERSIONING_NUDGES_ENABLED", ""
