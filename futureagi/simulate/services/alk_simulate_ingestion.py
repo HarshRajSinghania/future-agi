@@ -1484,6 +1484,10 @@ def _store_alk_chat_messages(
         if role in {"user", "customer"}:
             current = {"user": seg, "agent": []}
             exchanges.append(current)
+        elif role == ChatRole.SUB_ACTOR:
+            # Its own turn, so the person's and the agent's turns are never merged with it.
+            exchanges.append({"sub_actor": seg, "user": None, "agent": []})
+            current = None
         elif role in _CHAT_AGENT_SPEAKER_ROLES:
             if current is None:
                 current = {"user": None, "agent": []}
@@ -1495,6 +1499,8 @@ def _store_alk_chat_messages(
         content_items: list[dict] = []
         for seg in segs:
             item = {"role": role_str, "content": seg.get("content") or ""}
+            if seg.get("speaker_name"):
+                item["name"] = seg["speaker_name"]
             if seg.get("tool_calls"):
                 item["tool_calls"] = seg["tool_calls"]
             speaker = (seg.get("speaker_role") or "").lower()
@@ -1519,6 +1525,8 @@ def _store_alk_chat_messages(
     rows: list[ChatMessageModel] = []
     for index, exchange in enumerate(exchanges):
         created_at = base + timedelta(seconds=index)
+        if exchange.get("sub_actor") is not None:
+            rows.append(_row(ChatRole.SUB_ACTOR, "sub_actor", [exchange["sub_actor"]], created_at))
         if exchange["user"] is not None:
             rows.append(_row(ChatRole.USER, "user", [exchange["user"]], created_at))
         agent_segs = exchange["agent"]

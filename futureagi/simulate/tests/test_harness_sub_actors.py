@@ -130,3 +130,52 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
         ("sub_actor", "Bystander"),
         ("user", ""),
     ]
+
+
+@pytest.mark.django_db
+def test_a_second_chat_participant_is_its_own_message_with_its_name(organization, workspace):
+    from simulate.models.chat_message import ChatMessageModel
+
+    job, _ = create_hosted_job(organization, _payload(), idempotency_key="sub-actor-chat", workspace=workspace)
+    capability = register_attempt(job.id, endpoint_base_url="https://platform.example")
+    client = APIClient()
+    provision = client.post(
+        f"{BASE}/{capability.attempt.id}/scenarios/",
+        {
+            "operation": "provision",
+            "name": "Sub-actor chat",
+            "modality": "text",
+            "personas": [{"scenario_key": "chat-one", "name": "Customer", "situation": "Order", "outcome": "Ordered"}],
+        },
+        format="json",
+        **_headers(capability),
+    )
+    client.post(
+        f"{BASE}/{capability.attempt.id}/scenarios/",
+        {"operation": "begin", "run_test_id": provision.json()["result"]["run_test_id"], "scenario_keys": ["chat-one"]},
+        format="json",
+        **_headers(capability),
+    )
+    call = CallExecution.objects.get(hosted_registration__scenario_key="chat-one")
+    call.simulation_call_type = CallExecution.SimulationCallType.TEXT
+    call.save(update_fields=["simulation_call_type"])
+    document = {
+        "messages": [
+            {"role": "user", "content": "One item please."},
+            {"role": "assistant", "content": "Added."},
+            {"role": "sub_actor", "name": "Friend", "sub_actor": "subactor_friend", "content": "Add one more."},
+            {"role": "user", "content": "Just the one."},
+            {"role": "assistant", "content": "Done."},
+        ]
+    }
+    response = MagicMock()
+    response.read.return_value = json.dumps(document).encode()
+    storage = MagicMock()
+    storage.get_object.return_value = response
+    with patch("simulate.services.hosted_harness_ingestion.get_storage_client", return_value=storage):
+        _ingest_hosted_transcript(call, SimpleNamespace(object_key="transcript.json"))
+
+    rows = list(ChatMessageModel.objects.filter(call_execution=call).order_by("created_at", "role"))
+    assert [row.role for row in rows] == ["user", "assistant", "sub_actor", "user", "assistant"]
+    friend = next(row for row in rows if row.role == "sub_actor")
+    assert friend.content == [{"role": "sub_actor", "content": "Add one more.", "name": "Friend"}]

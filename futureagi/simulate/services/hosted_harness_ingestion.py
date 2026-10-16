@@ -1354,6 +1354,7 @@ def _ingest_hosted_transcript(
                 {
                     "speaker_role": str(message.get("role") or "unknown"),
                     "content": str(message.get("content") or ""),
+                    **({"speaker_name": str(message["name"])} if message.get("name") else {}),
                     **(
                         {"tool_calls": message["tool_calls"]}
                         if message.get("tool_calls")
