@@ -28,7 +28,12 @@ def _docs():
             "scenario_key": "with-bystander",
             "name": "with-bystander",
             "instruction": "Book it.",
-            "sub_actors": [{"id": "subactor_bystander", "trigger": {"kind": "mid_journey", "turn": 2}}],
+            "sub_actors": [
+                {
+                    "id": "subactor_bystander",
+                    "trigger": {"kind": "mid_journey", "turn": 2},
+                }
+            ],
         },
         {
             "scenario_key": "with-service",
@@ -44,8 +49,15 @@ def _keys(queryset):
 
 
 @pytest.mark.django_db
-def test_a_suite_indexes_each_scenarios_sub_actors_and_filters_by_them(organization, workspace):
-    job, _ = create_hosted_job(organization, _payload(scenario_count=3), idempotency_key="sub-actor-index", workspace=workspace)
+def test_a_suite_indexes_each_scenarios_sub_actors_and_filters_by_them(
+    organization, workspace
+):
+    job, _ = create_hosted_job(
+        organization,
+        _payload(scenario_count=3),
+        idempotency_key="sub-actor-index",
+        workspace=workspace,
+    )
     index_scenarios(job, _docs())
     rows = HostedHarnessScenario.no_workspace_objects.filter(job=job)
 
@@ -53,7 +65,9 @@ def test_a_suite_indexes_each_scenarios_sub_actors_and_filters_by_them(organizat
     assert scenario_row(bound)["sub_actors"] == [
         {"id": "subactor_bystander", "trigger": {"kind": "mid_journey", "turn": 2}}
     ]
-    assert rows.get(scenario_key="with-service").sub_actors == [{"id": "subactor_service", "trigger": {}}]
+    assert rows.get(scenario_key="with-service").sub_actors == [
+        {"id": "subactor_service", "trigger": {}}
+    ]
     assert rows.get(scenario_key="alone").sub_actors is None
 
     def filtered(query: str):
@@ -65,12 +79,21 @@ def test_a_suite_indexes_each_scenarios_sub_actors_and_filters_by_them(organizat
     assert filtered("sub_actors_not=subactor_service") == ["alone", "with-bystander"]
 
     field = next(one for one in field_catalogue(rows) if one["value"] == "sub_actors")
-    assert field["counts"] == {"subactor_bystander": 1, "subactor_service": 1, "none": 1}
+    assert field["counts"] == {
+        "subactor_bystander": 1,
+        "subactor_service": 1,
+        "none": 1,
+    }
 
 
 @pytest.mark.django_db
 def test_a_suite_with_no_sub_actors_offers_no_sub_actor_filter(organization, workspace):
-    job, _ = create_hosted_job(organization, _payload(scenario_count=1), idempotency_key="no-sub-actor-index", workspace=workspace)
+    job, _ = create_hosted_job(
+        organization,
+        _payload(scenario_count=1),
+        idempotency_key="no-sub-actor-index",
+        workspace=workspace,
+    )
     index_scenarios(job, _docs()[:1])
     rows = HostedHarnessScenario.no_workspace_objects.filter(job=job)
     assert not any(one["value"] == "sub_actors" for one in field_catalogue(rows))
@@ -78,7 +101,12 @@ def test_a_suite_with_no_sub_actors_offers_no_sub_actor_filter(organization, wor
 
 @pytest.mark.django_db
 def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
-    job, _ = create_hosted_job(organization, _payload(), idempotency_key="sub-actor-transcript", workspace=workspace)
+    job, _ = create_hosted_job(
+        organization,
+        _payload(),
+        idempotency_key="sub-actor-transcript",
+        workspace=workspace,
+    )
     capability = register_attempt(job.id, endpoint_base_url="https://platform.example")
     client = APIClient()
     provision = client.post(
@@ -87,14 +115,25 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
             "operation": "provision",
             "name": "Sub-actor transcript",
             "modality": "text",
-            "personas": [{"scenario_key": "voice-one", "name": "Customer", "situation": "Book it", "outcome": "Booked"}],
+            "personas": [
+                {
+                    "scenario_key": "voice-one",
+                    "name": "Customer",
+                    "situation": "Book it",
+                    "outcome": "Booked",
+                }
+            ],
         },
         format="json",
         **_headers(capability),
     )
     client.post(
         f"{BASE}/{capability.attempt.id}/scenarios/",
-        {"operation": "begin", "run_test_id": provision.json()["result"]["run_test_id"], "scenario_keys": ["voice-one"]},
+        {
+            "operation": "begin",
+            "run_test_id": provision.json()["result"]["run_test_id"],
+            "scenario_keys": ["voice-one"],
+        },
         format="json",
         **_headers(capability),
     )
@@ -105,7 +144,12 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
     call.save(update_fields=["simulation_call_type", "started_at"])
     document = {
         "messages": [
-            {"role": "assistant", "content": "Where to?", "started_speaking_at": at, "stopped_speaking_at": at + 1},
+            {
+                "role": "assistant",
+                "content": "Where to?",
+                "started_speaking_at": at,
+                "stopped_speaking_at": at + 1,
+            },
             {
                 "role": "sub_actor",
                 "name": "Bystander",
@@ -114,14 +158,22 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
                 "started_speaking_at": at + 2,
                 "stopped_speaking_at": at + 3,
             },
-            {"role": "user", "content": "Just the airport.", "started_speaking_at": at + 4, "stopped_speaking_at": at + 5},
+            {
+                "role": "user",
+                "content": "Just the airport.",
+                "started_speaking_at": at + 4,
+                "stopped_speaking_at": at + 5,
+            },
         ]
     }
     response = MagicMock()
     response.read.return_value = json.dumps(document).encode()
     storage = MagicMock()
     storage.get_object.return_value = response
-    with patch("simulate.services.hosted_harness_ingestion.get_storage_client", return_value=storage):
+    with patch(
+        "simulate.services.hosted_harness_ingestion.get_storage_client",
+        return_value=storage,
+    ):
         _ingest_hosted_transcript(call, SimpleNamespace(object_key="transcript.json"))
 
     rows = list(call.transcripts.order_by("start_time_ms"))
@@ -130,13 +182,25 @@ def test_a_sub_actor_turn_is_stored_with_its_name(organization, workspace):
         ("sub_actor", "Bystander"),
         ("user", ""),
     ]
+    # What CSAT and evals read: the sub-actor is named, never scored as the agent.
+    from simulate.tasks.alk_sim import _build_transcript_text
+
+    assert _build_transcript_text(call).splitlines() == [
+        "Agent: Where to?",
+        "Bystander (not the customer): Add a stop.",
+        "Customer: Just the airport.",
+    ]
 
 
 @pytest.mark.django_db
-def test_a_second_chat_participant_is_its_own_message_with_its_name(organization, workspace):
+def test_a_second_chat_participant_is_its_own_message_with_its_name(
+    organization, workspace
+):
     from simulate.models.chat_message import ChatMessageModel
 
-    job, _ = create_hosted_job(organization, _payload(), idempotency_key="sub-actor-chat", workspace=workspace)
+    job, _ = create_hosted_job(
+        organization, _payload(), idempotency_key="sub-actor-chat", workspace=workspace
+    )
     capability = register_attempt(job.id, endpoint_base_url="https://platform.example")
     client = APIClient()
     provision = client.post(
@@ -145,14 +209,25 @@ def test_a_second_chat_participant_is_its_own_message_with_its_name(organization
             "operation": "provision",
             "name": "Sub-actor chat",
             "modality": "text",
-            "personas": [{"scenario_key": "chat-one", "name": "Customer", "situation": "Order", "outcome": "Ordered"}],
+            "personas": [
+                {
+                    "scenario_key": "chat-one",
+                    "name": "Customer",
+                    "situation": "Order",
+                    "outcome": "Ordered",
+                }
+            ],
         },
         format="json",
         **_headers(capability),
     )
     client.post(
         f"{BASE}/{capability.attempt.id}/scenarios/",
-        {"operation": "begin", "run_test_id": provision.json()["result"]["run_test_id"], "scenario_keys": ["chat-one"]},
+        {
+            "operation": "begin",
+            "run_test_id": provision.json()["result"]["run_test_id"],
+            "scenario_keys": ["chat-one"],
+        },
         format="json",
         **_headers(capability),
     )
@@ -163,7 +238,12 @@ def test_a_second_chat_participant_is_its_own_message_with_its_name(organization
         "messages": [
             {"role": "user", "content": "One item please."},
             {"role": "assistant", "content": "Added."},
-            {"role": "sub_actor", "name": "Friend", "sub_actor": "subactor_friend", "content": "Add one more."},
+            {
+                "role": "sub_actor",
+                "name": "Friend",
+                "sub_actor": "subactor_friend",
+                "content": "Add one more.",
+            },
             {"role": "user", "content": "Just the one."},
             {"role": "assistant", "content": "Done."},
         ]
@@ -172,10 +252,52 @@ def test_a_second_chat_participant_is_its_own_message_with_its_name(organization
     response.read.return_value = json.dumps(document).encode()
     storage = MagicMock()
     storage.get_object.return_value = response
-    with patch("simulate.services.hosted_harness_ingestion.get_storage_client", return_value=storage):
+    with patch(
+        "simulate.services.hosted_harness_ingestion.get_storage_client",
+        return_value=storage,
+    ):
         _ingest_hosted_transcript(call, SimpleNamespace(object_key="transcript.json"))
 
-    rows = list(ChatMessageModel.objects.filter(call_execution=call).order_by("created_at", "role"))
-    assert [row.role for row in rows] == ["user", "assistant", "sub_actor", "user", "assistant"]
+    rows = list(
+        ChatMessageModel.objects.filter(call_execution=call).order_by(
+            "created_at", "role"
+        )
+    )
+    assert [row.role for row in rows] == [
+        "user",
+        "assistant",
+        "sub_actor",
+        "user",
+        "assistant",
+    ]
     friend = next(row for row in rows if row.role == "sub_actor")
-    assert friend.content == [{"role": "sub_actor", "content": "Add one more.", "name": "Friend"}]
+    assert friend.content == [
+        {"role": "sub_actor", "content": "Add one more.", "name": "Friend"}
+    ]
+    from simulate.tasks.alk_sim import _build_transcript_text
+
+    assert "Friend (not the customer): Add one more." in _build_transcript_text(call)
+    assert "Assistant: Add one more." not in _build_transcript_text(call)
+
+
+def test_the_sandboxes_are_told_about_sub_actors_only_when_the_setting_is_on(settings):
+    from simulate.services.hosted_harness_gateway import _platform_simulator_material
+
+    settings.ALK_SUB_ACTORS = False
+    assert "HARNESS_SUB_ACTORS" not in _platform_simulator_material()
+    settings.ALK_SUB_ACTORS = True
+    assert _platform_simulator_material()["HARNESS_SUB_ACTORS"] == "1"
+
+
+def test_the_environments_list_says_whether_sub_actors_are_on(
+    settings, user, workspace
+):
+    client = APIClient()
+    client.force_authenticate(user=user)
+    for enabled in (False, True):
+        settings.ALK_SUB_ACTORS = enabled
+        response = client.get(
+            "/simulate/api/harness-environments/", HTTP_X_WORKSPACE_ID=str(workspace.id)
+        )
+        assert response.status_code == 200
+        assert response.json()["sub_actors"] is enabled

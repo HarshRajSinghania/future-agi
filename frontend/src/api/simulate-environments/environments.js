@@ -40,6 +40,7 @@ export const myEnvironmentsQueryKey = (page = 0, pageSize = 25) => [
 const toPage = (data) => ({
   rows: (Array.isArray(data?.results) ? data.results : []).map(harnessEnvToRow),
   total: data?.count ?? 0,
+  subActors: Boolean(data?.sub_actors),
 });
 
 const LIST_REFETCH_MS = 3000;
@@ -64,6 +65,11 @@ export function useMyEnvironments({ page = 0, pageSize = 25 } = {}) {
         ? LIST_REFETCH_MS
         : false,
   });
+}
+
+// Whether sub-actors are on, read from the environments list the page already loads.
+export function useSubActorsEnabled() {
+  return Boolean(useMyEnvironments().data?.subActors);
 }
 
 export function useDeleteEnvironment() {
