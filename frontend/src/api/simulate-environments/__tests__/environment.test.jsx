@@ -20,6 +20,8 @@ const {
   stageOutputsToWorld,
   harnessEnvState,
   canRunHeader,
+  jobRefetchInterval,
+  SAVE_GRACE_MS,
 } = await import("../environment");
 const { useEnvironmentsStore, resetEnvironmentsStore } = await import(
   "src/sections/simulate/environments/store/useEnvironmentsStore"
@@ -442,6 +444,19 @@ describe("useEnvironment keeps the versions current", () => {
     getHarnessJob.mockResolvedValue(job);
     return queryClient.refetchQueries({ queryKey: ["harness-job", "job-done"] });
   };
+  const chatJobs = (conversationId) => {
+    const conversation = { conversation_id: conversationId, messages: [] };
+    return {
+      busy: {
+        ...COMPLETED_JOB,
+        conversation: { ...conversation, state: "responding" },
+      },
+      idle: {
+        ...COMPLETED_JOB,
+        conversation: { ...conversation, state: "idle" },
+      },
+    };
+  };
 
   it("does not refresh the versions when opening an environment that is already finished", async () => {
     getHarnessJob.mockResolvedValue(COMPLETED_JOB);
@@ -518,8 +533,7 @@ describe("useEnvironment keeps the versions current", () => {
   });
 
   it("refreshes the versions, and nothing else, when a chat turn finishes", async () => {
-    const busy = { ...COMPLETED_JOB, conversation: { state: "responding", messages: [] } };
-    const idle = { ...COMPLETED_JOB, conversation: { state: "idle", messages: [] } };
+    const { busy, idle } = chatJobs("c-turn");
     getHarnessJob.mockResolvedValue(busy);
     const { queryClient, Wrapper } = makeWrapper();
     const spy = vi.spyOn(queryClient, "invalidateQueries");
@@ -534,5 +548,87 @@ describe("useEnvironment keeps the versions current", () => {
     await waitFor(() => expect(versionsCalls(spy)).toBe(1));
     expect(spy.mock.calls.every(isVersionsCall)).toBe(true);
     expect(getHarnessEnvironment.mock.calls.length).toBe(detailFetches);
+  });
+
+  it("refreshes the versions again once the turn's background save has had time to land", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { busy, idle } = chatJobs("c-grace-hook");
+      getHarnessJob.mockResolvedValue(busy);
+      const { queryClient, Wrapper } = makeWrapper();
+      const spy = vi.spyOn(queryClient, "invalidateQueries");
+      const { result } = renderHook(() => useEnvironment("job-done"), {
+        wrapper: Wrapper,
+      });
+      await waitFor(() =>
+        expect(result.current.env?.name).toBe("Done Environment"),
+      );
+      await poll(queryClient, idle);
+      await waitFor(() => expect(versionsCalls(spy)).toBe(1));
+
+      vi.advanceTimersByTime(SAVE_GRACE_MS - 1000);
+      expect(versionsCalls(spy)).toBe(1);
+      vi.advanceTimersByTime(1000);
+
+      await waitFor(() => expect(versionsCalls(spy)).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the pending refresh when the page closes before the save lands", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { busy, idle } = chatJobs("c-unmount");
+      getHarnessJob.mockResolvedValue(busy);
+      const { queryClient, Wrapper } = makeWrapper();
+      const spy = vi.spyOn(queryClient, "invalidateQueries");
+      const { result, unmount } = renderHook(() => useEnvironment("job-done"), {
+        wrapper: Wrapper,
+      });
+      await waitFor(() =>
+        expect(result.current.env?.name).toBe("Done Environment"),
+      );
+      await poll(queryClient, idle);
+      await waitFor(() => expect(versionsCalls(spy)).toBe(1));
+
+      unmount();
+      vi.advanceTimersByTime(SAVE_GRACE_MS);
+
+      expect(versionsCalls(spy)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("jobRefetchInterval", () => {
+  const completed = (conversation) => ({
+    status: { stage: "completed" },
+    conversation,
+  });
+
+  it("polls fast while a chat turn is in flight", () => {
+    const busy = completed({ conversation_id: "c-busy", state: "responding" });
+    expect(jobRefetchInterval(busy, 0)).toBe(1000);
+  });
+
+  it("keeps polling a finished environment for a while after a turn ends, then stops", () => {
+    jobRefetchInterval(
+      completed({ conversation_id: "c-grace", state: "responding" }),
+      1000,
+    );
+    const idle = completed({ conversation_id: "c-grace", state: "idle" });
+
+    expect(jobRefetchInterval(idle, 1000 + SAVE_GRACE_MS - 1)).toBeGreaterThan(
+      0,
+    );
+    expect(jobRefetchInterval(idle, 1000 + SAVE_GRACE_MS)).toBe(false);
+  });
+
+  it("does not poll a finished environment whose chat was never busy here", () => {
+    const quiet = completed({ conversation_id: "c-quiet", state: "idle" });
+    expect(jobRefetchInterval(quiet, 0)).toBe(false);
+    expect(jobRefetchInterval(completed(undefined), 0)).toBe(false);
   });
 });

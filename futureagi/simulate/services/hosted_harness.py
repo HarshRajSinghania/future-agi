@@ -299,17 +299,31 @@ def create_selected_harness_run(
                 "environment changed while submitting this Run",
                 status_code=409,
             )
-        registrations = list(
-            HostedHarnessScenario.no_workspace_objects.filter(
-                job=environment, scenario_key__in=scenario_keys
+        pins = _pinned_versions(environment)
+        if pins is None:
+            registrations = list(
+                HostedHarnessScenario.no_workspace_objects.filter(
+                    job=environment, scenario_key__in=scenario_keys
+                )
+                .select_related("scenario", "dataset_row")
+                .order_by("created_at", "id")
             )
-            .select_related("scenario", "dataset_row")
-            .order_by("created_at", "id")
-        )
+        else:
+            registrations = _member_registrations(environment, pins, scenario_keys)
         by_key = {
             registration.scenario_key: registration for registration in registrations
         }
         missing = [key for key in scenario_keys if key not in by_key]
+        if missing and pins is not None:
+            # A rerun selects its source run's keys, which may have left the suite since.
+            raise HostedHarnessError(
+                "scenario_selection_unknown",
+                ", ".join(missing)
+                + (" is" if len(missing) == 1 else " are")
+                + " not in this environment's current scenarios; select from"
+                " those it has now",
+                status_code=400,
+            )
         if missing:
             raise HostedHarnessError(
                 "scenario_selection_unknown",
@@ -344,6 +358,9 @@ def create_selected_harness_run(
                     }
                 )
 
+        # TODO: replace payload.agent and payload.source with the pinned agent version's
+        # descriptor once agent versions carry their own (step 9); legacy agent versions
+        # mirror this payload.
         child_payload = json.loads(json.dumps(environment.payload))
         child_payload["scenario_count"] = len(manifest)
         runtime = child_payload["runtime"]
@@ -367,9 +384,15 @@ def create_selected_harness_run(
                 "execution_manifest": manifest,
                 "selected_scenario_keys": scenario_keys,
                 "trials": trials,
-                "scenario_edits": _scenario_edits(environment, registrations),
+                "scenario_edits": (
+                    _scenario_edits(environment, registrations)
+                    if pins is None
+                    else _member_scenario_edits(pins, scenario_keys)
+                ),
             }
         )
+        if pins is not None:
+            child_metadata["version_pins"] = pins.as_metadata()
         child_payload.pop("job_id", None)
         child_payload.pop("run_id", None)
 
@@ -393,8 +416,18 @@ def create_selected_harness_run(
             total_calls=len(manifest),
             picked_up_by_executor=True,
             simulator_agent=environment.run_test.simulator_agent,
-            agent_definition=environment.run_test.agent_definition,
-            agent_version=environment.run_test.agent_version,
+            # An environment without an agent pin runs the agent the run test
+            # names, as before versioning.
+            agent_definition=(
+                pins.agent_version.agent_definition
+                if pins is not None and pins.agent_version is not None
+                else environment.run_test.agent_definition
+            ),
+            agent_version=(
+                pins.agent_version
+                if pins is not None and pins.agent_version is not None
+                else environment.run_test.agent_version
+            ),
             execution_metadata={
                 "environment_job_id": str(environment.id),
                 "harness_job_id": str(child.id),
@@ -444,6 +477,19 @@ def create_selected_harness_run(
         child.stage_outputs = list(environment.stage_outputs or [])
         child.bundle_digest = environment.bundle_digest
         child.test_execution = test_execution
+        pin_fields: list[str] = []
+        if pins is not None:
+            child.stage_outputs = pins.stage_outputs(child.stage_outputs)
+            child.agent_version = pins.agent_version
+            child.environment_version = pins.environment_version
+            child.suite_version = pins.suite_version
+            child.assembled_bundle = pins.assembled_bundle
+            pin_fields = [
+                "agent_version",
+                "environment_version",
+                "suite_version",
+                "assembled_bundle",
+            ]
         child.save(
             update_fields=[
                 "payload",
@@ -453,9 +499,212 @@ def create_selected_harness_run(
                 "updated_at",
                 "stage_outputs",
                 "bundle_digest",
+                *pin_fields,
             ]
         )
         return child, True
+
+
+@dataclass(frozen=True)
+class _RunPins:
+    """The versions a new run of a versioned environment is pinned to."""
+
+    agent_version: Any
+    environment_version: Any
+    suite_version: Any
+    members: dict[str, Any]
+    assembled_bundle: Any
+    agent_hash: str | None
+
+    def as_metadata(self) -> dict[str, Any]:
+        return {
+            "agent_version_id": (
+                str(self.agent_version.id) if self.agent_version is not None else None
+            ),
+            "environment_version_id": str(self.environment_version.id),
+            "suite_version_id": str(self.suite_version.id),
+            "agent_hash": self.agent_hash,
+            "environment_hash": self.environment_version.hash,
+            "suite_hash": self.suite_version.hash,
+        }
+
+    def stage_outputs(self, current: list[Any]) -> list[Any]:
+        """The run's stage outputs, with the pinned versions' authored snapshots in place.
+
+        Only the kinds a chat save replaces are overlaid; the environment output keeps the
+        sealed bundle's manifest the run replays.
+        """
+        from simulate.services.hosted_harness_conversation import (
+            _CHECKPOINT_STAGE_KINDS,
+        )
+
+        pinned: dict[str, Any] = {}
+        for version in (self.environment_version, self.suite_version):
+            for output in (version.documents or {}).get("stage_outputs") or []:
+                if (
+                    isinstance(output, dict)
+                    and output.get("kind") in _CHECKPOINT_STAGE_KINDS
+                ):
+                    pinned[output["kind"]] = output
+        kept = [
+            (
+                pinned.pop(item["kind"])
+                if isinstance(item, dict) and item.get("kind") in pinned
+                else item
+            )
+            for item in current
+        ]
+        return kept + list(pinned.values())
+
+
+def _pinned_versions(environment: HostedHarnessJob) -> _RunPins | None:
+    """The environment's default versions, when it has them and versioning is on.
+
+    With the flag off a run is created exactly as before, versions or not, so turning
+    versioning on is what changes which agent and suite a run uses.
+    """
+    from simulate.models import (
+        AgentVersion,
+        HarnessAgentVersionRuntime,
+        HarnessAssembledBundle,
+        HarnessEnvironmentVersion,
+        HarnessSuiteMember,
+        HarnessSuiteVersion,
+    )
+    from simulate.services.harness_versioning.versions import pins_runs
+
+    if not pins_runs(environment):
+        return None
+    environment_version = HarnessEnvironmentVersion._base_manager.get(
+        id=environment.environment_version_id
+    )
+    suite_version = HarnessSuiteVersion._base_manager.get(
+        id=environment.suite_version_id
+    )
+    # A soft-deleted agent version is never pinned onto a run.
+    agent_version = (
+        AgentVersion.no_workspace_objects.select_related("agent_definition")
+        .filter(id=environment.agent_version_id)
+        .first()
+        if environment.agent_version_id
+        else None
+    )
+    if environment.agent_version_id and agent_version is None:
+        logger.warning(
+            "harness_run_agent_pin_missing",
+            environment_id=str(environment.id),
+            agent_version_id=str(environment.agent_version_id),
+        )
+    members = {
+        member.scenario_key: member
+        for member in HarnessSuiteMember.no_workspace_objects.filter(
+            suite_version=suite_version
+        ).order_by("number", "scenario_key")
+    }
+    bundle = None
+    agent_hash = None
+    if agent_version is not None:
+        bundle = (
+            HarnessAssembledBundle.no_workspace_objects.filter(
+                job=environment,
+                agent_version=agent_version,
+                environment_version=environment_version,
+                suite_version=suite_version,
+                state=HarnessAssembledBundle.State.READY,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        agent_hash = (
+            HarnessAgentVersionRuntime.no_workspace_objects.filter(
+                agent_version=agent_version
+            )
+            .values_list("hash", flat=True)
+            .first()
+        )
+    return _RunPins(
+        agent_version=agent_version,
+        environment_version=environment_version,
+        suite_version=suite_version,
+        members=members,
+        assembled_bundle=bundle,
+        agent_hash=agent_hash,
+    )
+
+
+def _member_registrations(
+    environment: HostedHarnessJob, pins: _RunPins, scenario_keys: list[str]
+) -> list[HostedHarnessScenario]:
+    """The identity rows behind the selected members of the pinned suite.
+
+    Only the pinned suite's scenarios can be selected. A member's row is loaded even if
+    a later suite dropped it, and a member never given a platform scenario is bound
+    first.
+    """
+    from simulate.services.hosted_harness_conversation import _bind_added_scenarios
+
+    selected = [pins.members[key] for key in scenario_keys if key in pins.members]
+
+    def load() -> list[HostedHarnessScenario]:
+        return list(
+            HostedHarnessScenario._base_manager.filter(
+                job=environment, id__in=[member.scenario_id for member in selected]
+            )
+            .select_related("scenario", "dataset_row")
+            .order_by("created_at", "id")
+        )
+
+    rows = load()
+    if any(row.scenario_id is None for row in rows):
+        # Binding gives the row a platform scenario and a row in the run test's grouped
+        # dataset, which a run's calls are created from, even for a dropped member.
+        try:
+            _bind_added_scenarios(environment, rows)
+        except HostedHarnessError as exc:
+            if exc.code != "scenario_provision_failed":
+                raise
+            raise HostedHarnessError(
+                "scenario_unavailable",
+                "some selected scenarios can't be run yet; try again in a moment",
+                status_code=409,
+            ) from exc
+        rows = load()
+    if unbound := [row.scenario_key for row in rows if row.scenario_id is None]:
+        raise HostedHarnessError(
+            "scenario_unavailable",
+            f"{', '.join(unbound)} can't be run yet; try again in a moment",
+            status_code=409,
+        )
+    return rows
+
+
+def _member_scenario_edits(
+    pins: _RunPins, scenario_keys: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Each selected scenario's editable fields as the pinned suite holds them."""
+    from simulate.services.harness_provider import HostedHarnessProvider
+
+    fields = (
+        HostedHarnessProvider._DESCRIPTIVE_FIELDS
+        | HostedHarnessProvider._BEHAVIOURAL_FIELDS
+    )
+    edits: dict[str, dict[str, Any]] = {}
+    for key in scenario_keys:
+        member = pins.members.get(key)
+        content = member.content if member is not None else None
+        if not isinstance(content, dict):
+            continue
+        edit = {field: content[field] for field in fields if field in content}
+        persona = content.get("persona")
+        if isinstance(persona, dict):
+            edit["persona"] = {
+                name: value
+                for name, value in persona.items()
+                if name in HostedHarnessProvider._PERSONA_FIELDS
+            }
+        if edit:
+            edits[key] = edit
+    return edits
 
 
 def _scenario_edits(

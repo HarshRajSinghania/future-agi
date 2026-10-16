@@ -1111,6 +1111,29 @@ def promote_turn_checkpoint(
     )
 
 
+def report_checkpoint_rejection(conversation_id: str, message: str) -> None:
+    """Tell the person in chat that a turn's changes were not saved, and why."""
+    with transaction.atomic():
+        conversation = (
+            HostedHarnessConversation.no_workspace_objects.select_for_update()
+            .filter(id=conversation_id)
+            .first()
+        )
+        if conversation is None:
+            return
+        HostedHarnessConversationMessage.no_workspace_objects.create(
+            conversation=conversation,
+            sequence=conversation.next_message_sequence,
+            role=HostedHarnessConversationMessage.Role.ASSISTANT,
+            kind=HostedHarnessConversationMessage.Kind.MESSAGE,
+            state=HostedHarnessConversationMessage.State.FAILED,
+            stage=conversation.current_stage,
+            content=f"These changes were not saved: {message}",
+        )
+        conversation.next_message_sequence += 1
+        conversation.save(update_fields=["next_message_sequence", "updated_at"])
+
+
 def promote_latest_checkpoint(
     conversation: HostedHarnessConversation,
 ) -> HostedHarnessJob | None:
@@ -1403,17 +1426,30 @@ def _authoring_archive(checkpoint: bytes) -> bytes:
     return out.getvalue()
 
 
-def _bind_added_scenarios(environment: HostedHarnessJob) -> None:
-    """Give scenarios the chat added the platform identity a Run creates its calls from."""
+def _bind_added_scenarios(
+    environment: HostedHarnessJob, rows: list[HostedHarnessScenario] | None = None
+) -> None:
+    """Give scenarios the chat added the platform identity a Run creates its calls from.
+
+    ``rows`` limits it to those scenarios, dropped ones included; by default every live
+    unbound scenario of the environment is bound.
+    """
     from simulate.services.alk_simulate_ingestion import (
         ALKSimulateIngestionError,
         append_alk_sim_scenarios,
     )
 
-    added = list(
-        HostedHarnessScenario.no_workspace_objects.filter(
-            job=environment, scenario__isnull=True
-        ).order_by("number", "created_at")
+    added = (
+        sorted(
+            (row for row in rows if row.scenario_id is None),
+            key=lambda row: (row.number is None, row.number or 0, row.created_at),
+        )
+        if rows is not None
+        else list(
+            HostedHarnessScenario.no_workspace_objects.filter(
+                job=environment, scenario__isnull=True
+            ).order_by("number", "created_at")
+        )
     )
     if not added or environment.run_test_id is None:
         return
@@ -1430,7 +1466,7 @@ def _bind_added_scenarios(environment: HostedHarnessJob) -> None:
             (shared, one) if shared is not None else (one, None)
         )
         registration.updated_at = bound_at
-    HostedHarnessScenario.no_workspace_objects.bulk_update(
+    HostedHarnessScenario._base_manager.bulk_update(
         added, ["scenario", "dataset_row", "updated_at"]
     )
 

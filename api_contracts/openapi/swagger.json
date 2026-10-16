@@ -132076,6 +132076,25 @@
                 }
             }
         },
+        "RunVersionLabel": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "format": "uuid",
+                    "readOnly": true
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1,
+                    "x-nullable": true
+                }
+            },
+            "x-nullable": true
+        },
         "TestExecutionItemResponse": {
             "type": "object",
             "properties": {
@@ -132242,6 +132261,12 @@
                     "type": "integer",
                     "readOnly": true,
                     "x-nullable": true
+                },
+                "environment_version": {
+                    "$ref": "#/definitions/RunVersionLabel"
+                },
+                "suite_version": {
+                    "$ref": "#/definitions/RunVersionLabel"
                 }
             }
         },
@@ -137665,6 +137690,12 @@
                     "type": "string",
                     "minLength": 1,
                     "x-nullable": true
+                },
+                "environment_version": {
+                    "$ref": "#/definitions/RunVersionLabel"
+                },
+                "suite_version": {
+                    "$ref": "#/definitions/RunVersionLabel"
                 },
                 "selected_scenario_keys": {
                     "type": "array",

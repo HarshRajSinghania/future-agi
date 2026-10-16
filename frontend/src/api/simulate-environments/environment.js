@@ -38,8 +38,20 @@ const REFETCH_ACTIVE_MS = 1000;
 // at a terminal stage; otherwise the steady live tick. `waiting_for_user` is not
 // "in flight" — nothing changes server-side until the user answers, and we keep
 // the composer enabled while waiting.
-const jobRefetchInterval = (data) => {
-  if (conversationInFlight(data?.conversation)) return REFETCH_ACTIVE_MS;
+// A chat turn's changes are saved after its reply, in the background. Keep the
+// steady tick for a short window after a turn ends, so the saved result or a
+// refusal (a failed message) shows without waiting for focus or the next send.
+export const SAVE_GRACE_MS = 30000;
+const lastBusyAt = new Map();
+
+export const jobRefetchInterval = (data, now = Date.now()) => {
+  const conversationId = data?.conversation?.conversation_id;
+  if (conversationInFlight(data?.conversation)) {
+    if (conversationId) lastBusyAt.set(conversationId, now);
+    return REFETCH_ACTIVE_MS;
+  }
+  const busyAt = conversationId ? lastBusyAt.get(conversationId) : undefined;
+  if (busyAt !== undefined && now - busyAt < SAVE_GRACE_MS) return REFETCH_MS;
   return terminalStages.has(data?.status?.stage) ? false : REFETCH_MS;
 };
 
@@ -322,8 +334,13 @@ export function useEnvironment(envId) {
   const inFlight = conversationInFlight(jobQuery.data?.conversation);
   const wasInFlight = useRef(inFlight);
   useEffect(() => {
-    if (wasInFlight.current && !inFlight) refreshVersions();
+    const ended = wasInFlight.current && !inFlight;
     wasInFlight.current = inFlight;
+    if (!ended) return undefined;
+    refreshVersions();
+    // The turn's save lands in the background; read the history again once it has.
+    const later = setTimeout(refreshVersions, SAVE_GRACE_MS);
+    return () => clearTimeout(later);
   }, [inFlight, refreshVersions]);
 
   const detail = useMemo(

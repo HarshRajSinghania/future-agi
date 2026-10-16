@@ -132,6 +132,13 @@ class AddEvalConfigResponseSerializer(serializers.Serializer):
     )
 
 
+class RunVersionLabelSerializer(serializers.Serializer):
+    """A pinned version as a run shows it: its id and label such as "v3"."""
+
+    id = serializers.UUIDField(read_only=True)
+    label = serializers.CharField(read_only=True, allow_null=True)
+
+
 class TestExecutionItemResponseSerializer(serializers.Serializer):
     """
     Response shape for a single item in GET /run-tests/{run_test_id}/executions/.
@@ -167,6 +174,8 @@ class TestExecutionItemResponseSerializer(serializers.Serializer):
     outcome_passed = serializers.IntegerField(read_only=True, allow_null=True)
     outcome_failed = serializers.IntegerField(read_only=True, allow_null=True)
     outcome_skipped = serializers.IntegerField(read_only=True, allow_null=True)
+    environment_version = RunVersionLabelSerializer(read_only=True, allow_null=True)
+    suite_version = RunVersionLabelSerializer(read_only=True, allow_null=True)
 
 
 class RunTestExecutionsResponseSerializer(serializers.Serializer):

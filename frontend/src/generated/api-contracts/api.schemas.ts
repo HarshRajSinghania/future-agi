@@ -21196,6 +21196,12 @@ export interface RunTestExecutionResponseApi {
   readonly scenario_ids?: readonly string[];
 }
 
+export interface RunVersionLabelApi {
+  readonly id?: string;
+  /** @minLength 1 */
+  readonly label?: string;
+}
+
 export interface TestExecutionItemResponseApi {
   /** @minLength 1 */
   readonly id?: string;
@@ -21236,6 +21242,8 @@ export interface TestExecutionItemResponseApi {
   readonly outcome_passed?: number;
   readonly outcome_failed?: number;
   readonly outcome_skipped?: number;
+  environment_version?: RunVersionLabelApi;
+  suite_version?: RunVersionLabelApi;
 }
 
 export interface RunTestExecutionsResponseApi {
@@ -23084,6 +23092,8 @@ export interface RunExecutionApi {
   ordinal: number;
   /** @minLength 1 */
   agent_version: string;
+  environment_version?: RunVersionLabelApi;
+  suite_version?: RunVersionLabelApi;
   selected_scenario_keys?: string[];
   /** @minimum 1 */
   trials?: number;

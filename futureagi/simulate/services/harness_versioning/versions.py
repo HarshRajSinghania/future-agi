@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 CODE_SOURCE_KINDS = frozenset({"github", "archive", "remote"})
 # Only a build proves its suite against its environment; edits carry older proofs.
 PROVED_ORIGINS = frozenset({"authoring", "extend"})
+# Saves where a person introduces scenarios; a dropped scenario's key is never reused.
+USER_ORIGINS = frozenset({"chat", "manual"})
 # The sandbox writes proof times on its own clock.
 PROOF_CLOCK_SKEW = timedelta(minutes=2)
 SCENARIO_COUNT_MAX = 32767
@@ -106,6 +108,19 @@ def is_versioned(job: HostedHarnessJob) -> bool:
     """
     head = environment_head(job)
     return head is not None and head.environment_version_id is not None
+
+
+def pins_runs(environment: HostedHarnessJob) -> bool:
+    """Whether a new run of this environment is pinned to its default versions.
+
+    Recording, exact key pairing and refusing a dropped or taken key apply whenever an
+    environment has versions, flag or not; only pinning a run waits for the flag.
+    """
+    return (
+        versioning_enabled()
+        and environment.environment_version_id is not None
+        and environment.suite_version_id is not None
+    )
 
 
 def _json(files: Mapping[str, bytes], path: str) -> Any:
@@ -309,29 +324,105 @@ def note_revision(version: Any, revision: str) -> None:
     version.save(update_fields=["documents", "updated_at"])
 
 
+def _refuse_retired_keys(
+    job: HostedHarnessJob, documents: list[dict[str, Any]]
+) -> None:
+    """A scenario a person adds may not take the key of one that was dropped.
+
+    Only keys new to the environment's default suite are checked, compared as
+    normalised tokens, so a scenario the default already holds is never refused.
+    """
+    from simulate.services.hosted_harness_gateway import _scenario_token
+
+    keys = {
+        _scenario_token(doc.get("scenario_key"))
+        for doc in documents
+        if str(doc.get("scenario_key") or "").strip()
+    } - {""}
+    if job.suite_version_id is not None:
+        keys -= {
+            _scenario_token(key)
+            for key in HarnessSuiteMember.no_workspace_objects.filter(
+                suite_version_id=job.suite_version_id
+            ).values_list("scenario_key", flat=True)
+        }
+        # A member paired by name carries its row's key; its document keeps its own.
+        documents_ = (
+            HarnessSuiteVersion._base_manager.filter(id=job.suite_version_id)
+            .values_list("documents", flat=True)
+            .first()
+        )
+        scenarios = (
+            documents_.get("scenarios") if isinstance(documents_, dict) else None
+        )
+        keys -= {
+            _scenario_token(doc.get("scenario_key"))
+            for doc in scenarios or []
+            if isinstance(doc, dict)
+        }
+    if not keys:
+        return
+    retired = sorted(
+        key
+        for key in HostedHarnessScenario._base_manager.filter(
+            job=job, deleted=True
+        ).values_list("scenario_key", flat=True)
+        if _scenario_token(key) in keys
+    )
+    if retired:
+        raise HostedHarnessError(
+            "scenario_key_retired",
+            ", ".join(retired)
+            + (" was" if len(retired) == 1 else " were")
+            + " removed earlier and can't be reused; give the scenario a new name",
+            status_code=422,
+        )
+
+
+def _refuse_taken_keys(job: HostedHarnessJob, documents: list[dict[str, Any]]) -> None:
+    """A scenario a person adds may not take the key of a row another scenario holds.
+
+    A backfill may have paired a scenario with a row keyed differently; that row stays
+    with its scenario, so its key is not free for a new one.
+    """
+    from simulate.services.harness_scenarios import _default_member_rows
+    from simulate.services.hosted_harness_gateway import _scenario_token
+
+    if job.suite_version_id is None:
+        return
+    paired = _default_member_rows(
+        job, list(HostedHarnessScenario.all_objects.filter(job=job))
+    )
+    held = {
+        token: row.scenario_key
+        for key_token, row in paired.items()
+        if (token := _scenario_token(row.scenario_key)) != key_token
+    }
+    taken = sorted(
+        {
+            held[token]
+            for doc in documents
+            if (token := _scenario_token(doc.get("scenario_key"))) in held
+            and token not in paired
+        }
+    )
+    if taken:
+        raise HostedHarnessError(
+            "scenario_key_taken",
+            ", ".join(taken)
+            + (" is" if len(taken) == 1 else " are")
+            + " already used by another scenario; give the scenario a new name",
+            status_code=422,
+        )
+
+
 def _member_rows(
     job: HostedHarnessJob, documents: list[dict[str, Any]]
 ) -> list[tuple[HostedHarnessScenario, dict[str, Any]]]:
-    from simulate.services.harness_scenarios import index_scenarios
-    from simulate.services.hosted_harness_gateway import _scenario_token
+    from simulate.services.harness_scenarios import pair_scenarios
 
-    index_scenarios(job, documents, prune=True)
-    held = list(HostedHarnessScenario.no_workspace_objects.filter(job=job))
-    # Keys first, so one row's name never shadows another row's key.
-    rows = {token: row for row in held if (token := _scenario_token(row.scenario_key))}
-    for row in held:
-        if token := _scenario_token(row.name):
-            rows.setdefault(token, row)
-    paired: list[tuple[HostedHarnessScenario, dict[str, Any]]] = []
-    seen: set[Any] = set()
-    for document in documents:
-        row = rows.get(_scenario_token(document.get("scenario_key"))) or rows.get(
-            _scenario_token(document.get("name"))
-        )
-        if row is not None and row.id not in seen:
-            seen.add(row.id)
-            paired.append((row, document))
-    return paired
+    # The rows indexing wrote each document to, so members never pair differently.
+    return pair_scenarios(job, documents, prune=True, exact=True)
 
 
 def _proved_at(proof: Mapping[str, Any]) -> datetime | None:
@@ -496,6 +587,10 @@ def record_authoring(
     pieces = prepare_pieces(
         job, split, outputs=_stage_outputs(pair_body), authoring_revision=revision
     )
+    if origin in USER_ORIGINS:
+        # Refused before anything is uploaded; checked again under the lock below.
+        _refuse_retired_keys(job, pieces.scenarios)
+        _refuse_taken_keys(job, pieces.scenarios)
     archives.put_archive(pieces.environment_key, pieces.environment_body)
     archives.put_archive(pieces.suite_key, pieces.suite_body)
     archives.put_archive(pair_key, pair_body)
@@ -526,6 +621,9 @@ def record_authoring(
                 "the environment changed while this edit was being saved",
                 status_code=409,
             )
+        if origin in USER_ORIGINS:
+            _refuse_retired_keys(locked, documents)
+            _refuse_taken_keys(locked, documents)
         base_environment = locked.environment_version
         base_suite = locked.suite_version
         environment_diff = None

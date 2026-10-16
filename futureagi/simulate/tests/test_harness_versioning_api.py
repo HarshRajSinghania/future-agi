@@ -393,8 +393,11 @@ class TestVersionsList:
             assert _get(auth_client, url).status_code == 200
         for index in range(4):
             child(index)
+            # A build may bring a dropped scenario back; a chat save may not.
             record_authoring(
-                environment, _authoring(names=NAMES[: 1 + index % 2]), origin="chat"
+                environment,
+                _authoring(names=NAMES[: 1 + index % 2]),
+                origin="authoring",
             )
             environment.refresh_from_db()
         with CaptureQueriesContext(connection) as many:

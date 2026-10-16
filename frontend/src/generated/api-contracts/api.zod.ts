@@ -44897,6 +44897,18 @@ export const SimulateRunTestsExecutionsListResponse = zod.object({
         outcome_passed: zod.number().optional(),
         outcome_failed: zod.number().optional(),
         outcome_skipped: zod.number().optional(),
+        environment_version: zod
+          .object({
+            id: zod.string().uuid().optional(),
+            label: zod.string().min(1).optional(),
+          })
+          .optional(),
+        suite_version: zod
+          .object({
+            id: zod.string().uuid().optional(),
+            label: zod.string().min(1).optional(),
+          })
+          .optional(),
       }),
     )
     .optional(),
@@ -47974,6 +47986,18 @@ export const SimulateV3TestExecutionCallsResponse = zod.object({
     completed_at: zod.string().datetime({ offset: true }),
     ordinal: zod.number(),
     agent_version: zod.string().min(1),
+    environment_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).optional(),
+      })
+      .optional(),
+    suite_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).optional(),
+      })
+      .optional(),
     selected_scenario_keys: zod
       .array(zod.string().min(1))
       .default(

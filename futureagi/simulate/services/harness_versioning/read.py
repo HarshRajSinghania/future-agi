@@ -457,3 +457,40 @@ def suite_members(job: HostedHarnessJob, version_id: Any) -> list[dict[str, Any]
         }
         for member in members
     ]
+
+
+def run_version_labels(execution_ids: Iterable[Any]) -> dict[str, dict[str, Any]]:
+    """Each hosted run's pinned environment and suite version, by test execution.
+
+    Read from the run job's own pins only, never the environment's defaults; an
+    unpinned run is absent, so callers show it as before versioning. The newest live
+    pinned job wins, as in the run's results.
+    """
+    ids = [one for one in execution_ids if one]
+    if not ids:
+        return {}
+    rows = (
+        HostedHarnessJob.no_workspace_objects.filter(test_execution_id__in=ids)
+        .exclude(environment_version__isnull=True, suite_version__isnull=True)
+        .order_by("created_at")
+        .values_list(
+            "test_execution_id",
+            "environment_version_id",
+            "environment_version__version_number",
+            "suite_version_id",
+            "suite_version__version_number",
+        )
+    )
+    return {
+        str(execution_id): {
+            "environment_version": (
+                {"id": str(env_id), "label": _label(env_number)} if env_id else None
+            ),
+            "suite_version": (
+                {"id": str(suite_id), "label": _label(suite_number)}
+                if suite_id
+                else None
+            ),
+        }
+        for execution_id, env_id, env_number, suite_id, suite_number in rows
+    }

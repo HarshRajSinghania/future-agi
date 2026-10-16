@@ -9,6 +9,7 @@ from contextlib import ExitStack, contextmanager
 from datetime import timedelta
 from functools import wraps
 from types import SimpleNamespace
+from typing import Any
 from urllib.parse import urlencode
 
 import structlog
@@ -148,6 +149,7 @@ from simulate.services.harness_evals import (
     is_harness_run_test,
     is_regrading_a_finished_harness_run,
 )
+from simulate.services.harness_versioning.read import run_version_labels
 from simulate.services.run_regrade import (
     RegradeAlreadyRunning,
     RegradeDispatchFailed,
@@ -5513,6 +5515,15 @@ def _covered_scenario_count(run_test) -> int:
     return len(covered)
 
 
+def _version_labels(labels: dict[str, Any], execution_id: Any) -> dict[str, Any]:
+    """A run's pinned environment and suite versions; null before versioning."""
+    held = labels.get(str(execution_id)) or {}
+    return {
+        "environment_version": held.get("environment_version"),
+        "suite_version": held.get("suite_version"),
+    }
+
+
 class RunTestExecutionsView(APIView):
     """
     API View to get test execution data for a specific run test with search and pagination
@@ -5738,6 +5749,9 @@ class RunTestExecutionsView(APIView):
 
             # Prepare response data using annotated values
             execution_data = []
+            version_labels = run_version_labels(
+                [test_execution.id for test_execution in result_page]
+            )
 
             for test_execution in result_page:
                 # Use annotated values instead of querying
@@ -5933,6 +5947,7 @@ class RunTestExecutionsView(APIView):
                             if test_execution.id in hosted_jobs
                             else None
                         ),
+                        **_version_labels(version_labels, test_execution.id),
                     }
                 )
 

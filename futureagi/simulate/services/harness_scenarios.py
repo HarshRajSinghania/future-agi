@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,7 @@ from django.db.models import (
     Func,
     Q,
     QuerySet,
+    Subquery,
     Value,
     When,
 )
@@ -350,15 +352,29 @@ def authored_scenarios_for_calls(
     call_ids = [call.id for call in calls]
     keys = set(source_keys.values()) - {None}
     if test_execution_id is not None:
+        # The run's pinned suite rides along as one uncorrelated subquery (evaluated
+        # once), so an unpinned run stays one query.
+        pinned_suite = pinned_suite_subquery(test_execution_id)
         candidates = list(
-            authored_candidates(test_execution_id, call_ids=call_ids, keys=keys)
+            authored_candidates(
+                test_execution_id, call_ids=call_ids, keys=keys
+            ).annotate(pinned_suite_id=Subquery(pinned_suite))
         )
         authored = AuthoredPick(
             candidates,
             {row.job_id for row in candidates if row.own_run},
             {row.job_id for row in candidates if row.in_scope},
         )
-        return {call.id: authored.pick(call.id, source_keys[call.id]) for call in calls}
+        resolved = {
+            call.id: authored.pick(call.id, source_keys[call.id]) for call in calls
+        }
+        suite_id = next(
+            (row.pinned_suite_id for row in candidates if row.pinned_suite_id), None
+        )
+        suites = (
+            {call.test_execution_id: suite_id for call in calls} if suite_id else {}
+        )
+        return _as_pinned(calls, resolved, suites, source_keys)
     run_jobs = HostedHarnessJob.no_workspace_objects.filter(run_test_id=run_test_id)
     scope = Q(job_id__in=run_jobs.values("id")) | Q(
         job_id__in=run_jobs.values("environment_id")
@@ -371,10 +387,109 @@ def authored_scenarios_for_calls(
         if row.call_execution_id:
             linked.setdefault(row.call_execution_id, row)
         by_key.setdefault(row.scenario_key, row)
-    return {
+    resolved = {
         call.id: linked.get(call.id) or by_key.get(source_keys[call.id])
         for call in calls
     }
+    # One indexed read of the runs' pins; nothing more when none is pinned.
+    return _as_pinned(calls, resolved, _pinned_suites(calls), source_keys)
+
+
+def pinned_suite_subquery(test_execution_id: Any) -> Subquery:
+    """The suite version a test execution's run job was pinned to, as one subquery."""
+    return Subquery(
+        HostedHarnessJob.no_workspace_objects.filter(
+            test_execution_id=test_execution_id, suite_version__isnull=False
+        )
+        .order_by("-created_at")
+        .values("suite_version_id")[:1]
+    )
+
+
+def _pinned_suites(calls: list[CallExecution]) -> dict[UUID, UUID]:
+    """The suite version each call's run was pinned to, by test execution."""
+    execution_ids = {call.test_execution_id for call in calls if call.test_execution_id}
+    if not execution_ids:
+        return {}
+    return dict(
+        HostedHarnessJob.no_workspace_objects.filter(
+            test_execution_id__in=execution_ids, suite_version__isnull=False
+        )
+        .order_by("created_at")
+        .values_list("test_execution_id", "suite_version_id")
+    )
+
+
+def member_key(call_key: str | None, row: HostedHarnessScenario | None) -> str | None:
+    """The member a call's scenario is read from: its own key, else the picked row's.
+
+    The SQL read model and the scan use the same rule.
+    """
+    if call_key:
+        return call_key
+    return row.scenario_key if row is not None else None
+
+
+def as_member(row: HostedHarnessScenario, content: Any) -> HostedHarnessScenario:
+    """The identity row as a pinned suite member held it.
+
+    The member is authoritative: a field it lacks shows empty, never the value a newer
+    suite wrote to the identity row. Values are normalised as ``index_scenarios`` stores
+    them, so callers see the same types either way.
+    """
+    if not isinstance(content, dict):
+        return row
+    shown = copy.copy(row)
+    for name, value in scenario_fields(content, row.scenario_key).items():
+        setattr(shown, name, value)
+    return shown
+
+
+def _as_pinned(
+    calls: list[CallExecution],
+    resolved: dict[UUID, HostedHarnessScenario | None],
+    suites: dict[UUID, UUID],
+    source_keys: dict[UUID, str | None],
+) -> dict[UUID, HostedHarnessScenario | None]:
+    """Scenarios as the suite version each call's run was pinned to held them.
+
+    A run on an older suite keeps showing that suite's content after the identity row
+    moved on; runs without a pinned suite keep the identity row.
+    """
+    from simulate.models import HarnessSuiteMember
+
+    if not suites:
+        return resolved
+    keys = {
+        key
+        for call in calls
+        if (key := member_key(source_keys.get(call.id), resolved.get(call.id)))
+    }
+    contents = {
+        (suite_id, key): content
+        for suite_id, key, content in HarnessSuiteMember.no_workspace_objects.filter(
+            suite_version_id__in=set(suites.values()), scenario_key__in=keys
+        ).values_list("suite_version_id", "scenario_key", "content")
+    }
+    pinned: dict[UUID, HostedHarnessScenario | None] = {}
+    for call in calls:
+        row = resolved.get(call.id)
+        suite_id = suites.get(call.test_execution_id)
+        key = member_key(source_keys.get(call.id), row)
+        if row is None or suite_id is None or key is None:
+            pinned[call.id] = row
+            continue
+        pinned[call.id] = as_member(row, contents.get((suite_id, key)))
+    return pinned
+
+
+def pinned_scenarios(
+    calls: list[CallExecution],
+    resolved: dict[UUID, HostedHarnessScenario | None],
+    source_keys: dict[UUID, str | None],
+) -> dict[UUID, HostedHarnessScenario | None]:
+    """``resolved`` as the suite version each call's run was pinned to held it."""
+    return _as_pinned(calls, resolved, _pinned_suites(calls), source_keys)
 
 
 def _orm_path(field: str) -> str:
@@ -385,14 +500,68 @@ def _orm_path(field: str) -> str:
     return _ALIASES.get(head, head)
 
 
+def scenario_fields(doc: dict[str, Any], key: str) -> dict[str, Any]:
+    """A scenario document's values as an identity row stores them."""
+    noise = doc.get("background_noise")
+    persona = doc.get("persona")
+    return {
+        "name": str(doc.get("name") or key)[:255],
+        "instruction": str(doc.get("instruction") or ""),
+        "use_case": str(doc.get("use_case") or "")[:255],
+        "branch": str(doc.get("branch") or ""),
+        "tests": str(doc.get("tests") or ""),
+        "folder": str(doc.get("folder") or "")[:512],
+        "persona": persona or None,
+        "coverage": doc.get("coverage") or None,
+        "sub_goals": doc.get("sub_goals") or None,
+        # Older suites carry keywords on the persona.
+        "keywords": (
+            doc.get("keywords")
+            or (persona.get("keywords") if isinstance(persona, dict) else None)
+            or None
+        ),
+        "background_noise": (
+            noise if isinstance(noise, str) else "present" if noise else "quiet line"
+        )[:64],
+        "max_turns": doc.get("max_turns") or None,
+    }
+
+
 def index_scenarios(
-    job: HostedHarnessJob, docs: list[dict[str, Any]], prune: bool = False
+    job: HostedHarnessJob,
+    docs: list[dict[str, Any]],
+    prune: bool = False,
+    exact: bool | None = None,
 ) -> int:
     """Persist the authored suite so it can be queried, and return how many rows it holds."""
+    return len(pair_scenarios(job, docs, prune=prune, exact=exact))
+
+
+def pair_scenarios(
+    job: HostedHarnessJob,
+    docs: list[dict[str, Any]],
+    prune: bool = False,
+    exact: bool | None = None,
+) -> list[tuple[HostedHarnessScenario, dict[str, Any]]]:
+    """Persist the authored suite and return the identity row each document was written to.
+
+    With ``exact`` (the default for an environment head that has versions) a document
+    that carries a scenario key matches the row the default suite links to the document
+    with that key (a backfill may have paired a scenario with a differently keyed row),
+    else the row with that key, compared as normalised tokens. A row the default suite
+    links to one document is never given to a document with another key; one whose key
+    such a row holds gets a row of its own under a derived key. A document without a key
+    falls back to name matching, as legacy suites without keys need.
+    """
     if not docs:
-        return 0
+        return []
     from simulate.services.hosted_harness_gateway import _scenario_token
 
+    if exact is None:
+        exact = (
+            getattr(job, "environment_id", None) is None
+            and getattr(job, "environment_version_id", None) is not None
+        )
     # Dropped rows are hidden, not deleted: a run's history still points at them.
     rows = list(HostedHarnessScenario.all_objects.filter(job=job))
     existing = {row.scenario_key: row for row in rows}
@@ -402,29 +571,61 @@ def index_scenarios(
         for token in (_scenario_token(row.scenario_key), _scenario_token(row.name))
         if token
     }
+    by_key_token: dict[str, HostedHarnessScenario] = {}
+    for row in sorted(rows, key=lambda row: not row.deleted):
+        if token := _scenario_token(row.scenario_key):
+            by_key_token[token] = row
+    paired = _default_member_rows(job, rows) if exact else {}
+    owned = {row.id for row in paired.values()}
+    key_tokens = set(by_key_token)
+    used: set[Any] = set()
     # Numbers are stable across re-indexing; only a new row gets the next free number.
     taken = max(
         (row.number for row in existing.values() if row.number is not None), default=0
     )
-    written = 0
+    pairs: list[tuple[HostedHarnessScenario, dict[str, Any]]] = []
     seen: set[str] = set()
     for position, doc in enumerate(docs, start=1):
-        held = next(
-            (
-                by_token[token]
-                for value in (doc.get("scenario_key"), doc.get("name"))
-                if (token := _scenario_token(value)) in by_token
-            ),
-            None,
-        )
-        key = (
-            held.scenario_key
-            if held is not None
-            else str(doc.get("scenario_key") or doc.get("name") or "").strip()
-        )
+        doc_key = str(doc.get("scenario_key") or "").strip()
+        if exact and doc_key:
+            # The default suite's pairing outranks a dropped row that shares the key.
+            held = (
+                paired.get(_scenario_token(doc_key))
+                or existing.get(doc_key)
+                or by_key_token.get(_scenario_token(doc_key))
+            )
+        else:
+            held = next(
+                (
+                    by_token[token]
+                    for value in (doc.get("scenario_key"), doc.get("name"))
+                    if (token := _scenario_token(value)) in by_token
+                ),
+                None,
+            )
+        if (
+            exact
+            and held is not None
+            and (
+                held.id in used
+                or (
+                    doc_key
+                    and held.id in owned
+                    and paired.get(_scenario_token(doc_key)) is not held
+                )
+            )
+        ):
+            held = None
+        if held is not None:
+            key = held.scenario_key
+        else:
+            key = str(doc.get("scenario_key") or doc.get("name") or "").strip()
+            if exact and key:
+                key = _free_key(key, key_tokens)
         if not key:
             continue
         seen.add(key)
+        key_tokens.add(_scenario_token(key))
         if held is not None and held.number is not None:
             number = held.number
         elif not existing:
@@ -432,36 +633,10 @@ def index_scenarios(
         else:
             taken += 1
             number = taken
-        noise = doc.get("background_noise")
-        fields = {
-            "number": number,
-            "name": str(doc.get("name") or key)[:255],
-            "instruction": str(doc.get("instruction") or ""),
-            "use_case": str(doc.get("use_case") or "")[:255],
-            "branch": str(doc.get("branch") or ""),
-            "tests": str(doc.get("tests") or ""),
-            "folder": str(doc.get("folder") or "")[:512],
-            "persona": doc.get("persona") or None,
-            "coverage": doc.get("coverage") or None,
-            "sub_goals": doc.get("sub_goals") or None,
-            # Older suites carry keywords on the persona.
-            "keywords": (
-                doc.get("keywords")
-                or (doc.get("persona") or {}).get("keywords")
-                or None
-            ),
-            "background_noise": (
-                noise
-                if isinstance(noise, str)
-                else "present"
-                if noise
-                else "quiet line"
-            )[:64],
-            "max_turns": doc.get("max_turns") or None,
-        }
+        fields = {"number": number, **scenario_fields(doc, key)}
         row = held
         if row is None:
-            HostedHarnessScenario.no_workspace_objects.create(
+            row = HostedHarnessScenario.no_workspace_objects.create(
                 job=job, scenario_key=key, **fields
             )
         else:
@@ -469,7 +644,8 @@ def index_scenarios(
             for name, value in fields.items():
                 setattr(row, name, value)
             row.save(update_fields=[*fields, "updated_at"])
-        written += 1
+        used.add(row.id)
+        pairs.append((row, doc))
     # Only an amend prunes: a short suite on a poll may still be mid-write. The row is
     # soft-deleted even when history points at it, so old Runs retain their foreign key
     # while active-suite reads and new Run selection no longer expose it.
@@ -477,7 +653,87 @@ def index_scenarios(
         HostedHarnessScenario.no_workspace_objects.filter(job=job).exclude(
             scenario_key__in=seen
         ).update(deleted=True, deleted_at=timezone.now())
-    return written
+    return pairs
+
+
+def _free_key(key: str, taken: set[str]) -> str:
+    """``key``, or the first ``key-N`` whose token no row of the environment holds."""
+    from simulate.services.hosted_harness_gateway import _scenario_token
+
+    candidate, suffix = key, 1
+    while _scenario_token(candidate) in taken:
+        suffix += 1
+        candidate = f"{key[:240]}-{suffix}"
+    return candidate
+
+
+def _default_member_rows(
+    job: HostedHarnessJob, rows: list[HostedHarnessScenario]
+) -> dict[str, HostedHarnessScenario]:
+    """Identity rows the default suite links, by the key token of that suite's own document.
+
+    A backfill may have paired a document with a row whose key differs; keying by the
+    document's key keeps that pair across a rename and never hands a new key a dropped row.
+    A member carries its row's key, not its document's, so key and name together pair
+    first, then names (a member's name is its document's), then keys; each row once.
+    """
+    from simulate.models import HarnessSuiteMember, HarnessSuiteVersion
+    from simulate.services.hosted_harness_gateway import _scenario_token
+
+    suite_id = getattr(job, "suite_version_id", None)
+    if suite_id is None:
+        return {}
+    documents = (
+        HarnessSuiteVersion._base_manager.filter(id=suite_id)
+        .values_list("documents", flat=True)
+        .first()
+    )
+    scenarios = (
+        (documents or {}).get("scenarios") if isinstance(documents, dict) else None
+    )
+    if not isinstance(scenarios, list):
+        return {}
+    by_id = {row.id: row for row in rows}
+    members = [
+        (
+            by_id[scenario_id],
+            _scenario_token(key),
+            _scenario_token(content.get("name") if isinstance(content, dict) else None),
+        )
+        for key, scenario_id, content in HarnessSuiteMember.no_workspace_objects.filter(
+            suite_version_id=suite_id
+        )
+        .order_by("number", "scenario_key")
+        .values_list("scenario_key", "scenario_id", "content")
+        if scenario_id in by_id
+    ]
+    linked = [
+        (key_token, _scenario_token(document.get("name")))
+        for document in scenarios
+        if isinstance(document, dict)
+        and (key_token := _scenario_token(document.get("scenario_key")))
+    ]
+    paired: dict[str, HostedHarnessScenario] = {}
+    used: set[Any] = set()
+    for match in (
+        lambda key, name: (key, name) if key and name else None,
+        lambda key, name: name or None,
+        lambda key, name: key or None,
+    ):
+        candidates: dict[Any, list[HostedHarnessScenario]] = {}
+        for row, key, name in members:
+            if row.id not in used and (value := match(key, name)) is not None:
+                candidates.setdefault(value, []).append(row)
+        for key_token, name_token in linked:
+            if key_token in paired:
+                continue
+            value = match(key_token, name_token)
+            for row in candidates.get(value, []) if value is not None else []:
+                if row.id not in used:
+                    used.add(row.id)
+                    paired[key_token] = row
+                    break
+    return paired
 
 
 def apply_filters(queryset: QuerySet, params) -> QuerySet:

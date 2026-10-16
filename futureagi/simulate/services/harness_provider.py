@@ -1053,6 +1053,25 @@ def _scenario_row(reg, number: int | None = None) -> dict:
     }
 
 
+def _in_default_suite(environment: HostedHarnessJob, keys: list[str]) -> list[str]:
+    """The keys a pinned run of this environment can select: its default suite's.
+
+    A live row outside the default suite (one a backfill kept unmatched) would make the
+    run refuse the whole selection.
+    """
+    from simulate.models import HarnessSuiteMember
+    from simulate.services.harness_versioning.versions import pins_runs
+
+    if not pins_runs(environment):
+        return keys
+    members = set(
+        HarnessSuiteMember.no_workspace_objects.filter(
+            suite_version_id=environment.suite_version_id
+        ).values_list("scenario_key", flat=True)
+    )
+    return [key for key in keys if key in members]
+
+
 class HostedHarnessProvider:
     """Persist jobs and drive the configured managed sandbox through Temporal."""
 
@@ -1652,6 +1671,7 @@ class HostedHarnessProvider:
                     "created_at", "id"
                 ).values_list("scenario_key", flat=True)
             )
+            scenario_keys = _in_default_suite(environment, scenario_keys)
         trials = int(prior_metadata.get("trials") or 1)
         child, _ = create_selected_harness_run(
             environment,
@@ -2115,7 +2135,12 @@ class HostedHarnessProvider:
                     rewrite_authoring_scenarios(job, suite, user=request.user)
                     rewrite_conversation_scenarios(job, suite)
                 except AuthoringArchiveKept as kept:
-                    if kept.code in {"version_conflict", SCENARIO_EDIT_ON_RUN}:
+                    if kept.code in {
+                        "version_conflict",
+                        "scenario_key_retired",
+                        "scenario_key_taken",
+                        SCENARIO_EDIT_ON_RUN,
+                    }:
                         return Response(
                             {"error": kept.code, "message": str(kept)},
                             status=kept.status_code or status.HTTP_409_CONFLICT,

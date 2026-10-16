@@ -407,3 +407,31 @@ def test_a_version_conflict_is_a_409(user, workspace):
         job=job, kind="scenarios"
     )
     assert [one["name"] for one in output.data] == ["one", "two"]
+
+
+@pytest.mark.parametrize("code", ["scenario_key_retired", "scenario_key_taken"])
+def test_a_save_that_refuses_a_scenario_key_is_a_422(user, workspace, code):
+    """The provider passes the save's refusal through; the refusals are tested on saves."""
+    from simulate.services.hosted_harness_gateway import AuthoringArchiveKept
+
+    job = _job(user, workspace, SUITE)
+    with (
+        patch(
+            "simulate.services.hosted_harness_gateway.push_scenarios_into_live_sandbox",
+            return_value=False,
+        ),
+        patch(
+            "simulate.services.hosted_harness_gateway.rewrite_authoring_scenarios",
+            side_effect=AuthoringArchiveKept(
+                "give the scenario a new name", code=code, status_code=422
+            ),
+        ),
+    ):
+        response = _post(user, job, [{"op": "drop", "scenario": "two"}])
+
+    assert response.status_code == 422
+    assert response.json()["error"] == code
+    output = HostedHarnessStageOutput.no_workspace_objects.get(
+        job=job, kind="scenarios"
+    )
+    assert [one["name"] for one in output.data] == ["one", "two"]
