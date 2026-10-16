@@ -19,12 +19,12 @@ from simulate.serializers.harness_job import (
     HarnessJobAdjustmentSerializer,
     HarnessJobCreateSerializer,
     HarnessJobExtendSerializer,
-    HarnessScenarioAmendSerializer,
     HarnessJobReadSerializer,
     HarnessPreflightResponseSerializer,
     HarnessPreflightSerializer,
     HarnessRunCreateResponseSerializer,
     HarnessRunCreateSerializer,
+    HarnessScenarioAmendSerializer,
     HarnessSecretFileUploadResponseSerializer,
     HarnessSecretValuesResponseSerializer,
     HarnessSecretValuesSerializer,
@@ -37,6 +37,7 @@ from simulate.serializers.hosted_harness_conversation import (
 from simulate.services.harness_credentials import (
     HOSTED_FILE_KEY_PREFIX,
     credential_file_ref,
+    mint_secret_refs,
     request_scope,
     store_credential_file,
 )
@@ -242,10 +243,6 @@ class HarnessJobViewSet(viewsets.ViewSet):
         With ``environment_id`` the values (and staged ``files``) make that environment's
         next agent version instead; it is checked next and returned with 202.
         """
-        import uuid
-
-        from simulate.models import HostedHarnessSecret
-
         organization, _workspace = request_scope(request)
         if organization is None:
             return Response(
@@ -254,21 +251,9 @@ class HarnessJobViewSet(viewsets.ViewSet):
             )
         if request.validated_data.get("environment_id") is not None:
             return self._agent_credentials(request, organization)
-        refs = {}
-        for alias, secret_value in request.validated_data["environment_values"].items():
-            key = f"harness-{alias.lower()}-{uuid.uuid4().hex}"
-            HostedHarnessSecret.objects.create(
-                organization=organization,
-                name=key,
-                version="1",
-                encrypted_value=secret_value,
-            )
-            refs[alias] = {
-                "manager": "platform-vault",
-                "key": key,
-                "version": "1",
-                "purpose": "target_provider",
-            }
+        refs = mint_secret_refs(
+            organization, request.validated_data["environment_values"]
+        )
         return Response({"secret_refs": refs}, status=status.HTTP_201_CREATED)
 
     @staticmethod

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -246,8 +247,8 @@ def test_an_unreadable_catalog_is_retried_not_memoised(monkeypatch):
     `pathlib.PosixPath.read_text` on the class, so the patch is narrowed to
     exactly this lookup rather than every `PosixPath` in the process.
     """
-    from simulate.services import harness_evals
     import model_hub.management.commands.seed_system_evals as seed_system_evals
+    from simulate.services import harness_evals
 
     class _UnreadableCatalog:
         def read_text(self, **_kwargs):
@@ -265,8 +266,8 @@ def test_a_mis_encoded_catalog_is_retried_not_memoised(monkeypatch):
     raises `UnicodeDecodeError`, a `ValueError` subclass, not an `OSError` —
     it must surface as the documented empty offer, not an unhandled 500.
     """
-    from simulate.services import harness_evals
     import model_hub.management.commands.seed_system_evals as seed_system_evals
+    from simulate.services import harness_evals
 
     class _MisEncodedCatalog:
         def read_text(self, **_kwargs):
@@ -284,8 +285,8 @@ def test_an_empty_catalog_is_not_memoised_either(monkeypatch):
     of nothing — and that empty answer must not be cached either: the very
     next call, once the catalog is readable again, must see the real keys.
     """
-    from simulate.services import harness_evals
     import model_hub.management.commands.seed_system_evals as seed_system_evals
+    from simulate.services import harness_evals
 
     class _EmptyCatalog:
         def read_text(self, **_kwargs):
@@ -307,8 +308,8 @@ def test_a_non_mapping_catalog_offers_nothing_rather_than_raising(monkeypatch):
     `.items()` — that would surface as a 500 rather than the documented empty
     offer. Also not cached, for the same reason as the empty-dict case.
     """
-    from simulate.services import harness_evals
     import model_hub.management.commands.seed_system_evals as seed_system_evals
+    from simulate.services import harness_evals
 
     class _ListCatalog:
         def read_text(self, **_kwargs):
@@ -371,16 +372,16 @@ def test_pick_winner_breaks_a_tie_between_two_of_a_tenants_own_templates_by_crea
     database's default ordering, so this cannot pass by accident of a
     queryset's own order.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
     from types import SimpleNamespace
 
     from simulate.services import harness_evals
 
     older = SimpleNamespace(
-        id="older", owner="user", created_at=datetime(2026, 1, 1, tzinfo=timezone.utc)
+        id="older", owner="user", created_at=datetime(2026, 1, 1, tzinfo=UTC)
     )
     newer = SimpleNamespace(
-        id="newer", owner="user", created_at=datetime(2026, 1, 2, tzinfo=timezone.utc)
+        id="newer", owner="user", created_at=datetime(2026, 1, 2, tzinfo=UTC)
     )
 
     assert harness_evals._pick_winner([older, newer]).id == "newer"

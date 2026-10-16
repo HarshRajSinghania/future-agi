@@ -126502,6 +126502,16 @@
                         "x-nullable": true
                     },
                     "default": {}
+                },
+                "credential_values": {
+                    "title": "Credential values",
+                    "description": "Agent credential values by name; stored with the environment's first agent version, never echoed.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string",
+                        "maxLength": 65536,
+                        "minLength": 1
+                    }
                 }
             }
         },
@@ -126577,7 +126587,7 @@
                     "type": "object",
                     "additionalProperties": {
                         "type": "string",
-                        "maxLength": 4096
+                        "maxLength": 65536
                     }
                 }
             }

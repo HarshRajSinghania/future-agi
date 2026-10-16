@@ -1003,26 +1003,47 @@ def resolve_secret_reference(
 
 class PlatformSecretResolver:
     def resolve(self, job: HostedHarnessJob) -> dict[str, str]:
-        from simulate.services.harness_agent_versions import pinned_credential_values
-        from simulate.services.harness_credentials import AGENT_VERSION_KEY_PREFIX
+        from simulate.services.harness_agent_versions import (
+            environment_credential_values,
+            pinned_credential_values,
+        )
+        from simulate.services.harness_credentials import is_names_only_ref
 
         # A job pinned to an agent version with its own credential set reads it; a
         # legacy or unpinned one reads the stored secrets its refs name.
         # Locals holding values are named for the error tracker's scrubber.
         pinned_secrets = pinned_credential_values(job)
+        secret_refs = job.payload["agent"]["secret_refs"]
+        environment_secrets = None
+        if pinned_secrets is None and any(
+            is_names_only_ref(reference) for reference in secret_refs.values()
+        ):
+            # Names-only refs no pin answers (an unpinned run, or versioning off):
+            # the environment's default version holds their values.
+            environment_secrets = environment_credential_values(job) or {}
         resolved_secrets: dict[str, str] = {}
-        for alias, reference in job.payload["agent"]["secret_refs"].items():
+        for alias, reference in secret_refs.items():
             if pinned_secrets is not None:
                 _check_secret_reference(alias, reference)
                 if alias in pinned_secrets:
                     resolved_secrets[alias] = pinned_secrets[alias]
                     continue
-                if str(reference.get("key") or "").startswith(AGENT_VERSION_KEY_PREFIX):
+                if is_names_only_ref(reference):
                     raise HostedHarnessError(
                         "credential_unavailable",
                         f"the pinned agent version holds no value for {alias}",
                         status_code=422,
                     )
+            elif environment_secrets is not None and is_names_only_ref(reference):
+                _check_secret_reference(alias, reference)
+                if alias not in environment_secrets:
+                    raise HostedHarnessError(
+                        "credential_unavailable",
+                        f"the environment's agent version holds no value for {alias}",
+                        status_code=422,
+                    )
+                resolved_secrets[alias] = environment_secrets[alias]
+                continue
             resolved_secrets[alias] = resolve_secret_reference(
                 job.organization, alias, reference
             )
@@ -1792,6 +1813,9 @@ class HostedHarnessGateway:
         if payload != job.payload:
             job.payload = payload
             job.save(update_fields=["payload", "updated_at"])
+        from simulate.services.harness_agent_versions import stamp_built_commit
+
+        stamp_built_commit(job, commit_sha)
 
         # An imported provider target is part of the agent source of truth. Give the isolated
         # authoring control process only the one provider credential it needs to fetch a

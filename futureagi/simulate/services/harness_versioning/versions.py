@@ -1173,6 +1173,9 @@ def move_agent(
             update_fields.append("payload")
     locked.content_updated_at = timezone.now()
     locked.save(update_fields=update_fields)
+    from simulate.services.harness_agent_versions import mirror_default_status
+
+    mirror_default_status(version)
 
 
 def _move_agent_default(

@@ -417,7 +417,7 @@ class TestVersionsList:
         runtime_selects = [
             re.sub(
                 r"\"agent_payload\" -> '(requested_by_environments"
-                r"|created_for_environment)'"
+                r"|created_for_environment|definition_owner)'"
                 r"|\"credential_blob\" IS NULL|\"credential_blob\" = ''",
                 "",
                 sql,

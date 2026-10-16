@@ -831,7 +831,7 @@ def certify_command() -> str:
     return (
         "if [ -f /work/authoring/scenarios.json ]; then "
         f"cp /work/authoring/scenarios.json {SUITE_INDEX_PATH}; fi && "
-        "ALK_FOREGROUND_COORDINATOR=1 python -m "
+        "python -m "
         "fi.alk.harness.hosted_authoring_entrypoint "
         f"{CERTIFY_JOB_PATH} --source /work/source --output /work/authoring "
         "--certify-only --bundle-output /work/bundle "

@@ -25,6 +25,7 @@ from django.utils import timezone
 from model_hub.models.evals_metric import EvalTemplate
 from simulate.models import (
     AgentDefinition,
+    AgentVersion,
     CallExecution,
     RunTest,
     Scenarios,
@@ -264,7 +265,7 @@ def _provision_agent_definition(
     )
     if agent_definition_id:
         try:
-            agent_definition = AgentDefinition.objects.get(
+            agent_definition = AgentDefinition.no_workspace_objects.get(
                 id=agent_definition_id,
                 organization=organization,
                 workspace=workspace,
@@ -660,6 +661,7 @@ def create_alk_sim_test_execution(
     scenario_selectors: list[dict[str, str]] | None = None,
     simulator_agent: SimulatorAgent | None = None,
     harness_job_id: str | None = None,
+    agent_version: AgentVersion | None = None,
 ) -> TestExecution:
     """Create a TestExecution shell for an ALK-owned run.
 
@@ -724,7 +726,7 @@ def create_alk_sim_test_execution(
         picked_up_by_executor=True,
         simulator_agent=simulator_agent or run_test.simulator_agent,
         agent_definition=run_test.agent_definition,
-        agent_version=run_test.agent_version,
+        agent_version=agent_version or run_test.agent_version,
         execution_metadata=(
             {"harness_job_id": str(harness_job_id)} if harness_job_id else {}
         ),

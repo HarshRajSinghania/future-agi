@@ -2667,10 +2667,14 @@ class TestAgentPin:
 
 class TestErrorTrackerScrubbing:
     def test_locals_holding_values_are_named_for_the_scrubber(self):
+        from simulate.services.harness_credentials import mint_secret_refs
         from simulate.services.harness_provider import (
             HostedHarnessProvider,
+            _environment_agent_maker,
+            _mint_sandbox_values,
             _preflight_credential_probe,
             _rerun_credentials_agent,
+            _secret_ref_minter,
             run_preflight_checks,
         )
         from simulate.views.harness_job import HarnessJobViewSet
@@ -2685,8 +2689,17 @@ class TestErrorTrackerScrubbing:
                 "secret_set",
                 "secret_item",
             ),
-            service.pinned_credential_values: ("secret_set", "pinned_secrets"),
-            service._legacy_values: ("secret_set", "provider_secrets", "secret_value"),
+            service._version_values: ("secret_set", "pinned_secrets"),
+            service._resolve_refs: ("secret_set", "provider_secrets", "secret_value"),
+            service.submitted_credentials: (
+                "secret_values",
+                "secret_set",
+                "provider_secrets",
+            ),
+            _environment_agent_maker: ("secret_values", "secret_submitted"),
+            _secret_ref_minter: ("secret_values",),
+            _mint_sandbox_values: ("secret_values", "secret_value"),
+            mint_secret_refs: ("secret_values", "secret_value"),
             service.create_agent_version: (
                 "secret_values",
                 "secret_files",
@@ -2696,7 +2709,11 @@ class TestErrorTrackerScrubbing:
             ),
             service.preflight_agent_version: ("secret_set", "provider_secrets"),
             service._run_preflight: ("secret_payload", "secret_probe", "secret_checks"),
-            PlatformSecretResolver.resolve: ("pinned_secrets", "resolved_secrets"),
+            PlatformSecretResolver.resolve: (
+                "pinned_secrets",
+                "environment_secrets",
+                "resolved_secrets",
+            ),
             service.staged_credential_files: ("secret_files", "secret_value"),
             service.change_credentials: ("secret_values", "secret_files"),
             HarnessJobViewSet._agent_credentials: ("secret_values", "secret_files"),
@@ -2714,7 +2731,7 @@ class TestErrorTrackerScrubbing:
                 "secret_value",
             ),
             HostedHarnessProvider.rerun_saved: ("environment_values", "secret_value"),
-            stored_values_view: ("secret_value",),
+            HostedHarnessProvider.create: ("secret_values",),
             staged_files_view: ("secret_content", "secret_document"),
         }
         for function, names in holders.items():

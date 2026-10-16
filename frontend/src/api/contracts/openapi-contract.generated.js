@@ -63607,6 +63607,17 @@ export const OPENAPI_CONTRACT = Object.freeze({
           },
           default: {},
         },
+        credential_values: {
+          title: "Credential values",
+          description:
+            "Agent credential values by name; stored with the environment's first agent version, never echoed.",
+          type: "object",
+          additionalProperties: {
+            type: "string",
+            maxLength: 65536,
+            minLength: 1,
+          },
+        },
       },
     },
     HarnessJobExtend: {
@@ -63821,7 +63832,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "object",
           additionalProperties: {
             type: "string",
-            maxLength: 4096,
+            maxLength: 65536,
           },
         },
       },

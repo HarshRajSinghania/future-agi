@@ -873,7 +873,7 @@ class TestLaunchMiss:
         chain = (
             "if [ -f /work/authoring/scenarios.json ]; then "
             "cp /work/authoring/scenarios.json /work/suite-scenarios.json; fi && "
-            "ALK_FOREGROUND_COORDINATOR=1 python -m "
+            "python -m "
             "fi.alk.harness.hosted_authoring_entrypoint /work/certify-job.json "
             "--source /work/source --output /work/authoring --certify-only "
             "--bundle-output /work/bundle "

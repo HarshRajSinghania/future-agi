@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -145,36 +145,68 @@ def clamp_parallelism(
     return admitted, admitted != value
 
 
+def find_replayed_job(
+    organization,
+    payload: dict[str, Any],
+    *,
+    idempotency_key: str,
+    workspace=None,
+    lock: bool = False,
+) -> HostedHarnessJob | None:
+    """The job this idempotency key already made for the same request, if any."""
+    request_digest = canonical_digest(payload)
+    jobs = HostedHarnessJob.no_workspace_objects.filter(
+        organization=organization,
+        idempotency_key=idempotency_key,
+    )
+    existing = (jobs.select_for_update() if lock else jobs).first()
+    if existing is None:
+        return None
+    if existing.workspace_id != getattr(workspace, "id", None):
+        raise HostedHarnessError(
+            "idempotency_conflict",
+            "the idempotency key was already used in a different workspace",
+            status_code=409,
+        )
+    if existing.request_digest != request_digest:
+        raise HostedHarnessError(
+            "idempotency_conflict",
+            "the idempotency key was already used for a different request",
+            status_code=409,
+        )
+    return existing
+
+
+def idempotency_lock_name(organization, idempotency_key: str) -> str:
+    return f"harness-job:{organization.id}:{idempotency_key}"
+
+
 def create_hosted_job(
     organization,
     payload: dict[str, Any],
     *,
     idempotency_key: str,
     workspace=None,
+    on_create: Callable[[HostedHarnessJob], None] | None = None,
 ) -> tuple[HostedHarnessJob, bool]:
+    """Create the job, or return the one this idempotency key already made.
+
+    ``on_create`` runs once inside the transaction, for a new job only.
+    """
+    from simulate.services.harness_agent_versions import advisory_xact_lock
+
     request_digest = canonical_digest(payload)
     with transaction.atomic():
-        existing = (
-            HostedHarnessJob.no_workspace_objects.select_for_update()
-            .filter(
-                organization=organization,
-                idempotency_key=idempotency_key,
-            )
-            .first()
+        # Same-key creates take turns, so a concurrent one replays the first's job.
+        advisory_xact_lock(idempotency_lock_name(organization, idempotency_key))
+        existing = find_replayed_job(
+            organization,
+            payload,
+            idempotency_key=idempotency_key,
+            workspace=workspace,
+            lock=True,
         )
         if existing is not None:
-            if existing.workspace_id != getattr(workspace, "id", None):
-                raise HostedHarnessError(
-                    "idempotency_conflict",
-                    "the idempotency key was already used in a different workspace",
-                    status_code=409,
-                )
-            if existing.request_digest != request_digest:
-                raise HostedHarnessError(
-                    "idempotency_conflict",
-                    "the idempotency key was already used for a different request",
-                    status_code=409,
-                )
             return existing, False
 
         run_id = payload.get("run_id") or uuid.uuid4()
@@ -217,6 +249,8 @@ def create_hosted_job(
         normalized["job_id"] = str(job.id)
         job.payload = normalized
         job.save(update_fields=["payload", "updated_at"])
+        if on_create is not None:
+            on_create(job)
         HostedHarnessConversation.no_workspace_objects.create(
             job=job,
             organization=organization,
@@ -873,10 +907,14 @@ def _unpinned_agent_version(environment: HostedHarnessJob) -> Any:
     """The run test's agent version, else its agent's latest without a credential
     set of its own: those are made for one environment."""
     from simulate.models import HarnessAgentVersionRuntime
+    from simulate.services.harness_agent_versions import environment_owned
 
     run_test = environment.run_test
     if run_test.agent_version is not None or run_test.agent_definition is None:
         return run_test.agent_version
+    if environment_owned(run_test.agent_definition_id):
+        # Its versions belong to the environments sharing it: run this one's default.
+        return environment.agent_version
     held = HarnessAgentVersionRuntime.no_workspace_objects.exclude(
         preflight_status=HarnessAgentVersionRuntime.PreflightStatus.LEGACY
     ).values("agent_version_id")
@@ -901,6 +939,7 @@ def agent_version_pickable(environment: HostedHarnessJob, agent_id: Any) -> bool
     """A live version of the environment's agent, in its workspace, whose check
     passed, or a legacy or pre-versioning one."""
     from simulate.models import AgentVersion, HarnessAgentVersionRuntime
+    from simulate.services.harness_agent_versions import lineage_version_ids
     from simulate.services.harness_versioning.read import (
         _agent_definition_id,
         in_workspace,
@@ -916,6 +955,10 @@ def agent_version_pickable(environment: HostedHarnessJob, agent_id: Any) -> bool
             agent_definition_id=definition_id,
         ).exists()
     ):
+        return False
+    # An agent environments share: only this environment's own versions.
+    allowed = lineage_version_ids(environment, definition_id)
+    if allowed is not None and str(agent_id) not in allowed:
         return False
     status = (
         HarnessAgentVersionRuntime.no_workspace_objects.filter(
@@ -1760,6 +1803,20 @@ def provision_scenarios(
         # Misclassifying a LiveKit run here makes completed voice calls render
         # through the chat schema and effectively disappear from call-details.
         modality = _resolve_scenario_modality(job, payload)
+        from simulate.services.harness_agent_versions import agent_definition_owner
+
+        bound_id = payload.get("agent_definition_id")
+        if agent_definition_owner(job) == "environment":
+            # Passed on, never put in the guest's request: it stays unbound there.
+            guest_id = bound_id
+            bound_id, modality = _environment_definition_for(job, modality)
+            if guest_id and str(guest_id) != str(bound_id):
+                logger.info(
+                    "harness_agent_not_bound",
+                    job_id=str(job.id),
+                    reason="guest_id_ignored",
+                )
+        # TODO: refuse a guest's id for a connected agent too (connected branch).
         # Defense: when the guest sends a bare UUID as the run name
         # (older guests use job.run_id), derive something readable.
         run_name = payload["name"]
@@ -1773,7 +1830,7 @@ def provision_scenarios(
             workspace=job.workspace,
             name=run_name,
             personas=personas,
-            agent_definition_id=payload.get("agent_definition_id"),
+            agent_definition_id=bound_id,
             agent_name=incoming_agent_name,
             description=payload.get("description", ""),
             modality=modality,
@@ -1887,6 +1944,67 @@ def provision_scenarios(
     return _provision_response(locked, registrations)
 
 
+def _environment_definition_for(
+    job: HostedHarnessJob, modality: str
+) -> tuple[str | None, str]:
+    """The agent made with the environment, and the modality its connector runs: an
+    ``auto`` agent takes the authored modality, a known connector keeps its own."""
+    from simulate.models import AgentDefinition, AgentVersion
+
+    definition_id = (
+        AgentVersion._base_manager.filter(id=job.agent_version_id)
+        .values_list("agent_definition_id", flat=True)
+        .first()
+        if job.agent_version_id
+        else None
+    )
+    definition = (
+        AgentDefinition.no_workspace_objects.filter(
+            id=definition_id,
+            organization_id=job.organization_id,
+            workspace_id=job.workspace_id,
+            deleted=False,
+        ).first()
+        if definition_id
+        else None
+    )
+    if definition is None:
+        logger.info(
+            "harness_agent_not_bound",
+            job_id=str(job.id),
+            reason="environment_definition_missing",
+        )
+        return None, modality
+    from simulate.serializers.harness_job import PROVIDER_TARGET_CONNECTORS
+    from simulate.services.harness_agent_versions import _connector_agent_type
+
+    connector = str((job.payload.get("agent") or {}).get("connector") or "")
+    Types = AgentDefinition.AgentTypeChoices
+    if connector not in PROVIDER_TARGET_CONNECTORS:
+        wanted = Types.VOICE if modality == "voice" else Types.TEXT
+        if definition.agent_type != wanted:
+            AgentDefinition.no_workspace_objects.filter(id=definition.id).update(
+                agent_type=wanted, updated_at=timezone.now()
+            )
+            logger.info(
+                "harness_agent_type_aligned",
+                job_id=str(job.id),
+                definition_id=str(definition.id),
+                from_type=definition.agent_type,
+                to_type=wanted,
+            )
+        return str(definition.id), modality
+    runs = "text" if _connector_agent_type(connector) == Types.TEXT else "voice"
+    if modality != runs:
+        logger.info(
+            "harness_modality_overridden",
+            job_id=str(job.id),
+            from_modality=modality,
+            to_modality=runs,
+        )
+    return str(definition.id), runs
+
+
 def _target_agent_prompt(job: HostedHarnessJob, payload: dict[str, Any]) -> str:
     """Resolve target instructions without reducing an Others prompt."""
     connector = str((job.payload.get("agent") or {}).get("connector") or "")
@@ -1929,71 +2047,32 @@ def _record_target_agent_facts(
     and that snapshot takes its ``description`` from the agent definition, so the definition's
     description is the platform's own home for an agent's instructions. Without a version row
     there is nothing for the mapping to read and nothing for the UI to show.
+
+    An agent made with the environment gets the columns only, never a new version;
+    one shared by environments only has its blanks filled.
     """
-    changed: list[str] = []
-    prompt = _target_agent_prompt(job, payload)
-    if prompt and agent_definition.description != prompt:
-        agent_definition.description = prompt
-        changed.append("description")
-    # model and language are left alone: the contract carries neither.
-    connector = str((job.payload.get("agent") or {}).get("connector") or "").lower()
-    if (
-        connector in {"livekit", "vapi", "retell", "retell_chat", "phone"}
-        and not agent_definition.provider
-    ):
-        agent_definition.provider = (
-            "retell" if connector == "retell_chat" else connector
+    from simulate.services.harness_agent_versions import (
+        _shared_key,
+        agent_definition_owner,
+        resnapshot_version,
+    )
+
+    owner = agent_definition_owner(job)
+    if owner == "connected":
+        # TODO: write nothing to a connected agent (connected branch, once P26/P26a
+        # merge).
+        return
+    if owner == "environment":
+        _copy_target_facts(
+            job,
+            agent_definition,
+            payload,
+            fill_only=_shared_key(job.payload) is not None,
         )
-        changed.append("provider")
-    authored = _authored_contract_data(job)
-    named = str(authored.get("agent") or "").strip()
-    if named and agent_definition.agent_name == "alk-sdk-agent":
-        agent_definition.agent_name = named[:255]
-        changed.append("agent_name")
-    agent = job.payload.get("agent") or {}
-    agent_config = agent.get("config") or {}
-    # Provider-backed web voice targets are identified by different payload
-    # keys, but AgentDefinition intentionally stores both in assistant_id.
-    # Without copying this identity into the definition/version, authoring can
-    # succeed while the later simulation-runner build has no Retell agent_id
-    # or Vapi assistant_id and fails every selected call before transport.
-    assistant_id = str(
-        agent_config.get("assistant_id") or agent_config.get("agent_id") or ""
-    ).strip()
-    if assistant_id and agent_definition.assistant_id != assistant_id:
-        agent_definition.assistant_id = assistant_id
-        changed.append("assistant_id")
-    contact_number = str(agent_config.get("phone_number") or "").strip()
-    if contact_number and agent_definition.contact_number != contact_number:
-        # Phone targets arrive through the hosted job payload rather than the
-        # native agent-definition form. Persist the validated destination on
-        # the definition before creating its version so the hosted runner sees
-        # a SIP target instead of treating it as a LiveKit-native agent.
-        agent_definition.contact_number = contact_number
-        changed.append("contact_number")
-    explicit_inbound = agent_config.get("inbound")
-    declared = str(agent.get("call_direction") or "").strip().lower()
-    direction = declared or str(authored.get("call_direction") or "").strip().lower()
-    if isinstance(explicit_inbound, bool) or direction in {"inbound", "outbound"}:
-        # The user's RL Environment selection is authoritative: the explicit
-        # boolean first, then the submitted direction, then the authored guess.
-        inbound = (
-            explicit_inbound
-            if isinstance(explicit_inbound, bool)
-            else direction == "inbound"
-        )
-        if agent_definition.inbound != inbound:
-            agent_definition.inbound = inbound
-            changed.append("inbound")
-    target_speaks_first = agent_config.get("target_speaks_first")
-    if (
-        isinstance(target_speaks_first, bool)
-        and agent_definition.target_speaks_first != target_speaks_first
-    ):
-        agent_definition.target_speaks_first = target_speaks_first
-        changed.append("target_speaks_first")
-    if changed:
-        agent_definition.save(update_fields=[*changed, "updated_at"])
+        if job.agent_version_id:
+            resnapshot_version(job.agent_version_id, agent_definition.id)
+        return
+    prompt, changed = _copy_target_facts(job, agent_definition, payload)
     # Any changed fact gets a version, so the newest one's snapshot matches.
     if prompt and (agent_definition.latest_version is None or changed):
         from simulate.models import AgentDefinition
@@ -2008,6 +2087,83 @@ def _record_target_agent_facts(
             status="active",
             version_number=next_version_number(agent_definition.id),
         )
+
+
+def _copy_target_facts(
+    job: HostedHarnessJob,
+    agent_definition,
+    payload: dict[str, Any],
+    *,
+    fill_only: bool = False,
+) -> tuple[str, list[str]]:
+    """Copy the target's prompt and identity onto its agent; with ``fill_only`` only
+    into columns still blank. Returns the prompt and the columns changed."""
+    changed: list[str] = []
+    prompt = _target_agent_prompt(job, payload)
+    if (
+        prompt
+        and agent_definition.description != prompt
+        and not (fill_only and agent_definition.description)
+    ):
+        agent_definition.description = prompt
+        changed.append("description")
+    # model and language are left alone: the contract carries neither.
+    from simulate.serializers.harness_job import PROVIDER_TARGET_CONNECTORS
+    from simulate.services.harness_agent_versions import (
+        connector_provider,
+        target_identity,
+    )
+
+    connector = str((job.payload.get("agent") or {}).get("connector") or "").lower()
+    if connector in PROVIDER_TARGET_CONNECTORS and not agent_definition.provider:
+        agent_definition.provider = connector_provider(connector)
+        changed.append("provider")
+    authored = _authored_contract_data(job)
+    named = str(authored.get("agent") or "").strip()
+    if named and agent_definition.agent_name == "alk-sdk-agent":
+        agent_definition.agent_name = named[:255]
+        changed.append("agent_name")
+    # Provider-backed web voice targets are identified by different payload
+    # keys, but AgentDefinition intentionally stores both in assistant_id.
+    # Without copying this identity into the definition/version, authoring can
+    # succeed while the later simulation-runner build has no Retell agent_id
+    # or Vapi assistant_id and fails every selected call before transport.
+    # The user's RL Environment selection is authoritative for inbound: the
+    # explicit boolean first, then the submitted direction, then the authored guess.
+    assistant_id, contact_number, inbound, target_speaks_first = target_identity(
+        job.payload.get("agent") or {}, authored.get("call_direction")
+    )
+    if (
+        assistant_id
+        and agent_definition.assistant_id != assistant_id
+        and not (fill_only and agent_definition.assistant_id)
+    ):
+        agent_definition.assistant_id = assistant_id
+        changed.append("assistant_id")
+    if (
+        contact_number
+        and agent_definition.contact_number != contact_number
+        and not (fill_only and agent_definition.contact_number)
+    ):
+        # Phone targets arrive through the hosted job payload rather than the
+        # native agent-definition form. Persist the validated destination on
+        # the definition before creating its version so the hosted runner sees
+        # a SIP target instead of treating it as a LiveKit-native agent.
+        agent_definition.contact_number = contact_number
+        changed.append("contact_number")
+    if not fill_only and inbound is not None and agent_definition.inbound != inbound:
+        agent_definition.inbound = inbound
+        changed.append("inbound")
+    if (
+        target_speaks_first is not None
+        and agent_definition.target_speaks_first != target_speaks_first
+        and not (fill_only and agent_definition.target_speaks_first is not None)
+    ):
+        agent_definition.target_speaks_first = target_speaks_first
+        changed.append("target_speaks_first")
+    if changed:
+        agent_definition.save(update_fields=[*changed, "updated_at"])
+    return prompt, changed
 
 
 def _select_platform_evals(
@@ -2118,9 +2274,15 @@ def begin_scenarios(
                 item.save(update_fields=["call_execution", "updated_at"])
         return _begin_response(job, registrations)
 
+    from simulate.services.harness_agent_versions import agent_definition_owner
+
     test_execution = create_alk_sim_test_execution(
         job.run_test,
         scenario_ids=list(dict.fromkeys(item.scenario_id for item in registrations)),
+        # A shared agent's latest version may be another environment's.
+        agent_version=(
+            job.agent_version if agent_definition_owner(job) == "environment" else None
+        ),
     )
     try:
         batch = create_alk_sim_call_execution_batch(

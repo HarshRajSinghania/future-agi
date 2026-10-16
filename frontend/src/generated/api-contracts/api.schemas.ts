@@ -18137,6 +18137,11 @@ export const HarnessJobCreateApiSchemaVersion = {
 
 export type HarnessJobCreateApiMetadata = { [key: string]: string };
 
+/**
+ * Agent credential values by name; stored with the environment's first agent version, never echoed.
+ */
+export type HarnessJobCreateApiCredentialValues = { [key: string]: string };
+
 export type HarnessSourceApiKind =
   (typeof HarnessSourceApiKind)[keyof typeof HarnessSourceApiKind];
 
@@ -18380,6 +18385,8 @@ export interface HarnessJobCreateApi {
    */
   platform_run_id?: string;
   metadata?: HarnessJobCreateApiMetadata;
+  /** Agent credential values by name; stored with the environment's first agent version, never echoed. */
+  credential_values?: HarnessJobCreateApiCredentialValues;
 }
 
 export type HarnessPreflightApiSchemaVersion =

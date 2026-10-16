@@ -30,9 +30,10 @@ from simulate.models import (
 )
 from simulate.models.agent_definition import ProviderCredentials
 from simulate.serializers.harness_job import CONNECTOR_ALIASES
-from simulate.services.harness_credentials import (
-    AGENT_VERSION_KEY_PREFIX,
+from simulate.services.harness_credentials import (  # noqa: F401 - re-exported
+    agent_version_secret_ref,
     is_credential_file_ref,
+    is_names_only_ref,
 )
 from simulate.services.harness_versioning import diffs, hashing
 from simulate.services.hosted_harness import HostedHarnessError
@@ -111,16 +112,6 @@ class CredentialSet:
 class PreflightResult:
     status: str
     report: dict[str, Any] | None
-
-
-def agent_version_secret_ref(name: str) -> dict[str, str]:
-    """A names-only ref the resolver answers from the pinned version's set."""
-    return {
-        "manager": "platform-vault",
-        "key": f"{AGENT_VERSION_KEY_PREFIX}{name}",
-        "version": "1",
-        "purpose": "target_provider",
-    }
 
 
 def configured_prompt(payload: Mapping[str, Any] | None) -> str:
@@ -442,10 +433,14 @@ def pinned_credential_values(job: HostedHarnessJob) -> dict[str, str] | None:
         # With versioning off an environment's own jobs read its stored refs, as its
         # unpinned runs do; a run pinned before reads the names-only refs it holds.
         return None
+    return _version_values(job.organization_id, job.agent_version_id)
+
+
+def _version_values(organization_id: Any, version_id: Any) -> dict[str, str] | None:
     runtime = (
         HarnessAgentVersionRuntime.no_workspace_objects.filter(
-            agent_version_id=job.agent_version_id,
-            organization_id=job.organization_id,
+            agent_version_id=version_id,
+            organization_id=organization_id,
         )
         .only("id", "agent_version_id", "credential_blob")
         .first()
@@ -462,7 +457,7 @@ def pinned_credential_values(job: HostedHarnessJob) -> dict[str, str] | None:
             },
         }
         # The version's own provider row only: a definition's legacy row is not its.
-        pinned_secrets.update(_row_values(_own_provider_row(job.agent_version_id)))
+        pinned_secrets.update(_row_values(_own_provider_row(version_id)))
     except Exception:  # noqa: BLE001 - nothing of a value may reach the error
         raise _credential_unavailable() from None
     return pinned_secrets
@@ -474,12 +469,20 @@ def _legacy_values(
     """The requesting environment's set, resolved from the stored secrets its refs
     name; a legacy side row is shared by environments whose refs may differ. Names in
     ``replaced`` are given new values, so their stored secrets are not read."""
+    refs = ((environment.payload or {}).get("agent") or {}).get("secret_refs") or {}
+    return _resolve_refs(organization, refs, replaced)
+
+
+def _resolve_refs(
+    organization: Any, refs: Mapping[str, Mapping[str, Any]], skipped: Iterable[str]
+) -> tuple[CredentialSet, dict[str, str]]:
+    """The values the stored secrets these refs name hold, as a set and provider keys;
+    names in ``skipped`` are not read."""
     from simulate.services.hosted_harness_gateway import resolve_secret_reference
 
     secret_set = CredentialSet()
     provider_secrets: dict[str, str] = {}
-    refs = ((environment.payload or {}).get("agent") or {}).get("secret_refs") or {}
-    skipped = set(replaced)
+    skipped = set(skipped)
     for alias, ref in sorted(refs.items()):
         if alias in skipped:
             continue
@@ -707,6 +710,23 @@ def next_version_number(definition_id: Any) -> int:
     return (top or 0) + 1
 
 
+def _runtime_hash(runtime: HarnessAgentVersionRuntime) -> str:
+    """A side row's version identity.
+
+    How the source is reached counts too, never the bundle key: a version is never
+    shared by environments reaching it through other installations.
+    """
+    from simulate.services.canonical_json import canonical_digest
+    from simulate.services.harness_versioning.assembly import runtime_identity
+
+    return canonical_digest(
+        {
+            "agent": hashing.agent_hash(runtime_identity(runtime)),
+            "source_access": (runtime.agent_payload or {}).get("source_access"),
+        }
+    )
+
+
 def create_agent_version(
     definition: AgentDefinition,
     *,
@@ -731,11 +751,7 @@ def create_agent_version(
     its check is queued.
     Without ``activate`` nothing is queued or made a default: the caller checks it.
     """
-    from simulate.services.canonical_json import canonical_digest
-    from simulate.services.harness_versioning.assembly import (
-        legacy_runtime,
-        runtime_identity,
-    )
+    from simulate.services.harness_versioning.assembly import legacy_runtime
     from simulate.services.harness_versioning.backfill import (
         effective_runtime,
         legacy_source,
@@ -787,6 +803,9 @@ def create_agent_version(
 
         base = dict(parent_facts.agent_payload or {}) if parent_facts else {}
         payload = copy.deepcopy(dict(agent_payload) if agent_payload else base)
+        if agent_payload and base.get("definition_owner"):
+            # Who owns the agent is the agent's, whatever the version's settings.
+            payload["definition_owner"] = base["definition_owner"]
         for name in _OWN_PAYLOAD_KEYS:
             payload.pop(name, None)
         connector = str(payload.get("connector") or "")
@@ -864,14 +883,7 @@ def create_agent_version(
             trigger=trigger,
             created_by=user,
         )
-        # How the source is reached counts too, never the bundle key: a version is
-        # never shared by environments reaching it through other installations.
-        runtime.hash = canonical_digest(
-            {
-                "agent": hashing.agent_hash(runtime_identity(runtime)),
-                "source_access": access,
-            }
-        )
+        runtime.hash = _runtime_hash(runtime)
         # Locked, so a check finishing meanwhile waits and then sees this request.
         existing = (
             HarnessAgentVersionRuntime.no_workspace_objects.filter(
@@ -1814,9 +1826,7 @@ def activate_agent_version(version: AgentVersion) -> list[Any]:
         return []
     # TODO: nudge these environments, naming the changed variables (step 12).
     _record_activation(version.id, dict.fromkeys(others, "not_requested"))
-    moved = _activate(version, requested)
-    # TODO: mirror AgentVersion.status for environment-owned agents (step 10).
-    return moved
+    return _activate(version, requested)
 
 
 def _recent(at: Any) -> bool:
@@ -1954,7 +1964,10 @@ def discard_agent_version(version: AgentVersion, *, by_environment: Any = None) 
             )
         runtime.preflight_status = Status.DISCARDED
         runtime.save(update_fields=["preflight_status", "updated_at"])
-        # TODO: AgentVersion.status=DEPRECATED once ownership is recorded (step 10).
+        if environment_owned(version.agent_definition_id):
+            AgentVersion._base_manager.filter(id=version.id).update(
+                status=AgentVersion.StatusChoices.DEPRECATED, updated_at=timezone.now()
+            )
     logger.info("harness_agent_version_discarded version=%s", version.id)
 
 
@@ -1992,3 +2005,607 @@ def fill_agent_pin(locked: HostedHarnessJob) -> bool:
         version.id,
     )
     return True
+
+
+# --- environment creation -----------------------------------------------------------
+
+# Provider agents one assistant stands for: environments on it share one agent.
+_SHARED_CONNECTORS = ("vapi", "retell", "retell_chat")
+
+
+@dataclass(frozen=True)
+class SubmittedCredentials:
+    """A creation's credentials, resolved; values never reach a repr."""
+
+    secret_set: CredentialSet
+    provider_secrets: dict[str, str] = field(repr=False)
+
+
+@dataclass(frozen=True)
+class CreationCheck:
+    """The creation's check of them, by name only."""
+
+    report: dict[str, Any]
+    required_variable_names: list[str]
+
+
+def environment_owned(definition_id: Any) -> bool:
+    """Whether an agent was made by and for environments, rather than connected."""
+    # TODO: refuse Agents-page and MCP edits with managed_by_environment (step 11).
+    return HarnessAgentVersionRuntime._base_manager.filter(
+        agent_definition_id=definition_id,
+        agent_payload__definition_owner="environment",
+    ).exists()
+
+
+def agent_definition_owner(job: HostedHarnessJob) -> str:
+    """``environment`` for an agent made with the environment, else ``legacy``."""
+    metadata = (job.payload or {}).get("metadata") or {}
+    return str(metadata.get("agent_definition_owner") or "legacy")
+
+
+def mirror_default_status(version: AgentVersion) -> None:
+    """Show an environment-owned agent's latest default as its active version."""
+    if not environment_owned(version.agent_definition_id):
+        return
+    Statuses = AgentVersion.StatusChoices
+    with transaction.atomic():
+        # One mirror per agent at a time, so a shared agent never has two active.
+        advisory_xact_lock(f"harness-agent-mirror:{version.agent_definition_id}")
+        now = timezone.now()
+        AgentVersion._base_manager.filter(
+            agent_definition_id=version.agent_definition_id, status=Statuses.ACTIVE
+        ).exclude(id=version.id).update(status=Statuses.ARCHIVED, updated_at=now)
+        AgentVersion._base_manager.filter(id=version.id).update(
+            status=Statuses.ACTIVE, updated_at=now
+        )
+
+
+def resnapshot_version(version_id: Any, definition_id: Any = None) -> None:
+    """Rebuild a version's snapshot from a fresh read, since the version in hand
+    cached its agent and provider row before they were written; never a new version."""
+    versions = AgentVersion.no_workspace_objects.select_related("agent_definition")
+    if definition_id is not None:
+        versions = versions.filter(agent_definition_id=definition_id)
+    fresh = versions.filter(id=version_id).first()
+    if fresh is None:
+        return
+    snapshot = fresh.create_snapshot(commit_message=fresh.commit_message)
+    if snapshot != fresh.configuration_snapshot:
+        AgentVersion._base_manager.filter(id=fresh.id).update(
+            configuration_snapshot=snapshot
+        )
+
+
+def lineage_version_ids(
+    environment: HostedHarnessJob, definition_id: Any
+) -> set[str] | None:
+    """The versions of an environment-owned agent this environment lists and picks:
+    its default and those it asked for. ``None`` for any other agent."""
+    if definition_id is None or not environment_owned(definition_id):
+        return None
+    # Not the default's lineage: a creation reusing another environment's version
+    # would take in that environment's ancestors.
+    allowed = (
+        {str(environment.agent_version_id)} if environment.agent_version_id else set()
+    )
+    for (
+        version_id,
+        requested_by,
+        created_for,
+    ) in HarnessAgentVersionRuntime.no_workspace_objects.filter(
+        agent_definition_id=definition_id,
+        organization_id=environment.organization_id,
+    ).values_list(
+        "agent_version_id",
+        "agent_payload__requested_by_environments",
+        "agent_payload__created_for_environment",
+    ):
+        if requested_here(requested_by, created_for, environment.id):
+            allowed.add(str(version_id))
+    return allowed
+
+
+def environment_credential_values(job: HostedHarnessJob) -> dict[str, str] | None:
+    """The values names-only refs of a job no version answers for are read from: its
+    own pin's, else its environment's default's. ``None`` without a credential set."""
+    version_id = job.agent_version_id
+    if version_id is None and job.environment_id is not None:
+        version_id = (
+            HostedHarnessJob.no_workspace_objects.filter(
+                id=job.environment_id, organization_id=job.organization_id
+            )
+            .values_list("agent_version_id", flat=True)
+            .first()
+        )
+    if version_id is None:
+        return None
+    return _version_values(job.organization_id, version_id)
+
+
+def submitted_credentials(
+    organization: Any,
+    secret_refs: Mapping[str, Mapping[str, Any]],
+    secret_values: Mapping[str, str],
+) -> SubmittedCredentials:
+    """A creation's values, over what its stored refs (staged files, an older client's
+    vault refs) hold. A names-only ref without a value is refused."""
+    for alias, ref in sorted(secret_refs.items()):
+        if is_names_only_ref(ref) and alias not in secret_values:
+            raise HostedHarnessError(
+                "credential_missing",
+                f"A stored value for {alias} is missing; enter it again",
+                status_code=422,
+                details={"name": alias},
+            )
+    stored = {
+        alias: ref for alias, ref in secret_refs.items() if not is_names_only_ref(ref)
+    }
+    secret_set, provider_secrets = _resolve_refs(organization, stored, secret_values)
+    _overlay(secret_set, provider_secrets, secret_values, ())
+    return SubmittedCredentials(
+        secret_set=secret_set, provider_secrets=provider_secrets
+    )
+
+
+def check_creation_credentials(
+    organization: Any,
+    payload: Mapping[str, Any],
+    submitted: SubmittedCredentials,
+    source_analysis: Any,
+) -> CreationCheck:
+    """Check a creation's credentials live, reusing its source scan; refused with 422
+    when they fail."""
+    from simulate.serializers.harness_job import present_provider_aliases
+    from simulate.services.harness_provider import _connector_credential_readiness
+
+    detected, required_files, scanned = (
+        source_analysis
+        if isinstance(source_analysis, (tuple, list)) and len(source_analysis) == 3
+        else ([], [], 0)
+    )
+    scan = {
+        "detected_connectors": sorted(str(name) for name in detected or []),
+        "required_files": sorted(str(name) for name in required_files or []),
+        "scanned_files": int(scanned or 0),
+    }
+    try:
+        passed, report = _run_preflight(
+            organization,
+            {
+                **payload,
+                "credential_values": {
+                    **submitted.secret_set.env,
+                    **submitted.provider_secrets,
+                },
+            },
+            scan=scan,
+        )
+    except Exception as exc:  # noqa: BLE001 - its text may carry a value
+        logger.warning("harness_creation_preflight_error error=%s", type(exc).__name__)
+        passed, report = False, _report([], [], [], "preflight_error", scan)
+    if not passed:
+        raise HostedHarnessError(
+            "agent_preflight_failed",
+            "The agent's credentials didn't pass their check",
+            status_code=422,
+            details={"preflight_report": report},
+        )
+    readiness = _connector_credential_readiness(
+        payload,
+        scan["detected_connectors"],
+        scan["scanned_files"],
+        scan["required_files"],
+    )
+    agent = payload["agent"]
+    # A name public config meets (a LiveKit URL) is never asked of the credentials.
+    met_by_config = present_provider_aliases(agent) - set(
+        agent.get("secret_refs") or {}
+    )
+    required = {
+        str(item["environment_name"])
+        for item in readiness["report"]["requirements"]
+        if item.get("required")
+    }
+    return CreationCheck(
+        report=report, required_variable_names=sorted(required - met_by_config)
+    )
+
+
+def _connector_agent_type(connector: str) -> str:
+    Types = AgentDefinition.AgentTypeChoices
+    return Types.TEXT if connector in ("retell_chat", "auto") else Types.VOICE
+
+
+def connector_provider(connector: str) -> str:
+    """The provider an agent on this connector is stored under."""
+    return "retell" if connector == "retell_chat" else connector
+
+
+def target_identity(
+    agent: Mapping[str, Any], authored_direction: str = ""
+) -> tuple[str, str, bool | None, bool | None]:
+    """A target's assistant id, phone number, inbound (the explicit bool, else its
+    call direction, else the authored one) and whether it speaks first."""
+    config = agent.get("config") or {}
+    explicit_inbound = config.get("inbound")
+    direction = (
+        str(agent.get("call_direction") or "").strip().lower()
+        or str(authored_direction or "").strip().lower()
+    )
+    if isinstance(explicit_inbound, bool):
+        inbound = explicit_inbound
+    elif direction in {"inbound", "outbound"}:
+        inbound = direction == "inbound"
+    else:
+        inbound = None
+    speaks_first = config.get("target_speaks_first")
+    return (
+        str(config.get("assistant_id") or config.get("agent_id") or "").strip(),
+        str(config.get("phone_number") or "").strip(),
+        inbound,
+        speaks_first if isinstance(speaks_first, bool) else None,
+    )
+
+
+def advisory_xact_lock(name: str) -> None:
+    """Hold a named lock until the current transaction ends."""
+    from django.db import connection
+
+    lock_id = int.from_bytes(
+        hashlib.sha256(name.encode("utf-8")).digest()[:8], "big", signed=True
+    )
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [lock_id])
+
+
+def _shared_key(payload: Mapping[str, Any]) -> tuple[str, str, str, str] | None:
+    """What a provider agent environments share is keyed by; ``None`` when each
+    environment has its own agent."""
+    agent = payload.get("agent") or {}
+    connector = str(agent.get("connector") or "")
+    if (
+        str((payload.get("source") or {}).get("kind") or "") == "remote"
+        or connector not in _SHARED_CONNECTORS
+    ):
+        return None
+    assistant_id, contact_number, _, _ = target_identity(agent)
+    if not assistant_id:
+        return None
+    return (
+        connector_provider(connector),
+        assistant_id,
+        _connector_agent_type(connector),
+        contact_number,
+    )
+
+
+def _definition_key(definition: AgentDefinition) -> tuple[str, str, str, str]:
+    return (
+        definition.provider or "",
+        definition.assistant_id or "",
+        definition.agent_type,
+        definition.contact_number or "",
+    )
+
+
+def _definition_columns(payload: Mapping[str, Any]) -> dict[str, Any]:
+    agent = payload.get("agent") or {}
+    connector = str(agent.get("connector") or "")
+    assistant_id, contact_number, inbound, speaks_first = target_identity(agent)
+    return {
+        "provider": None if connector == "auto" else connector_provider(connector),
+        "assistant_id": assistant_id or None,
+        "contact_number": contact_number or None,
+        "inbound": True if inbound is None else inbound,
+        "target_speaks_first": speaks_first,
+        "description": configured_prompt(payload),
+    }
+
+
+def _requested_definition(
+    job: HostedHarnessJob, raw_id: Any, connector: str
+) -> tuple[AgentDefinition | None, str | None]:
+    """The agent a creation names, when it is one of the job's workspace that can run
+    the connector; else why not."""
+    import uuid
+
+    try:
+        definition_id = uuid.UUID(str(raw_id))
+    except (TypeError, ValueError, AttributeError):
+        return None, "not_found"
+    definition = AgentDefinition.no_workspace_objects.filter(
+        id=definition_id,
+        organization_id=job.organization_id,
+        workspace_id=job.workspace_id,
+        deleted=False,
+    ).first()
+    if definition is None:
+        return None, "not_found"
+    if connector != "auto" and definition.agent_type != _connector_agent_type(
+        connector
+    ):
+        return None, "modality"
+    return definition, None
+
+
+def _shared_definition(
+    job: HostedHarnessJob, key: tuple[str, str, str, str]
+) -> AgentDefinition | None:
+    """The environment-owned agent of this assistant, under a lock no other creation
+    of it passes until this one commits."""
+    from django.db.models import Q
+
+    provider, assistant_id, agent_type, contact_number = key
+    advisory_xact_lock(
+        f"harness-agent:{job.organization_id}:{job.workspace_id}:{provider}:"
+        f"{assistant_id}:{agent_type}:{contact_number}"
+    )
+    owned = HarnessAgentVersionRuntime._base_manager.filter(
+        organization_id=job.organization_id,
+        agent_payload__definition_owner="environment",
+    ).values("agent_definition_id")
+    number = (
+        Q(contact_number=contact_number)
+        if contact_number
+        else Q(contact_number__isnull=True) | Q(contact_number="")
+    )
+    return (
+        AgentDefinition.no_workspace_objects.filter(
+            number,
+            organization_id=job.organization_id,
+            workspace_id=job.workspace_id,
+            provider=provider,
+            assistant_id=assistant_id,
+            agent_type=agent_type,
+            deleted=False,
+            id__in=owned,
+        )
+        .order_by("created_at")
+        .first()
+    )
+
+
+def _provider_identifiers(connector: str, config: Mapping[str, Any]):
+    """The non-secret target identifiers a version's provider row carries."""
+    from simulate.services.types.agent_definition import ProviderCredentialsInput
+
+    if connector == "livekit":
+        agent_name = str(config.get("agent_name") or "").strip()
+        return (
+            ProviderCredentialsInput(provider="livekit", livekit_agent_name=agent_name)
+            if agent_name
+            else None
+        )
+    assistant_id = target_identity({"config": config})[0]
+    if connector not in _SHARED_CONNECTORS or not assistant_id:
+        return None
+    return ProviderCredentialsInput(
+        provider=connector_provider(connector),
+        assistant_id=assistant_id,
+    )
+
+
+def ensure_environment_agent(
+    job: HostedHarnessJob,
+    *,
+    submitted: SubmittedCredentials,
+    check: CreationCheck,
+    user: Any = None,
+) -> AgentVersion:
+    """Make a new environment's agent and its first version, and pin the job to it.
+
+    Inside the creation's transaction. A provider agent is shared by the environments
+    on its assistant; any other agent is the environment's own. Its columns are
+    written when it is made, never when it is reused.
+    """
+    from simulate.services.agent_definition import sync_provider_credentials
+    from simulate.services.harness_versioning.backfill import legacy_agent_payload
+    from simulate.services.hosted_harness import _derive_name_from_job
+
+    payload = job.payload
+    agent = payload.get("agent") or {}
+    connector = str(agent.get("connector") or "")
+    config = agent.get("config") or {}
+    metadata = dict(payload.get("metadata") or {})
+    key = _shared_key(payload)
+    definition = None
+    requested_id = None
+    raw_id = metadata.get("agent_definition_id")
+    if raw_id:
+        found, reason = _requested_definition(job, raw_id, connector)
+        if found is not None:
+            if not environment_owned(found.id):
+                # TODO: bind the customer's agent (connected branch) once P26/P26a
+                # merge.
+                reason = "connected_unavailable"
+            elif key is not None and key == _definition_key(found):
+                definition = found
+            else:
+                reason = "environment_owned"
+        if definition is None:
+            logger.info(
+                "harness_agent_not_bound job=%s reason=%s definition=%s",
+                job.id,
+                reason,
+                getattr(found, "id", None),
+            )
+            requested_id = str(raw_id)
+    if definition is None and key is not None:
+        definition = _shared_definition(job, key)
+    reused_definition = definition is not None
+    if definition is None:
+        name = metadata.get("agent_name") or metadata.get("name")
+        definition = AgentDefinition.no_workspace_objects.create(
+            organization=job.organization,
+            workspace=job.workspace,
+            agent_name=str(name or _derive_name_from_job(job))[:255],
+            agent_type=_connector_agent_type(connector),
+            **_definition_columns(payload),
+        )
+    version = create_agent_version(
+        definition,
+        parent=None,
+        env=job,
+        source=payload.get("source") or {},
+        prompt=configured_prompt(payload) or None,
+        agent_payload={
+            **legacy_agent_payload(payload),
+            "definition_owner": "environment",
+        },
+        secret_values={**submitted.secret_set.env, **submitted.provider_secrets},
+        secret_files=list(submitted.secret_set.files.values()),
+        trigger=Trigger.CREATION,
+        user=user,
+        activate=False,
+    )
+    runtime = _side_row(version.id, lock=True)
+    stored = dict(runtime.agent_payload or {})
+    created = stored.get("created_for_environment") == str(job.id)
+    requested = list(stored.get("requested_by_environments") or [])
+    # Asked for here, so an activation of it never reads as a rerun's.
+    stored["requested_by_environments"] = (
+        requested if str(job.id) in requested else [*requested, str(job.id)]
+    )
+    stored["requested_defaults"] = {
+        **(stored.get("requested_defaults") or {}),
+        str(job.id): None,
+    }
+    now = timezone.now()
+    finished: dict[str, Any] = {"agent_payload": stored, "updated_at": now}
+    if runtime.preflight_status == Status.PENDING:
+        finished.update(
+            preflight_status=Status.PASSED,
+            preflighted_at=now,
+            preflight_report=check.report,
+            required_variable_names=check.required_variable_names,
+        )
+    HarnessAgentVersionRuntime.no_workspace_objects.filter(id=runtime.id).update(
+        **finished
+    )
+    row = _own_provider_row(version.id)
+    identifiers = _provider_identifiers(connector, config)
+    if (
+        created
+        and identifiers is not None
+        and row is not None
+        and row.provider_type == _CONNECTOR_PROVIDERS.get(connector)
+    ):
+        sync_provider_credentials(version, identifiers)
+        resnapshot_version(version.id)
+    mirror_default_status(version)
+    metadata.update(
+        agent_definition_owner="environment",
+        agent_definition_id=str(definition.id),
+        build_agent_version_id=str(version.id),
+    )
+    if requested_id is not None:
+        metadata["requested_agent_definition_id"] = requested_id
+    names = version_credential_names(runtime)
+    job.agent_version = version
+    job.payload = {
+        **payload,
+        "agent": {
+            **agent,
+            "secret_refs": {name: agent_version_secret_ref(name) for name in names},
+        },
+        "metadata": metadata,
+    }
+    job.save(update_fields=["agent_version", "payload", "updated_at"])
+    logger.info(
+        "harness_environment_agent_created job=%s definition=%s version=%s"
+        " reused_definition=%s reused_version=%s names=%d",
+        job.id,
+        definition.id,
+        version.id,
+        reused_definition,
+        not created,
+        len(names),
+    )
+    return version
+
+
+def stamp_built_commit(job: HostedHarnessJob, commit_sha: str | None) -> None:
+    """Record the commit an environment's build resolved its branch to in the agent
+    versions made for it that name the branch alone, so their runs fetch that commit
+    rather than the branch's tip. A version that names a commit, or that another
+    environment uses, keeps what it names."""
+    from django.db.models import Q
+
+    from simulate.services.harness_versioning.versions import versioning_enabled
+
+    source = (job.payload or {}).get("source") or {}
+    if (
+        not versioning_enabled()
+        or not commit_sha
+        or job.environment_id is not None
+        or not job.agent_version_id
+        or source.get("kind") != "github"
+    ):
+        return
+    with transaction.atomic():
+        # The lock create_agent_version takes, so no child copies the branch meanwhile.
+        definition = (
+            AgentDefinition.no_workspace_objects.select_for_update(of=("self",))
+            .filter(versions__id=job.agent_version_id)
+            .first()
+        )
+        if definition is None:
+            return
+        rows = (
+            HarnessAgentVersionRuntime.no_workspace_objects.filter(
+                Q(agent_payload__created_for_environment=str(job.id))
+                | Q(agent_version_id=job.agent_version_id),
+                agent_definition_id=definition.id,
+                source_kind=HarnessAgentVersionRuntime.SourceKind.GITHUB,
+                source__repository__iexact=str(source.get("repository") or ""),
+            )
+            .exclude(preflight_status=Status.LEGACY)
+            .select_for_update()
+            .defer("credential_blob")
+        )
+        ref = source.get("ref") or None
+        for runtime in rows:
+            facts = runtime.source or {}
+            if facts.get("commit_sha") or facts.get("ref") != ref:
+                continue
+            stored = runtime.agent_payload or {}
+            if (
+                stored.get("created_for_environment") not in (None, str(job.id))
+                or any(
+                    str(one) != str(job.id)
+                    for one in stored.get("requested_by_environments") or []
+                )
+                or HostedHarnessJob.no_workspace_objects.filter(
+                    agent_version_id=runtime.agent_version_id,
+                    environment__isnull=True,
+                )
+                .exclude(id=job.id)
+                .exists()
+            ):
+                # TODO: fork a version carrying this commit for this environment when
+                # another environment shares the row; it keeps the branch until then.
+                logger.warning(
+                    "harness_agent_commit_not_stamped job=%s version=%s reason=shared",
+                    job.id,
+                    runtime.agent_version_id,
+                )
+                continue
+            runtime.source = {**facts, "commit_sha": commit_sha}
+            runtime.hash = _runtime_hash(runtime)
+            try:
+                with transaction.atomic():
+                    HarnessAgentVersionRuntime.no_workspace_objects.filter(
+                        id=runtime.id
+                    ).update(
+                        source=runtime.source,
+                        hash=runtime.hash,
+                        updated_at=timezone.now(),
+                    )
+            except IntegrityError:
+                # A live version already names this commit; this one keeps the branch.
+                logger.warning(
+                    "harness_agent_commit_not_stamped job=%s version=%s",
+                    job.id,
+                    runtime.agent_version_id,
+                )

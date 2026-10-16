@@ -37259,6 +37259,7 @@ export const simulateApiHarnessJobsCreateBodyArtifactsMaxArtifactBytesMin = 0;
 export const simulateApiHarnessJobsCreateBodyPlatformRunIdMax = 255;
 
 export const simulateApiHarnessJobsCreateBodyMetadataDefault = {};
+export const simulateApiHarnessJobsCreateBodyCredentialValuesMaxOne = 65536;
 
 export const SimulateApiHarnessJobsCreateBody = zod.object({
   schema_version: zod
@@ -37484,6 +37485,18 @@ export const SimulateApiHarnessJobsCreateBody = zod.object({
   metadata: zod
     .record(zod.string(), zod.string())
     .default(simulateApiHarnessJobsCreateBodyMetadataDefault),
+  credential_values: zod
+    .record(
+      zod.string(),
+      zod
+        .string()
+        .min(1)
+        .max(simulateApiHarnessJobsCreateBodyCredentialValuesMaxOne),
+    )
+    .optional()
+    .describe(
+      "Agent credential values by name; stored with the environment's first agent version, never echoed.",
+    ),
 });
 
 /**
@@ -37591,7 +37604,7 @@ export const simulateApiHarnessJobsPreflightBodyArtifactsMaxArtifactBytesMin = 0
 export const simulateApiHarnessJobsPreflightBodyPlatformRunIdMax = 255;
 
 export const simulateApiHarnessJobsPreflightBodyMetadataDefault = {};
-export const simulateApiHarnessJobsPreflightBodyCredentialValuesMaxOne = 4096;
+export const simulateApiHarnessJobsPreflightBodyCredentialValuesMaxOne = 65536;
 
 export const SimulateApiHarnessJobsPreflightBody = zod.object({
   schema_version: zod

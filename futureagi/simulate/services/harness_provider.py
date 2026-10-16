@@ -1196,15 +1196,85 @@ def _rerun_credentials_agent(
     return version
 
 
+def _environment_agent_maker(organization, payload, secret_values, analysis, user):
+    """Check a creation's credentials now; the returned hook makes its agent and first
+    version inside the job's transaction."""
+    from simulate.services.harness_agent_versions import (
+        check_creation_credentials,
+        ensure_environment_agent,
+        submitted_credentials,
+    )
+
+    secret_submitted = submitted_credentials(
+        organization, payload["agent"]["secret_refs"], secret_values
+    )
+    check = check_creation_credentials(
+        organization, payload, secret_submitted, analysis
+    )
+
+    def make(job) -> None:
+        ensure_environment_agent(
+            job, submitted=secret_submitted, check=check, user=user
+        )
+
+    return make
+
+
+def _secret_ref_minter(secret_values):
+    """A hook storing the values after the request digest, so a replay mints none."""
+    from simulate.services.harness_credentials import mint_secret_refs
+
+    def mint(job) -> None:
+        agent = job.payload["agent"]
+        minted = mint_secret_refs(job.organization, secret_values)
+        job.payload = {
+            **job.payload,
+            "agent": {**agent, "secret_refs": {**agent["secret_refs"], **minted}},
+        }
+        job.save(update_fields=["payload", "updated_at"])
+
+    return mint
+
+
+def _mint_sandbox_values(request) -> Response | None:
+    """Store submitted values as the sandbox server's refs, in place of the names-only
+    ones seeded for them; refused without an organization."""
+    from simulate.services.harness_credentials import mint_secret_refs
+
+    data = request.validated_data
+    secret_values = {
+        alias: secret_value
+        for alias, secret_value in (data.pop("credential_values", None) or {}).items()
+        if secret_value
+    }
+    if not secret_values:
+        return None
+    organization = request_organization(request)
+    if organization is None:
+        return Response(
+            {"detail": "an organization is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    data["agent"]["secret_refs"] = {
+        **data["agent"]["secret_refs"],
+        **mint_secret_refs(organization, secret_values),
+    }
+    return None
+
+
 class HostedHarnessProvider:
     """Persist jobs and drive the configured managed sandbox through Temporal."""
 
     name = "hosted"
 
     def create(self, request) -> Response:
+        from simulate.services.harness_agent_versions import advisory_xact_lock
+        from simulate.services.harness_versioning.versions import versioning_enabled
         from simulate.services.hosted_harness import (
             HostedHarnessError,
             create_hosted_job,
+            find_replayed_job,
+            idempotency_lock_name,
         )
         from simulate.temporal.client import start_hosted_harness_gateway_workflow
 
@@ -1221,6 +1291,8 @@ class HostedHarnessProvider:
                 status=status.HTTP_400_BAD_REQUEST,
             )
         payload = request.validated_data
+        # Taken out first: values never reach the checks, the digest or the job.
+        secret_values = payload.pop("credential_values", None) or {}
         base_url = (
             getattr(settings, "HARNESS_PUBLIC_BASE_URL", "")
             or request.build_absolute_uri("/")
@@ -1260,13 +1332,49 @@ class HostedHarnessProvider:
             if response is not None:
                 return response
             raise
+        workspace = request_workspace(request)
         try:
-            job, _ = create_hosted_job(
-                organization,
-                payload,
-                idempotency_key=idempotency_key,
-                workspace=request_workspace(request),
+            with transaction.atomic():
+                # A same-key create waits here and then replays the first's job, so
+                # credentials are checked once; a replay never reads them again.
+                advisory_xact_lock(idempotency_lock_name(organization, idempotency_key))
+                replayed = find_replayed_job(
+                    organization,
+                    payload,
+                    idempotency_key=idempotency_key,
+                    workspace=workspace,
+                )
+                on_create = None
+                if replayed is None and versioning_enabled():
+                    on_create = _environment_agent_maker(
+                        organization,
+                        payload,
+                        secret_values,
+                        source_analysis,
+                        request.user,
+                    )
+                elif replayed is None and secret_values:
+                    on_create = _secret_ref_minter(secret_values)
+                job, _ = create_hosted_job(
+                    organization,
+                    payload,
+                    idempotency_key=idempotency_key,
+                    workspace=workspace,
+                    on_create=on_create,
+                )
+        except HostedHarnessError as exc:
+            return Response(exc.as_dict(), status=exc.status_code)
+        except Exception as exc:
+            logger.warning(
+                "harness_create_failed org=%s error=%s",
+                organization.id,
+                type(exc).__name__,
             )
+            return Response(
+                {"detail": "Hosted harness scheduler is unavailable"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        try:
             retry_cfg = job.payload["retry"]
             start_hosted_harness_gateway_workflow(
                 str(job.id),
@@ -2633,6 +2741,9 @@ class SandboxHarnessProvider:
             HarnessSandboxUnavailable,
         )
 
+        refused = _mint_sandbox_values(request)
+        if refused is not None:
+            return refused
         try:
             payload = self._flatten_source(request.validated_data)
             result = self._client().submit(payload)
@@ -2667,6 +2778,9 @@ class SandboxHarnessProvider:
             HarnessSandboxUnavailable,
         )
 
+        refused = _mint_sandbox_values(request)
+        if refused is not None:
+            return refused
         try:
             payload = self._flatten_source(request.validated_data)
             report = self._client().preflight(payload)

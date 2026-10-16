@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from simulate.models import HarnessCredentialFile, HarnessEnvironmentCredentials
-
+from simulate.models import (
+    HarnessCredentialFile,
+    HarnessEnvironmentCredentials,
+    HostedHarnessSecret,
+)
 
 PLATFORM_FILE_MANAGER = "harness_environment_file"
 # A hosted credential file crosses as an encrypted JSON secret, so its ref is
@@ -17,6 +21,41 @@ AGENT_VERSION_KEY_PREFIX = "harness-agent-version:"
 AGENT_VERSION_FILE_KEY = (
     f"{AGENT_VERSION_KEY_PREFIX}GOOGLE_APPLICATION_CREDENTIALS_JSON"
 )
+
+
+def agent_version_secret_ref(name: str) -> dict[str, str]:
+    """A names-only ref the resolver answers from the pinned version's set."""
+    return {
+        "manager": "platform-vault",
+        "key": f"{AGENT_VERSION_KEY_PREFIX}{name}",
+        "version": "1",
+        "purpose": "target_provider",
+    }
+
+
+def mint_secret_refs(organization, secret_values) -> dict[str, dict[str, str]]:
+    """Store each value as an organization secret and return its opaque ref."""
+    refs = {}
+    for alias, secret_value in secret_values.items():
+        key = f"harness-{alias.lower()}-{uuid.uuid4().hex}"
+        HostedHarnessSecret.objects.create(
+            organization=organization,
+            name=key,
+            version="1",
+            encrypted_value=secret_value,
+        )
+        refs[alias] = {
+            "manager": "platform-vault",
+            "key": key,
+            "version": "1",
+            "purpose": "target_provider",
+        }
+    return refs
+
+
+def is_names_only_ref(ref: Any) -> bool:
+    """Whether this ref names a value in the pinned agent version's set."""
+    return str(ref.get("key") or "").startswith(AGENT_VERSION_KEY_PREFIX)
 
 
 def is_credential_file_ref(ref) -> bool:

@@ -495,6 +495,8 @@ def legacy_source(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
             }
         )
     if connector == "livekit":
+        # TODO: payloads carry ``livekit_url``; reading it would move every existing
+        # LiveKit hash, so it waits for a step that rehashes them.
         return Kind.LIVEKIT, _clean(
             {
                 "agent_name": config.get("agent_name"),

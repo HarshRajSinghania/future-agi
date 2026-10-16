@@ -225,6 +225,12 @@ def _agent_versions(
     if ids is not None:
         versions = versions.filter(id__in=ids)
     found = list(versions)
+    from simulate.services.harness_agent_versions import lineage_version_ids
+
+    # An agent environments share: only this environment's own versions.
+    allowed = lineage_version_ids(job, definition_id)
+    if allowed is not None:
+        found = [version for version in found if str(version.id) in allowed]
     pinned = job.agent_version_id
     if pinned and pinned not in {version.id for version in found}:
         if ids is None or str(pinned) in {str(one) for one in ids}:
