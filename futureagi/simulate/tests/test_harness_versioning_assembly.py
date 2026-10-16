@@ -708,7 +708,7 @@ class TestTodaysPath:
         assert attempt.state == HostedHarnessAttempt.State.RUNNING
         assert _command(gateway) == (
             "if [ ! -f /work/authoring/contract.json ]; then "
-            "ALK_FOREGROUND_COORDINATOR=1 python -m "
+            "python -m "
             "fi.alk.harness.hosted_authoring_entrypoint /work/job.json "
             "--source /work/source --output /work/authoring "
             f"--adjustments {gateway_module._ADJUSTMENTS_PATH} ; fi && "
