@@ -384,8 +384,7 @@ function relativeTime(row, end = false) {
 export function functionCallTranscriptRows(calls = []) {
   return (Array.isArray(calls) ? calls : []).map((call, index) => {
     const duration = call.duration_ms ?? call.durationMs;
-    const fault = call.fault || "";
-    const heading = `Function call · ${call.name || call.function?.name || "tool"}${duration != null ? ` · ${duration}ms` : ""}${fault ? ` · injected ${fault}` : ""}`;
+    const heading = `Function call · ${call.name || call.function?.name || "tool"}${duration != null ? ` · ${duration}ms` : ""}`;
     const args = call.arguments ?? call.function?.arguments;
     const result = call.result ?? call.output;
     return {

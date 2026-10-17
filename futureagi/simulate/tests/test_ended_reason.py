@@ -7,7 +7,6 @@ class TestToCanonicalEndedReason:
     def test_maps_sdk_codes_to_canonical(self):
         assert to_canonical_ended_reason("simulator_end_call") == "customer-ended-call"
         assert to_canonical_ended_reason("agent_unavailable") == "no-answer"
-        assert to_canonical_ended_reason("transferred") == "assistant-forwarded-call"
         assert (
             to_canonical_ended_reason("conversation_silence_timeout")
             == "silence-timed-out"

@@ -111,11 +111,11 @@ describe("ActorsPanel create / edit / remove flow", () => {
   it("shows a built environment's own cast read-only, with the scenarios that bring each in", () => {
     const env = {
       ...voiceEnv,
-      cast: { subActors: [{ id: "rep", name: "Human Support Specialist", role: "answers transfers", channel: "transfer_leg", prompt: "Greets the caller" }] },
+      cast: { subActors: [{ id: "passenger", name: "Back-seat passenger", role: "asks for something else", channel: "audio_mix", prompt: "Wants a stop on the way" }] },
     };
-    const scenarios = [{ subActors: ["rep"] }, { subActors: [] }];
+    const scenarios = [{ subActors: ["passenger"] }, { subActors: [] }];
     render(<ActorsPanel env={env} envState={{ scenarios }} patch={vi.fn()} onGo={vi.fn()} />);
-    expect(screen.getByText("Human Support Specialist")).toBeInTheDocument();
+    expect(screen.getByText("Back-seat passenger")).toBeInTheDocument();
     expect(screen.getByText(/In this environment \(1\)/)).toBeInTheDocument();
     expect(screen.getByText("used by 1")).toBeInTheDocument();
     expect(screen.queryByText("Fraud desk")).toBeNull();

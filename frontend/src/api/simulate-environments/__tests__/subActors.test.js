@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import { stageOutputsToWorld } from "../environment";
 import { scenarioFromApi } from "../scenarios";
-import { functionCallTranscriptRows, mapCallDetail } from "../runDetail";
+import { mapCallDetail } from "../runDetail";
 import { PREBUILT_ENVIRONMENTS_FIXTURE } from "../_fixtures/prebuiltEnvironments";
 
 describe("sub-actors", () => {
@@ -12,13 +12,13 @@ describe("sub-actors", () => {
         kind: "cast",
         data: {
           sub_actors: [
-            { id: "subactor_service", name: "Service", role: "behind a tool", behaviour: { prompt: "fails" }, origin: "derived" },
+            { id: "subactor_passenger", name: "Passenger", role: "in the back seat", behaviour: { prompt: "asks for a stop" }, origin: "derived" },
           ],
         },
       },
     ]);
     expect(world.cast.subActors).toEqual([
-      { id: "subactor_service", name: "Service", role: "behind a tool", channel: "", prompt: "fails", origin: "derived" },
+      { id: "subactor_passenger", name: "Passenger", role: "in the back seat", channel: "", prompt: "asks for a stop", origin: "derived" },
     ]);
     expect(stageOutputsToWorld([{ kind: "contract", data: {} }])).toBeNull();
   });
@@ -30,7 +30,7 @@ describe("sub-actors", () => {
     expect(scenarioFromApi({}).subActors).toEqual([]);
   });
 
-  it("keeps a sub-actor's name on its turn and marks an injected fault", () => {
+  it("keeps a sub-actor's name on its turn", () => {
     const detail = mapCallDetail({
       transcript: [{ speaker_role: "sub_actor", speaker_name: "Bystander", content: "Add a stop." }],
     });
@@ -40,11 +40,6 @@ describe("sub-actors", () => {
       transcript: [{ role: "sub_actor", content: [{ role: "sub_actor", content: "Add one.", name: "Friend" }] }],
     });
     expect(chat.turns[0]).toMatchObject({ role: "sub_actor", speakerName: "Friend" });
-
-    const [row] = functionCallTranscriptRows([{ name: "book", fault: "timeout", sub_actor: "subactor_service" }]);
-    expect(row.content).toContain("injected timeout");
-    const [plain] = functionCallTranscriptRows([{ name: "book" }]);
-    expect(plain.content).not.toContain("injected");
   });
 });
 

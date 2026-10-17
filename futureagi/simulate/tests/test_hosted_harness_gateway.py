@@ -890,11 +890,11 @@ def test_an_environment_with_a_cast_shows_it_and_one_without_shows_none():
 
     cast = {
         "primary": {"role": "the person served"},
-        "sub_actors": [{"id": "subactor_service", "name": "Service", "channel": "tool_response"}],
+        "sub_actors": [{"id": "subactor_passenger", "name": "Passenger", "channel": "audio_mix"}],
     }
     outputs = authoring_stage_outputs_from_archive(_archive_of({"cast.json": cast}))
     shown = next(item for item in outputs if item["kind"] == "cast")
-    assert shown["summary"] == "1 sub-actor" and shown["data"]["sub_actors"][0]["id"] == "subactor_service"
+    assert shown["summary"] == "1 sub-actor" and shown["data"]["sub_actors"][0]["id"] == "subactor_passenger"
 
     outputs = authoring_stage_outputs_from_archive(_archive_of({"sub_goals.json": {"sub_goals": []}}))
     assert not any(item["kind"] == "cast" for item in outputs)

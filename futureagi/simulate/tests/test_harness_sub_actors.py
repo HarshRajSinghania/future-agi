@@ -36,10 +36,10 @@ def _docs():
             ],
         },
         {
-            "scenario_key": "with-service",
-            "name": "with-service",
+            "scenario_key": "with-passenger",
+            "name": "with-passenger",
             "instruction": "Book it.",
-            "sub_actors": ["subactor_service"],
+            "sub_actors": ["subactor_passenger"],
         },
     ]
 
@@ -65,8 +65,8 @@ def test_a_suite_indexes_each_scenarios_sub_actors_and_filters_by_them(
     assert scenario_row(bound)["sub_actors"] == [
         {"id": "subactor_bystander", "trigger": {"kind": "mid_journey", "turn": 2}}
     ]
-    assert rows.get(scenario_key="with-service").sub_actors == [
-        {"id": "subactor_service", "trigger": {}}
+    assert rows.get(scenario_key="with-passenger").sub_actors == [
+        {"id": "subactor_passenger", "trigger": {}}
     ]
     assert rows.get(scenario_key="alone").sub_actors is None
 
@@ -75,12 +75,12 @@ def test_a_suite_indexes_each_scenarios_sub_actors_and_filters_by_them(
 
     assert filtered("sub_actors=subactor_bystander") == ["with-bystander"]
     assert filtered("sub_actors=none") == ["alone"]
-    assert filtered("sub_actors_not=subactor_service") == ["alone", "with-bystander"]
+    assert filtered("sub_actors_not=subactor_passenger") == ["alone", "with-bystander"]
 
     field = next(one for one in field_catalogue(rows) if one["value"] == "sub_actors")
     assert field["counts"] == {
         "subactor_bystander": 1,
-        "subactor_service": 1,
+        "subactor_passenger": 1,
         "none": 1,
     }
 

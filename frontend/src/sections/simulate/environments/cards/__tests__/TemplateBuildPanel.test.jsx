@@ -145,11 +145,11 @@ describe("TemplateBuildPanel", () => {
 
   it.each([
     [false, undefined],
-    [true, { subActors: [{ id: "supervisor", name: "Supervisor", role: "", channel: "transfer_leg" }] }],
+    [true, { subActors: [{ id: "household_member", name: "Household member", role: "", channel: "audio_mix" }] }],
   ])("brings the template's cast only when sub-actors are on (%s)", async (enabled, cast) => {
     subActorsOn = enabled;
     const user = userEvent.setup();
-    renderPanel({ template: { ...TEMPLATE, cast: { subActors: [{ id: "supervisor", name: "Supervisor", role: "", channel: "transfer_leg" }] } } });
+    renderPanel({ template: { ...TEMPLATE, cast: { subActors: [{ id: "household_member", name: "Household member", role: "", channel: "audio_mix" }] } } });
 
     await user.click(screen.getByRole("button", { name: /Build environment/ }));
 
