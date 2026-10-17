@@ -129,21 +129,37 @@ describe("NudgeCard", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows Rebuild disabled with its reason in plain text, tied to the button", () => {
-    render(<NudgeCard turn={turnFor()} />);
-    const rebuild = screen.getByRole("button", { name: "Rebuild" });
-    expect(rebuild).toBeDisabled();
-    expect(rebuild).toHaveAccessibleDescription("Rebuild isn't available yet.");
-    expect(screen.getByText("Rebuild isn't available yet.")).toBeVisible();
+  it("rebuilds with the keyboard, and shows the rebuild starting", async () => {
+    const user = userEvent.setup();
+    const turn = turnFor({}, { onRebuild: vi.fn(), nudgesEnabled: true });
+    const { rerender } = render(<NudgeCard turn={turn} />);
+    const rebuild = screen.getByRole("button", {
+      name: "Rebuild: Agent v3 changed",
+    });
+    expect(rebuild).toBeEnabled();
+    rebuild.focus();
+    await user.keyboard("{Enter}");
+    expect(turn.onRebuild).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <NudgeCard turn={{ ...turn, answering: true, rebuilding: true }} />,
+    );
+    expect(screen.getByRole("button", { name: "Starting…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
   });
 
-  it("says Rebuild is turned off when nudges are off", () => {
+  it("says Rebuild is turned off when nudges are off, in plain text", () => {
     render(<NudgeCard turn={turnFor({}, { nudgesEnabled: false })} />);
-    expect(
-      screen.getByRole("button", { name: "Rebuild" }),
-    ).toHaveAccessibleDescription(
+    const rebuild = screen.getByRole("button", {
+      name: "Rebuild: Agent v3 changed",
+    });
+    expect(rebuild).toBeDisabled();
+    expect(rebuild).toHaveAccessibleDescription(
       "Rebuilding is turned off for this environment.",
     );
+    expect(
+      screen.getByText("Rebuilding is turned off for this environment."),
+    ).toBeVisible();
   });
 
   it("skips with the keyboard, and shows the answer pending", async () => {
@@ -161,8 +177,9 @@ describe("NudgeCard", () => {
 
   it.each([
     ["nudge_closed", "This update was already answered or closed."],
-    ["nudges_disabled", "Rebuilding is turned off for this environment."],
-    ["rebuild_unavailable", "Rebuild isn't available yet."],
+    ["nudges_disabled", "Rebuild isn't available yet."],
+    ["rebuild_running", "An update is running; try again when it finishes"],
+    ["environment_building", "The environment is still being built"],
     ["nudge_not_found", "This update no longer exists."],
   ])("explains a refused answer (%s)", (code, text) => {
     render(
@@ -171,6 +188,23 @@ describe("NudgeCard", () => {
       />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent(text);
+  });
+
+  it("shows the usage message of a refused rebuild", () => {
+    render(
+      <NudgeCard
+        turn={turnFor(
+          {},
+          {
+            rebuilding: true,
+            error: { statusCode: 402, message: "Your credits ran out." },
+          },
+        )}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Your credits ran out.",
+    );
   });
 
   it("falls back to a retry message for any other failure", () => {
@@ -243,6 +277,21 @@ describe("NudgeCard", () => {
     expect(screen.getByRole("status")).toHaveTextContent(text);
   });
 
+  it("says a rebuild stopped by a newer one", () => {
+    render(
+      <NudgeCard
+        turn={turnFor({
+          state: "replaced",
+          error: { code: "stopped_by_newer" },
+        })}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Stopped by a newer rebuild",
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("offers a version that isn't this environment's default", () => {
     render(
       <NudgeCard
@@ -251,7 +300,9 @@ describe("NudgeCard", () => {
     );
     expect(screen.getByText("Agent v3 is available")).toBeInTheDocument();
     expect(
-      screen.getByText("It isn't this environment's default yet."),
+      screen.getByText(
+        "Rebuild updates this environment for it and makes it the default agent when the update lands.",
+      ),
     ).toBeInTheDocument();
   });
 

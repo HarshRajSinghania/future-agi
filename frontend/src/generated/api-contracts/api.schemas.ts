@@ -18103,11 +18103,22 @@ export interface HarnessNudgeFactsApi {
   from_environment_version_id?: string | null;
 }
 
+export interface HarnessNudgeProblemApi {
+  item: string;
+  kind: string;
+  message: string;
+  in_your_unsaved_edits: boolean;
+}
+
 export interface HarnessNudgeErrorApi {
-  /** @minLength 1 */
+  /**
+   * stopped_by_user, stopped_by_newer, environment_deleted, checks_failed, no_report, not_runnable, turn_failed, turn_interrupted, rebuild_not_started, rebuild_stuck, landing_failed, or a refused save's code.
+   * @minLength 1
+   */
   code: string;
   /** @minLength 1 */
   message?: string;
+  problems?: HarnessNudgeProblemApi[];
 }
 
 export interface HarnessNudgeReplacementApi {
@@ -18281,9 +18292,18 @@ export interface HarnessDefaultMoveApi {
 
 export type HarnessVersionDiffApiDiff = { [key: string]: unknown };
 
+/**
+ * Those unsaved edits, against the default they started from.
+ */
+export type HarnessVersionDiffApiSnapshotDiff = { [key: string]: unknown };
+
 export interface HarnessVersionDiffApi {
   summary: string;
   diff: HarnessVersionDiffApiDiff | null;
+  /** A rebuild made someone's unsaved edits live with this version. */
+  includes_draft_edits?: boolean;
+  /** Those unsaved edits, against the default they started from. */
+  snapshot_diff?: HarnessVersionDiffApiSnapshotDiff | null;
 }
 
 export type HarnessJobReadApiReceiptsItem = { [key: string]: unknown };

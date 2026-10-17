@@ -5,9 +5,11 @@ import {
   SimulateApiHarnessEnvironmentsDraftsSaveDraftsBody,
   SimulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse,
   SimulateApiHarnessEnvironmentsNudgesResponseItem,
+  SimulateApiHarnessEnvironmentsNudgesStopNudgeResponse,
   SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse,
   SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse,
   SimulateApiHarnessEnvironmentsVersionsResponse,
+  SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse,
   SimulateV3CallExecutionDetailResponse,
   SimulateV3TestExecutionCallsResponse,
 } from "src/generated/api-contracts/api.zod";
@@ -55,7 +57,25 @@ describe.each([
 describe.each([
   ["nudges", SimulateApiHarnessEnvironmentsNudgesResponseItem],
   ["answer", SimulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse],
+  ["stop", SimulateApiHarnessEnvironmentsNudgesStopNudgeResponse],
 ])("generated %s response", (_name, schema) => {
+  it("accepts a failed rebuild's problems", () => {
+    const error = {
+      code: "checks_failed",
+      problems: [
+        {
+          item: "refund_order",
+          kind: "contract",
+          message: "bad",
+          in_your_unsaved_edits: true,
+        },
+      ],
+    };
+
+    expect(schema.shape.error.parse(error)).toEqual(error);
+    expect(schema.shape.error.parse(null)).toBeNull();
+  });
+
   it("accepts a nudge with nothing answered, applied or known yet", () => {
     const item = {
       id: "7d4c1a52-8d43-4c55-9d3e-0c5d0b1f6a10",
@@ -102,6 +122,21 @@ describe.each([
     };
 
     expect(schema.parse(item)).toEqual(item);
+  });
+});
+
+describe("generated version diff contract", () => {
+  it("accepts a version without unsaved edits", () => {
+    const body = {
+      summary: "1 tool added",
+      diff: null,
+      includes_draft_edits: false,
+      snapshot_diff: null,
+    };
+
+    expect(
+      SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse.parse(body),
+    ).toEqual(body);
   });
 });
 

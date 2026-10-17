@@ -448,6 +448,35 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         )
 
     @validated_request(
+        request_serializer=EmptyRequestSerializer,
+        responses={200: HarnessNudgeSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"nudges/(?P<nudge_id>[0-9a-fA-F-]{36})/stop",
+    )
+    def stop_nudge(self, request, pk=None, nudge_id=None):
+        """Stop a queued or running rebuild; it can be run again. Returns the nudge."""
+        from simulate.services.harness_versioning.nudges import (
+            _nudges,
+            nudge_item,
+            nudge_not_found,
+        )
+        from simulate.services.harness_versioning.rebuild import stop_rebuild
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        identifier = _uuid_or_none(nudge_id)
+        if identifier is None:
+            raise nudge_not_found()
+        nudge = stop_rebuild(job, identifier, user=request.user)
+        return Response(nudge_item(_nudges(job).get(id=nudge.id)))
+
+    @validated_request(
         query_serializer=HarnessRunPlanQuerySerializer,
         responses={200: HarnessRunPlanSerializer},
         reject_unknown_fields=True,

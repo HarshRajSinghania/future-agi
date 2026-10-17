@@ -1,7 +1,10 @@
 import PropTypes from "prop-types";
 import { Box, Typography } from "@mui/material";
 
-import { NudgeActions } from "../../buildEnvironment/console/NudgeCard";
+import {
+  NudgeActions,
+  NudgeStatus,
+} from "../../buildEnvironment/console/NudgeCard";
 import { AGENT_VERSIONS_COPY } from "../workspace.constants";
 
 const COPY = AGENT_VERSIONS_COPY.nudge;
@@ -25,16 +28,23 @@ const summary = (facts = {}) => {
 };
 
 // The environment nudge on its trigger version's row: a compact summary with
-// Rebuild and Skip, answered through the same endpoint as the chat card.
+// Rebuild and Skip, then its progress with Stop, and what it did. Answered
+// through the same endpoints as the chat card.
 export default function RebuildAction({
   nudge,
   label,
   nudgesEnabled,
   answering,
+  rebuilding,
+  stopping,
+  focus,
   error,
+  onRebuild,
   onSkipNudge,
+  onStopNudge,
 }) {
-  const counts = summary(nudge.facts);
+  const pending = nudge.state === "pending";
+  const counts = pending && summary(nudge.facts);
   return (
     <Box
       data-testid={`rebuild-action-${nudge.id}`}
@@ -48,12 +58,20 @@ export default function RebuildAction({
           {counts}
         </Typography>
       )}
+      {!pending && (
+        <NudgeStatus nudge={nudge} focus={focus} sx={{ typography: "s3" }} />
+      )}
       <NudgeActions
+        nudge={nudge}
         subject={label}
         nudgesEnabled={nudgesEnabled}
         answering={answering}
+        rebuilding={rebuilding}
+        stopping={stopping}
         error={error}
+        onRebuild={onRebuild}
         onSkipNudge={onSkipNudge}
+        onStopNudge={onStopNudge}
       />
     </Box>
   );
@@ -62,11 +80,18 @@ export default function RebuildAction({
 RebuildAction.propTypes = {
   nudge: PropTypes.shape({
     id: PropTypes.string.isRequired,
+    state: PropTypes.string,
     facts: PropTypes.object,
   }).isRequired,
   label: PropTypes.string.isRequired,
   nudgesEnabled: PropTypes.bool,
   answering: PropTypes.bool,
+  rebuilding: PropTypes.bool,
+  stopping: PropTypes.bool,
+  // Its state line takes focus once its own answer or Stop lands.
+  focus: PropTypes.bool,
   error: PropTypes.object,
+  onRebuild: PropTypes.func,
   onSkipNudge: PropTypes.func.isRequired,
+  onStopNudge: PropTypes.func,
 };

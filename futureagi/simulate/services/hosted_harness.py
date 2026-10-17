@@ -2449,8 +2449,12 @@ def record_cleanup(
             and job.state == HostedHarnessJob.State.COMPLETED
         ):
             from simulate.services.harness_versioning.nudges import schedule_reconcile
+            from simulate.services.harness_versioning.rebuild import (
+                schedule_deferred_activations,
+            )
 
             schedule_reconcile(job.id)
+            schedule_deferred_activations(job.id)
         if job.test_execution_id:
             execution_status = {
                 HostedHarnessJob.State.COMPLETED: TestExecution.ExecutionStatus.COMPLETED,

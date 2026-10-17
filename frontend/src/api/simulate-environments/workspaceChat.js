@@ -26,14 +26,17 @@ import { harnessJobQuery } from "./environment";
 import {
   isVersioningDisabled,
   nudgesKey,
-  useAnswerNudge,
+  refreshFollowers,
+  useDrafts,
   useNudges,
 } from "./versions";
+import { useNudgeActions } from "./nudgeActions";
 import {
   projectConversation,
   conversationInFlight,
   conversationWaiting,
   draftsBlocked,
+  turnAwaitingAnswer,
 } from "./conversationProjection";
 
 const NO_WORKSPACE =
@@ -161,7 +164,7 @@ export function useWorkspaceChat(env, { source } = {}) {
     [mutate],
   );
 
-  const stop = useCallback(() => {
+  const interrupt = useCallback(() => {
     const id = jobIdRef.current;
     if (!id) return;
     const requestId = harnessIdempotencyKey();
@@ -194,16 +197,47 @@ export function useWorkspaceChat(env, { source } = {}) {
     !isVersioningDisabled(nudgesQuery.error)
       ? nudgesQuery.data
       : null;
-  const answer = useAnswerNudge(jobId);
-  const { mutate: answerNudge, reset: resetAnswer } = answer;
-  const skipNudge = useCallback(
-    (nudgeId) => answerNudge({ nudgeId, answer: "no" }),
-    [answerNudge],
+  const nudgeActions = useNudgeActions(jobId);
+  const {
+    rebuild: rebuildNudge,
+    skip: skipNudge,
+    stop: stopNudgeById,
+    reset: resetNudgeActions,
+    flagsFor,
+  } = nudgeActions;
+  // The rebuild card notes the piece's open draft.
+  const { data: drafts } = useDrafts(jobId, {
+    enabled: Boolean(jobId) && versioningEnabled,
+  });
+
+  // The queued or running rebuild. Stop in the composer stops it while it
+  // runs; an interrupt would only reach the builder as its next command.
+  const active = nudges?.active || null;
+  const activeId = active?.id;
+  const activeRunning = active?.state === "running";
+  const inFlight = conversationInFlight(conversation);
+  // A turn paused on a question is not working, so Stop goes to the rebuild.
+  const awaiting = turnAwaitingAnswer(conversation);
+  // Its builder message for this attempt was sent: the turn in flight is the
+  // rebuild's. An earlier attempt's message stays in the chat.
+  // TODO: match on the nudge's command_message_id once the item exposes it.
+  const dispatched = Boolean(
+    activeId &&
+      (conversation?.messages || []).some(
+        (m) =>
+          m.payload?.command_kind === "nudge" &&
+          m.payload?.nudge_id === activeId &&
+          new Date(m.created_at) >= new Date(active.answeredAt),
+      ),
   );
-  const answeringId = answer.isPending ? answer.variables?.nudgeId : null;
-  const skippedId = answer.isSuccess ? answer.variables?.nudgeId : null;
-  const failedId = answer.isError ? answer.variables?.nudgeId : null;
-  const answerError = answer.error;
+  // Stop goes to the rebuild unless a turn of its own is working ahead of it,
+  // including an answered question's turn.
+  const stopsRebuild =
+    Boolean(activeId) && (activeRunning || dispatched || awaiting || !inFlight);
+  const stop = useCallback(() => {
+    if (stopsRebuild) stopNudgeById(activeId);
+    else interrupt();
+  }, [stopsRebuild, activeId, stopNudgeById, interrupt]);
 
   // A card whose nudge isn't listed yet asks for the list again; a nudge
   // without its card, or one whose state moved, asks for the conversation
@@ -229,16 +263,19 @@ export function useWorkspaceChat(env, { source } = {}) {
       queryClient.invalidateQueries({ queryKey: nudgesKey(jobId) });
     }
     let refetchJob = false;
+    let moved = false;
     nudges.list.forEach((nudge) => {
       const before = seenStates.current[nudge.id];
-      if (before !== undefined && before !== nudge.state) refetchJob = true;
+      if (before !== undefined && before !== nudge.state) moved = true;
       seenStates.current[nudge.id] = nudge.state;
       if (!cards.has(nudge.id) && !askedForCard.current.has(nudge.id)) {
         askedForCard.current.add(nudge.id);
         refetchJob = true;
       }
     });
-    if (refetchJob) {
+    // A state change moves what follows the defaults and the drafts too.
+    if (moved) refreshFollowers(queryClient, jobId);
+    else if (refetchJob) {
       queryClient.invalidateQueries({ queryKey: ["harness-job", jobId] });
     }
   }, [nudges, conversation, jobId, queryClient]);
@@ -250,16 +287,23 @@ export function useWorkspaceChat(env, { source } = {}) {
     return projected.map((turn) => {
       if (turn.role === "system" && turn.kind === "nudge") {
         if (!nudges) return turn;
+        const nudge = nudges.byId[turn.nudgeId];
+        const flags = flagsFor(turn.nudgeId);
         return {
           ...turn,
-          nudge: nudges.byId[turn.nudgeId],
+          nudge,
           nudgesEnabled,
+          draft: nudge ? drafts?.[nudge.target] || null : null,
+          onRebuild: () => rebuildNudge(turn.nudgeId),
           onSkipNudge: () => skipNudge(turn.nudgeId),
-          answering: answeringId === turn.nudgeId,
-          skipped: skippedId === turn.nudgeId,
+          onStopNudge: () => stopNudgeById(turn.nudgeId),
+          answering: flags.answering,
+          rebuilding: flags.rebuilding,
+          stopping: flags.stopping,
+          skipped: flags.settled,
           // Focused once: a remounted card leaves focus where it is.
-          onSkippedFocused: resetAnswer,
-          error: failedId === turn.nudgeId ? answerError : undefined,
+          onSkippedFocused: resetNudgeActions,
+          error: flags.error,
         };
       }
       if (
@@ -285,12 +329,12 @@ export function useWorkspaceChat(env, { source } = {}) {
     send,
     nudges,
     nudgesEnabled,
+    drafts,
+    rebuildNudge,
     skipNudge,
-    answeringId,
-    skippedId,
-    resetAnswer,
-    failedId,
-    answerError,
+    stopNudgeById,
+    flagsFor,
+    resetNudgeActions,
   ]);
 
   // Retry a failed send by replaying its original variables (same payload, same
@@ -364,7 +408,16 @@ export function useWorkspaceChat(env, { source } = {}) {
     stop,
     frozen,
     frozenReason,
-    inFlight: conversationInFlight(conversation),
+    inFlight,
+    // Stop interrupts the turn, or stops the queued or running rebuild.
+    canStop: inFlight || Boolean(active),
+    // The working indicator: a turn in flight or a running rebuild, not one
+    // that only waits.
+    working: (inFlight && !awaiting) || activeRunning,
+    // A Stop for the rebuild is on its way.
+    stopping: nudgeActions.stopping,
+    // A queued or running rebuild holds the drafts' Save and Discard.
+    rebuildHold: Boolean(active),
     // A question or confirmation is open and the user can still answer it. A
     // frozen chat (job ended without a saved workspace, conversation retired)
     // can keep an open question on the backend, but there is nothing to do.

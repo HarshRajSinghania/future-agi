@@ -133,6 +133,17 @@ describe("DraftBar", () => {
     expect(discardButton()).toHaveAccessibleDescription(DRAFTS_COPY.busy);
   });
 
+  it("keeps both buttons off while a rebuild holds the drafts, saying why", () => {
+    render(<DraftBar env={ENV} rebuilding />);
+    const reason = DRAFTS_COPY.errors.rebuild_running;
+    expect(screen.getByText(reason)).toBeVisible();
+    expect(saveButton()).toBeDisabled();
+    expect(discardButton()).toBeDisabled();
+    expect(saveButton()).toHaveAccessibleDescription(reason);
+    expect(discardButton()).toHaveAccessibleDescription(reason);
+    expect(screen.getByRole("button", { name: "View changes" })).toBeEnabled();
+  });
+
   it("shows the save in progress and blocks a second action", () => {
     state.save = { isPending: true };
     render(<DraftBar env={ENV} />);

@@ -458,9 +458,18 @@ class HarnessNudge(BaseModel):
         blank=True,
         related_name="+",
     )
+    # The builder message a rebuild dispatched; ``conversation_message`` is the card.
+    command_message = models.ForeignKey(
+        "simulate.HostedHarnessConversationMessage",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     summary = models.JSONField(null=True, blank=True)
     error = models.JSONField(null=True, blank=True)
     usage = models.JSONField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
     answered_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

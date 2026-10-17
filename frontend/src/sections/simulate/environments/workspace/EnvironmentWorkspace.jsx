@@ -468,6 +468,7 @@ export default function EnvironmentWorkspace() {
       <DraftBar
         env={env}
         busy={Boolean(chat.running || chat.draftsBlocked || chatSaving)}
+        rebuilding={chat.rebuildHold}
         onViewChanges={(piece, id) =>
           setTab("versions", { version: `${piece}:${id}` })
         }
@@ -488,7 +489,9 @@ export default function EnvironmentWorkspace() {
               running={chat.running}
               onSend={chat.send}
               onStop={chat.stop}
-              canStop={chat.inFlight}
+              canStop={chat.canStop}
+              working={chat.working}
+              stopping={chat.stopping}
               frozen={!envLive || chat.frozen}
               frozenReason={!envLive ? CONSOLE_COPY.frozen : chat.frozenReason}
               onCollapse={collapse}

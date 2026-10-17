@@ -169,19 +169,29 @@ def draft_refs(environment: HostedHarnessJob) -> dict[str, DraftRef]:
     return refs
 
 
-def require_no_rebuild(environment: HostedHarnessJob, *, piece: str | None = None):
-    """Refuse an edit or a save while an update rebuilds the environment."""
-    # TODO: step 14 also guards move_default and the MCP edit tools.
-    if HarnessNudge.no_workspace_objects.filter(
-        job_id=environment.id,
-        state__in=(HarnessNudge.State.QUEUED, HarnessNudge.State.RUNNING),
-    ).exists():
-        raise _error(
-            "rebuild_running",
-            "An update is running; try again when it finishes",
-            409,
-            piece=piece,
-        )
+def require_no_rebuild(
+    environment: HostedHarnessJob, *, piece: str | None = None, owner: Any = None
+):
+    """Refuse an edit, a save or a default move while an update rebuilds the
+    environment; ``owner``, the rebuild itself, may."""
+    from simulate.services.harness_versioning.nudges import _IN_FLIGHT
+
+    held = HarnessNudge.no_workspace_objects.filter(
+        job_id=environment.id, state__in=_IN_FLIGHT
+    )
+    if owner is not None:
+        held = held.exclude(id=owner.id)
+    if held.exists():
+        raise rebuild_running(piece)
+
+
+def rebuild_running(piece: str | None) -> HostedHarnessError:
+    return _error(
+        "rebuild_running",
+        "An update is running; try again when it finishes",
+        409,
+        piece=piece,
+    )
 
 
 # --- chat activity --------------------------------------------------------------------
@@ -588,7 +598,7 @@ def record_draft(
             default = getattr(locked, f"{piece}_version")
             if default.hash == hashes[piece] and default.hash_kind == HashKind.TREE_V1:
                 if fresh:
-                    _discard(draft, user=user)
+                    _discard(draft, user=user, discarded_by=origin)
                     discarded.add(piece)
                     rows[piece] = None
                     logger.info(
@@ -951,9 +961,7 @@ def activate_drafts(
     """
     from simulate.services.harness_agent_versions import fill_agent_pin
 
-    # TODO: refuse while another nudge's rebuild holds the environment, except
-    # hold_owner's own (step 14).
-    del hold_owner
+    require_no_rebuild(locked, piece=next(iter(sorted(pieces))), owner=hold_owner)
     drafts = {}
     for piece in DRAFT_PIECES:
         if piece in pieces:
@@ -1211,13 +1219,16 @@ def restore_draft(
     archive_object_key: str,
     revision: int,
     last_edited_by_id: Any,
+    origin: str | None = None,
 ) -> Any:
-    """Bring a set-aside draft back from its archive; the caller holds the lock."""
+    """Bring a set-aside draft back from its archive; the caller holds the lock. Its
+    revision moves past both, so no workspace composed on either still matches."""
     draft = (
         _model(piece)
         ._base_manager.select_for_update()
         .get(job=locked, id=draft_id, deleted=False)
     )
+    draft.origin = origin or draft.origin
     default = getattr(locked, f"{piece}_version")
     head = HostedHarnessJob.no_workspace_objects.get(id=locked.id)
     files = archives.read_archive(archives.get_archive(archive_object_key))
@@ -1238,7 +1249,7 @@ def restore_draft(
         setattr(draft, name, value)
     draft.status = VersionStatus.DRAFT
     draft.discard_reason = None
-    draft.revision = revision
+    draft.revision = max(draft.revision, revision) + 1
     draft.last_edited_by_id = last_edited_by_id
     draft.save()
     return draft

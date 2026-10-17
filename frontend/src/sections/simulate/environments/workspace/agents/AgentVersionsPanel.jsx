@@ -12,13 +12,13 @@ import {
   canMakeDefault,
   isStuck,
   isVersioningDisabled,
-  useAnswerNudge,
   useDiscardAgentVersion,
   useEnvironmentVersions,
   useMoveDefault,
   useNudges,
   useRetryAgentVersion,
 } from "src/api/simulate-environments/versions";
+import { useNudgeActions } from "src/api/simulate-environments/nudgeActions";
 import {
   AGENT_VERSIONS_COPY as COPY,
   VERSIONS_COPY,
@@ -32,6 +32,16 @@ import AgentSourceChange from "./AgentSourceChange";
 import { PreflightReport } from "./PreflightStatus";
 import RebuildAction from "./RebuildAction";
 import { activationText, named } from "./agentVersionStatus";
+
+// The nudge states a version's row shows with its actions or what it did.
+const ACTIONABLE_NUDGE = new Set([
+  "pending",
+  "queued",
+  "running",
+  "failed",
+  "applied",
+  "no_change",
+]);
 
 // Only this environment's own changes: its default and the versions it
 // descends from have passed or are legacy, so never need a check again.
@@ -225,7 +235,7 @@ export default function AgentVersionsPanel({ env }) {
   const discard = useDiscardAgentVersion(envId);
   const retry = useRetryAgentVersion(envId);
   const { data: nudges } = useNudges(envId, { enabled });
-  const answer = useAnswerNudge(envId);
+  const nudgeActions = useNudgeActions(envId);
   const [confirming, setConfirming] = useState(null);
   const announcement = useCheckAnnouncement(data?.agent);
 
@@ -252,9 +262,8 @@ export default function AgentVersionsPanel({ env }) {
     discard.reset();
     retry.reset();
   };
-  const pendingNudge = nudges?.pendingEnvironment;
-  const answeringThis = answer.variables?.nudgeId === pendingNudge?.id;
-  // The newest environment nudge a version raised, to say it was skipped.
+  // The newest environment nudge a version raised: its actions and progress,
+  // or that it was skipped.
   const latestNudge = (version) =>
     nudges?.list.find(
       (nudge) =>
@@ -305,6 +314,8 @@ export default function AgentVersionsPanel({ env }) {
                 errorFor(move, version, VERSIONS_COPY.makeDefault.error) ||
                 errorFor(discard, version, COPY.discard.error) ||
                 errorFor(retry, version, COPY.retry.error);
+              const nudge = latestNudge(version);
+              const flags = nudge && nudgeActions.flagsFor(nudge.id);
               return (
                 <Box key={version.id}>
                   <AgentVersionRow
@@ -335,31 +346,24 @@ export default function AgentVersionsPanel({ env }) {
                       {failure}
                     </Typography>
                   )}
-                  {pendingNudge?.triggerAgentVersion?.id === version.id ? (
+                  {ACTIONABLE_NUDGE.has(nudge?.state) ? (
                     <RebuildAction
-                      nudge={pendingNudge}
+                      nudge={nudge}
                       label={named(version)}
                       nudgesEnabled={env.versioning?.nudges_enabled !== false}
-                      answering={answeringThis && answer.isPending}
-                      error={
-                        answeringThis && answer.isError
-                          ? answer.error
-                          : undefined
-                      }
-                      onSkipNudge={() =>
-                        answer.mutate({
-                          nudgeId: pendingNudge.id,
-                          answer: "no",
-                        })
-                      }
+                      answering={flags.answering}
+                      rebuilding={flags.rebuilding}
+                      stopping={flags.stopping}
+                      focus={flags.settled}
+                      error={flags.error}
+                      onRebuild={() => nudgeActions.rebuild(nudge.id)}
+                      onSkipNudge={() => nudgeActions.skip(nudge.id)}
+                      onStopNudge={() => nudgeActions.stop(nudge.id)}
                     />
                   ) : (
-                    latestNudge(version)?.state === "answered_no" && (
+                    nudge?.state === "answered_no" && (
                       <NudgeStateLine
-                        focus={
-                          answer.isSuccess &&
-                          answer.variables?.nudgeId === latestNudge(version).id
-                        }
+                        focus={flags.settled}
                         sx={{ typography: "s3", mt: 0.5 }}
                       >
                         {COPY.nudge.skipped}

@@ -1397,6 +1397,30 @@ def _lock_environment(environment: HostedHarnessJob) -> HostedHarnessJob:
     return locked
 
 
+def _offer_reapply(locked: HostedHarnessJob, piece: str, version: Any) -> None:
+    """A rolled-back version that made someone's unsaved edits live offers them again."""
+    from simulate.services.harness_versioning.read import _label, _message_label
+    from simulate.services.hosted_harness_conversation import post_system_message
+
+    label = _label(version.version_number)
+    transaction.on_commit(
+        lambda: post_system_message(
+            locked,
+            content=(
+                f"The edits that went live with {_message_label(label)} were rolled"
+                " back. Re-apply them in chat?"
+            ),
+            payload={
+                "reapply": {
+                    "piece": piece,
+                    "version_id": str(version.id),
+                    "label": label,
+                }
+            },
+        )
+    )
+
+
 def move_default(
     environment: HostedHarnessJob,
     piece: str,
@@ -1411,6 +1435,7 @@ def move_default(
     The pair's runnable archive is found before anything moves, and the whole move is
     one transaction.
     """
+    from simulate.services.harness_versioning.drafts import require_no_rebuild
     from simulate.services.hosted_harness import _not_pickable
 
     model = HarnessEnvironmentVersion if piece == "environment" else HarnessSuiteVersion
@@ -1419,6 +1444,7 @@ def move_default(
         require_not_busy(locked, piece)
         if piece == "agent":
             return _move_agent_default(locked, version_id, expected_default_id, user)
+        require_no_rebuild(locked, piece=piece)
         version = model.no_workspace_objects.filter(
             job=locked, id=version_id, status=VersionStatus.ACTIVE
         ).first()
@@ -1458,9 +1484,8 @@ def move_default(
             pieces={piece},
             outgoing_agent_version_id=locked.agent_version_id,
         )
-        # TODO: refuse with rebuild_running while a build or extend runs (step 14).
-        # TODO: offer to re-apply a version's draft edits (includes_draft_edits)
-        # (step 14).
+        if current is not None and current.includes_draft_edits:
+            _offer_reapply(locked, piece, current)
     logger.info(
         "harness_default_moved piece=%s from=%s to=%s actor=%s",
         piece,

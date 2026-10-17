@@ -4,11 +4,18 @@ import { useState } from "react";
 // "pending", or { error }. `calls` keeps every request.
 export const mutations = {};
 export const resetMutations = () => {
-  ["move", "discard", "retry", "change", "upload", "create", "answer"].forEach(
-    (name) => {
-      mutations[name] = { answer: undefined, data: undefined, calls: [] };
-    },
-  );
+  [
+    "move",
+    "discard",
+    "retry",
+    "change",
+    "upload",
+    "create",
+    "answer",
+    "stop",
+  ].forEach((name) => {
+    mutations[name] = { answer: undefined, data: undefined, calls: [] };
+  });
 };
 resetMutations();
 

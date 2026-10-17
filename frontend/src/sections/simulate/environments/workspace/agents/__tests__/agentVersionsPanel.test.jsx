@@ -44,6 +44,7 @@ vi.mock("src/api/simulate-environments/versions", async () => {
       data: enabled ? actual.toNudges(state.nudges) : undefined,
     })),
     useAnswerNudge: vi.fn(() => useFakeMutation("answer")),
+    useStopNudge: vi.fn(() => useFakeMutation("stop")),
   };
 });
 vi.mock("src/api/simulate-environments/environments", () => ({
@@ -681,12 +682,101 @@ describe("AgentVersionsPanel nudges", () => {
       "1 file changed · 1 variable changed · prompt changed",
     );
     expect(
-      within(action).getByRole("button", { name: "Rebuild" }),
-    ).toBeDisabled();
-    expect(
-      within(action).getByText("Rebuild isn't available yet."),
-    ).toBeVisible();
+      within(action).getByRole("button", { name: "Rebuild: v6" }),
+    ).toBeEnabled();
     ["a7", "a5", "a4"].forEach((id) => expect(actionOf(id)).toBeNull());
+  });
+
+  it("rebuilds through the answer endpoint, then shows it waiting with Stop", async () => {
+    state.nudges = [nudge()];
+    const user = userEvent.setup();
+    const { rerender } = render(<AgentVersionsPanel env={ENV} />);
+    await user.click(
+      within(actionOf("a6")).getByRole("button", { name: "Rebuild: v6" }),
+    );
+    expect(mutations.answer.calls).toEqual([{ nudgeId: "n1", answer: "yes" }]);
+    state.nudges = [nudge({ state: "queued", can_stop: true })];
+    rerender(<AgentVersionsPanel env={ENV} />);
+    const action = actionOf("a6");
+    expect(within(action).getByRole("status")).toHaveTextContent(
+      "Waiting for the chat to finish",
+    );
+    expect(within(action).getByRole("status")).toHaveFocus();
+    expect(action).not.toHaveTextContent("1 file changed");
+    await user.click(
+      within(action).getByRole("button", { name: "Stop the update: v6" }),
+    );
+    expect(mutations.stop.calls).toEqual([{ nudgeId: "n1" }]);
+  });
+
+  it("explains a refused Stop", async () => {
+    state.nudges = [nudge({ state: "running", can_stop: true })];
+    mutations.stop.answer = {
+      error: { statusCode: 409, error: "nudge_closed", state: "applied" },
+    };
+    const user = userEvent.setup();
+    render(<AgentVersionsPanel env={ENV} />);
+    expect(within(actionOf("a6")).getByRole("status")).toHaveTextContent(
+      "Updating…",
+    );
+    await user.click(
+      within(actionOf("a6")).getByRole("button", {
+        name: "Stop the update: v6",
+      }),
+    );
+    expect(within(actionOf("a6")).getByRole("alert")).toHaveTextContent(
+      "This update was already answered or closed.",
+    );
+  });
+
+  it("offers Rebuild again on a failed update", async () => {
+    state.nudges = [
+      nudge({ state: "failed", error: { code: "stopped_by_user" } }),
+    ];
+    const user = userEvent.setup();
+    render(<AgentVersionsPanel env={ENV} />);
+    expect(within(actionOf("a6")).getByRole("status")).toHaveTextContent(
+      "Stopped",
+    );
+    await user.click(
+      within(actionOf("a6")).getByRole("button", {
+        name: "Rebuild again: v6",
+      }),
+    );
+    expect(mutations.answer.calls).toEqual([{ nudgeId: "n1", answer: "yes" }]);
+  });
+
+  it("keeps the row's state line once the rebuild lands, with no actions", () => {
+    state.nudges = [nudge({ state: "running", can_stop: true })];
+    const { rerender } = render(<AgentVersionsPanel env={ENV} />);
+    state.nudges = [
+      nudge({
+        state: "applied",
+        summary: {
+          piece: "environment",
+          label: "v4",
+          agent_not_moved: "other",
+        },
+      }),
+    ];
+    rerender(<AgentVersionsPanel env={ENV} />);
+    const action = actionOf("a6");
+    expect(within(action).getByRole("status")).toHaveTextContent(
+      "Rebuilt: environment v4",
+    );
+    expect(action).toHaveTextContent(
+      "Agent v6 didn't become the default. Make it the default from the Agents panel.",
+    );
+    expect(within(action).queryByRole("button")).toBeNull();
+  });
+
+  it("says a rebuild found nothing to change", () => {
+    state.nudges = [nudge({ state: "no_change" })];
+    render(<AgentVersionsPanel env={ENV} />);
+    expect(within(actionOf("a6")).getByRole("status")).toHaveTextContent(
+      "No change needed",
+    );
+    expect(within(actionOf("a6")).queryByRole("button")).toBeNull();
   });
 
   it("skips through the answer endpoint", async () => {

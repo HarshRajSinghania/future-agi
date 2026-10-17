@@ -51161,6 +51161,55 @@
                 }
             ]
         },
+        "/simulate/api/harness-environments/{id}/nudges/{nudge_id}/stop/": {
+            "post": {
+                "operationId": "simulate_api_harness-environments_nudges_stop_nudge",
+                "description": "Stop a queued or running rebuild; it can be run again. Returns the nudge.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/EmptyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessNudge"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                },
+                {
+                    "name": "nudge_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/harness-environments/{id}/run-plan/": {
             "get": {
                 "operationId": "simulate_api_harness-environments_run_plan",
@@ -126132,6 +126181,33 @@
                 }
             }
         },
+        "HarnessNudgeProblem": {
+            "required": [
+                "item",
+                "kind",
+                "message",
+                "in_your_unsaved_edits"
+            ],
+            "type": "object",
+            "properties": {
+                "item": {
+                    "title": "Item",
+                    "type": "string"
+                },
+                "kind": {
+                    "title": "Kind",
+                    "type": "string"
+                },
+                "message": {
+                    "title": "Message",
+                    "type": "string"
+                },
+                "in_your_unsaved_edits": {
+                    "title": "In your unsaved edits",
+                    "type": "boolean"
+                }
+            }
+        },
         "HarnessNudgeError": {
             "required": [
                 "code"
@@ -126140,6 +126216,7 @@
             "properties": {
                 "code": {
                     "title": "Code",
+                    "description": "stopped_by_user, stopped_by_newer, environment_deleted, checks_failed, no_report, not_runnable, turn_failed, turn_interrupted, rebuild_not_started, rebuild_stuck, landing_failed, or a refused save's code.",
                     "type": "string",
                     "minLength": 1
                 },
@@ -126147,6 +126224,12 @@
                     "title": "Message",
                     "type": "string",
                     "minLength": 1
+                },
+                "problems": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessNudgeProblem"
+                    }
                 }
             },
             "x-nullable": true
@@ -126672,6 +126755,17 @@
                 },
                 "diff": {
                     "title": "Diff",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "includes_draft_edits": {
+                    "title": "Includes draft edits",
+                    "description": "A rebuild made someone's unsaved edits live with this version.",
+                    "type": "boolean"
+                },
+                "snapshot_diff": {
+                    "title": "Snapshot diff",
+                    "description": "Those unsaved edits, against the default they started from.",
                     "type": "object",
                     "x-nullable": true
                 }

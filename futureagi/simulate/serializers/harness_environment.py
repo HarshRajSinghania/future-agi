@@ -701,6 +701,15 @@ class HarnessVersionDiffSerializer(serializers.Serializer):
 
     summary = serializers.CharField(allow_blank=True)
     diff = serializers.JSONField(allow_null=True)
+    includes_draft_edits = serializers.BooleanField(
+        required=False,
+        help_text="A rebuild made someone's unsaved edits live with this version.",
+    )
+    snapshot_diff = serializers.JSONField(
+        required=False,
+        allow_null=True,
+        help_text="Those unsaved edits, against the default they started from.",
+    )
 
 
 class HarnessRunPlanQuerySerializer(serializers.Serializer):
@@ -883,9 +892,24 @@ class HarnessNudgeReplacementSerializer(serializers.Serializer):
     trigger_label = serializers.CharField(allow_null=True)
 
 
+class HarnessNudgeProblemSerializer(serializers.Serializer):
+    item = serializers.CharField(allow_blank=True)
+    kind = serializers.CharField(allow_blank=True)
+    message = serializers.CharField(allow_blank=True)
+    in_your_unsaved_edits = serializers.BooleanField()
+
+
 class HarnessNudgeErrorSerializer(serializers.Serializer):
-    code = serializers.CharField()
+    code = serializers.CharField(
+        help_text=(
+            "stopped_by_user, stopped_by_newer, environment_deleted, checks_failed,"
+            " no_report, not_runnable, turn_failed, turn_interrupted,"
+            " rebuild_not_started, rebuild_stuck, landing_failed, or a refused save's"
+            " code."
+        )
+    )
     message = serializers.CharField(required=False)
+    problems = HarnessNudgeProblemSerializer(many=True, required=False)
 
 
 class HarnessNudgeSerializer(serializers.Serializer):

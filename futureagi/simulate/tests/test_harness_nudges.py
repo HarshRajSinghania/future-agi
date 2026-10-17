@@ -329,7 +329,7 @@ class TestRaise:
         assert offer.trigger_agent_version_id == a3.id
         assert offer.facts["agent_default_moved"] is False
 
-    def test_a_busy_activation_is_offered_once_the_build_completes(
+    def test_a_busy_activation_moves_the_default_once_the_build_completes(
         self,
         user,
         workspace,
@@ -338,6 +338,8 @@ class TestRaise:
         started,
         django_capture_on_commit_callbacks,
     ):
+        from simulate.services.harness_versioning import rebuild
+
         [environment] = _shared(user, workspace, storage, "n-busy", count=1)
         a1 = _a1(environment)
         a2 = _create(a1, environment, secret_values={"OPENAI_API_KEY": NEW_VALUE})
@@ -355,11 +357,19 @@ class TestRaise:
         )
         with django_capture_on_commit_callbacks(execute=True):
             nudges.schedule_reconcile(environment.id)
-            nudges.schedule_reconcile(environment.id)
+        # A busy activation is retried, not offered.
+        assert _nudges(environment) == []
 
-        [offer] = _nudges(environment)
-        assert offer.trigger_agent_version_id == a2.id
-        assert offer.facts["agent_default_moved"] is False
+        with django_capture_on_commit_callbacks(execute=True):
+            assert rebuild.retry_deferred_activations(a2.id) == {
+                str(environment.id): "activated"
+            }
+
+        environment.refresh_from_db()
+        assert environment.agent_version_id == a2.id
+        [card] = _nudges(environment)
+        assert card.trigger_agent_version_id == a2.id
+        assert card.facts["agent_default_moved"] is True
 
     def test_an_offer_missed_while_busy_is_found_below_a_newer_version(
         self,
@@ -400,6 +410,47 @@ class TestRaise:
 
         [offer] = _nudges(first, trigger_agent_version=a3)
         assert offer.facts["agent_default_moved"] is False
+
+    def test_an_older_offer_waits_behind_a_newer_busy_version(
+        self,
+        user,
+        workspace,
+        storage,
+        scheduled,
+        started,
+        settings,
+        django_capture_on_commit_callbacks,
+    ):
+        from simulate.models import HarnessAgentVersionRuntime
+        from simulate.tests.test_harness_agent_versions import _on_a2
+
+        settings.HARNESS_BUNDLE_CERTIFY_ENABLED = True
+        (first, second), _a1_, a2 = _on_a2(user, workspace, storage, "n-busy-newest")
+        a3 = _create(a2, second, secret_values={"OPENAI_API_KEY": "val-openai-v3"})
+        with django_capture_on_commit_callbacks(execute=True):
+            assert _preflight(a3).status == "passed"
+        a4 = _create(a3, second, secret_values={"OPENAI_API_KEY": "val-openai-v4"})
+        with django_capture_on_commit_callbacks(execute=True):
+            assert _preflight(a4).status == "passed"
+        side = HarnessAgentVersionRuntime.no_workspace_objects.get(agent_version=a4)
+        side.preflight_report = {
+            **(side.preflight_report or {}),
+            "activation": [
+                {"environment_id": str(first.id), "outcome": "environment_busy"}
+            ],
+        }
+        side.save(update_fields=["preflight_report"])
+        first.refresh_from_db()
+        assert nudges.reads._activation_outcome(
+            HarnessAgentVersionRuntime.no_workspace_objects.get(
+                agent_version=a3
+            ).preflight_report,
+            first.id,
+        ) in ("not_requested", "offered")
+        assert nudges.agent_version_pickable(first, a4.id)
+
+        # The newest is the deferred retry's: no older version is offered.
+        assert nudges._missed_offer(first) is None
 
     def test_a_busy_offer_is_found_below_a_newer_version_it_cannot_pick(
         self,
@@ -449,9 +500,18 @@ class TestRaise:
         [card] = _nudges(first)
         with django_capture_on_commit_callbacks(execute=True):
             assert _answer(auth_client, first, card, "no").status_code == 200
+        # The busy request is moved, not offered.
+        assert _nudges(first, trigger_agent_version=a3) == []
 
-        [offer] = _nudges(first, trigger_agent_version=a3)
-        assert offer.state == "pending"
+        from simulate.services.harness_versioning import rebuild
+
+        with django_capture_on_commit_callbacks(execute=True):
+            rebuild.retry_deferred_activations(a3.id)
+
+        first.refresh_from_db()
+        assert first.agent_version_id == a3.id
+        [moved] = _nudges(first, trigger_agent_version=a3)
+        assert moved.facts["agent_default_moved"] is True
 
     def test_a_skipped_missed_offer_is_not_raised_again_after_e_moves(
         self,
@@ -463,27 +523,23 @@ class TestRaise:
         auth_client,
         django_capture_on_commit_callbacks,
     ):
-        [environment] = _shared(user, workspace, storage, "n-skip-final", count=1)
-        a2 = _create(
-            _a1(environment), environment, secret_values={"OPENAI_API_KEY": NEW_VALUE}
+        from simulate.tests.test_harness_agent_versions import _on_a2
+
+        (first, environment), _a1_, a2 = _on_a2(
+            user, workspace, storage, "n-skip-final"
         )
-        HostedHarnessJob.no_workspace_objects.filter(id=environment.id).update(
-            state="running"
-        )
+        a3 = _create(a2, first, secret_values={"OPENAI_API_KEY": "val-openai-v3"})
         with django_capture_on_commit_callbacks(execute=True):
-            assert _preflight(a2).status == "passed"
-        HostedHarnessJob.no_workspace_objects.filter(id=environment.id).update(
-            state="completed"
-        )
-        nudges.reconcile_environment_nudges(environment.id)
-        [offer] = _nudges(environment, target="environment")
+            assert _preflight(a3).status == "passed"
+        [offer] = _nudges(environment, trigger_agent_version=a3)
+        assert offer.facts["agent_default_moved"] is False
         assert _answer(auth_client, environment, offer, "no").status_code == 200
         with django_capture_on_commit_callbacks(execute=True):
             _contract_change(user, environment, [{"name": "refund"}])
 
         nudges.reconcile_environment_nudges(environment.id)
 
-        [skipped] = _nudges(environment, target="environment")
+        [skipped] = _nudges(environment, target="environment", trigger_agent_version=a3)
         assert skipped.state == "answered_no"
 
     def test_a_newer_trigger_replaces_the_pending_card(
@@ -1105,7 +1161,7 @@ class TestAnswer:
         assert response.status_code == 409
         assert response.json()["state"] == "replaced"
 
-    def test_yes_is_refused_until_rebuilds_exist(
+    def test_yes_queues_a_rebuild_only_with_the_nudges_flag(
         self,
         user,
         workspace,
@@ -1120,18 +1176,30 @@ class TestAnswer:
             user, workspace, storage, "n-yes", django_capture_on_commit_callbacks
         )
         [nudge] = _nudges(environment)
+        settings.HARNESS_VERSIONING_NUDGES_ENABLED = False
 
         response = _answer(auth_client, environment, nudge, "yes")
 
         assert response.status_code == 409
-        assert response.json()["error"] == "rebuild_unavailable"
-        settings.HARNESS_VERSIONING_NUDGES_ENABLED = False
-        response = _answer(auth_client, environment, nudge, "yes")
         assert response.json()["error"] == "nudges_disabled"
         nudge.refresh_from_db()
         assert nudge.state == "pending"
-        # Skip still works with the nudges flag off.
-        assert _answer(auth_client, environment, nudge, "no").status_code == 200
+        settings.HARNESS_VERSIONING_NUDGES_ENABLED = True
+        with patch("simulate.services.harness_versioning.rebuild.schedule_nudge_check"):
+            response = _answer(auth_client, environment, nudge, "yes")
+        assert response.status_code == 200
+        assert response.json()["state"] == "queued"
+        assert response.json()["can_stop"] is True
+        assert _answer(auth_client, environment, nudge, "no").status_code == 409
+        settings.HARNESS_VERSIONING_NUDGES_ENABLED = False
+        # Skip still works with the nudges flag off; a queued one is not pending.
+        other = HarnessNudge.no_workspace_objects.create(
+            job=environment,
+            organization_id=environment.organization_id,
+            target="suite",
+            state="pending",
+        )
+        assert _answer(auth_client, environment, other, "no").status_code == 200
 
     def test_another_environments_nudge_and_bad_requests(
         self,
@@ -2204,7 +2272,12 @@ class TestReconcileHooks:
         )
         _mark_extend(extended)
 
-        with patch.object(nudges, "schedule_reconcile") as reconcile:
+        from simulate.services.harness_versioning import rebuild
+
+        with (
+            patch.object(nudges, "schedule_reconcile") as reconcile,
+            patch.object(rebuild, "schedule_deferred_activations") as deferred,
+        ):
             job = record_cleanup(
                 attempt.id,
                 provider_ref=attempt.provider_ref or "",
@@ -2214,6 +2287,11 @@ class TestReconcileHooks:
             freeze_authoring_archive(extended, _authoring(NAMES), extending=True)
 
         assert [call.args for call in reconcile.call_args_list] == [
+            (built.id,),
+            (extended.id,),
+        ]
+        # Activations that waited for either to finish are retried at once.
+        assert [call.args for call in deferred.call_args_list] == [
             (built.id,),
             (extended.id,),
         ]

@@ -23,6 +23,13 @@ export const IN_FLIGHT_MESSAGE_STATES = new Set([
   "streaming",
 ]);
 
+const nudgeLine = (payload = {}) => {
+  const label = payload.trigger_label || "an unnumbered version";
+  return payload.stage === "suite"
+    ? `Updating the scenarios for environment ${label}…`
+    : `Updating the environment for agent ${label}…`;
+};
+
 function normalizeQuestion(message, blocking) {
   const p = message.payload || {};
   // The open question also carries prompt/options on blocking_input; prefer the
@@ -124,6 +131,17 @@ export function projectConversation(conversation) {
         // command_kind — they are not chat turns, so keep them out of the transcript.
         const cmd = m.payload?.command_kind;
         if (cmd === "interrupt" || cmd === "cancel_operation") continue;
+        // A Rebuild's builder message has no text on polls: the builder's
+        // turn opens with a line naming what it updates.
+        if (cmd === "nudge") {
+          endBuilder();
+          startBuilder().steps.push({
+            id: m.message_id,
+            kind: "nudge-line",
+            text: nudgeLine(m.payload),
+          });
+          continue;
+        }
         // A reply to a blocking question is already surfaced in that question's
         // resolved ask card (answerText) — don't also render it as a bubble.
         if (m.reply_to) continue;
@@ -142,6 +160,20 @@ export function projectConversation(conversation) {
           nudgeId: m.payload.nudge_id,
           target: m.payload.nudge_target,
           text: m.content,
+        });
+        continue;
+      }
+      // A roll-back's re-apply offer never reaches the builder, so it is a
+      // plain note of its own, not a question in the builder's turn.
+      // TODO: a re-apply card that prefills the composer with the edits.
+      if (m.role === "system" && m.payload?.reapply) {
+        builder = null;
+        const label = m.payload.reapply.label || "an unnumbered version";
+        turns.push({
+          id: m.message_id,
+          role: "system",
+          kind: "reapply",
+          text: `The edits that went live with ${label} were rolled back.`,
         });
         continue;
       }
@@ -283,6 +315,21 @@ export function conversationWaiting(conversation) {
   return !messages.some((m) => m.reply_to === blocking.message_id);
 }
 
+// A turn paused on its unanswered blocking question, mirroring the server's
+// `_awaiting_answer`. Its command stays "delivered" while it waits.
+export function turnAwaitingAnswer(conversation) {
+  if (!conversation) return false;
+  const messages = Array.isArray(conversation.messages)
+    ? conversation.messages
+    : [];
+  const asked = conversation.blocking_input?.message_id;
+  return (
+    conversation.state === "waiting_for_user" &&
+    Boolean(asked) &&
+    !messages.some((m) => m.role === "user" && m.reply_to === asked)
+  );
+}
+
 /**
  * Whether this chat holds Save, mirroring the server's `_busy_conversation`:
  * - a turn paused on an unanswered blocking question (`_awaiting_answer`) is idle,
@@ -299,12 +346,7 @@ export function draftsBlocked(conversation) {
   const messages = Array.isArray(conversation.messages)
     ? conversation.messages
     : [];
-  const asked = conversation.blocking_input?.message_id;
-  const awaiting =
-    conversation.state === "waiting_for_user" &&
-    Boolean(asked) &&
-    !messages.some((m) => m.role === "user" && m.reply_to === asked);
-  if (awaiting) {
+  if (turnAwaitingAnswer(conversation)) {
     return messages.some((m) => m.role === "user" && m.state === "queued");
   }
   if (ACTIVE_CONVERSATION_STATES.has(conversation.state)) return true;

@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1079,
+  endpointCount: 1080,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28361,6 +28361,25 @@ export const OPENAPI_CONTRACT = Object.freeze({
         runtimeResponseValidation: true,
         requestBody: {
           $ref: "#/definitions/HarnessNudgeAnswer",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/HarnessNudge",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/nudges/{nudge_id}/stop/": {
+      post: {
+        operationId: "simulate_api_harness-environments_nudges_stop_nudge",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/EmptyRequest",
         },
         queryParameters: {},
         responses: {
@@ -64823,6 +64842,19 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "object",
           "x-nullable": true,
         },
+        includes_draft_edits: {
+          title: "Includes draft edits",
+          description:
+            "A rebuild made someone's unsaved edits live with this version.",
+          type: "boolean",
+        },
+        snapshot_diff: {
+          title: "Snapshot diff",
+          description:
+            "Those unsaved edits, against the default they started from.",
+          type: "object",
+          "x-nullable": true,
+        },
       },
     },
     HarnessVersions: {
@@ -94991,6 +95023,8 @@ export const OPENAPI_CONTRACT = Object.freeze({
       properties: {
         code: {
           title: "Code",
+          description:
+            "stopped_by_user, stopped_by_newer, environment_deleted, checks_failed, no_report, not_runnable, turn_failed, turn_interrupted, rebuild_not_started, rebuild_stuck, landing_failed, or a refused save's code.",
           type: "string",
           minLength: 1,
         },
@@ -94998,6 +95032,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Message",
           type: "string",
           minLength: 1,
+        },
+        problems: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessNudgeProblem",
+          },
         },
       },
       "x-nullable": true,
@@ -111814,6 +111854,28 @@ export const OPENAPI_CONTRACT = Object.freeze({
         error: {
           title: "Error",
           type: "string",
+        },
+      },
+    },
+    HarnessNudgeProblem: {
+      required: ["item", "kind", "message", "in_your_unsaved_edits"],
+      type: "object",
+      properties: {
+        item: {
+          title: "Item",
+          type: "string",
+        },
+        kind: {
+          title: "Kind",
+          type: "string",
+        },
+        message: {
+          title: "Message",
+          type: "string",
+        },
+        in_your_unsaved_edits: {
+          title: "In your unsaved edits",
+          type: "boolean",
         },
       },
     },

@@ -28,6 +28,7 @@ const STEP_SHAPE = PropTypes.shape({
     "cancelled",
     "completed",
     "heartbeat",
+    "nudge-line",
   ]),
   text: PropTypes.string,
   markdown: PropTypes.bool,
@@ -265,6 +266,16 @@ export function Step({ step }) {
 
   if (step.kind === "heartbeat") {
     return <HeartbeatRow since={step.since} />;
+  }
+
+  if (step.kind === "nudge-line") {
+    return (
+      <Typography
+        sx={{ typography: "s2", color: "text.subtitle", px: 0.5, py: 0.25 }}
+      >
+        {step.text}
+      </Typography>
+    );
   }
 
   return <ToolStep step={step} />;

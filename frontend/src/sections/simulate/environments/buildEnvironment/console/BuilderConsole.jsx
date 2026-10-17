@@ -58,6 +58,8 @@ export default function BuilderConsole({
   onSend,
   onStop,
   canStop = false,
+  working = canStop,
+  stopping = false,
   preComposer,
   frozen = false,
   frozenReason,
@@ -97,7 +99,8 @@ export default function BuilderConsole({
   // "Busy" drives the working indicator: the brief send round-trip (running) OR a
   // turn still in flight (canStop = a queued/responding message waiting on the
   // agent). Distinct from `blocked`, so the composer stays usable while waiting.
-  const busy = running || canStop;
+  // `working` narrows it when Stop also covers work that only waits.
+  const busy = running || working;
 
   const send = () => {
     const text = draft.trim();
@@ -271,7 +274,7 @@ export default function BuilderConsole({
               <IconButton
                 aria-label="Stop"
                 title={CONSOLE_COPY.stop}
-                disabled={running}
+                disabled={running || stopping}
                 onClick={onStop}
                 sx={{
                   width: 30, height: 30, borderRadius: 1, mr: 0.5,
@@ -314,6 +317,9 @@ BuilderConsole.propTypes = {
   onSend: PropTypes.func,
   onStop: PropTypes.func,
   canStop: PropTypes.bool,
+  working: PropTypes.bool,
+  // A Stop is on its way.
+  stopping: PropTypes.bool,
   preComposer: PropTypes.node,
   frozen: PropTypes.bool,
   frozenReason: PropTypes.string,

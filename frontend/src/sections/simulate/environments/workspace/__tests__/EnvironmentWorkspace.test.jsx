@@ -21,7 +21,7 @@ vi.mock("src/api/harness/harness", () => ({
 // the axios instance is stubbed.
 vi.mock("src/utils/axios", async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, default: { get: vi.fn() } };
+  return { ...actual, default: { get: vi.fn(), post: vi.fn() } };
 });
 
 const { getHarnessJob } = await import("src/api/harness/harness");
@@ -352,6 +352,89 @@ describe("EnvironmentWorkspace route shell", () => {
     }
   });
 
+  it("offers Stop for a rebuild waiting on an answer without saying the chat is working, and holds it while it stops", async () => {
+    // The builder's question pauses the turn; its command stays delivered.
+    const conversation = {
+      state: "waiting_for_user",
+      runtime: { available: true },
+      blocking_input: { message_id: "q1", kind: "question_requested" },
+      messages: [
+        {
+          message_id: "m1",
+          role: "system",
+          kind: "status",
+          state: "completed",
+          content: "Agent v2 changed: prompt. Rebuild the environment?",
+          payload: { nudge_id: "n1", nudge_target: "environment" },
+          created_at: NOW,
+          sequence: 1,
+        },
+        {
+          message_id: "u1",
+          role: "user",
+          kind: "message",
+          state: "delivered",
+          content: "Add a rule",
+          created_at: NOW,
+          sequence: 2,
+        },
+        {
+          message_id: "q1",
+          role: "assistant",
+          kind: "question",
+          state: "completed",
+          content: "How strict?",
+          created_at: NOW,
+          sequence: 3,
+        },
+      ],
+      events: [],
+    };
+    axios.get.mockImplementation((url) => {
+      if (url.endsWith("/nudges/")) {
+        return Promise.resolve({
+          data: [
+            {
+              id: "n1",
+              target: "environment",
+              state: "queued",
+              queued_behind_input: true,
+              facts: {},
+              card_message_id: "m1",
+            },
+          ],
+        });
+      }
+      return Promise.reject(
+        Object.assign(new Error("Not found"), { statusCode: 404 }),
+      );
+    });
+    getHarnessJob.mockResolvedValue({
+      ...COMPLETED_JOB,
+      versioning: { enabled: true, nudges_enabled: true },
+      conversation,
+    });
+    renderWorkspace("/dashboard/simulate/environments/job-done");
+    expect(
+      await screen.findByText("Waiting for your answer in chat"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Ask, correct, or steer what it builds"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Working…")).not.toBeInTheDocument();
+
+    axios.post.mockReturnValue(new Promise(() => {}));
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(axios.post).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/job-done/nudges/n1/stop/",
+      {},
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled(),
+    );
+  });
+
   it("renders the run detail as its own full page, without the workspace chrome", async () => {
     getHarnessJob.mockResolvedValue(COMPLETED_JOB);
 
@@ -642,6 +725,38 @@ describe("EnvironmentWorkspace unsaved changes", () => {
       await screen.findByText("Chat is working; save when it finishes"),
     ).toBeVisible();
     expect(await saveButton()).toBeDisabled();
+  });
+
+  it("holds Save and Discard while a rebuild is queued, and offers Stop in the composer", async () => {
+    serve({ environment: DRAFT, suite: null, set_aside: [] });
+    const drafts = axios.get.getMockImplementation();
+    axios.get.mockImplementation((url) =>
+      url.endsWith("/nudges/")
+        ? Promise.resolve({
+            data: [
+              {
+                id: "n1",
+                target: "environment",
+                state: "queued",
+                can_stop: true,
+                facts: {},
+              },
+            ],
+          })
+        : drafts(url),
+    );
+    getHarnessJob.mockResolvedValue({
+      ...VERSIONED,
+      conversation: conversationIn("warm_idle"),
+    });
+    renderWorkspace("/dashboard/simulate/environments/job-done");
+    const reason = "An update is running; try again when it finishes";
+    expect(await screen.findByText(reason)).toBeVisible();
+    expect(await saveButton()).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Discard" }),
+    ).toHaveAccessibleDescription(reason);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
   });
 
   it("offers Save as soon as the builder asks a question", async () => {

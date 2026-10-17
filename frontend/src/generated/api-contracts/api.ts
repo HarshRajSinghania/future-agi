@@ -59319,6 +59319,56 @@ export const simulateApiHarnessEnvironmentsNudgesAnswerNudge = async (
   );
 };
 
+export type simulateApiHarnessEnvironmentsNudgesStopNudgeResponse200 = {
+  data: HarnessNudgeApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsNudgesStopNudgeResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsNudgesStopNudgeResponseSuccess =
+  simulateApiHarnessEnvironmentsNudgesStopNudgeResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsNudgesStopNudgeResponseError =
+  simulateApiHarnessEnvironmentsNudgesStopNudgeResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsNudgesStopNudgeResponse =
+  | simulateApiHarnessEnvironmentsNudgesStopNudgeResponseSuccess
+  | simulateApiHarnessEnvironmentsNudgesStopNudgeResponseError;
+
+export const getSimulateApiHarnessEnvironmentsNudgesStopNudgeUrl = (
+  id: string,
+  nudgeId: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/nudges/${nudgeId}/stop/`;
+};
+
+/**
+ * Stop a queued or running rebuild; it can be run again. Returns the nudge.
+ */
+export const simulateApiHarnessEnvironmentsNudgesStopNudge = async (
+  id: string,
+  nudgeId: string,
+  emptyRequestApi: EmptyRequestApi,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsNudgesStopNudgeResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsNudgesStopNudgeResponse>(
+    getSimulateApiHarnessEnvironmentsNudgesStopNudgeUrl(id, nudgeId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(emptyRequestApi),
+    },
+  );
+};
+
 export type simulateApiHarnessEnvironmentsRunPlanResponse200 = {
   data: HarnessRunPlanApi;
   status: 200;

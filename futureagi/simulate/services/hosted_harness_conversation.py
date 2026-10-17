@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from typing import Any
 
 from django.conf import settings
@@ -172,6 +173,11 @@ def recover_stalled_conversations(
     schedule: Callable[[str], Any], *, limit: int = 100
 ) -> dict[str, int]:
     """Restart chat runtimes that died with messages outstanding; settle ones that died idle."""
+    from simulate.services.harness_versioning.rebuild import (
+        holds_conversation,
+        waiting_since,
+    )
+
     now = timezone.now()
     unacked = HostedHarnessConversationMessage.no_workspace_objects.filter(
         conversation=OuterRef("pk"),
@@ -250,8 +256,12 @@ def recover_stalled_conversations(
             counts["settled"] += _settle_idle(candidate.id)
             continue
         oldest = _unacked_commands(candidate).order_by("sequence").first()
-        if oldest is not None and now - oldest.created_at > timedelta(
-            seconds=RUNTIME_GIVE_UP_SECONDS
+        if (
+            oldest is not None
+            and now - waiting_since(candidate, oldest)
+            > timedelta(seconds=RUNTIME_GIVE_UP_SECONDS)
+            # A rebuild's own checks end it; its chat restarts meanwhile.
+            and not holds_conversation(candidate)
         ):
             counts["abandoned"] += _abandon_outstanding(candidate.id)
             continue
@@ -313,6 +323,8 @@ def retire_without_saved_workspace(conversation_id) -> int:
 
 
 def _abandon_outstanding(conversation_id) -> int:
+    from simulate.services.harness_versioning.rebuild import waiting_since
+
     with transaction.atomic():
         conversation = (
             HostedHarnessConversation.no_workspace_objects.select_for_update().get(
@@ -327,7 +339,7 @@ def _abandon_outstanding(conversation_id) -> int:
             runtime_is_live(lease)
             or runtime_start_pending(lease)
             or oldest is None
-            or timezone.now() - oldest.created_at
+            or timezone.now() - waiting_since(conversation, oldest)
             <= timedelta(seconds=RUNTIME_GIVE_UP_SECONDS)
         ):
             return 0
@@ -575,27 +587,40 @@ def issue_conversation_capability(
     control_only: bool = False,
     runtime_name: str = "",
     runtime_digest: str = "",
-) -> ConversationCapability:
+    agent_version: Any = None,
+    claim_ref: str | None = None,
+) -> ConversationCapability | None:
+    """With ``claim_ref``, only that start's claim is taken over; ``None`` when it was
+    given up meanwhile."""
     token = secrets.token_urlsafe(32)
     fence = secrets.token_urlsafe(32)
     expires_at = timezone.now() + timedelta(seconds=ttl_seconds)
-    lease, _ = HostedHarnessConversationLease.no_workspace_objects.update_or_create(
+    defaults = {
+        "attempt": attempt,
+        "control_only": control_only,
+        "agent_version": agent_version,
+        "provider_ref": provider_ref,
+        "state": HostedHarnessConversationLease.State.STARTING,
+        "token_hash": hash_secret(token),
+        "fence_hash": hash_secret(fence),
+        "expires_at": expires_at,
+        "heartbeat_at": timezone.now(),
+        "snapshot_name": runtime_name
+        or str(getattr(settings, "ALK_DAYTONA_SNAPSHOT", "") or ""),
+        "snapshot_digest": runtime_digest
+        or str(getattr(settings, "ALK_DAYTONA_SNAPSHOT_DIGEST", "") or ""),
+    }
+    leases = HostedHarnessConversationLease.no_workspace_objects
+    if claim_ref is None:
+        lease, _ = leases.update_or_create(conversation=conversation, defaults=defaults)
+    elif leases.filter(
         conversation=conversation,
-        defaults={
-            "attempt": attempt,
-            "control_only": control_only,
-            "provider_ref": provider_ref,
-            "state": HostedHarnessConversationLease.State.STARTING,
-            "token_hash": hash_secret(token),
-            "fence_hash": hash_secret(fence),
-            "expires_at": expires_at,
-            "heartbeat_at": timezone.now(),
-            "snapshot_name": runtime_name
-            or str(getattr(settings, "ALK_DAYTONA_SNAPSHOT", "") or ""),
-            "snapshot_digest": runtime_digest
-            or str(getattr(settings, "ALK_DAYTONA_SNAPSHOT_DIGEST", "") or ""),
-        },
-    )
+        provider_ref=claim_ref,
+        state=HostedHarnessConversationLease.State.STARTING,
+    ).update(**defaults, updated_at=timezone.now()):
+        lease = leases.get(conversation=conversation)
+    else:
+        return None
     base = endpoint_base_url.rstrip("/")
     prefix = f"{base}/simulate/api/harness/conversations/{conversation.id}"
     document = {
@@ -641,9 +666,15 @@ def build_turn_context(conversation: HostedHarnessConversation) -> dict[str, Any
                 HostedHarnessConversationLease.State.ACTIVE,
             ),
         )
-        .only("control_only")
+        .only("control_only", "agent_version_id")
         .first()
     )
+    source = job.payload.get("source") or {}
+    if lease is not None and lease.agent_version_id:
+        from simulate.services.harness_agent_versions import _side_row
+
+        runtime = _side_row(lease.agent_version_id)
+        source = (runtime.source or {}) if runtime is not None else source
     return {
         "schema_version": "futureagi.harness-turn-context.v1",
         "conversation_id": str(conversation.id),
@@ -653,7 +684,7 @@ def build_turn_context(conversation: HostedHarnessConversation) -> dict[str, Any
             "job_id": str(job.id),
             "run_id": str(job.run_id),
             "workspace_revision": conversation.latest_workspace_digest,
-            "source_revision": (job.payload.get("source") or {}).get("commit_sha"),
+            "source_revision": source.get("commit_sha"),
         },
         "selection": {
             "run_test_id": str(job.run_test_id) if job.run_test_id else None,
@@ -874,6 +905,16 @@ def ingest_conversation_events(
                 conversation=conversation
             )
         )
+        if lease.state in {
+            HostedHarnessConversationLease.State.EXPIRED,
+            HostedHarnessConversationLease.State.RELEASED,
+        }:
+            # Expired while this request waited for the lock (a stopped rebuild).
+            raise HostedHarnessError(
+                "conversation_lease_inactive",
+                "conversation lease is no longer active",
+                status_code=409,
+            )
         latest_command = (
             conversation.messages.filter(
                 role=HostedHarnessConversationMessage.Role.USER
@@ -978,6 +1019,21 @@ def _ingest_event(
     )
     conversation.event_acked_through = event["sequence"]
     conversation.next_event_sequence = event["sequence"] + 1
+    if event["kind"] in ("turn_started", "turn_completed", "turn_interrupted"):
+        from simulate.services.harness_versioning.rebuild import on_turn_event
+
+        # After the commit, before the turn's promotion and before the guest hears
+        # back: a rebuild's turn end expires its sandbox's lease here.
+        transaction.on_commit(
+            partial(
+                on_turn_event,
+                str(conversation.id),
+                event["kind"],
+                event.get("payload") or {},
+                event["sequence"],
+                event["emitted_at"],
+            )
+        )
     _project_event(conversation, event)
 
 
@@ -1610,6 +1666,14 @@ def promote_turn_checkpoint(
     ).first()
     if turn is None:
         return None
+    from simulate.services.harness_versioning import rebuild
+
+    command = HostedHarnessConversationMessage.no_workspace_objects.filter(
+        conversation=conversation,
+        id=(turn.payload or {}).get("command_message_id"),
+        role=HostedHarnessConversationMessage.Role.USER,
+    ).first()
+    nudge = rebuild.nudge_for_command(command)
     checkpoints = HostedHarnessConversationEvent.no_workspace_objects.filter(
         conversation=conversation,
         kind="checkpoint_committed",
@@ -1623,27 +1687,34 @@ def promote_turn_checkpoint(
         checkpoints.order_by("-sequence").values_list("sequence", "payload").first()
     )
     if committed is None:
+        if nudge is not None:
+            rebuild.land_nudge_result(nudge, checkpoint_key=None, turn_event=turn)
         return None
     sequence, payload = committed
     digest = str(payload["digest"])
-    command = HostedHarnessConversationMessage.no_workspace_objects.filter(
-        conversation=conversation,
-        id=(turn.payload or {}).get("command_message_id"),
-        role=HostedHarnessConversationMessage.Role.USER,
-    ).first()
     expected_revision = (
         str((command.payload or {}).get("_environment_revision") or "")
         if command is not None
         else ""
     )
-    return promote_conversation_checkpoint(
-        conversation,
-        object_key=_workspace_object_key(conversation, digest),
-        digest=digest,
-        sequence=sequence,
-        expected_revision=expected_revision,
-        command=command,
-    )
+    object_key = _workspace_object_key(conversation, digest)
+    try:
+        environment = promote_conversation_checkpoint(
+            conversation,
+            object_key=object_key,
+            digest=digest,
+            sequence=sequence,
+            expected_revision=expected_revision,
+            command=command,
+        )
+    except HostedHarnessError as exc:
+        if nudge is None or exc.retryable:
+            raise
+        rebuild.fail_landing(nudge, exc, turn_event=turn)
+        return None
+    if nudge is not None:
+        rebuild.land_nudge_result(nudge, checkpoint_key=object_key, turn_event=turn)
+    return environment
 
 
 def report_checkpoint_rejection(conversation_id: str, message: str) -> None:
@@ -1683,14 +1754,9 @@ def promote_latest_checkpoint(
             status_code=409,
             retryable=True,
         )
-    command = (
-        conversation.messages.filter(
-            role=HostedHarnessConversationMessage.Role.USER,
-            sequence__lte=conversation.command_acked_through,
-        )
-        .order_by("-sequence")
-        .first()
-    )
+    from simulate.services.harness_versioning.rebuild import turn_command
+
+    command = turn_command(conversation)
     expected_revision = (
         str((command.payload or {}).get("_environment_revision") or "")
         if command is not None
@@ -1719,16 +1785,20 @@ class _DraftCommand:
 
 def _draft_command(
     command: HostedHarnessConversationMessage | None, environment: HostedHarnessJob
-) -> _DraftCommand:
+) -> _DraftCommand | None:
+    """``None`` drops the save: it is a rebuild's, and that rebuild is over."""
     from simulate.services.harness_versioning.drafts import command_author
+    from simulate.services.harness_versioning.rebuild import draft_command
 
     payload = (command.payload or {}) if command is not None else {}
-    # TODO: map a nudge command (payload["nudge_id"], set by the server) to
-    # origin="nudge", pieces={nudge.target} and nudge=nudge (step 14).
+    rebuild = draft_command(command)
+    if rebuild is None:
+        return None
+    origin, draft_kwargs = rebuild
     return _DraftCommand(
-        origin="extend" if payload.get("_origin") == "extend" else "chat",
+        origin=origin or ("extend" if payload.get("_origin") == "extend" else "chat"),
         author=command_author(payload, environment),
-        draft_kwargs={},
+        draft_kwargs=draft_kwargs,
     )
 
 
@@ -1775,7 +1845,7 @@ def promote_conversation_checkpoint(
     rolls the environment back.
     """
     from simulate.services.harness_scenarios import index_scenarios
-    from simulate.services.harness_versioning import drafts
+    from simulate.services.harness_versioning import drafts, rebuild
     from simulate.services.hosted_harness_gateway import (
         authoring_basis,
         authoring_content_digest,
@@ -1851,7 +1921,9 @@ def promote_conversation_checkpoint(
             return environment
 
         basis = checkpoint_basis or expected_revision
-        if basis != current_revision:
+        if basis != current_revision and not rebuild.only_agent_moved(
+            command, environment
+        ):
             stale_revision = current_revision
         elif drafts.drafts_apply(environment):
             token = draft_basis_token(checkpoint)
@@ -1860,6 +1932,8 @@ def promote_conversation_checkpoint(
             # recomposed.
             outdated = expected is None
             draft_command = _draft_command(command, environment)
+            if draft_command is None:
+                return environment
             try:
                 if outdated:
                     raise drafts.draft_changed()
@@ -2235,7 +2309,12 @@ def _serialize_message(message: HostedHarnessConversationMessage) -> dict[str, A
         "kind": message.kind,
         "state": message.state,
         "stage": message.stage,
-        "content": message.content,
+        # A rebuild's briefing is for its sandbox; the workspace shows its labels.
+        "content": (
+            ""
+            if (message.payload or {}).get("command_kind") == "nudge"
+            else message.content
+        ),
         "payload": message.payload,
         "invocation_id": message.invocation_id,
         "function_call_id": message.function_call_id,

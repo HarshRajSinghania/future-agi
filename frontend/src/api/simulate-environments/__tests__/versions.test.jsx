@@ -30,6 +30,7 @@ const {
   useRefreshWhenChecked,
   useNudges,
   useAnswerNudge,
+  useStopNudge,
   useDrafts,
   useSaveDrafts,
   useDiscardDraft,
@@ -37,6 +38,7 @@ const {
   toDrafts,
   nudgesKey,
   nudgeFromApi,
+  toNudges,
   canMakeDefault,
   runPlanKey,
   environmentVersionsKey,
@@ -1148,7 +1150,76 @@ describe("nudges", () => {
     ]);
   });
 
-  it.each(["nudges_disabled", "rebuild_unavailable"])(
+  it("keeps a landed rebuild's diffs as sent, and names the active rebuild", () => {
+    const landed = {
+      ...NUDGE,
+      state: "applied",
+      summary: {
+        set_aside: { started_from_label: "v1" },
+        update: {
+          sub_goals: { added: ["verify_identity"] },
+          changed: { angry_caller_v2: ["persona"] },
+        },
+        draft_edits: { contract: { use_cases: {} }, edited_by: "Asha" },
+      },
+    };
+    const nudge = nudgeFromApi(landed);
+    expect(nudge.summary.setAside.startedFromLabel).toBe("v1");
+    expect(Object.keys(nudge.summary.update)).toEqual(["sub_goals", "changed"]);
+    expect(Object.keys(nudge.summary.update.changed)).toEqual([
+      "angry_caller_v2",
+    ]);
+    expect(nudge.summary.draftEdits).toEqual({
+      contract: { use_cases: {} },
+      edited_by: "Asha",
+    });
+    expect(toNudges([landed]).active).toBeNull();
+    const running = { ...SUITE, state: "running" };
+    expect(toNudges([landed, running]).active.id).toBe("n2");
+  });
+
+  it("stops a rebuild, updates its row and refreshes what follows it", async () => {
+    client.setQueryData(nudgesKey("env-1"), [
+      { ...NUDGE, state: "running" },
+      SUITE,
+    ]);
+    axios.post.mockResolvedValue({
+      data: { ...NUDGE, state: "failed", error: { code: "stopped_by_user" } },
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useStopNudge("env-1"), { wrapper });
+    await act(() => result.current.mutateAsync({ nudgeId: "n1" }));
+    expect(axios.post).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/env-1/nudges/n1/stop/",
+      {},
+    );
+    expect(
+      client.getQueryData(nudgesKey("env-1")).map((one) => one.state),
+    ).toEqual(["failed", "pending"]);
+    expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: nudgesKey("env-1") },
+      { queryKey: [...environmentVersionsKey("env-1"), "run-plan"] },
+      { queryKey: harnessJobQuery("env-1").queryKey },
+    ]);
+  });
+
+  it("refreshes the list when the rebuild being stopped closed meanwhile", async () => {
+    axios.post.mockRejectedValue({
+      statusCode: 409,
+      error: "nudge_closed",
+      state: "applied",
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useStopNudge("env-1"), { wrapper });
+    await act(() =>
+      result.current.mutateAsync({ nudgeId: "n1" }).catch(() => {}),
+    );
+    expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: nudgesKey("env-1") },
+    ]);
+  });
+
+  it.each(["nudges_disabled", "rebuild_running", "environment_building"])(
     "refreshes nothing when a rebuild is refused (%s)",
     async (code) => {
       axios.post.mockRejectedValue({ statusCode: 409, error: code });

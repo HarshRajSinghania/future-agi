@@ -12,9 +12,7 @@ import {
 } from "src/api/simulate-environments/versions";
 import { refusalText } from "../evals/refusalText";
 import { DRAFTS_COPY as COPY } from "../workspace.constants";
-
-const changeCount = (changes) =>
-  Object.values(changes || {}).reduce((n, v) => n + (Number(v) || 0), 0);
+import { changeCount } from "./changeCount";
 
 const pieceLine = (piece, draft) =>
   `${COPY.pieces[piece]} · ${
@@ -47,7 +45,12 @@ const errorText = (error, drafts, fallback) => {
  * who edited them last, and Save (every open piece at once) or Discard. Shown
  * only with versioning on and a draft open.
  */
-export default function DraftBar({ env, busy = false, onViewChanges }) {
+export default function DraftBar({
+  env,
+  busy = false,
+  rebuilding = false,
+  onViewChanges,
+}) {
   const enabled = Boolean(env?.versioning?.enabled);
   const { data: drafts } = useDrafts(env?.id, { enabled });
   const save = useSaveDrafts(env?.id);
@@ -55,6 +58,7 @@ export default function DraftBar({ env, busy = false, onViewChanges }) {
   const [confirming, setConfirming] = useState(false);
   const staleId = useId();
   const busyId = useId();
+  const holdId = useId();
 
   // A refusal is about the drafts it was sent for, so it goes when they
   // change. draft_changed stays: it asks to review the drafts it refetched.
@@ -80,9 +84,9 @@ export default function DraftBar({ env, busy = false, onViewChanges }) {
     new Date(b.updatedAt || 0) > new Date(a.updatedAt || 0) ? b : a,
   );
   const pending = save.isPending || discard.isPending;
-  // TODO: step 14 also blocks Save while a rebuild holds the environment.
   const staleReason = drafts.stale ? staleText(drafts) : null;
-  const saveReasons = [staleReason && staleId, busy && busyId].filter(Boolean);
+  const holdReasons = [busy && busyId, rebuilding && holdId].filter(Boolean);
+  const saveReasons = [staleReason && staleId, ...holdReasons].filter(Boolean);
 
   const onSave = () => {
     discard.reset();
@@ -151,8 +155,8 @@ export default function DraftBar({ env, busy = false, onViewChanges }) {
           size="small"
           variant="outlined"
           color="inherit"
-          disabled={busy || pending}
-          aria-describedby={busy ? busyId : undefined}
+          disabled={holdReasons.length > 0 || pending}
+          aria-describedby={holdReasons.join(" ") || undefined}
           onClick={() => setConfirming(true)}
           sx={{ textTransform: "none" }}
         >
@@ -183,6 +187,14 @@ export default function DraftBar({ env, busy = false, onViewChanges }) {
           sx={{ typography: "s3", color: "text.secondary", mt: 0.5 }}
         >
           {COPY.busy}
+        </Typography>
+      )}
+      {rebuilding && (
+        <Typography
+          id={holdId}
+          sx={{ typography: "s3", color: "text.secondary", mt: 0.5 }}
+        >
+          {COPY.errors.rebuild_running}
         </Typography>
       )}
       {error && (
@@ -224,6 +236,8 @@ DraftBar.propTypes = {
   }),
   // Chat is working or still saving its last turn.
   busy: PropTypes.bool,
+  // A queued or running rebuild holds Save and Discard.
+  rebuilding: PropTypes.bool,
   // (piece, draft version id): show that draft in the Versions tab.
   onViewChanges: PropTypes.func,
 };

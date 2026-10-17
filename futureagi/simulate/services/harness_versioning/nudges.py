@@ -94,6 +94,8 @@ def _start(kind: str, environment_id: str, *args: Any) -> None:
     try:
         if kind == "raise":
             tasks.schedule_nudge(environment_id, *args)
+        elif kind == "check":
+            tasks.schedule_nudge_check_task(environment_id)
         else:
             tasks.schedule_reconcile_task(environment_id)
     except Exception as exc:  # noqa: BLE001 - the next trigger or reconcile recovers it
@@ -629,8 +631,11 @@ def _agent_secrets(
 
     secret_values: dict[str, set[str]] = {}
     legacy_read = False
-    for version_id in {str(one) for one in agent_version_ids if one}:
-        version_secrets = _version_values(environment.organization_id, version_id)
+    # No version named: the sandbox ran with this environment's stored secrets.
+    for version_id in {str(one) for one in agent_version_ids if one} or {None}:
+        version_secrets = version_id and _version_values(
+            environment.organization_id, version_id
+        )
         if version_secrets is None:
             if legacy_read:
                 continue
@@ -1310,7 +1315,6 @@ def _missed_offer(environment: HostedHarnessJob) -> Any:
     default = AgentVersion._base_manager.filter(id=environment.agent_version_id).first()
     if default is None:
         return None
-    # TODO: drop environment_busy here once retry_deferred_activations exists (step 14).
     waiting = ("environment_busy", "not_requested", *_OFFERED)
     allowed = lineage_version_ids(environment, default.agent_definition_id)
     for runtime in (
@@ -1324,11 +1328,15 @@ def _missed_offer(environment: HostedHarnessJob) -> Any:
     ):
         if allowed is not None and str(runtime.agent_version_id) not in allowed:
             continue
-        if reads._activation_outcome(
-            runtime.preflight_report, environment.id
-        ) in waiting and agent_version_pickable(environment, runtime.agent_version_id):
+        outcome = reads._activation_outcome(runtime.preflight_report, environment.id)
+        if outcome in waiting and agent_version_pickable(
+            environment, runtime.agent_version_id
+        ):
             break
     else:
+        return None
+    if outcome == "environment_busy":
+        # A busy environment's activation is retried, not offered.
         return None
     offered = (
         HarnessNudge.no_workspace_objects.filter(
@@ -1386,8 +1394,9 @@ def reconcile_environment_nudges(environment_id: Any) -> str:
     offered = _missed_offer(environment)
     if offered is not None:
         raise_environment_nudge(environment.id, offered, default_moved=False)
-    # TODO: run this from step 14's tick for environments whose schedule failed, and
-    # once when the nudges flag is turned on (step 14).
+    # TODO: also run this for environments whose schedule failed, and once when the
+    # nudges flag is turned on; a sweep of every versioned environment reads GitHub and
+    # storage, so it needs its own budget.
     logger.info("harness_nudge_reconciled environment=%s outcome=done", environment.id)
     return "reconciled"
 
@@ -1397,7 +1406,9 @@ def reconcile_environment_nudges(environment_id: Any) -> str:
 
 def close_environment_nudges(locked: HostedHarnessJob, *, code: str) -> list[str]:
     """Close a deleted environment's open nudges as failed with ``code``."""
-    # TODO: close queued and running nudges through rebuild.close_nudge (step 14).
+    from simulate.services.harness_versioning.rebuild import close_open_nudges
+
+    close_open_nudges(locked, code=code)
     return _close(
         HarnessNudge.no_workspace_objects.filter(
             job=locked, state__in=(State.PENDING, State.FAILED)
@@ -1454,7 +1465,19 @@ def _public_error(error: Any) -> dict[str, Any] | None:
     return {
         "code": str(error["code"]),
         **({"message": str(error["message"])} if error.get("message") else {}),
+        **({"problems": list(error["problems"])} if error.get("problems") else {}),
     }
+
+
+def _queued_behind_input(nudge: HarnessNudge) -> bool:
+    from simulate.models import HostedHarnessConversation
+
+    return (
+        nudge.state == State.QUEUED
+        and HostedHarnessConversation.no_workspace_objects.filter(
+            job_id=nudge.job_id, blocking_input__isnull=False
+        ).exists()
+    )
 
 
 def nudge_item(
@@ -1481,10 +1504,9 @@ def nudge_item(
         "result_suite_version": ref(suite=nudge.result_suite_version),
         "summary": nudge.summary,
         "error": _public_error(nudge.error),
-        # Step 14's fields, kept stable for the contract.
-        "closed_at": None,
-        "queued_behind_input": False,
-        "can_stop": False,
+        "closed_at": nudge.closed_at.isoformat() if nudge.closed_at else None,
+        "queued_behind_input": _queued_behind_input(nudge),
+        "can_stop": nudge.state in _IN_FLIGHT,
         "replaced_by": (
             {"id": str(replaced_by.id), "trigger_label": _trigger_label(replaced_by)}
             if replaced_by is not None
@@ -1546,16 +1568,6 @@ def list_nudges(
     return items
 
 
-def _answer_yes(
-    environment: HostedHarnessJob, nudge_id: Any, *, user: Any
-) -> HarnessNudge:
-    # TODO: replace _answer_yes with rebuild.answer_rebuild (usage gate, queued, hold,
-    # dispatch) (step 14).
-    raise HostedHarnessError(
-        "rebuild_unavailable", "Rebuild isn't available yet", status_code=409
-    )
-
-
 def _closed(nudge: HarnessNudge) -> HostedHarnessError:
     return HostedHarnessError(
         "nudge_closed",
@@ -1568,19 +1580,12 @@ def _closed(nudge: HarnessNudge) -> HostedHarnessError:
 def answer_nudge(
     environment: HostedHarnessJob, nudge_id: Any, *, answer: str, user: Any
 ) -> dict[str, Any]:
-    """Skip ("no") or Rebuild ("yes") a pending nudge."""
+    """Skip ("no") a pending nudge, or Rebuild ("yes") a pending or failed one."""
     if answer == "yes":
-        nudge = _nudges(environment).filter(id=nudge_id).first()
-        if nudge is None:
-            raise nudge_not_found()
-        if nudge.state != State.PENDING:
-            raise _closed(nudge)
-        if not nudges_enabled():
-            raise HostedHarnessError(
-                "nudges_disabled", "Rebuilds aren't switched on", status_code=409
-            )
-        nudge = _answer_yes(environment, nudge_id, user=user)
-        return nudge_item(nudge)
+        from simulate.services.harness_versioning.rebuild import answer_rebuild
+
+        nudge = answer_rebuild(environment, nudge_id, user=user)
+        return nudge_item(_nudges(environment).get(id=nudge.id))
     with transaction.atomic():
         # The environment first, as a raise takes it, so a Skip and a replace queue.
         _head(environment.id, lock=True)

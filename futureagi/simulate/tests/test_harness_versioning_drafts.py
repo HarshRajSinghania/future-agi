@@ -2151,7 +2151,7 @@ class TestStepFourteenInterface:
                 last_edited_by_id=user.id,
             )
 
-        assert (restored.status, restored.revision) == ("draft", 5)
+        assert (restored.status, restored.revision) == ("draft", 6)
         assert restored.last_edited_by_id == user.id
         assert restored.hash == draft.hash
         assert {one["key"] for one in restored.documents["pairs"]} == {

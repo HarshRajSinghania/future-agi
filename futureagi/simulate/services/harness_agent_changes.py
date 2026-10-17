@@ -68,7 +68,12 @@ _DAY = 86400
 _POLL_RESERVE = 20
 # A passed version an environment asked for from where it stands is observed, unless
 # its move was held back by one of these: asking again moves it.
-_ASK_AGAIN = ("environment_busy", "rollback_unavailable", "failed")
+_ASK_AGAIN = (
+    "environment_busy",
+    "environment_not_ready",
+    "rollback_unavailable",
+    "failed",
+)
 # A move refused this many times in a row may never be possible: no more asks.
 _ROLLBACK_ASKS = 3
 # A pair read for a push is not read again for another this soon: the poller is.

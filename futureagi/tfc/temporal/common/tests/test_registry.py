@@ -58,16 +58,40 @@ def test_agent_change_detection_runs_on_the_default_queue():
 
 def test_nudge_activities_run_on_the_default_queue():
     from simulate.tasks.harness_nudges import (
+        check_harness_nudges,
+        finish_harness_nudge_turn,
         raise_harness_environment_nudge,
         reconcile_harness_environment_nudges,
+        retry_harness_deferred_activations,
+        stop_harness_nudge_sandbox,
+        tick_harness_nudges,
     )
     from simulate.temporal.constants import QUEUE_RUNNER
     from tfc.temporal.drop_in.decorator import _ACTIVITY_WRAPPERS
+    from tfc.temporal.schedules.simulate import SIMULATE_SCHEDULES
 
-    for task in (raise_harness_environment_nudge, reconcile_harness_environment_nudges):
+    for task in (
+        raise_harness_environment_nudge,
+        reconcile_harness_environment_nudges,
+        tick_harness_nudges,
+        check_harness_nudges,
+        finish_harness_nudge_turn,
+        stop_harness_nudge_sandbox,
+    ):
         wrapper = _ACTIVITY_WRAPPERS[task.name]
         assert wrapper in registry.get_activities_for_queue("default")
         assert wrapper not in registry.get_activities_for_queue(QUEUE_RUNNER)
+    # Activations run where the agent check runs.
+    retry = _ACTIVITY_WRAPPERS[retry_harness_deferred_activations.name]
+    assert retry in registry.get_activities_for_queue(QUEUE_RUNNER)
+    [tick] = [
+        one for one in SIMULATE_SCHEDULES if one.schedule_id == "tick-harness-nudges"
+    ]
+    assert (tick.activity_name, tick.interval_seconds, tick.queue) == (
+        "tick_harness_nudges",
+        30,
+        "default",
+    )
 
 
 def test_the_removed_authoring_activity_is_not_registered():

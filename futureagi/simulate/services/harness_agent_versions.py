@@ -1628,6 +1628,17 @@ def hand_move(user: Any, version_id: Any) -> dict[str, Any]:
     }
 
 
+def record_hand_move(locked: HostedHarnessJob, user: Any, version_id: Any) -> None:
+    """Record on the locked environment that ``version_id`` is its default by hand."""
+    payload = dict(locked.payload or {})
+    payload["metadata"] = {
+        **(payload.get("metadata") or {}),
+        HAND_MOVE_KEY: hand_move(user, version_id),
+    }
+    locked.payload = payload
+    locked.save(update_fields=["payload", "updated_at"])
+
+
 def _turned_down(
     locked: HostedHarnessJob,
     version: AgentVersion,
@@ -1697,13 +1708,7 @@ def _activate_on(
         if locked.agent_version_id == version.id:
             if explicit:
                 # Asked for again by hand: an earlier request never replaces it.
-                payload = dict(locked.payload or {})
-                payload["metadata"] = {
-                    **(payload.get("metadata") or {}),
-                    HAND_MOVE_KEY: hand_move(user, version.id),
-                }
-                locked.payload = payload
-                locked.save(update_fields=["payload", "updated_at"])
+                record_hand_move(locked, user, version.id)
             return "already_default"
         # Locked, so a discard waits until this move is visible to its in-use check.
         runtime = _side_row(version.id, lock=True)
@@ -1716,7 +1721,7 @@ def _activate_on(
             if reason is not None:
                 return reason
         if _busy(locked):
-            # TODO: move it once the build or extend finishes (steps 10/14).
+            # Moved by rebuild.retry_deferred_activations once it finishes.
             return "environment_busy"
         outgoing = locked.agent_version_id
         try:
@@ -1917,7 +1922,7 @@ def _still_waiting(runtime: HarnessAgentVersionRuntime, by_environment: Any) -> 
         ):
             continue
         if outcome == "environment_busy":
-            # TODO: moved once the build or extend finishes (steps 10/14).
+            # Moved by rebuild.retry_deferred_activations once it finishes.
             # A failed or canceled build is not finishing: nothing will move it.
             waiting = environment.state not in UNREADY_STATES and _busy(environment)
         elif runtime.preflight_status == Status.PENDING:

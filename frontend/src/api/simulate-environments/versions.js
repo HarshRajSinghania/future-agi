@@ -64,6 +64,11 @@ const answerNudgePath = (envId, nudgeId) =>
     id: envId,
     nudge_id: nudgeId,
   });
+const stopNudgePath = (envId, nudgeId) =>
+  apiPath("/simulate/api/harness-environments/{id}/nudges/{nudge_id}/stop/", {
+    id: envId,
+    nudge_id: nudgeId,
+  });
 
 const draftsPath = (envId) =>
   apiPath("/simulate/api/harness-environments/{id}/drafts/", { id: envId });
@@ -143,6 +148,9 @@ export const getNudges = async (envId) =>
 
 export const answerNudge = async (envId, nudgeId, answer) =>
   (await axios.post(answerNudgePath(envId, nudgeId), { answer })).data;
+
+export const stopNudge = async (envId, nudgeId) =>
+  (await axios.post(stopNudgePath(envId, nudgeId), {})).data;
 
 export const getDrafts = async (envId) =>
   (await axios.get(draftsPath(envId))).data;
@@ -358,7 +366,7 @@ export function useRunPlan(envId, picks, { enabled = true } = {}) {
 // The versions (with the drafts) and what follows the defaults: the
 // environment detail, the job and the scenarios. Keys are environment.js's and
 // scenariosHooks.js's literals, which import this module.
-const refreshFollowers = (queryClient, envId) => {
+export const refreshFollowers = (queryClient, envId) => {
   queryClient.invalidateQueries({ queryKey: environmentVersionsKey(envId) });
   queryClient.invalidateQueries({ queryKey: ["harness-environment", envId] });
   queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
@@ -486,13 +494,15 @@ export function useRefreshWhenChecked(envId, agentVersions) {
   }, [pending, envId, queryClient]);
 }
 
-// Rebuild ("yes") is answered 409 until rebuilding lands; it shows disabled.
-// TODO: enable Rebuild (step 14).
-export const REBUILD_AVAILABLE = false;
-
 // The diff and summary of a suite nudge are keyed by contract paths, tool
 // names and sub-goal keys, so their keys stay as the server wrote them.
-const VERBATIM_FACTS = new Set(["environment_diff", "environment_summary"]);
+// A landed rebuild's diffs are version diffs, read as VersionDiff reads them.
+const VERBATIM_FACTS = new Set([
+  "environment_diff",
+  "environment_summary",
+  "update",
+  "draft_edits",
+]);
 
 const camelDeep = (value) => {
   if (Array.isArray(value)) return value.map(camelDeep);
@@ -512,7 +522,7 @@ export const nudgeFromApi = (item = {}) => {
   return { ...nudge, facts: nudge.facts || {} };
 };
 
-const NUDGE_ACTIVE_STATES = new Set(["queued", "running"]);
+export const NUDGE_ACTIVE_STATES = new Set(["queued", "running"]);
 const NUDGE_ACTIVE_POLL_MS = 5000;
 const NUDGE_POLL_MS = 30000;
 
@@ -527,6 +537,8 @@ export const toNudges = (data) => {
     byId: Object.fromEntries(list.map((nudge) => [nudge.id, nudge])),
     pendingEnvironment: pending("environment"),
     pendingSuite: pending("suite"),
+    // The queued or running rebuild; it holds the environment's drafts.
+    active: list.find((nudge) => NUDGE_ACTIVE_STATES.has(nudge.state)) || null,
   };
 };
 
@@ -548,16 +560,17 @@ export function useNudges(envId, { enabled = true } = {}) {
   });
 }
 
-// Answer a nudge. The answered nudge replaces its cached row; the run plan's
-// warnings and the job's conversation follow it, so both are asked again. A
-// nudge closed meanwhile refreshes the list so the card shows its state.
-export function useAnswerNudge(envId) {
+// Answer or stop a nudge. The nudge it answers with replaces its cached row;
+// the run plan's warnings and the job's conversation follow it, so both are
+// asked again. A nudge closed meanwhile refreshes the list so the card shows
+// its state.
+const useNudgeMutation = (envId, mutationFn) => {
   const queryClient = useQueryClient();
   const refreshNudges = () =>
     queryClient.invalidateQueries({ queryKey: nudgesKey(envId) });
   return useMutation({
     meta: { errorHandled: true },
-    mutationFn: ({ nudgeId, answer }) => answerNudge(envId, nudgeId, answer),
+    mutationFn,
     onSuccess: (data) => {
       if (data?.id) {
         queryClient.setQueryData(nudgesKey(envId), (prev) =>
@@ -578,7 +591,17 @@ export function useAnswerNudge(envId) {
       }
     },
   });
-}
+};
+
+// "yes" queues a rebuild, "no" skips.
+export const useAnswerNudge = (envId) =>
+  useNudgeMutation(envId, ({ nudgeId, answer }) =>
+    answerNudge(envId, nudgeId, answer),
+  );
+
+// Stop a queued or running rebuild.
+export const useStopNudge = (envId) =>
+  useNudgeMutation(envId, ({ nudgeId }) => stopNudge(envId, nudgeId));
 
 // The pieces that can hold unsaved changes, in the order they are saved.
 export const DRAFT_PIECES = ["environment", "suite"];

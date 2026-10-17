@@ -675,6 +675,13 @@ export type ${jsonAlias} = JsonValueApi;`,
       "diff: HarnessVersionDiffApiDiff | null;",
       "HarnessVersionDiffApi.diff nullable",
     );
+    schemas = assertReplaceInNamedBlock(
+      schemas,
+      "export interface HarnessVersionDiffApi {",
+      "snapshot_diff?: HarnessVersionDiffApiSnapshotDiff;",
+      "snapshot_diff?: HarnessVersionDiffApiSnapshotDiff | null;",
+      "HarnessVersionDiffApi.snapshot_diff nullable",
+    );
     // A move sends the default it saw, which is null for a piece without one.
     schemas = assertReplaceInNamedBlock(
       schemas,
@@ -1140,6 +1147,13 @@ export type ${jsonAlias} = JsonValueApi;`,
 }).passthrough().nullable()`,
       "SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse.diff nullable",
     );
+    zod = assertReplaceRegexInNamedBlock(
+      zod,
+      "export const SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse =",
+      /("snapshot_diff": zod\.object\(\{\s*\}\)\.passthrough\(\))\.optional\(\)/g,
+      "$1.nullish()",
+      "SimulateApiHarnessEnvironmentsVersionsVersionDiffResponse.snapshot_diff nullable",
+    );
     // The same nullable run-plan fields, and picks a run may send as null.
     zod = assertReplaceRegexInNamedBlock(
       zod,
@@ -1226,6 +1240,7 @@ export type ${jsonAlias} = JsonValueApi;`,
     for (const response of [
       "SimulateApiHarnessEnvironmentsNudgesResponseItem",
       "SimulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse",
+      "SimulateApiHarnessEnvironmentsNudgesStopNudgeResponse",
     ]) {
       for (const [pattern, label] of [
         [
@@ -1242,7 +1257,8 @@ export type ${jsonAlias} = JsonValueApi;`,
           "ids",
         ],
         [
-          /("(?:trigger_agent_version|base_agent_version|base_environment_version|base_suite_version|result_environment_version|result_suite_version|replaced_by|error|answered_by)": zod\.object\(\{[^{}]*\}\))/g,
+          // One level of nesting: an error's problems are objects too.
+          /("(?:trigger_agent_version|base_agent_version|base_environment_version|base_suite_version|result_environment_version|result_suite_version|replaced_by|error|answered_by)": zod\.object\(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}\))/g,
           "objects",
         ],
         [

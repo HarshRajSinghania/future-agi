@@ -691,22 +691,42 @@ def version_diff(
     if piece == "agent":
         return _agent_diff(job, version_id, against_id)
     if against_id is None:
-        version = _piece_version(job, piece, version_id, load=("diff",))
+        version = _piece_version(job, piece, version_id, load=("diff", "snapshot_diff"))
         diff = _stored_diff(version.diff, version.id)
-        return {"summary": version.summary or "", "diff": diff}
-    version = _piece_version(job, piece, version_id, load=("documents",))
+        return {"summary": version.summary or "", "diff": diff, **_draft_edits(version)}
+    version = _piece_version(
+        job, piece, version_id, load=("documents", "snapshot_diff")
+    )
     other = _piece_version(job, piece, against_id, load=("documents",))
     previous = _mapping(other.documents, other.id, "documents")
     current = _mapping(version.documents, version.id, "documents")
     if piece == "environment":
         diff = _environment_diff(previous, current, other.id, version.id)
-        return {"summary": diffs.summarize_environment(diff), "diff": diff}
+        return {
+            "summary": diffs.summarize_environment(diff),
+            "diff": diff,
+            **_draft_edits(version),
+        }
     diff = diffs.suite_diff(
         _scenarios(previous, other.id),
         _scenarios(current, version.id),
         removed_reason="not in this version",
     )
-    return {"summary": diffs.summarize_suite(diff), "diff": diff}
+    return {
+        "summary": diffs.summarize_suite(diff),
+        "diff": diff,
+        **_draft_edits(version),
+    }
+
+
+def _draft_edits(version: Any) -> dict[str, Any]:
+    """Whether a rebuild made someone's unsaved edits live with this version, and
+    what they were (the default before it, against that draft)."""
+    included = bool(version.includes_draft_edits)
+    return {
+        "includes_draft_edits": included,
+        "snapshot_diff": version.snapshot_diff if included else None,
+    }
 
 
 def suite_members(job: HostedHarnessJob, version_id: Any) -> list[dict[str, Any]]:

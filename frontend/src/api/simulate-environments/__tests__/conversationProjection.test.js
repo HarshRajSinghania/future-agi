@@ -224,6 +224,60 @@ describe("projectConversation", () => {
     expect(userTexts).toEqual(["hi"]);
   });
 
+  it("opens a Rebuild's builder turn with a line naming what it updates, not a bubble", () => {
+    const command = (stage, label) =>
+      msg({
+        message_id: `c-${stage}`,
+        role: "user",
+        content: "",
+        state: "delivered",
+        payload: {
+          command_kind: "nudge",
+          nudge_id: "n1",
+          stage,
+          trigger_label: label,
+        },
+        created_at: "2026-09-22T10:00:02Z",
+        sequence: 2,
+      });
+    const turns = projectConversation({
+      messages: [
+        msg({
+          message_id: "u1",
+          role: "user",
+          content: "hi",
+          created_at: "2026-09-22T10:00:00Z",
+          sequence: 1,
+        }),
+        command("environment", "v3"),
+        msg({
+          message_id: "a1",
+          content: "Added the tool.",
+          created_at: "2026-09-22T10:00:03Z",
+          sequence: 3,
+        }),
+      ],
+      events: [],
+    });
+    expect(turns.filter((t) => t.role === "user").map((t) => t.text)).toEqual([
+      "hi",
+    ]);
+    const builder = turns[turns.length - 1];
+    expect(builder.role).toBe("builder");
+    expect(builder.steps.map((s) => [s.kind, s.text])).toEqual([
+      ["nudge-line", "Updating the environment for agent v3…"],
+      ["note", "Added the tool."],
+    ]);
+
+    const suite = projectConversation({
+      messages: [command("suite", "v5")],
+      events: [],
+    });
+    expect(suite[0].steps[0].text).toBe(
+      "Updating the scenarios for environment v5…",
+    );
+  });
+
   it("gives every turn and step a stable id", () => {
     const turns = projectConversation({
       messages: [msg({ message_id: "a1", content: "x" })],
@@ -316,6 +370,36 @@ describe("projectConversation nudge cards", () => {
     });
     expect(turns[0].role).toBe("builder");
     expect(turns[0].steps[0]).toMatchObject({ kind: "note", text: "Saved." });
+  });
+
+  it("projects a re-apply offer to a plain note of its own, without the question", () => {
+    const turns = projectConversation({
+      messages: [
+        card({
+          content:
+            "The edits that went live with v3 were rolled back. Re-apply them in chat?",
+          payload: {
+            reapply: { piece: "environment", version_id: "e3", label: "v3" },
+          },
+        }),
+      ],
+      events: [
+        evt({
+          event_id: "e1",
+          kind: "tool_started",
+          function_call_id: "c1",
+          emitted_at: "2026-09-22T10:00:00Z",
+          payload: { label: "Read" },
+        }),
+      ],
+    });
+    expect(turns.map((t) => t.role)).toEqual(["builder", "system"]);
+    expect(turns[1]).toEqual({
+      id: "n-msg",
+      role: "system",
+      kind: "reapply",
+      text: "The edits that went live with v3 were rolled back.",
+    });
   });
 
   it("is never in flight", () => {

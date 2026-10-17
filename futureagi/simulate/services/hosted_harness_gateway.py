@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import gzip
 import hashlib
 import io
@@ -35,6 +36,7 @@ from simulate.models import (
     HostedHarnessAttempt,
     HostedHarnessConversation,
     HostedHarnessConversationLease,
+    HostedHarnessConversationMessage,
     HostedHarnessJob,
     HostedHarnessSecret,
 )
@@ -48,6 +50,7 @@ from simulate.services.hosted_harness import (
     request_cancellation,
 )
 from simulate.services.hosted_harness_conversation import (
+    _unacked_commands,
     ensure_conversation,
     issue_conversation_capability,
     load_workspace_archive,
@@ -226,10 +229,12 @@ def chat_workspace_for(
     )
     composed = None
     if drafts.drafts_apply(environment):
-        # TODO: only_draft = rebuild.nudge_composition(environment, conversation) (step 14).
-        only_draft = None
+        from simulate.services.harness_versioning.rebuild import nudge_composition
+
         composed = drafts.compose_workspace(
-            environment, conversation, only_draft=only_draft
+            environment,
+            conversation,
+            only_draft=nudge_composition(environment, conversation),
         )
     if composed is not None:
         body = _with_chat_state(archives.pack_archive(composed.files), chat_state)
@@ -2537,6 +2542,7 @@ class HostedHarnessGateway:
             runtime_name=self.client.runtime_name,
             runtime_digest=self.client.runtime_digest,
         )
+        assert capability is not None  # no claim_ref: never given up
         sandbox.fs.upload_file(
             json.dumps(
                 capability.document, sort_keys=True, separators=(",", ":")
@@ -2632,6 +2638,7 @@ class HostedHarnessGateway:
         *,
         conversation: HostedHarnessConversation,
         endpoint_base_url: str,
+        claim_again: bool = True,
     ) -> HostedHarnessConversationLease | None:
         """Keep one live ALK conversation process for this environment, or wait for a home.
 
@@ -2648,7 +2655,15 @@ class HostedHarnessGateway:
             HostedHarnessJob.State.FAILED,
             HostedHarnessJob.State.CANCELED,
         }
+        from simulate.services.harness_versioning import rebuild
+
         attempt = None
+        wanted = None
+        if job.environment_id is None and job.state in terminal_states:
+            if rebuild.landing_pending(job):
+                # A rebuild's result is landing; chat restarts once it has.
+                return None
+            wanted = rebuild.wanted_agent_version(job, conversation)
         if job.state not in terminal_states:
             attempt = (
                 HostedHarnessAttempt.no_workspace_objects.filter(
@@ -2682,6 +2697,15 @@ class HostedHarnessGateway:
                 lease is not None
                 and lease.attempt_id == home
                 and runtime_is_live(lease, now=now)
+                # A sandbox running as another agent than chat wants is retired,
+                # once its turn is over.
+                and (
+                    rebuild.runs_as_wanted_agent(lease, wanted)
+                    or bool(conversation.active_invocation_id)
+                    or _unacked_commands(conversation)
+                    .filter(state=HostedHarnessConversationMessage.State.DELIVERED)
+                    .exists()
+                )
             ):
                 live = lease
             elif runtime_start_pending(lease, now=now):
@@ -2729,21 +2753,7 @@ class HostedHarnessGateway:
                 self._renew_chat_idle_window(live)
             return live
         if retired_ref:
-            try:
-                self.client.delete(
-                    self.client.get(
-                        retired_ref, request_timeout=_PROVIDER_POLL_TIMEOUT_SECONDS
-                    ),
-                    timeout=120,
-                    wait=True,
-                )
-            except SandboxNotFoundError:
-                pass
-            except Exception:
-                logger.exception(
-                    "retired conversation sandbox deletion failed conversation=%s",
-                    conversation.id,
-                )
+            self._delete_chat_sandbox(retired_ref, conversation.id)
         try:
             if attempt is not None:
                 return self._start_chat_in_sandbox(
@@ -2756,8 +2766,12 @@ class HostedHarnessGateway:
                     ),
                     endpoint_base_url=endpoint_base_url,
                 )
-            return self._start_chat_sandbox(
-                job, conversation=conversation, endpoint_base_url=endpoint_base_url
+            started = self._start_chat_sandbox(
+                job,
+                conversation=conversation,
+                endpoint_base_url=endpoint_base_url,
+                agent_version=wanted,
+                claim_ref=claim_ref,
             )
         except Exception as exc:
             HostedHarnessConversationLease.no_workspace_objects.filter(
@@ -2781,6 +2795,32 @@ class HostedHarnessGateway:
                 status_code=503,
                 retryable=True,
             ) from exc
+        if started is None and claim_again:
+            # A close gave the claim up meanwhile; the restart it asked for is this one.
+            return self.ensure_conversation_runtime(
+                job,
+                conversation=conversation,
+                endpoint_base_url=endpoint_base_url,
+                claim_again=False,
+            )
+        return started
+
+    def _delete_chat_sandbox(self, provider_ref: str, conversation_id: Any) -> None:
+        try:
+            self.client.delete(
+                self.client.get(
+                    provider_ref, request_timeout=_PROVIDER_POLL_TIMEOUT_SECONDS
+                ),
+                timeout=120,
+                wait=True,
+            )
+        except SandboxNotFoundError:
+            pass
+        except Exception:
+            logger.exception(
+                "retired conversation sandbox deletion failed conversation=%s",
+                conversation_id,
+            )
 
     def _renew_chat_idle_window(self, lease: HostedHarnessConversationLease) -> None:
         """Keep a chat sandbox for the idle window after the user's latest message."""
@@ -2810,14 +2850,40 @@ class HostedHarnessGateway:
         *,
         conversation: HostedHarnessConversation,
         endpoint_base_url: str,
-    ) -> HostedHarnessConversationLease:
-        """Restore the latest workspace checkpoint into a sandbox of chat's own."""
+        agent_version: Any = None,
+        claim_ref: str | None = None,
+    ) -> HostedHarnessConversationLease | None:
+        """Restore the latest workspace checkpoint into a sandbox of chat's own.
+
+        With ``agent_version`` the sandbox gets that version's agent settings and
+        source; secret refs name its credentials only, never a value. ``None`` when
+        ``claim_ref``'s claim was given up meanwhile; the new sandbox is deleted.
+        """
         workspace_archive = chat_workspace_for(
             job, conversation, chat_state=load_workspace_archive(conversation)
         )
         control_only = workspace_archive is None
         if workspace_archive is None:
             workspace_archive = _empty_workspace_archive()
+        if agent_version is not None:
+            from simulate.services.harness_agent_versions import (
+                _side_row,
+                apply_agent_version,
+            )
+            from simulate.services.harness_versioning.backfill import (
+                effective_runtime,
+            )
+
+            payload = copy.deepcopy(job.payload)
+            apply_agent_version(
+                payload,
+                effective_runtime(
+                    job, _side_row(agent_version.id), version=agent_version
+                ),
+                environment_id=job.id,
+            )
+            job = copy.copy(job)
+            job.payload = payload
         source_archive, _commit_sha = HostedSourceAcquirer().acquire(job)
         simulator_env = _platform_simulator_material()
         _add_scoped_guest_pin_policy(simulator_env, job)
@@ -2860,7 +2926,12 @@ class HostedHarnessGateway:
                 control_only=control_only,
                 runtime_name=self.client.runtime_name,
                 runtime_digest=self.client.runtime_digest,
+                agent_version=agent_version,
+                claim_ref=claim_ref,
             )
+            if capability is None:
+                self._delete_chat_sandbox(str(sandbox.id), conversation.id)
+                return None
             sandbox.fs.upload_file(source_archive, "/work/source.tar.gz")
             sandbox.fs.upload_file(workspace_archive, "/work/conversation.tar.gz")
             sandbox.fs.upload_file(
@@ -5548,8 +5619,12 @@ def freeze_authoring_archive(
         )
         if extending:
             from simulate.services.harness_versioning.nudges import schedule_reconcile
+            from simulate.services.harness_versioning.rebuild import (
+                schedule_deferred_activations,
+            )
 
             schedule_reconcile(job.id)
+            schedule_deferred_activations(job.id)
         return
     store_authoring_archive(job, body, advance_lifecycle=False)
     if job.environment_id is None and is_versioned(job):
