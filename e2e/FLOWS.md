@@ -1750,3 +1750,83 @@
 - PG mcp_server_mcptoolgroupconfig.enabled_groups equals that exact set for the actor connection
 - GET /mcp/internal/tools/ equals the initial tool set minus all dataset tools
 - POST /mcp/internal/tool-call/ list_datasets returns 403 while whoami and list_projects still succeed
+
+## simulate
+
+### SIM-E2E-001 — the versions tab lists every version and what changed in one
+
+**Goal:** A user sees the agent, environment and scenario versions and what changed in one  
+**Spec:** `flows/simulate/versions-tab.spec.ts:24`  
+**Tags:** —
+
+**User steps:**
+
+1. seed a backfilled environment with 3 scenarios, then drop one scenario as a manual edit
+2. open the environment on the Versions tab
+3. read the agent, environment and scenario version lists
+4. pick scenario version v2 and read what changed in it
+
+**Backend state verified:**
+
+- GET harness-environments/{id}/versions/ returns exactly S2 (default), S1; E1 (default); A1 (default)
+- PG simulate_hosted_harness_job.suite_version_id is S2
+- the diff of S2 lists exactly the dropped scenario key under "Scenarios removed"
+
+### SIM-E2E-002 — a run uses the default or an older scenario version and warns before it starts
+
+**Goal:** A user runs on the defaults or an older scenario version, sees why a combination is risky, and runs anyway  
+**Spec:** `flows/simulate/run-dialog.spec.ts:40`  
+**Tags:** —
+
+**User steps:**
+
+1. seed a backfilled environment with 3 scenarios, then drop one scenario so v2 is the default
+2. open Run simulation: the dialog pre-selects the default agent, environment and scenario versions
+3. read the unproved-scenarios warning and choose Run anyway
+4. open Run simulation again, pick scenario version v1 and choose Run anyway
+
+**Backend state verified:**
+
+- the first run request names no version and its 202 pins the defaults with a suite_unproved warning
+- the second run request names only suite_version_id = S1 and its 202 pins S1
+- PG: the two newest run jobs pin S2 then S1, each with A1 and E1
+- PG: no job payload of the environment holds the credential value
+
+### SIM-E2E-003 — rolling the environment back makes new runs use the older version
+
+**Goal:** A user rolls the environment back and new runs use it  
+**Spec:** `flows/simulate/roll-back.spec.ts:15`  
+**Tags:** —
+
+**User steps:**
+
+1. seed a backfilled environment, then add a tool as a manual edit so environment v2 is the default
+2. open the environment and its environment-version pin
+3. choose "Roll back to v1" and confirm
+
+**Backend state verified:**
+
+- POST versions/environment/{E1}/default/ sends expected_default_id = E2 and returns E1 as the default
+- PG: the environment pins E1 and E2 stays active
+- GET run-plan/ resolves the environment version to E1
+
+### SIM-E2E-004 — a changed credential becomes a checked agent version for this environment only
+
+**Goal:** A user changes a credential value; it becomes a checked agent version and this environment's default only; the value is never shown  
+**Spec:** `flows/simulate/agent-credentials.spec.ts:27`  
+**Tags:** —
+
+**User steps:**
+
+1. seed two backfilled environments that share one agent version A1, each with its own E2E_GREETING value
+2. open the first environment's Overview and Manage versions
+3. read the stored credential names, choose Change values and enter a new value
+4. save the values and wait for the new version to pass its check
+
+**Backend state verified:**
+
+- the secret-values/ request names the environment and its 202 holds none of the three values
+- GET versions/ shows A2 passed its check and is the default
+- PG: A2 side row has preflight_status passed, trigger credentials and an encrypted value; the environment pins A2
+- the second environment still pins A1 in PG, versions/ and run-plan/, and no response of it holds the new value
+- the page never shows any of the three values after Save

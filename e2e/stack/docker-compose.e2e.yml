@@ -1,4 +1,17 @@
 # Overlay on docker-compose.distributed.yml (the distributed topology) for the futureagi-e2e stack.
+# Sandbox-provider settings are blanked whatever the shell exports, so a launch can
+# never create a real sandbox. The numeric ALK_E2B_* sizes stay: settings parses them.
+x-no-sandbox-provider: &no-sandbox-provider
+  DAYTONA_API_KEY: ""
+  DAYTONA_API_URL: ""
+  DAYTONA_TARGET: ""
+  DAYTONA_ORGANIZATION_ID: ""
+  ALK_DAYTONA_SNAPSHOT: ""
+  ALK_DAYTONA_SNAPSHOT_DIGEST: ""
+  ALK_DAYTONA_DOCKERFILE: ""
+  E2B_API_KEY: ""
+  ALK_E2B_TEMPLATE_REFERENCE: ""
+  ALK_E2B_TEMPLATE_BUILD_ID: ""
 services:
   clickhouse:
     # Seatbelt on 16GB CI runners: CH is the first OOM-kill victim otherwise.
@@ -20,19 +33,36 @@ services:
     # volume inherited from docker-compose.distributed.yml.
     volumes: !reset []
     environment:
+      <<: *no-sandbox-provider
       BASE_URL: http://localhost:8100
       MODEL_SERVING_URL: http://mock-llm:8080
       FUTURE_AGI_TELEMETRY_DISABLED: "true"
       # Request logs reach Django over this shared secret; without it the
       # webhook rejects every batch the gateway sends.
       AGENTCC_WEBHOOK_SECRET: ${AGENTCC_WEBHOOK_SECRET:-e2e-agentcc-webhook-secret}
+      # One key for every process: settings' per-process fallback key would leave the
+      # worker unable to read credential blobs the API wrote.
+      INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-ZTJlLW9ubHktdGhyb3dhd2F5LWZlcm5ldC1rZXktMDA=}
+      HARNESS_VERSIONING_ENABLED: "true"
+      HARNESS_VERSIONING_NUDGES_ENABLED: "true"
+      # Non-default picks and changed agents stay runnable.
+      HARNESS_BUNDLE_CERTIFY_ENABLED: "true"
   worker:
     restart: "no"
     # Keep the worker mount-free for the managed-mock attestation as well.
     volumes: !reset []
     environment:
+      <<: *no-sandbox-provider
       MODEL_SERVING_URL: http://mock-llm:8080
       FUTURE_AGI_TELEMETRY_DISABLED: "true"
+      INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:-ZTJlLW9ubHktdGhyb3dhd2F5LWZlcm5ldC1rZXktMDA=}
+      HARNESS_VERSIONING_ENABLED: "true"
+      HARNESS_VERSIONING_NUDGES_ENABLED: "true"
+      HARNESS_BUNDLE_CERTIFY_ENABLED: "true"
+      # The general worker also polls simulation_runner so agent preflight runs. Side
+      # effect: runner activities that need ALK_RUNNER_PYTHON (absent in this image) and
+      # gateway launches (no sandbox provider, see above) fail fast instead of queueing forever.
+      TEMPORAL_EXCLUDED_QUEUES: ""
   fi-collector:
     # Collector and consumer must run the same checked-out transport protocol.
     image: futureagi/fi-collector:${E2E_FI_COLLECTOR_VERSION:-latest}

@@ -103,7 +103,7 @@ const backgroundEnvironment = {
 for (const evalBackground of [false, true]) {
   test(`managed mock accepts only the optional E2E webhook secret (background=${evalBackground})`, async () => {
     const optionalEnvironments: Record<string, string>[] = [{}, { AGENTCC_WEBHOOK_SECRET: '' },
-      { AGENTCC_WEBHOOK_SECRET: 'e2e-agentcc-webhook-secret' }];
+      { AGENTCC_WEBHOOK_SECRET: 'e2e-agentcc-webhook-secret' }, { TEMPORAL_EXCLUDED_QUEUES: '' }];
     for (const service of ['backend', 'worker', 'agentcc-gateway', 'mock-llm']) {
       for (const optional of optionalEnvironments) {
         validateMockEnvironment(service, { ...backgroundEnvironment, ...optional }, evalBackground);
