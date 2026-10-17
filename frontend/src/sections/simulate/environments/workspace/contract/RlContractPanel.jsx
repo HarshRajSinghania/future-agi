@@ -152,6 +152,7 @@ const ENV_SHAPE = PropTypes.shape({
   tools: PropTypes.arrayOf(PropTypes.shape({ name: PropTypes.string, desc: PropTypes.string })),
   rules: PropTypes.arrayOf(PropTypes.string),
   seed: PropTypes.shape({ tables: PropTypes.arrayOf(PropTypes.shape({ name: PropTypes.string })) }),
+  cast: PropTypes.shape({ subActors: PropTypes.array }),
 });
 
 const ENV_STATE_SHAPE = PropTypes.shape({
