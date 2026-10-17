@@ -37,7 +37,7 @@ from simulate.tests.test_harness_versioning_backfill import (
     _legacy,
     _RealisticStorage,
 )
-from simulate.tests.test_harness_versioning_record import _authoring
+from simulate.tests.test_harness_versioning_record import _authoring, _save_drafts
 
 pytestmark = pytest.mark.django_db
 
@@ -923,7 +923,8 @@ class TestRetiredKeys:
         )
 
         assert promote(str(conversation.id), turn) == str(environment.id)
-        environment.refresh_from_db()
+        # Since drafts, the chat's save is made live by Save.
+        _save_drafts(environment)
         assert environment.suite_version_id != before
         assert set(
             HarnessSuiteMember.no_workspace_objects.filter(

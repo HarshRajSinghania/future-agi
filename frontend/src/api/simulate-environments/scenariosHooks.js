@@ -10,7 +10,10 @@ import {
   amendScenarios,
   scenarioCoverage,
 } from "src/api/simulate-environments/scenarios";
-import { environmentVersionsKey } from "src/api/simulate-environments/versions";
+import {
+  environmentVersionsKey,
+  refreshDrafts,
+} from "src/api/simulate-environments/versions";
 
 /**
  * The scenarios list read path, mirroring useMyEnvironments: 0-indexed page in
@@ -116,11 +119,13 @@ export function useAmendScenarios(jobId) {
     mutationFn: (body) => amendScenarios(jobId, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: harnessScenariosListKey(jobId) });
-      // Only the list: a version's own diff and scenarios never change.
+      // Only the list: a saved version's own diff and scenarios never change.
       queryClient.invalidateQueries({
         queryKey: environmentVersionsKey(jobId),
         exact: true,
       });
+      // With versioning on, the edit lands in the unsaved changes.
+      refreshDrafts(queryClient, jobId);
     },
   });
 }

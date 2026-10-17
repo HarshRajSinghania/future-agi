@@ -198,21 +198,26 @@ class TestFailedRecordingMovesNothing:
         environment = record_tests._environment(user, workspace, "fail-chat")
         record_authoring(environment, record_tests._authoring(), origin="authoring")
         environment.refresh_from_db()
+        record_tests.TestChatPromote()._promote(environment, storage, NAMES)
         before = dict(environment.payload["metadata"])
+        default = environment.suite_version_id
         members_before = _member_count(environment)
         _fail_member_writes(monkeypatch)
 
+        # Since drafts, a chat edit is made live by Save; that is where it can fail.
         with pytest.raises(RuntimeError):
-            record_tests.TestChatPromote()._promote(environment, storage, NAMES)
+            record_tests._save_drafts(environment)
 
         environment.refresh_from_db()
         metadata = environment.payload["metadata"]
+        assert environment.suite_version_id == default
         assert metadata["authoring_object_key"] == before["authoring_object_key"]
         assert metadata["authoring_revision"] == before["authoring_revision"]
-        assert metadata.get("conversation_checkpoints") == before.get(
-            "conversation_checkpoints"
-        )
-        assert len(record_tests._versions(HarnessSuiteVersion, environment)) == 1
+        assert metadata.get("draft_saves") == before.get("draft_saves")
+        assert [
+            one.status
+            for one in record_tests._versions(HarnessSuiteVersion, environment)
+        ] == ["active", "draft"]
         assert _member_count(environment) == members_before
 
 

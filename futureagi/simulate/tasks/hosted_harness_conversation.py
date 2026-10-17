@@ -71,8 +71,13 @@ def promote_hosted_harness_conversation_checkpoint(
             code=exc.code,
             message=exc.message,
         )
-        if exc.code in {"scenario_key_retired", "scenario_key_taken"}:
-            # The person has to rename the scenario, so they need to see why.
+        if exc.code in {
+            "scenario_key_retired",
+            "scenario_key_taken",
+            "draft_changed",
+            "conversation_checkpoint_stale",
+        }:
+            # The person has to act (rename, or ask again), so they need to see why.
             report_checkpoint_rejection(conversation_id, exc.message)
         return ""
     return str(environment.id) if environment is not None else ""

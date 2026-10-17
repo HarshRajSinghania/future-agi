@@ -1,5 +1,6 @@
 import PropTypes from "prop-types";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Box,
   Button,
@@ -359,7 +360,13 @@ export default function VersionsPanel({ env }) {
   const { data, isLoading, error } = useEnvironmentVersions(env?.id, {
     enabled,
   });
+  // A link (the unsaved-changes bar) may name the version to show first.
+  const [params, setParams] = useSearchParams();
+  const [linkedPiece, linkedId] = (params.get("version") || "").split(":");
   const [picked, setPicked] = useState(null);
+  useEffect(() => {
+    if (linkedId) setPicked({ piece: linkedPiece, id: linkedId });
+  }, [linkedPiece, linkedId]);
   // Held here so a refusal outlives the refresh that re-renders the detail.
   const move = useMoveDefault(env?.id);
 
@@ -447,6 +454,12 @@ export default function VersionsPanel({ env }) {
             onSelect={(p, id) => {
               move.reset();
               setPicked({ piece: p, id });
+              // So the next link to a version counts as a change.
+              if (params.has("version")) {
+                const q = new URLSearchParams(params);
+                q.delete("version");
+                setParams(q, { replace: true });
+              }
             }}
           />
         ))}

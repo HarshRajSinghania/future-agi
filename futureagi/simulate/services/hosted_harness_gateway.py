@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import ipaddress
@@ -176,9 +177,14 @@ def _current_chat_workspace(job: HostedHarnessJob, checkpoint: bytes) -> bytes |
     current = _authoring_archive_for(environment)
     if current is None:
         return checkpoint
+    return with_authoring_basis(_with_chat_state(current, checkpoint), revision)
+
+
+def _with_chat_state(current: bytes, checkpoint: bytes | None) -> bytes:
+    """The environment's files with the chat's own state (its root dot files) from its
+    checkpoint; the basis files are stamped afresh."""
     out = io.BytesIO()
     with (
-        tarfile.open(fileobj=io.BytesIO(checkpoint), mode="r:gz") as chat,
         tarfile.open(fileobj=io.BytesIO(current), mode="r:gz") as accepted,
         tarfile.open(fileobj=out, mode="w:gz") as target,
     ):
@@ -186,15 +192,54 @@ def _current_chat_workspace(job: HostedHarnessJob, checkpoint: bytes) -> bytes |
             parts = _archive_parts(member.name)
             if parts and not parts[0].startswith("."):
                 target.addfile(member, accepted.extractfile(member) if member.isfile() else None)
-        for member in chat.getmembers():
-            parts = _archive_parts(member.name)
-            if (
-                parts
-                and parts[0].startswith(".")
-                and parts[0] not in (AUTHORING_BASIS_FILE, ".futureagi-published.json")
-            ):
-                target.addfile(member, chat.extractfile(member) if member.isfile() else None)
-    return with_authoring_basis(out.getvalue(), revision)
+        if checkpoint is not None:
+            with tarfile.open(fileobj=io.BytesIO(checkpoint), mode="r:gz") as chat:
+                for member in chat.getmembers():
+                    parts = _archive_parts(member.name)
+                    if (
+                        parts
+                        and parts[0].startswith(".")
+                        and parts[0] not in _STAMPED_FILES
+                    ):
+                        target.addfile(
+                            member,
+                            chat.extractfile(member) if member.isfile() else None,
+                        )
+    return out.getvalue()
+
+
+def chat_workspace_for(
+    job: HostedHarnessJob,
+    conversation: HostedHarnessConversation,
+    *,
+    chat_state: bytes | None,
+) -> bytes | None:
+    """The files a chat sandbox starts from: the environment's unsaved changes over its
+    defaults where drafts apply, else the environment's current files, with the chat's
+    own state from ``chat_state`` (its latest checkpoint)."""
+    from simulate.services.harness_versioning import archives, drafts
+
+    environment = job.environment or job
+    revision = str(
+        ((environment.payload or {}).get("metadata") or {}).get("authoring_revision")
+        or ""
+    )
+    composed = None
+    if drafts.drafts_apply(environment):
+        # TODO: only_draft = rebuild.nudge_composition(environment, conversation) (step 14).
+        only_draft = None
+        composed = drafts.compose_workspace(
+            environment, conversation, only_draft=only_draft
+        )
+    if composed is not None:
+        body = _with_chat_state(archives.pack_archive(composed.files), chat_state)
+        return with_draft_basis(with_authoring_basis(body, revision), composed.token)
+    if chat_state is not None:
+        return _current_chat_workspace(job, chat_state)
+    body = _authoring_archive_for(environment)
+    if body is not None and revision:
+        body = with_authoring_basis(body, revision)
+    return body
 
 
 def _ask_harness_to_build(
@@ -2765,21 +2810,9 @@ class HostedHarnessGateway:
         endpoint_base_url: str,
     ) -> HostedHarnessConversationLease:
         """Restore the latest workspace checkpoint into a sandbox of chat's own."""
-        workspace_archive = load_workspace_archive(conversation)
-        if workspace_archive is not None:
-            workspace_archive = _current_chat_workspace(job, workspace_archive)
-        if workspace_archive is None:
-            workspace_archive = _authoring_archive_for(job.environment or job)
-            if workspace_archive is not None:
-                environment = job.environment or job
-                basis = str(
-                    ((environment.payload or {}).get("metadata") or {}).get(
-                        "authoring_revision"
-                    )
-                    or ""
-                )
-                if basis:
-                    workspace_archive = with_authoring_basis(workspace_archive, basis)
+        workspace_archive = chat_workspace_for(
+            job, conversation, chat_state=load_workspace_archive(conversation)
+        )
         control_only = workspace_archive is None
         if workspace_archive is None:
             workspace_archive = _empty_workspace_archive()
@@ -4985,36 +5018,37 @@ def authoring_content_digest(body: bytes) -> str:
 
 
 AUTHORING_BASIS_FILE = ".futureagi-authoring-basis.json"
+# Which unsaved changes a chat workspace was composed from: a random token only.
+DRAFT_BASIS_FILE = ".futureagi-draft-basis.json"
+# Root files the platform writes into a chat workspace; never carried from a checkpoint.
+_STAMPED_FILES = (AUTHORING_BASIS_FILE, ".futureagi-published.json", DRAFT_BASIS_FILE)
 
 
-def with_authoring_basis(body: bytes, revision: str) -> bytes:
-    """Stamp the environment revision a chat workspace was built from."""
-    data = json.dumps(
-        {"authoring_revision": revision}, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+def _with_root_json(body: bytes, name: str, value: dict[str, str]) -> bytes:
+    data = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     out = io.BytesIO()
     with (
         tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as source,
-        tarfile.open(fileobj=out, mode="w:gz") as target,
+        gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as zipped,
+        tarfile.open(fileobj=zipped, mode="w") as target,
     ):
         for member in source.getmembers():
-            if _archive_parts(member.name) == (AUTHORING_BASIS_FILE,):
+            if _archive_parts(member.name) == (name,):
                 continue
             target.addfile(
                 member, source.extractfile(member) if member.isfile() else None
             )
-        info = tarfile.TarInfo(AUTHORING_BASIS_FILE)
+        info = tarfile.TarInfo(name)
         info.size = len(data)
         info.mode = 0o600
         target.addfile(info, io.BytesIO(data))
     return out.getvalue()
 
 
-def authoring_basis(body: bytes) -> str:
-    """The environment revision a chat workspace declares it was built from."""
+def _root_json_value(body: bytes, name: str, key: str) -> str:
     with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
         for member in archive.getmembers():
-            if _archive_parts(member.name) != (AUTHORING_BASIS_FILE,):
+            if _archive_parts(member.name) != (name,):
                 continue
             source = archive.extractfile(member) if member.isfile() else None
             if source is None:
@@ -5023,8 +5057,28 @@ def authoring_basis(body: bytes) -> str:
                 value = json.loads(source.read().decode("utf-8"))
             except (UnicodeDecodeError, ValueError):
                 return ""
-            return str((value or {}).get("authoring_revision") or "")
+            return str((value or {}).get(key) or "")
     return ""
+
+
+def with_authoring_basis(body: bytes, revision: str) -> bytes:
+    """Stamp the environment revision a chat workspace was built from."""
+    return _with_root_json(body, AUTHORING_BASIS_FILE, {"authoring_revision": revision})
+
+
+def authoring_basis(body: bytes) -> str:
+    """The environment revision a chat workspace declares it was built from."""
+    return _root_json_value(body, AUTHORING_BASIS_FILE, "authoring_revision")
+
+
+def with_draft_basis(body: bytes, token: str) -> bytes:
+    """Stamp the composition of unsaved changes a chat workspace was built from."""
+    return _with_root_json(body, DRAFT_BASIS_FILE, {"token": token})
+
+
+def draft_basis_token(body: bytes) -> str:
+    """The composition of unsaved changes a chat workspace declares it was built from."""
+    return _root_json_value(body, DRAFT_BASIS_FILE, "token")
 
 
 # A run replays these byte for byte against their sealed manifests, so an edit never touches them.

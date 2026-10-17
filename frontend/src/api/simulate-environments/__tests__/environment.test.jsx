@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import PropTypes from "prop-types";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ENV_STATUS } from "src/sections/simulate/environments/myEnvironments.constants";
 import { environmentName } from "src/pages/dashboard/harness/harnessShared";
@@ -439,6 +439,17 @@ describe("useEnvironment keeps the versions current", () => {
   const isVersionsCall = ([arg]) =>
     JSON.stringify(arg?.queryKey) === JSON.stringify(["harness-env-versions", "job-done"]);
   const versionsCalls = (spy) => spy.mock.calls.filter(isVersionsCall).length;
+  const isDraftsCall = ([arg]) =>
+    JSON.stringify(arg?.queryKey) ===
+    JSON.stringify(["harness-env-versions", "job-done", "drafts"]);
+  const draftsCalls = (spy) => spy.mock.calls.filter(isDraftsCall).length;
+  // A draft's own diff and members, which change as it is edited.
+  const isDraftViewCall = ([arg]) =>
+    ["diff", "members"].some(
+      (sub) =>
+        JSON.stringify(arg?.queryKey) ===
+        JSON.stringify(["harness-env-versions", "job-done", sub]),
+    );
   const atStage = (stage) => ({ ...COMPLETED_JOB, status: { ...COMPLETED_JOB.status, stage } });
   const poll = (queryClient, job) => {
     getHarnessJob.mockResolvedValue(job);
@@ -532,7 +543,7 @@ describe("useEnvironment keeps the versions current", () => {
     expect(versionsCalls(spy)).toBe(0);
   });
 
-  it("refreshes the versions, and nothing else, when a chat turn finishes", async () => {
+  it("refreshes the versions and the unsaved changes with their diff and members, and nothing else, when a chat turn finishes", async () => {
     const { busy, idle } = chatJobs("c-turn");
     getHarnessJob.mockResolvedValue(busy);
     const { queryClient, Wrapper } = makeWrapper();
@@ -546,7 +557,14 @@ describe("useEnvironment keeps the versions current", () => {
     await poll(queryClient, idle);
 
     await waitFor(() => expect(versionsCalls(spy)).toBe(1));
-    expect(spy.mock.calls.every(isVersionsCall)).toBe(true);
+    expect(draftsCalls(spy)).toBe(1);
+    expect(spy.mock.calls.filter(isDraftViewCall)).toHaveLength(2);
+    expect(
+      spy.mock.calls.every(
+        (call) =>
+          isVersionsCall(call) || isDraftsCall(call) || isDraftViewCall(call),
+      ),
+    ).toBe(true);
     expect(getHarnessEnvironment.mock.calls.length).toBe(detailFetches);
   });
 
@@ -568,9 +586,41 @@ describe("useEnvironment keeps the versions current", () => {
 
       vi.advanceTimersByTime(SAVE_GRACE_MS - 1000);
       expect(versionsCalls(spy)).toBe(1);
+      expect(draftsCalls(spy)).toBe(1);
       vi.advanceTimersByTime(1000);
 
       await waitFor(() => expect(versionsCalls(spy)).toBe(2));
+      expect(draftsCalls(spy)).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits as long as the server holds a finished turn's publish", () => {
+    expect(SAVE_GRACE_MS).toBe(60000);
+  });
+
+  it("reports chat as saving for the grace period after a turn ends", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { busy, idle } = chatJobs("c-saving");
+      getHarnessJob.mockResolvedValue(busy);
+      const { queryClient, Wrapper } = makeWrapper();
+      const { result } = renderHook(() => useEnvironment("job-done"), {
+        wrapper: Wrapper,
+      });
+      await waitFor(() =>
+        expect(result.current.env?.name).toBe("Done Environment"),
+      );
+      expect(result.current.chatSaving).toBe(false);
+
+      await poll(queryClient, idle);
+      await waitFor(() => expect(result.current.chatSaving).toBe(true));
+
+      act(() => vi.advanceTimersByTime(SAVE_GRACE_MS - 1000));
+      expect(result.current.chatSaving).toBe(true);
+      act(() => vi.advanceTimersByTime(1000));
+      await waitFor(() => expect(result.current.chatSaving).toBe(false));
     } finally {
       vi.useRealTimers();
     }

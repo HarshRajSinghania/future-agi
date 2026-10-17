@@ -282,3 +282,37 @@ export function conversationWaiting(conversation) {
   const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
   return !messages.some((m) => m.reply_to === blocking.message_id);
 }
+
+/**
+ * Whether this chat holds Save, mirroring the server's `_busy_conversation`:
+ * - a turn paused on an unanswered blocking question (`_awaiting_answer`) is idle,
+ *   though its command stays "delivered"; only a queued command still counts;
+ * - once a reply to that question is queued or delivered, the turn is busy again;
+ * - otherwise `_in_flight` (an open turn or an unacked command): an active state,
+ *   a streaming reply, a queued user message, or a delivered one while the turn
+ *   is still open; an acked message left "delivered" after the turn ends is idle;
+ * - `_publish_pending` is the SAVE_GRACE_MS window after a turn completes, even
+ *   with its question unanswered (`chatSaving` from useEnvironment); callers add it.
+ */
+export function draftsBlocked(conversation) {
+  if (!conversation) return false;
+  const messages = Array.isArray(conversation.messages)
+    ? conversation.messages
+    : [];
+  const asked = conversation.blocking_input?.message_id;
+  const awaiting =
+    conversation.state === "waiting_for_user" &&
+    Boolean(asked) &&
+    !messages.some((m) => m.role === "user" && m.reply_to === asked);
+  if (awaiting) {
+    return messages.some((m) => m.role === "user" && m.state === "queued");
+  }
+  if (ACTIVE_CONVERSATION_STATES.has(conversation.state)) return true;
+  const paused = conversation.state === "waiting_for_user";
+  return messages.some(
+    (m) =>
+      m.state === "streaming" ||
+      (m.role === "user" &&
+        (m.state === "queued" || (paused && m.state === "delivered"))),
+  );
+}

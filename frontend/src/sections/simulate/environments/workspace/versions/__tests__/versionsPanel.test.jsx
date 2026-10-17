@@ -98,6 +98,9 @@ vi.mock("src/api/simulate-environments/versions", async () => {
 });
 
 const { default: VersionsPanel } = await import("../VersionsPanel");
+const { default: useWorkspaceTab } = await import(
+  "../../helpers/useWorkspaceTab"
+);
 
 const ENV = {
   id: "env-1",
@@ -587,6 +590,67 @@ describe("VersionsPanel", () => {
     expect(
       screen.getByRole("combobox", { name: "Compared with" }),
     ).toHaveTextContent("Its previous version");
+  });
+
+  it("opens on the version a link names, such as the unsaved draft", () => {
+    state.versions = {
+      ...VERSIONS,
+      suite: [
+        item({ id: "sd", label: null, status: "draft", parent_id: "s2" }),
+        ...VERSIONS.suite,
+      ],
+    };
+    window.history.pushState({}, "", "/?tab=versions&version=suite:sd");
+    try {
+      render(<VersionsPanel env={ENV} />);
+      expect(row("suite", "Unnumbered version")).toHaveAttribute(
+        "aria-current",
+        "true",
+      );
+      expect(row("environment", "v2")).not.toHaveAttribute("aria-current");
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("opens the linked version again after the reader picked another one", async () => {
+    const user = userEvent.setup();
+    state.versions = {
+      ...VERSIONS,
+      suite: [
+        item({ id: "sd", label: null, status: "draft", parent_id: "s2" }),
+        ...VERSIONS.suite,
+      ],
+    };
+    const Link = () => {
+      const { setTab } = useWorkspaceTab();
+      return (
+        <button
+          type="button"
+          onClick={() => setTab("versions", { version: "suite:sd" })}
+        >
+          View changes
+        </button>
+      );
+    };
+    window.history.pushState({}, "", "/?tab=versions&version=suite:sd");
+    try {
+      render(
+        <>
+          <Link />
+          <VersionsPanel env={ENV} />
+        </>,
+      );
+      await user.click(row("environment", "v1"));
+      expect(window.location.search).not.toContain("version=");
+      await user.click(screen.getByRole("button", { name: "View changes" }));
+      expect(row("suite", "Unnumbered version")).toHaveAttribute(
+        "aria-current",
+        "true",
+      );
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
   });
 
   it("opens on the newest version that is not a draft when a piece has no default", () => {

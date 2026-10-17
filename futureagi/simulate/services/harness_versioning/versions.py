@@ -106,7 +106,7 @@ def environment_head(job: HostedHarnessJob) -> HostedHarnessJob | None:
     """The environment a job belongs to, read fresh; ``None`` once it is deleted."""
     return (
         HostedHarnessJob.no_workspace_objects.filter(id=job.environment_id or job.id)
-        .only("id", "environment_version_id")
+        .only("id", "environment_version_id", "suite_version_id")
         .first()
     )
 
@@ -343,6 +343,19 @@ def _refuse_retired_keys(
     Only keys new to the environment's default suite are checked, compared as
     normalised tokens, so a scenario the default already holds is never refused.
     """
+    retired = retired_keys(job, documents)
+    if retired:
+        raise HostedHarnessError(
+            "scenario_key_retired",
+            ", ".join(retired)
+            + (" was" if len(retired) == 1 else " were")
+            + " removed earlier and can't be reused; give the scenario a new name",
+            status_code=422,
+        )
+
+
+def retired_keys(job: HostedHarnessJob, documents: list[dict[str, Any]]) -> list[str]:
+    """The dropped scenarios' keys that documents new to the default suite reuse."""
     from simulate.services.hosted_harness_gateway import _scenario_token
 
     keys = {
@@ -372,22 +385,14 @@ def _refuse_retired_keys(
             if isinstance(doc, dict)
         }
     if not keys:
-        return
-    retired = sorted(
+        return []
+    return sorted(
         key
         for key in HostedHarnessScenario._base_manager.filter(
             job=job, deleted=True
         ).values_list("scenario_key", flat=True)
         if _scenario_token(key) in keys
     )
-    if retired:
-        raise HostedHarnessError(
-            "scenario_key_retired",
-            ", ".join(retired)
-            + (" was" if len(retired) == 1 else " were")
-            + " removed earlier and can't be reused; give the scenario a new name",
-            status_code=422,
-        )
 
 
 def _refuse_taken_keys(job: HostedHarnessJob, documents: list[dict[str, Any]]) -> None:
@@ -396,27 +401,7 @@ def _refuse_taken_keys(job: HostedHarnessJob, documents: list[dict[str, Any]]) -
     A backfill may have paired a scenario with a row keyed differently; that row stays
     with its scenario, so its key is not free for a new one.
     """
-    from simulate.services.harness_scenarios import _default_member_rows
-    from simulate.services.hosted_harness_gateway import _scenario_token
-
-    if job.suite_version_id is None:
-        return
-    paired = _default_member_rows(
-        job, list(HostedHarnessScenario.all_objects.filter(job=job))
-    )
-    held = {
-        token: row.scenario_key
-        for key_token, row in paired.items()
-        if (token := _scenario_token(row.scenario_key)) != key_token
-    }
-    taken = sorted(
-        {
-            held[token]
-            for doc in documents
-            if (token := _scenario_token(doc.get("scenario_key"))) in held
-            and token not in paired
-        }
-    )
+    taken = taken_keys(job, documents)
     if taken:
         raise HostedHarnessError(
             "scenario_key_taken",
@@ -425,6 +410,31 @@ def _refuse_taken_keys(job: HostedHarnessJob, documents: list[dict[str, Any]]) -
             + " already used by another scenario; give the scenario a new name",
             status_code=422,
         )
+
+
+def taken_keys(job: HostedHarnessJob, documents: list[dict[str, Any]]) -> list[str]:
+    """The keys of rows other scenarios hold that the documents ask for."""
+    from simulate.services.harness_scenarios import _default_member_rows
+    from simulate.services.hosted_harness_gateway import _scenario_token
+
+    if job.suite_version_id is None:
+        return []
+    paired = _default_member_rows(
+        job, list(HostedHarnessScenario.all_objects.filter(job=job))
+    )
+    held = {
+        token: row.scenario_key
+        for key_token, row in paired.items()
+        if (token := _scenario_token(row.scenario_key)) != key_token
+    }
+    return sorted(
+        {
+            held[token]
+            for doc in documents
+            if (token := _scenario_token(doc.get("scenario_key"))) in held
+            and token not in paired
+        }
+    )
 
 
 def _member_rows(
@@ -447,6 +457,60 @@ def _proved_at(proof: Mapping[str, Any]) -> datetime | None:
 
 def _member_content(document: Mapping[str, Any]) -> dict[str, Any]:
     return {field: document[field] for field in MEMBER_FIELDS if field in document}
+
+
+def _add_members(
+    suite_version: HarnessSuiteVersion,
+    paired: list[tuple[HostedHarnessScenario, dict[str, Any]]],
+) -> None:
+    HarnessSuiteMember.no_workspace_objects.bulk_create(
+        [
+            HarnessSuiteMember(
+                suite_version=suite_version,
+                scenario=row,
+                scenario_key=row.scenario_key,
+                number=row.number,
+                content=_member_content(document),
+            )
+            for row, document in paired
+        ]
+    )
+
+
+def environment_change(
+    base: HarnessEnvironmentVersion | None,
+    contract: Any,
+    documents: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str]:
+    """The environment documents' diff against ``base``, and its summary."""
+    diff = None
+    if base is not None:
+        previous = base.documents or {}
+        diff = diffs.environment_diff(
+            previous_contract=previous.get("contract"),
+            contract=contract,
+            previous_sub_goals=previous.get("sub_goal_digests") or {},
+            sub_goals=documents.get("sub_goal_digests") or {},
+            previous_files=previous.get("file_digests"),
+            files=documents.get("file_digests") or {},
+        )
+    return diff, diffs.summarize_environment(diff)
+
+
+def suite_change(
+    base: HarnessSuiteVersion | None,
+    scenarios: list[dict[str, Any]],
+    origin: str,
+) -> tuple[dict[str, Any] | None, str]:
+    """The scenarios' diff against ``base``, and its summary."""
+    diff = None
+    if base is not None:
+        diff = diffs.suite_diff(
+            (base.documents or {}).get("scenarios") or [],
+            scenarios,
+            removed_reason=REMOVED_REASONS.get(origin, "removed"),
+        )
+    return diff, diffs.summarize_suite(diff)
 
 
 def _carried_proofs(
@@ -642,17 +706,9 @@ def record_authoring(
         agent_pinned = fill_agent_pin(locked)
         base_environment = locked.environment_version
         base_suite = locked.suite_version
-        environment_diff = None
-        if base_environment is not None:
-            previous = base_environment.documents or {}
-            environment_diff = diffs.environment_diff(
-                previous_contract=previous.get("contract"),
-                contract=contract,
-                previous_sub_goals=previous.get("sub_goal_digests") or {},
-                sub_goals=pieces.environment_documents["sub_goal_digests"],
-                previous_files=previous.get("file_digests"),
-                files=pieces.environment_documents["file_digests"],
-            )
+        environment_diff, environment_summary = environment_change(
+            base_environment, contract, pieces.environment_documents
+        )
         environment_version, environment_created = _land(
             HarnessEnvironmentVersion,
             locked,
@@ -661,19 +717,13 @@ def record_authoring(
                 **pieces.environment_fields,
                 "origin": origin,
                 "parent": base_environment,
-                "summary": diffs.summarize_environment(environment_diff),
+                "summary": environment_summary,
                 "diff": environment_diff,
                 "agent_version_id": locked.agent_version_id,
                 "created_by": user,
             },
         )
-        suite_diff = None
-        if base_suite is not None:
-            suite_diff = diffs.suite_diff(
-                (base_suite.documents or {}).get("scenarios") or [],
-                documents,
-                removed_reason=REMOVED_REASONS.get(origin, "removed"),
-            )
+        suite_diff, suite_summary = suite_change(base_suite, documents, origin)
         suite_version, suite_created = _land(
             HarnessSuiteVersion,
             locked,
@@ -682,7 +732,7 @@ def record_authoring(
                 **pieces.suite_fields,
                 "origin": origin,
                 "parent": base_suite,
-                "summary": diffs.summarize_suite(suite_diff),
+                "summary": suite_summary,
                 "diff": suite_diff,
                 "scenario_count": min(len(documents), SCENARIO_COUNT_MAX),
                 "authored_against": environment_version,
@@ -695,18 +745,7 @@ def record_authoring(
             note_revision(suite_version, revision)
         paired = _member_rows(locked, documents)
         if suite_created:
-            HarnessSuiteMember.no_workspace_objects.bulk_create(
-                [
-                    HarnessSuiteMember(
-                        suite_version=suite_version,
-                        scenario=row,
-                        scenario_key=row.scenario_key,
-                        number=row.number,
-                        content=_member_content(document),
-                    )
-                    for row, document in paired
-                ]
-            )
+            _add_members(suite_version, paired)
         if origin in PROVED_ORIGINS and proved_since is not None:
             _validation(
                 suite_version,
@@ -754,7 +793,6 @@ def record_authoring(
                 replace=False,
             )
         metadata["authoring_object_key"] = pair_key
-        # TODO: chat compares this content digest; it can become the version pair at step 13.
         metadata["authoring_revision"] = revision
         if sealed_key:
             metadata["sealed_bundle_object_key"] = sealed_key
@@ -1227,6 +1265,138 @@ def _move_agent_default(
     return locked
 
 
+def require_not_busy(locked: HostedHarnessJob, piece: str) -> None:
+    """Refuse to move a default while the environment builds, extends or is unready."""
+    from simulate.services.harness_agent_versions import _busy
+
+    if _busy(locked):
+        raise HostedHarnessError(
+            "environment_busy",
+            (
+                "The environment isn't ready; the default can't be changed now"
+                if locked.state in UNREADY_STATES
+                else "The environment is being built or extended; try again "
+                "when it finishes"
+            ),
+            status_code=409,
+            details={"piece": piece},
+        )
+
+
+def set_defaults(
+    locked: HostedHarnessJob,
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    environment_version: HarnessEnvironmentVersion,
+    suite_version: HarnessSuiteVersion,
+    pair: _Pair,
+    *,
+    pieces: set[str],
+    outgoing_agent_version_id: Any,
+) -> None:
+    """Make the pair the locked environment's defaults, with every side effect.
+
+    The outgoing pair is kept for a roll back under the agent it ran with, which
+    differs from ``locked``'s when the agent moves in the same step. An environment
+    or suite move tells the nudges once the caller commits.
+    """
+    from simulate.services import harness_scenarios
+    from simulate.services.harness_versioning.nudges import (
+        schedule_environment_moved,
+        schedule_reconcile,
+    )
+    from simulate.services.hosted_harness_conversation import _bind_added_scenarios
+
+    base_environment = locked.environment_version
+    base_suite = locked.suite_version
+    agent_moved = locked.agent_version_id != outgoing_agent_version_id
+    if agent_moved:
+        _name_kept_pairs(metadata, outgoing_agent_version_id)
+    if (
+        base_environment is not None
+        and base_suite is not None
+        and metadata.get("authoring_object_key")
+        and _recorded_against(metadata, base_environment, base_suite)
+    ):
+        _remember_pair(
+            metadata,
+            base_environment,
+            base_suite,
+            _outgoing_pair(metadata),
+            agent_version_id=outgoing_agent_version_id,
+            replace=False,
+        )
+    locked.environment_version = environment_version
+    locked.suite_version = suite_version
+    if "suite" in pieces:
+        # Reads the new default's members off the job: its rows come back.
+        harness_scenarios.index_scenarios(
+            locked,
+            (suite_version.documents or {}).get("scenarios") or [],
+            prune=True,
+        )
+        _bind_added_scenarios(locked)
+    _default_outputs(locked, environment_version, suite_version)
+    update_fields = [
+        "payload",
+        "agent_version",
+        "environment_version",
+        "suite_version",
+        "stage_outputs",
+        "content_updated_at",
+        "updated_at",
+    ]
+    if 1 <= suite_version.scenario_count <= MAX_SCENARIOS_PER_JOB:
+        payload["scenario_count"] = suite_version.scenario_count
+        locked.scenario_count = suite_version.scenario_count
+        update_fields.append("scenario_count")
+    metadata["authoring_object_key"] = pair.key
+    metadata["authoring_revision"] = pair.revision
+    metadata["default_pair_sealed"] = pair.sealed
+    if pair.sealed_key:
+        metadata["sealed_bundle_object_key"] = pair.sealed_key
+    else:
+        # An edit on top must not carry another pair's bundle.
+        metadata.pop("sealed_bundle_object_key", None)
+    _remember_pair(
+        metadata,
+        environment_version,
+        suite_version,
+        pair,
+        agent_version_id=locked.agent_version_id,
+    )
+    payload["metadata"] = metadata
+    locked.payload = payload
+    locked.content_updated_at = timezone.now()
+    locked.save(update_fields=update_fields)
+    if agent_moved and locked.agent_version is not None:
+        from simulate.services.harness_agent_versions import mirror_default_status
+
+        mirror_default_status(locked.agent_version)
+    if "environment" in pieces:
+        schedule_environment_moved(
+            locked.id,
+            from_environment_version_id=getattr(base_environment, "id", None),
+            environment_version_id=environment_version.id,
+        )
+    if "suite" in pieces:
+        # A pending suite card the new suite is proved against closes.
+        schedule_reconcile(locked.id)
+
+
+def _lock_environment(environment: HostedHarnessJob) -> HostedHarnessJob:
+    locked = (
+        HostedHarnessJob.no_workspace_objects.select_for_update()
+        .filter(id=environment.id)
+        .first()
+    )
+    if locked is None:
+        raise HostedHarnessError(
+            "environment_not_found", "Environment not found", status_code=404
+        )
+    return locked
+
+
 def move_default(
     environment: HostedHarnessJob,
     piece: str,
@@ -1241,35 +1411,12 @@ def move_default(
     The pair's runnable archive is found before anything moves, and the whole move is
     one transaction.
     """
-    from simulate.services import harness_scenarios
     from simulate.services.hosted_harness import _not_pickable
-    from simulate.services.hosted_harness_conversation import _bind_added_scenarios
 
     model = HarnessEnvironmentVersion if piece == "environment" else HarnessSuiteVersion
     with transaction.atomic():
-        locked = (
-            HostedHarnessJob.no_workspace_objects.select_for_update()
-            .filter(id=environment.id)
-            .first()
-        )
-        if locked is None:
-            raise HostedHarnessError(
-                "environment_not_found", "Environment not found", status_code=404
-            )
-        if locked.state != HostedHarnessJob.State.COMPLETED or (
-            (locked.payload or {}).get("metadata") or {}
-        ).get("scenario_extend"):
-            raise HostedHarnessError(
-                "environment_busy",
-                (
-                    "The environment isn't ready; the default can't be changed now"
-                    if locked.state in UNREADY_STATES
-                    else "The environment is being built or extended; try again "
-                    "when it finishes"
-                ),
-                status_code=409,
-                details={"piece": piece},
-            )
+        locked = _lock_environment(environment)
+        require_not_busy(locked, piece)
         if piece == "agent":
             return _move_agent_default(locked, version_id, expected_default_id, user)
         version = model.no_workspace_objects.filter(
@@ -1298,85 +1445,22 @@ def move_default(
             raise _not_pickable(piece)
         payload = dict(locked.payload or {})
         metadata = dict(payload.get("metadata") or {})
-        if (
-            current is not None
-            and metadata.get("authoring_object_key")
-            and _recorded_against(
-                metadata, locked.environment_version, locked.suite_version
-            )
-        ):
-            _remember_pair(
-                metadata,
-                locked.environment_version,
-                locked.suite_version,
-                _outgoing_pair(metadata),
-                agent_version_id=locked.agent_version_id,
-                replace=False,
-            )
         pair = _default_pair(
             locked, metadata, environment_version, suite_version, piece
         )
-
-        locked.environment_version = environment_version
-        locked.suite_version = suite_version
-        if piece == "suite":
-            # Reads the new default's members off the job: its rows come back.
-            harness_scenarios.index_scenarios(
-                locked,
-                (suite_version.documents or {}).get("scenarios") or [],
-                prune=True,
-            )
-            _bind_added_scenarios(locked)
-        _default_outputs(locked, environment_version, suite_version)
-        update_fields = [
-            "payload",
-            "environment_version",
-            "suite_version",
-            "stage_outputs",
-            "content_updated_at",
-            "updated_at",
-        ]
-        if 1 <= suite_version.scenario_count <= MAX_SCENARIOS_PER_JOB:
-            payload["scenario_count"] = suite_version.scenario_count
-            locked.scenario_count = suite_version.scenario_count
-            update_fields.append("scenario_count")
-        metadata["authoring_object_key"] = pair.key
-        metadata["authoring_revision"] = pair.revision
-        metadata["default_pair_sealed"] = pair.sealed
-        if pair.sealed_key:
-            metadata["sealed_bundle_object_key"] = pair.sealed_key
-        else:
-            # An edit on top must not carry another pair's bundle.
-            metadata.pop("sealed_bundle_object_key", None)
-        _remember_pair(
+        set_defaults(
+            locked,
+            payload,
             metadata,
             environment_version,
             suite_version,
             pair,
-            agent_version_id=locked.agent_version_id,
+            pieces={piece},
+            outgoing_agent_version_id=locked.agent_version_id,
         )
-        payload["metadata"] = metadata
-        locked.payload = payload
-        locked.content_updated_at = timezone.now()
-        locked.save(update_fields=update_fields)
-        if piece == "environment":
-            from simulate.services.harness_versioning.nudges import (
-                schedule_environment_moved,
-            )
-
-            schedule_environment_moved(
-                locked.id,
-                from_environment_version_id=current.id if current else None,
-                environment_version_id=version.id,
-            )
-        elif piece == "suite":
-            from simulate.services.harness_versioning.nudges import schedule_reconcile
-
-            # A pending suite card the new suite is proved against closes.
-            schedule_reconcile(locked.id)
         # TODO: refuse with rebuild_running while a build or extend runs (step 14).
-        # TODO: offer to re-apply a version's draft edits (includes_draft_edits) once
-        # drafts exist (steps 13/14).
+        # TODO: offer to re-apply a version's draft edits (includes_draft_edits)
+        # (step 14).
     logger.info(
         "harness_default_moved piece=%s from=%s to=%s actor=%s",
         piece,

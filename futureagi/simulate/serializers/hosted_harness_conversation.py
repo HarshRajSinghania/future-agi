@@ -299,3 +299,7 @@ class HarnessConversationOverviewSerializer(serializers.Serializer):
     recent_runs = serializers.ListField(child=serializers.DictField())
     build_changes = serializers.ListField(child=serializers.DictField())
     earlier_messages = serializers.ListField(child=serializers.DictField())
+    drafts = serializers.DictField(
+        required=False,
+        help_text="The unsaved changes by piece, where the environment has drafts.",
+    )

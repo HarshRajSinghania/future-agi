@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  SimulateApiHarnessEnvironmentsDraftsResponse,
+  SimulateApiHarnessEnvironmentsDraftsSaveDraftsBody,
   SimulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse,
   SimulateApiHarnessEnvironmentsNudgesResponseItem,
   SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse,
@@ -100,5 +102,60 @@ describe.each([
     };
 
     expect(schema.parse(item)).toEqual(item);
+  });
+});
+
+describe("generated drafts contract", () => {
+  const draft = {
+    id: "7d4c1a52-8d43-4c55-9d3e-0c5d0b1f6a10",
+    label: null,
+    status: "draft",
+    is_default: false,
+    created_at: "2026-10-17T00:00:00+00:00",
+    created_by: null,
+    origin: "chat",
+    summary: "1 scenario added",
+    hash: "tree_v1:abc",
+    parent_id: "0b5d0b1f-8d43-4c55-9d3e-7d4c1a526a10",
+    derived_from_agent_version_id: null,
+    scenario_count: 3,
+    source: null,
+    prompt: null,
+    preflight_status: null,
+    preflight_report: null,
+    preflighted_at: null,
+    check_started_at: null,
+    credential_names: null,
+    required_variable_names: null,
+    activation_outcome: null,
+    requested_here: null,
+    pickable: null,
+    discardable: null,
+    stale: false,
+    revision: 1,
+    last_edited_by: null,
+    updated_at: "2026-10-17T00:00:00+00:00",
+    parent_label: "v1",
+    default_label: "v1",
+    changes: { added: 1, removed: 0, changed: 0 },
+  };
+
+  it("accepts a piece without a draft and an unnumbered draft", () => {
+    const body = { environment: null, suite: draft, set_aside: [] };
+
+    expect(SimulateApiHarnessEnvironmentsDraftsResponse.parse(body)).toEqual(
+      body,
+    );
+  });
+
+  it("accepts a save that saw no parent", () => {
+    const body = {
+      drafts: [{ piece: "suite", expected_parent_id: null }],
+      idempotency_key: "save-1",
+    };
+
+    expect(
+      SimulateApiHarnessEnvironmentsDraftsSaveDraftsBody.parse(body),
+    ).toEqual(body);
   });
 });

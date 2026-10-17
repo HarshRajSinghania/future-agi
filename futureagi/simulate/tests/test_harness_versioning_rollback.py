@@ -116,7 +116,8 @@ def _amend_drop(auth_client, environment, name):
             format="json",
         )
     assert response.status_code == 200, response.content
-    environment.refresh_from_db()
+    # Since drafts, the amend is made live by Save.
+    record_tests._save_drafts(environment)
 
 
 def _suite(environment, number):

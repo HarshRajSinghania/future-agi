@@ -434,6 +434,51 @@ export const RUN_DIALOG_COPY = {
   starting: "Starting…",
 };
 
+// Unsaved changes (drafts) to the environment and its scenarios, made live
+// together by one Save. Counts and names only.
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+export const DRAFTS_COPY = {
+  title: "Unsaved changes",
+  pieces: { environment: "environment", suite: "scenarios" },
+  environmentChanges: (n) => plural(n, "change"),
+  suiteChanges: ({ added = 0, removed = 0, changed = 0 } = {}) =>
+    `${added} added, ${removed} removed, ${changed} changed`,
+  lastEdited: (name, when) =>
+    name ? `last edited by ${name}, ${when}` : `last edited ${when}`,
+  viewChanges: "View changes",
+  save: "Save",
+  saving: "Saving…",
+  discard: "Discard",
+  discarding: "Discarding…",
+  discardTitle: "Discard unsaved changes?",
+  discardBody:
+    "The unsaved changes are removed. The saved versions stay as they are.",
+  stale: (piece, from, now) =>
+    `These unsaved changes started from ${piece} ${from || "an earlier version"}; it is now ${now || "a newer version"}. Discard them, or ask chat to make them again on the current version.`,
+  busy: "Chat is working; save when it finishes",
+  saveError: "Couldn't save the changes. Try again in a moment.",
+  discardError: "Couldn't discard the changes. Try again in a moment.",
+  errors: {
+    draft_changed:
+      "Someone changed these edits a moment ago; review them and save again",
+    chat_working:
+      "Chat is still saving its last changes; try again in a moment",
+    rebuild_running: "An update is running; try again when it finishes",
+    environment_busy:
+      "The environment is being built or updated; try again when it finishes",
+    draft_not_found: "These changes were already saved or discarded.",
+    idempotency_key_reused:
+      "These changes moved while saving; press Save again.",
+  },
+  // The Scenarios tab and the run dialog.
+  unsaved: "Unsaved",
+  saveToRun: "Save to run",
+  saveToRunSelected: "Save the unsaved changes to run these scenarios",
+  addedToDraft: "Added to unsaved changes",
+  notInRun:
+    "Unsaved changes aren't part of this run. Save them first to include them.",
+};
+
 // Comparing a run with another run of the same environment, scenario by
 // scenario, on pass rates over trials.
 export const COMPARE_COPY = {

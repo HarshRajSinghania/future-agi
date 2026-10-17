@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { camelCase } from "lodash";
 import axios from "src/utils/axios";
 import { apiPath } from "src/api/contracts/api-surface";
+import { harnessIdempotencyKey } from "src/api/harness/harness";
 
 /**
  * The version history of one environment: its agent, environment and scenario
@@ -13,6 +14,8 @@ import { apiPath } from "src/api/contracts/api-surface";
  * move a default to another version, and set aside, re-check or re-credential an
  * agent version. Nudges propose rebuilding the environment (or its scenarios)
  * after its agent (or environment) changed; they can be listed and skipped.
+ * Edits made while versioning is on wait as unsaved changes (drafts) until
+ * they are saved together or discarded.
  */
 
 export const VERSION_PIECES = ["agent", "environment", "suite"];
@@ -60,6 +63,18 @@ const answerNudgePath = (envId, nudgeId) =>
   apiPath("/simulate/api/harness-environments/{id}/nudges/{nudge_id}/answer/", {
     id: envId,
     nudge_id: nudgeId,
+  });
+
+const draftsPath = (envId) =>
+  apiPath("/simulate/api/harness-environments/{id}/drafts/", { id: envId });
+const saveDraftsPath = (envId) =>
+  apiPath("/simulate/api/harness-environments/{id}/drafts/save/", {
+    id: envId,
+  });
+const discardDraftPath = (envId, piece) =>
+  apiPath("/simulate/api/harness-environments/{id}/drafts/{piece}/", {
+    id: envId,
+    piece,
   });
 
 const runPlanPath = (envId) =>
@@ -129,6 +144,22 @@ export const getNudges = async (envId) =>
 export const answerNudge = async (envId, nudgeId, answer) =>
   (await axios.post(answerNudgePath(envId, nudgeId), { answer })).data;
 
+export const getDrafts = async (envId) =>
+  (await axios.get(draftsPath(envId))).data;
+
+// Each draft carries the default it started from and the revision the user
+// saw; a newer edit or default refuses the save (409).
+export const saveDrafts = async (envId, { drafts, idempotencyKey }) =>
+  (
+    await axios.post(saveDraftsPath(envId), {
+      drafts,
+      idempotency_key: idempotencyKey,
+    })
+  ).data;
+
+export const discardDraft = async (envId, piece) =>
+  (await axios.delete(discardDraftPath(envId, piece))).data;
+
 export const environmentVersionsKey = (envId) => [
   "harness-env-versions",
   envId,
@@ -149,6 +180,11 @@ export const suiteMembersKey = (envId, versionId) => [
 export const nudgesKey = (envId) => [
   ...environmentVersionsKey(envId),
   "nudges",
+];
+
+export const draftsKey = (envId) => [
+  ...environmentVersionsKey(envId),
+  "drafts",
 ];
 
 export const runPlanKey = (envId, picks = {}) => [
@@ -319,19 +355,34 @@ export function useRunPlan(envId, picks, { enabled = true } = {}) {
   });
 }
 
-// Make a version the default. The answer is every version, so it seeds the list;
-// the environment detail, the job and the scenarios follow the default, so they
-// are asked again too. A conflict means the default moved elsewhere: refresh so
-// the user picks again from what is current. Keys are environment.js's and
+// The versions (with the drafts) and what follows the defaults: the
+// environment detail, the job and the scenarios. Keys are environment.js's and
 // scenariosHooks.js's literals, which import this module.
+const refreshFollowers = (queryClient, envId) => {
+  queryClient.invalidateQueries({ queryKey: environmentVersionsKey(envId) });
+  queryClient.invalidateQueries({ queryKey: ["harness-environment", envId] });
+  queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
+  queryClient.invalidateQueries({ queryKey: ["harness-scenarios", envId] });
+};
+
+// A draft keeps its id as it is edited, so its diff and members are asked
+// again with the drafts.
+export const refreshDrafts = (queryClient, envId) => {
+  queryClient.invalidateQueries({ queryKey: draftsKey(envId) });
+  queryClient.invalidateQueries({
+    queryKey: [...environmentVersionsKey(envId), "diff"],
+  });
+  queryClient.invalidateQueries({
+    queryKey: [...environmentVersionsKey(envId), "members"],
+  });
+};
+
+// Make a version the default. The answer is every version, so it seeds the list;
+// what follows the default is asked again too. A conflict means the default
+// moved elsewhere: refresh so the user picks again from what is current.
 export function useMoveDefault(envId) {
   const queryClient = useQueryClient();
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: environmentVersionsKey(envId) });
-    queryClient.invalidateQueries({ queryKey: ["harness-environment", envId] });
-    queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
-    queryClient.invalidateQueries({ queryKey: ["harness-scenarios", envId] });
-  };
+  const refresh = () => refreshFollowers(queryClient, envId);
   return useMutation({
     meta: { errorHandled: true },
     mutationFn: ({ piece, versionId, expectedDefaultId }) =>
@@ -526,5 +577,121 @@ export function useAnswerNudge(envId) {
         refreshNudges();
       }
     },
+  });
+}
+
+// The pieces that can hold unsaved changes, in the order they are saved.
+export const DRAFT_PIECES = ["environment", "suite"];
+
+// An unsaved draft: a version row plus what the save checks and the bar shows.
+// `changes` holds counts only.
+export const draftFromApi = (item = {}) => ({
+  ...versionFromApi(item),
+  stale: Boolean(item.stale),
+  revision: item.revision ?? null,
+  lastEditedBy: item.last_edited_by?.name || null,
+  updatedAt: item.updated_at || null,
+  parentLabel: item.parent_label || null,
+  defaultLabel: item.default_label || null,
+  changes: item.changes || {},
+});
+
+export const toDrafts = (data = {}) => {
+  const drafts = Object.fromEntries(
+    DRAFT_PIECES.map((piece) => [
+      piece,
+      data?.[piece] ? draftFromApi(data[piece]) : null,
+    ]),
+  );
+  const pieces = DRAFT_PIECES.filter((piece) => drafts[piece]);
+  return {
+    ...drafts,
+    setAside: (Array.isArray(data?.set_aside) ? data.set_aside : []).map(
+      draftFromApi,
+    ),
+    pieces,
+    any: pieces.length > 0,
+    stale: pieces.some((piece) => drafts[piece].stale),
+  };
+};
+
+// Not polled: the edits that change it (a chat turn, a Scenarios-tab edit, a
+// save or discard) ask for it again.
+export function useDrafts(envId, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: draftsKey(envId),
+    queryFn: () => getDrafts(envId),
+    select: toDrafts,
+    enabled: Boolean(envId) && enabled,
+    retry: retryUnlessNotFound,
+    meta: { errorHandled: true },
+  });
+}
+
+const DRAFTS_REFRESH_CODES = new Set([
+  "draft_stale",
+  "draft_changed",
+  "draft_not_found",
+]);
+
+// Save every open draft at once. A click keeps its key while the same drafts
+// are sent again after a failure the server may not have seen; a refusal or
+// other drafts mint a new one. The answer is every version, so it seeds the
+// list; what follows the defaults is asked again.
+export function useSaveDrafts(envId) {
+  const queryClient = useQueryClient();
+  const pending = useRef(null);
+  return useMutation({
+    meta: { errorHandled: true },
+    mutationFn: (drafts) => {
+      const body = drafts.map(({ piece, parentId, revision }) => ({
+        piece,
+        expected_parent_id: parentId ?? null,
+        ...(revision != null ? { expected_revision: revision } : {}),
+      }));
+      const signature = JSON.stringify(body);
+      if (pending.current?.signature !== signature) {
+        pending.current = { signature, key: harnessIdempotencyKey() };
+      }
+      return saveDrafts(envId, {
+        drafts: body,
+        idempotencyKey: pending.current.key,
+      });
+    },
+    onSuccess: (data) => {
+      pending.current = null;
+      if (data?.versions) {
+        queryClient.setQueryData(environmentVersionsKey(envId), data.versions);
+      }
+      refreshFollowers(queryClient, envId);
+    },
+    onError: (error) => {
+      const status = errorStatus(error);
+      if (status >= 400 && status < 500) pending.current = null;
+      if (DRAFTS_REFRESH_CODES.has(error?.error)) {
+        queryClient.invalidateQueries({ queryKey: draftsKey(envId) });
+      } else if (error?.error === "version_conflict") {
+        queryClient.invalidateQueries({
+          queryKey: environmentVersionsKey(envId),
+        });
+      }
+    },
+  });
+}
+
+// Discard the given pieces' drafts, one request each. Whatever was discarded
+// before a refusal is gone, so the drafts and what they overlay are asked
+// again either way.
+export function useDiscardDraft(envId) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    meta: { errorHandled: true },
+    mutationFn: async (pieces) => {
+      for (const piece of pieces) {
+        // eslint-disable-next-line no-await-in-loop
+        await discardDraft(envId, piece);
+      }
+    },
+    onSettled: () => refreshFollowers(queryClient, envId),
   });
 }

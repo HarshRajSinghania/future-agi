@@ -597,6 +597,9 @@ import type {
   HarnessConversationTranscriptAppendResponseApi,
   HarnessConversationWorkspaceResponseApi,
   HarnessDefaultMoveApi,
+  HarnessDraftSaveApi,
+  HarnessDraftSaveResponseApi,
+  HarnessDraftsApi,
   HarnessEnvironmentAddEvaluationApi,
   HarnessEnvironmentAvailableEvalsApi,
   HarnessEnvironmentDetailApi,
@@ -58803,6 +58806,145 @@ export const simulateApiHarnessEnvironmentsCompare = async (
     {
       ...options,
       method: "GET",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsDraftsResponse200 = {
+  data: HarnessDraftsApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsDraftsResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsDraftsResponseSuccess =
+  simulateApiHarnessEnvironmentsDraftsResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsDraftsResponseError =
+  simulateApiHarnessEnvironmentsDraftsResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsDraftsResponse =
+  | simulateApiHarnessEnvironmentsDraftsResponseSuccess
+  | simulateApiHarnessEnvironmentsDraftsResponseError;
+
+export const getSimulateApiHarnessEnvironmentsDraftsUrl = (id: string) => {
+  return `/simulate/api/harness-environments/${id}/drafts/`;
+};
+
+/**
+ * The environment's unsaved changes, for the Save bar.
+ */
+export const simulateApiHarnessEnvironmentsDrafts = async (
+  id: string,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsDraftsResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsDraftsResponse>(
+    getSimulateApiHarnessEnvironmentsDraftsUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsDraftsSaveDraftsResponse200 = {
+  data: HarnessDraftSaveResponseApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsDraftsSaveDraftsResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsDraftsSaveDraftsResponseSuccess =
+  simulateApiHarnessEnvironmentsDraftsSaveDraftsResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsDraftsSaveDraftsResponseError =
+  simulateApiHarnessEnvironmentsDraftsSaveDraftsResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsDraftsSaveDraftsResponse =
+  | simulateApiHarnessEnvironmentsDraftsSaveDraftsResponseSuccess
+  | simulateApiHarnessEnvironmentsDraftsSaveDraftsResponseError;
+
+export const getSimulateApiHarnessEnvironmentsDraftsSaveDraftsUrl = (
+  id: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/drafts/save/`;
+};
+
+/**
+ * Make every named draft live together; returns the new defaults and every
+version.
+ */
+export const simulateApiHarnessEnvironmentsDraftsSaveDrafts = async (
+  id: string,
+  harnessDraftSaveApi: HarnessDraftSaveApi,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsDraftsSaveDraftsResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsDraftsSaveDraftsResponse>(
+    getSimulateApiHarnessEnvironmentsDraftsSaveDraftsUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(harnessDraftSaveApi),
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsDiscardDraftResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type simulateApiHarnessEnvironmentsDiscardDraftResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 204>;
+};
+
+export type simulateApiHarnessEnvironmentsDiscardDraftResponseSuccess =
+  simulateApiHarnessEnvironmentsDiscardDraftResponse204 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsDiscardDraftResponseError =
+  simulateApiHarnessEnvironmentsDiscardDraftResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsDiscardDraftResponse =
+  | simulateApiHarnessEnvironmentsDiscardDraftResponseSuccess
+  | simulateApiHarnessEnvironmentsDiscardDraftResponseError;
+
+export const getSimulateApiHarnessEnvironmentsDiscardDraftUrl = (
+  id: string,
+  piece: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/drafts/${piece}/`;
+};
+
+/**
+ * Set one piece's unsaved changes aside; discarding none is not an error.
+ */
+export const simulateApiHarnessEnvironmentsDiscardDraft = async (
+  id: string,
+  piece: string,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsDiscardDraftResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsDiscardDraftResponse>(
+    getSimulateApiHarnessEnvironmentsDiscardDraftUrl(id, piece),
+    {
+      ...options,
+      method: "DELETE",
     },
   );
 };

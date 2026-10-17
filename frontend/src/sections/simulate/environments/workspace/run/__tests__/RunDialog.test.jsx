@@ -3,7 +3,7 @@ import { render, screen, within } from "src/utils/test-utils";
 import userEvent from "@testing-library/user-event";
 
 // Each hook is stubbed; tests set what the server answered.
-const state = { versions: undefined, plans: {}, members: {} };
+const state = { versions: undefined, plans: {}, members: {}, drafts: null };
 const planCalls = [];
 vi.mock("src/api/simulate-environments/versions", async () => {
   const actual = await vi.importActual(
@@ -30,6 +30,9 @@ vi.mock("src/api/simulate-environments/versions", async () => {
       }
       return { data: plan, isLoading: false, isError: false };
     }),
+    useDrafts: vi.fn((envId, { enabled } = {}) => ({
+      data: enabled && state.drafts ? actual.toDrafts(state.drafts) : undefined,
+    })),
     useSuiteMembers: vi.fn((envId, id) => ({
       data: state.members[id],
       isLoading: !state.members[id],
@@ -107,6 +110,7 @@ describe("RunDialog", () => {
     state.plans = {};
     state.members = { s3: members("k1", "k2", "k3"), s2: members("k1", "k9") };
     planCalls.length = 0;
+    state.drafts = null;
   });
 
   it("pre-selects the defaults and offers only active versions", async () => {
@@ -550,8 +554,7 @@ describe("RunDialog", () => {
   it("runs all of another suite's scenarios when that suite is picked", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderDialog({ scenarioIds: undefined });
-    // The default suite runs the server's current list, so no count is promised.
-    expect(screen.getByText("Runs all scenarios in v3.")).toBeInTheDocument();
+    expect(screen.getByText("Runs all 3 scenarios in v3.")).toBeInTheDocument();
 
     await pickOption(user, "Scenario version", "v2");
     expect(screen.getByText("Runs all 2 scenarios in v2.")).toBeInTheDocument();
@@ -563,11 +566,38 @@ describe("RunDialog", () => {
     );
   });
 
-  it("keeps run-all on the server's list for the default suite", async () => {
+  it("keeps run-all on the server's list for the default suite with versioning off", async () => {
     const user = userEvent.setup();
-    const { onSubmit } = renderDialog({ scenarioIds: undefined });
+    const { onSubmit } = renderDialog({
+      scenarioIds: undefined,
+      env: { id: "env-1" },
+    });
+    // The default suite runs the server's current list, so no count is promised.
+    expect(screen.getByText("Runs all scenarios in v3.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Run" }));
     expect(onSubmit).toHaveBeenCalledWith({}, undefined, DEFAULTS);
+  });
+
+  it("runs the default suite's own scenarios with versioning on, even before the drafts are known", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog({ scenarioIds: undefined });
+    expect(screen.getByText("Runs all 3 scenarios in v3.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect(onSubmit).toHaveBeenCalledWith({}, ["k1", "k2", "k3"], DEFAULTS);
+  });
+
+  it("says unsaved changes aren't part of the run", () => {
+    state.drafts = { environment: { id: "ed" }, suite: null, set_aside: [] };
+    renderDialog();
+    expect(screen.getByTestId("run-drafts-note")).toHaveTextContent(
+      "Unsaved changes aren't part of this run. Save them first to include them.",
+    );
+  });
+
+  it("says nothing about unsaved changes when there are none", () => {
+    state.drafts = { environment: null, suite: null, set_aside: [] };
+    renderDialog();
+    expect(screen.queryByTestId("run-drafts-note")).toBeNull();
   });
 
   it("says why Run is off when the picked suite has no scenarios", async () => {

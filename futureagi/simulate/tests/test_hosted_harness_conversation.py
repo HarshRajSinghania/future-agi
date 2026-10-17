@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
@@ -559,12 +560,33 @@ def _chat_checkpoint(names, *, one_liner):
         entries[f"{folder}/scenario.json"] = json.dumps(document).encode()
         entries[f"{folder}/ready.py"] = b"def ready(world):\n    return True\n"
     out = io.BytesIO()
-    with tarfile.open(fileobj=out, mode="w:gz") as archive:
+    with (
+        gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as zipped,
+        tarfile.open(fileobj=zipped, mode="w") as archive,
+    ):
         for path, data in entries.items():
             member = tarfile.TarInfo(path)
             member.size = len(data)
             archive.addfile(member, io.BytesIO(data))
     return out.getvalue()
+
+
+def test_chat_checkpoints_a_second_apart_have_the_same_digest(monkeypatch):
+    from simulate.services.hosted_harness_gateway import with_authoring_basis
+    from simulate.tests.test_harness_amend_archive import NAMES
+
+    def checkpoint():
+        body = _chat_checkpoint(NAMES, one_liner="same")
+        return body, with_authoring_basis(body, "r1")
+
+    monkeypatch.setattr("time.time", lambda: 1_000_000.0)
+    first = checkpoint()
+    monkeypatch.setattr("time.time", lambda: 1_000_001.0)
+    second = checkpoint()
+
+    assert [hashlib.sha256(body).digest() for body in first] == [
+        hashlib.sha256(body).digest() for body in second
+    ]
 
 
 def _commit_checkpoint(client, conversation, headers, body):

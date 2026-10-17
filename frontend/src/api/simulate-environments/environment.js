@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect, useRef } from "react";
+import { useCallback, useMemo, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getHarnessJob } from "src/api/harness/harness";
 import { getHarnessEnvironment } from "src/api/simulate-environments/harnessEnvironments";
@@ -18,7 +18,7 @@ import {
 } from "src/sections/simulate/environments/helpers/harnessJobToRow";
 import { usePrebuiltEnvironments } from "./prebuilt";
 import { conversationInFlight } from "./conversationProjection";
-import { environmentVersionsKey } from "./versions";
+import { environmentVersionsKey, refreshDrafts } from "./versions";
 
 // The §6 environment-detail endpoint is implemented on the backend branch but not
 // yet merged/served (see environments-api-contracts §6). Until it lands and the
@@ -41,7 +41,8 @@ const REFETCH_ACTIVE_MS = 1000;
 // A chat turn's changes are saved after its reply, in the background. Keep the
 // steady tick for a short window after a turn ends, so the saved result or a
 // refusal (a failed message) shows without waiting for focus or the next send.
-export const SAVE_GRACE_MS = 30000;
+// As long as the server holds Save for that publish (PUBLISH_GRACE in drafts.py).
+export const SAVE_GRACE_MS = 60000;
 const lastBusyAt = new Map();
 
 export const jobRefetchInterval = (data, now = Date.now()) => {
@@ -307,7 +308,7 @@ export function useEnvironment(envId) {
   // The version history changes when a build, rebuild or extend finishes while
   // this page is open, and when a chat turn saves. Opening an environment that
   // is already finished fetches it once, from the readers themselves. Only the
-  // list is refreshed: a version's own diff and scenarios never change.
+  // list is refreshed: a saved version's own diff and scenarios never change.
   const queryClient = useQueryClient();
   const refreshVersions = useCallback(
     () =>
@@ -331,17 +332,31 @@ export function useEnvironment(envId) {
       refreshVersions();
     }
   }, [envId, stage, refreshVersions]);
+  // A turn's save also writes the unsaved changes, under their own key.
+  const refreshAfterTurn = useCallback(() => {
+    refreshVersions();
+    refreshDrafts(queryClient, envId);
+  }, [refreshVersions, queryClient, envId]);
   const inFlight = conversationInFlight(jobQuery.data?.conversation);
   const wasInFlight = useRef(inFlight);
+  // A turn ended less than SAVE_GRACE_MS ago, so its save may still be landing.
+  const [chatSaving, setChatSaving] = useState(false);
   useEffect(() => {
     const ended = wasInFlight.current && !inFlight;
     wasInFlight.current = inFlight;
     if (!ended) return undefined;
-    refreshVersions();
+    refreshAfterTurn();
+    setChatSaving(true);
     // The turn's save lands in the background; read the history again once it has.
-    const later = setTimeout(refreshVersions, SAVE_GRACE_MS);
-    return () => clearTimeout(later);
-  }, [inFlight, refreshVersions]);
+    const later = setTimeout(() => {
+      refreshAfterTurn();
+      setChatSaving(false);
+    }, SAVE_GRACE_MS);
+    return () => {
+      clearTimeout(later);
+      setChatSaving(false);
+    };
+  }, [inFlight, refreshAfterTurn]);
 
   const detail = useMemo(
     () => (detailQuery.data ? harnessDetailToEnvironment(detailQuery.data) : null),
@@ -401,6 +416,7 @@ export function useEnvironment(envId) {
       source: "harness",
       bootstrapState,
       detailReady,
+      chatSaving,
       notFound: false,
       isLoading: false,
     };

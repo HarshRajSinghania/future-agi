@@ -138,6 +138,30 @@ def _versions(model, environment):
     )
 
 
+def _save_drafts(environment, user=None, key="save"):
+    """Press Save on every open draft, as the workspace's Save bar does, once the
+    chat's turns have finished."""
+    from simulate.models import HostedHarnessConversationMessage
+    from simulate.services.harness_versioning.drafts import (
+        DRAFT_PIECES,
+        SaveRequest,
+        open_draft,
+        save_drafts,
+    )
+
+    HostedHarnessConversationMessage.no_workspace_objects.filter(
+        conversation__job=environment, role="user"
+    ).update(state="completed")
+    requests = {
+        piece: SaveRequest(draft.parent_id, draft.revision)
+        for piece in DRAFT_PIECES
+        if (draft := open_draft(environment, piece)) is not None
+    }
+    body = save_drafts(environment, requests, idempotency_key=key, user=user)
+    environment.refresh_from_db()
+    return body
+
+
 class TestFirstAuthoring:
     def test_records_e1_s1_and_makes_them_the_defaults(self, user, workspace, storage):
         environment = _environment(user, workspace, "first-authoring")
@@ -753,7 +777,7 @@ class TestChatPromote:
         )
         environment.refresh_from_db()
 
-    def test_a_promoted_chat_edit_becomes_the_next_version(
+    def test_a_promoted_chat_edit_becomes_the_next_version_on_save(
         self, user, workspace, storage
     ):
         environment = _environment(user, workspace, "chat-promote")
@@ -762,6 +786,12 @@ class TestChatPromote:
 
         self._promote(environment, storage, NAMES)
 
+        assert environment.suite_version_id == first.suite.id
+        draft = HarnessSuiteVersion.no_workspace_objects.get(
+            job=environment, status="draft"
+        )
+        assert (draft.revision, draft.parent_id) == (1, first.suite.id)
+        _save_drafts(environment)
         suite = environment.suite_version
         assert suite.version_number == 2
         assert suite.origin == "chat"
@@ -1235,9 +1265,13 @@ class TestPromoteNoOp:
         environment.refresh_from_db()
         chat = TestChatPromote()
 
-        chat._promote(environment, storage, NAMES)
         key = environment.payload["metadata"]["authoring_object_key"]
+        chat._promote(environment, storage, NAMES)
         chat._promote(environment, storage, NAMES, sequence=101)
 
         assert environment.payload["metadata"]["authoring_object_key"] == key
-        assert len(_versions(HarnessSuiteVersion, environment)) == 2
+        suites = _versions(HarnessSuiteVersion, environment)
+        assert [(one.status, one.revision) for one in suites] == [
+            ("active", 0),
+            ("draft", 1),
+        ]

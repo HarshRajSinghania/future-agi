@@ -4,7 +4,16 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("src/utils/axios", () => ({
-  default: { get: vi.fn(), post: vi.fn() },
+  default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
+}));
+// Save keys are counted so a test can tell a reused key from a fresh one.
+let keyCount = 0;
+vi.mock("src/api/harness/harness", async (importOriginal) => ({
+  ...(await importOriginal()),
+  harnessIdempotencyKey: vi.fn(() => {
+    keyCount += 1;
+    return `key-${keyCount}`;
+  }),
 }));
 
 const { default: axios } = await import("src/utils/axios");
@@ -21,6 +30,11 @@ const {
   useRefreshWhenChecked,
   useNudges,
   useAnswerNudge,
+  useDrafts,
+  useSaveDrafts,
+  useDiscardDraft,
+  draftsKey,
+  toDrafts,
   nudgesKey,
   nudgeFromApi,
   canMakeDefault,
@@ -92,6 +106,8 @@ beforeEach(() => {
   });
   axios.get.mockReset();
   axios.post.mockReset();
+  axios.delete.mockReset();
+  keyCount = 0;
 });
 
 describe("versionFromApi / toVersions", () => {
@@ -1149,4 +1165,231 @@ describe("nudges", () => {
       expect(spy).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("drafts", () => {
+  const DRAFTS = {
+    environment: {
+      id: "ed",
+      label: null,
+      status: "draft",
+      origin: "chat",
+      parent_id: "e2",
+      stale: false,
+      revision: 3,
+      last_edited_by: { id: "u1", name: "Asha" },
+      updated_at: "2026-10-16T10:00:00Z",
+      parent_label: "v2",
+      default_label: "v2",
+      changes: { tools: 1, rules: 2, sub_goals: 0, world_files: 0 },
+    },
+    suite: null,
+    set_aside: [],
+  };
+  const PIECES = [
+    { piece: "environment", parentId: "e2", revision: 3 },
+    { piece: "suite", parentId: "s3", revision: 1 },
+  ];
+  const BODY = [
+    { piece: "environment", expected_parent_id: "e2", expected_revision: 3 },
+    { piece: "suite", expected_parent_id: "s3", expected_revision: 1 },
+  ];
+  const SAVE_PATH = "/simulate/api/harness-environments/env-1/drafts/save/";
+  const invalidated = (spy) => spy.mock.calls.map(([filters]) => filters);
+
+  it("nests the drafts under the versions, so a versions refresh reaches them", () => {
+    expect(draftsKey("env-1")).toEqual([
+      ...environmentVersionsKey("env-1"),
+      "drafts",
+    ]);
+  });
+
+  it("maps each open piece and tells whether any is open or stale", () => {
+    const drafts = toDrafts({
+      ...DRAFTS,
+      suite: { ...DRAFTS.environment, id: "sd", stale: true, changes: {} },
+    });
+    expect(drafts.environment).toMatchObject({
+      id: "ed",
+      status: "draft",
+      parentId: "e2",
+      stale: false,
+      revision: 3,
+      lastEditedBy: "Asha",
+      updatedAt: "2026-10-16T10:00:00Z",
+      parentLabel: "v2",
+      defaultLabel: "v2",
+      changes: { tools: 1, rules: 2, sub_goals: 0, world_files: 0 },
+    });
+    expect(drafts.pieces).toEqual(["environment", "suite"]);
+    expect(drafts.any).toBe(true);
+    expect(drafts.stale).toBe(true);
+  });
+
+  it("reads no drafts as nothing open", () => {
+    expect(
+      toDrafts({ environment: null, suite: null, set_aside: [] }),
+    ).toMatchObject({
+      environment: null,
+      suite: null,
+      setAside: [],
+      pieces: [],
+      any: false,
+      stale: false,
+    });
+  });
+
+  it("reads the drafts under their key, and not while versioning is off", async () => {
+    axios.get.mockResolvedValue({ data: DRAFTS });
+    const { result } = renderHook(() => useDrafts("env-1"), { wrapper });
+    await waitFor(() => expect(result.current.data?.any).toBe(true));
+    expect(axios.get).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/env-1/drafts/",
+    );
+    expect(client.getQueryData(draftsKey("env-1"))).toEqual(DRAFTS);
+
+    axios.get.mockClear();
+    renderHook(() => useDrafts("env-2", { enabled: false }), { wrapper });
+    expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it("saves every piece with its parent, revision and a key, then refreshes what follows", async () => {
+    axios.post.mockResolvedValue({
+      data: { saved: {}, versions: RESPONSE },
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useSaveDrafts("env-1"), { wrapper });
+
+    await act(() => result.current.mutateAsync(PIECES));
+
+    expect(axios.post).toHaveBeenCalledWith(SAVE_PATH, {
+      drafts: BODY,
+      idempotency_key: "key-1",
+    });
+    expect(client.getQueryData(environmentVersionsKey("env-1"))).toEqual(
+      RESPONSE,
+    );
+    // The versions prefix covers the drafts, the run plan and the nudges.
+    expect(invalidated(spy)).toEqual([
+      { queryKey: environmentVersionsKey("env-1") },
+      { queryKey: harnessEnvironmentKey("env-1") },
+      { queryKey: harnessJobQuery("env-1").queryKey },
+      { queryKey: harnessScenariosListKey("env-1") },
+    ]);
+  });
+
+  it("leaves out a revision it doesn't know", async () => {
+    axios.post.mockResolvedValue({ data: {} });
+    const { result } = renderHook(() => useSaveDrafts("env-1"), { wrapper });
+    await act(() =>
+      result.current.mutateAsync([{ piece: "suite", parentId: null }]),
+    );
+    expect(axios.post.mock.calls[0][1].drafts).toEqual([
+      { piece: "suite", expected_parent_id: null },
+    ]);
+  });
+
+  it("keeps the key for a retry of the same drafts after a failure the server may not have seen", async () => {
+    axios.post.mockRejectedValueOnce({ message: "Network Error" });
+    axios.post.mockResolvedValueOnce({ data: {} });
+    const { result } = renderHook(() => useSaveDrafts("env-1"), { wrapper });
+
+    await act(() => result.current.mutateAsync(PIECES).catch(() => {}));
+    await act(() => result.current.mutateAsync(PIECES));
+
+    const keys = axios.post.mock.calls.map(([, body]) => body.idempotency_key);
+    expect(keys).toEqual(["key-1", "key-1"]);
+  });
+
+  it("uses a new key after a refusal, and for other drafts", async () => {
+    axios.post.mockRejectedValueOnce({
+      statusCode: 409,
+      error: "chat_working",
+    });
+    axios.post.mockRejectedValueOnce({ message: "Network Error" });
+    axios.post.mockResolvedValue({ data: {} });
+    const { result } = renderHook(() => useSaveDrafts("env-1"), { wrapper });
+
+    await act(() => result.current.mutateAsync(PIECES).catch(() => {}));
+    await act(() => result.current.mutateAsync(PIECES).catch(() => {}));
+    await act(() => result.current.mutateAsync(PIECES.slice(0, 1)));
+
+    const keys = axios.post.mock.calls.map(([, body]) => body.idempotency_key);
+    expect(keys).toEqual(["key-1", "key-2", "key-3"]);
+  });
+
+  it.each(["draft_stale", "draft_changed", "draft_not_found"])(
+    "asks for the drafts again when the save is refused with %s",
+    async (code) => {
+      axios.post.mockRejectedValue({ statusCode: 409, error: code });
+      const spy = vi.spyOn(client, "invalidateQueries");
+      const { result } = renderHook(() => useSaveDrafts("env-1"), {
+        wrapper,
+      });
+      await act(() => result.current.mutateAsync(PIECES).catch(() => {}));
+      expect(invalidated(spy)).toEqual([{ queryKey: draftsKey("env-1") }]);
+    },
+  );
+
+  it("asks for the versions again after a version conflict, and for nothing on other refusals", async () => {
+    axios.post.mockRejectedValueOnce({
+      statusCode: 409,
+      error: "version_conflict",
+    });
+    axios.post.mockRejectedValueOnce({
+      statusCode: 409,
+      error: "rebuild_running",
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useSaveDrafts("env-1"), { wrapper });
+    await act(() => result.current.mutateAsync(PIECES).catch(() => {}));
+    expect(invalidated(spy)).toEqual([
+      { queryKey: environmentVersionsKey("env-1") },
+    ]);
+    spy.mockClear();
+    await act(() => result.current.mutateAsync(PIECES).catch(() => {}));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("discards each piece with its own request, then refreshes what it overlaid", async () => {
+    axios.delete.mockResolvedValue({ data: "" });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useDiscardDraft("env-1"), {
+      wrapper,
+    });
+
+    await act(() => result.current.mutateAsync(["environment", "suite"]));
+
+    expect(axios.delete.mock.calls.map(([path]) => path)).toEqual([
+      "/simulate/api/harness-environments/env-1/drafts/environment/",
+      "/simulate/api/harness-environments/env-1/drafts/suite/",
+    ]);
+    // The versions prefix covers the drafts and the discarded draft's views.
+    expect(invalidated(spy)).toEqual([
+      { queryKey: environmentVersionsKey("env-1") },
+      { queryKey: harnessEnvironmentKey("env-1") },
+      { queryKey: harnessJobQuery("env-1").queryKey },
+      { queryKey: harnessScenariosListKey("env-1") },
+    ]);
+  });
+
+  it("refreshes after a refused discard too, since earlier pieces may be gone", async () => {
+    axios.delete.mockResolvedValueOnce({ data: "" });
+    axios.delete.mockRejectedValueOnce({
+      statusCode: 409,
+      error: "chat_working",
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useDiscardDraft("env-1"), {
+      wrapper,
+    });
+    await act(() =>
+      result.current.mutateAsync(["environment", "suite"]).catch(() => {}),
+    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(axios.delete).toHaveBeenCalledTimes(2);
+    expect(invalidated(spy)).toContainEqual({
+      queryKey: environmentVersionsKey("env-1"),
+    });
+  });
 });

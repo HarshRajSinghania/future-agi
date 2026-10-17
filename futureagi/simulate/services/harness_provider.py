@@ -1839,6 +1839,7 @@ class HostedHarnessProvider:
                 kind=data["kind"],
                 reply_to=data.get("reply_to"),
                 payload=data.get("payload"),
+                server_payload={"_author_id": str(request.user.id)},
             )
         except HostedHarnessError as exc:
             return Response(exc.as_dict(), status=exc.status_code)
@@ -2064,11 +2065,16 @@ class HostedHarnessProvider:
             index_scenarios,
             scenario_row,
         )
+        from simulate.services.harness_versioning.drafts import draft_rows
 
+        # The unsaved scenarios when the environment has them, numbered as Save will.
+        drafted = draft_rows(job)
         queryset = HostedHarnessScenario.no_workspace_objects.filter(
             job=job
         ).select_related("scenario", "call_execution")
-        if not queryset.filter(number__isnull=False).exists():
+        if drafted is not None:
+            queryset = drafted
+        elif not queryset.filter(number__isnull=False).exists():
             # Runs from before indexing: index from the stage output or the unpacked archive.
             artefact = (
                 HostedHarnessStageOutput.no_workspace_objects.filter(
@@ -2103,8 +2109,20 @@ class HostedHarnessProvider:
 
         asked = request.query_params.get("group_by")
         group_by = DEFAULT_GROUP_BY if asked is None else asked
-        rows = grouped([scenario_row(one) for one in page or []], group_by)
+        rows = grouped(
+            [
+                (
+                    {**scenario_row(one), "draft_change": one.draft_change}
+                    if drafted is not None
+                    else scenario_row(one)
+                )
+                for one in page or []
+            ],
+            group_by,
+        )
         response = paginator.get_paginated_response(rows)
+        if drafted is not None:
+            response.data["draft"] = drafted.draft
         response.data["groups"] = group_counts(rows, queryset, group_by)
         response.data["group_by"] = group_by
         from simulate.services.harness_environment import AGENT_TYPE_VOICE, agent_type
@@ -2135,8 +2153,11 @@ class HostedHarnessProvider:
             apply_search,
             coverage_grid,
         )
+        from simulate.services.harness_versioning.drafts import draft_rows
 
-        queryset = HostedHarnessScenario.no_workspace_objects.filter(job=job)
+        queryset = draft_rows(job)
+        if queryset is None:
+            queryset = HostedHarnessScenario.no_workspace_objects.filter(job=job)
         queryset = apply_search(queryset, request.query_params.get("search", ""))
         queryset = apply_filters(queryset, request.query_params)
         from simulate.services.harness_environment import AGENT_TYPE_VOICE, agent_type
@@ -2206,6 +2227,35 @@ class HostedHarnessProvider:
                         [],
                     )
                 ]
+            from simulate.services.harness_versioning import drafts
+            from simulate.services.hosted_harness import HostedHarnessError
+            from simulate.services.hosted_harness_gateway import _scenario_token
+
+            # Where drafts apply, an edit goes to the unsaved changes, on top of them.
+            on_draft = drafts.drafts_apply(job)
+            draft_numbering = None
+            if on_draft:
+                try:
+                    drafts.require_no_rebuild(job, piece="suite")
+                except HostedHarnessError as exc:
+                    return Response(exc.as_dict(), status=exc.status_code)
+                suite_draft = drafts.fresh_draft(job, "suite")
+                if suite_draft is not None:
+                    documents = suite_draft.documents or {}
+                    suite = [dict(one) for one in documents.get("scenarios") or []]
+                    by_token = {
+                        _scenario_token(one.get("scenario_key") or one.get("name")): one
+                        for one in suite
+                    }
+                    draft_numbering = {
+                        pair["number"]: str(
+                            (by_token.get(_scenario_token(pair["doc_key"])) or {}).get(
+                                "name"
+                            )
+                            or pair["key"]
+                        )
+                        for pair in documents.get("pairs") or []
+                    }
             if not suite:
                 return Response(
                     {
@@ -2223,7 +2273,7 @@ class HostedHarnessProvider:
             for change in changes:
                 said = change.get("scenarios") or change.get("scenario")
                 # Resolve numbers against stored numbering, not list position.
-                numbering = {
+                numbering = draft_numbering or {
                     row.number: row.name or row.scenario_key
                     for row in HostedHarnessScenario.no_workspace_objects.filter(
                         job=job, number__isnull=False
@@ -2392,6 +2442,8 @@ class HostedHarnessProvider:
                             ]
                         }
                     )
+            if touched and on_draft:
+                return self._amend_draft(job, suite, receipts, request.user)
             if touched:
                 # The archive a run replays changes first; if it cannot, nothing changes.
                 try:
@@ -2455,6 +2507,124 @@ class HostedHarnessProvider:
                     ]
         return Response({"receipts": receipts})
 
+    def _amend_draft(self, job, suite, receipts, user) -> Response:
+        """Write an amended suite into the unsaved changes; nothing runs it until Save."""
+        from simulate.services.harness_versioning import drafts
+        from simulate.services.hosted_harness import HostedHarnessError
+        from simulate.services.hosted_harness_gateway import AuthoringArchiveKept
+
+        def kept(why: str) -> Response:
+            return Response(
+                {
+                    "receipts": [
+                        (
+                            {
+                                **one,
+                                "outcome": "refused",
+                                "why": f"nothing changed: {why}",
+                            }
+                            if one.get("outcome") == "applied"
+                            else one
+                        )
+                        for one in receipts
+                    ]
+                }
+            )
+
+        try:
+            write = drafts.write_suite_edit(job, suite, user=user)
+        except HostedHarnessError as exc:
+            if exc.code in {"scenario_key_retired", "scenario_key_taken"}:
+                return Response(
+                    {"error": exc.code, "message": exc.message},
+                    status=exc.status_code,
+                )
+            return kept(exc.message)
+        except AuthoringArchiveKept as refused:
+            return kept(str(refused))
+        if write is None:
+            return kept("the change could not be saved")
+        draft = write.suite
+        return Response(
+            {
+                "receipts": receipts,
+                "draft": (
+                    {"id": str(draft.id), "revision": draft.revision}
+                    if draft is not None
+                    else None
+                ),
+            }
+        )
+
+    def _extend_in_chat(self, request, job, count, guidance, client_request_id):
+        """Extend where drafts apply: a builder request whose scenarios land in the
+        unsaved changes."""
+        from uuid import uuid4
+
+        from simulate.services.harness_versioning import drafts
+        from simulate.services.hosted_harness import HostedHarnessError
+        from simulate.services.hosted_harness_conversation import (
+            CHAT_CHECKPOINT_MAX_SCENARIOS,
+            enqueue_message,
+        )
+        from simulate.services.hosted_harness_ingress import _public_base_url
+        from simulate.tasks.hosted_harness_conversation import (
+            schedule_conversation_runtime,
+        )
+
+        if job.state != HostedHarnessJob.State.COMPLETED:
+            # Only a finished environment takes the builder's save.
+            raise HostedHarnessError(
+                "environment_busy",
+                "The environment isn't ready; scenarios can't be added now",
+                status_code=409,
+            )
+        if HostedHarnessConversation.no_workspace_objects.filter(
+            job=job, state=HostedHarnessConversation.State.RETIRED
+        ).exists():
+            raise HostedHarnessError(
+                "conversation_workspace_not_ready",
+                "This environment's saved files are no longer available; rebuild it "
+                "to chat.",
+                status_code=409,
+            )
+        drafts.require_no_rebuild(job, piece="suite")
+        suite_draft = drafts.fresh_draft(job, "suite")
+        held = (
+            suite_draft.scenario_count
+            if suite_draft is not None
+            else HostedHarnessScenario.no_workspace_objects.filter(job=job).count()
+            or job.scenario_count
+        )
+        # The builder's save has to hold them all, so a larger total would be refused later.
+        if held + count > CHAT_CHECKPOINT_MAX_SCENARIOS:
+            raise HostedHarnessError(
+                "scenario_limit_exceeded",
+                f"a hosted run can contain at most {CHAT_CHECKPOINT_MAX_SCENARIOS} "
+                "scenarios",
+                status_code=422,
+            )
+        base_url = _public_base_url(request)
+        conversation, _message, _created = enqueue_message(
+            job,
+            content=f"Add {count} scenarios" + (f": {guidance}" if guidance else ""),
+            client_request_id=client_request_id or f"extend-{uuid4().hex}",
+            server_payload={"_origin": "extend", "_author_id": str(request.user.id)},
+        )
+        conversation_id = str(conversation.id)
+
+        def schedule() -> None:
+            try:
+                schedule_conversation_runtime(conversation_id, base_url)
+            except Exception:  # noqa: BLE001 - the queued request waits for recovery
+                logger.exception(
+                    "could not schedule the extend request conversation=%s",
+                    conversation_id,
+                )
+
+        transaction.on_commit(schedule)
+        return Response(serialize_job(job))
+
     def extend(self, request, pk) -> Response:
         """Chat 'Add scenarios' on a finished RL environment: add ``count`` new scenarios,
         steered by optional guidance, replaying the authored world. Rerun is a separate action."""
@@ -2508,8 +2678,13 @@ class HostedHarnessProvider:
                         status_code=409,
                     )
                 from simulate.services.harness_usage import require_harness_authoring
+                from simulate.services.harness_versioning.drafts import drafts_apply
 
                 require_harness_authoring(str(organization.id))
+                if drafts_apply(job):
+                    return self._extend_in_chat(
+                        request, job, count, guidance, client_request_id
+                    )
                 # Add relative to what the environment actually holds: the scenarios
                 # registered by the last successful run are exactly what the saved authoring
                 # archive contains (it is only re-frozen on success). ``job.scenario_count``

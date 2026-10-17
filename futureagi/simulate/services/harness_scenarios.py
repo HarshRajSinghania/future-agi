@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -537,13 +538,23 @@ def index_scenarios(
     return len(pair_scenarios(job, docs, prune=prune, exact=exact))
 
 
-def pair_scenarios(
+@dataclass(frozen=True)
+class PlannedPair:
+    """Which identity row a document pairs with (``None``: a new one), its key and number."""
+
+    row: HostedHarnessScenario | None
+    key: str
+    number: int
+    doc: dict[str, Any]
+
+
+def plan_pairs(
     job: HostedHarnessJob,
     docs: list[dict[str, Any]],
-    prune: bool = False,
+    *,
     exact: bool | None = None,
-) -> list[tuple[HostedHarnessScenario, dict[str, Any]]]:
-    """Persist the authored suite and return the identity row each document was written to.
+) -> list[PlannedPair]:
+    """The identity row, key and number each document is written to; writes nothing.
 
     With ``exact`` (the default for an environment head that has versions) a document
     that carries a scenario key matches the row the default suite links to the document
@@ -583,8 +594,7 @@ def pair_scenarios(
     taken = max(
         (row.number for row in existing.values() if row.number is not None), default=0
     )
-    pairs: list[tuple[HostedHarnessScenario, dict[str, Any]]] = []
-    seen: set[str] = set()
+    plan: list[PlannedPair] = []
     for position, doc in enumerate(docs, start=1):
         doc_key = str(doc.get("scenario_key") or "").strip()
         if exact and doc_key:
@@ -624,7 +634,6 @@ def pair_scenarios(
                 key = _free_key(key, key_tokens)
         if not key:
             continue
-        seen.add(key)
         key_tokens.add(_scenario_token(key))
         if held is not None and held.number is not None:
             number = held.number
@@ -633,19 +642,43 @@ def pair_scenarios(
         else:
             taken += 1
             number = taken
-        fields = {"number": number, **scenario_fields(doc, key)}
-        row = held
+        if held is not None:
+            used.add(held.id)
+        plan.append(PlannedPair(row=held, key=key, number=number, doc=doc))
+    return plan
+
+
+def pair_scenarios(
+    job: HostedHarnessJob,
+    docs: list[dict[str, Any]],
+    prune: bool = False,
+    exact: bool | None = None,
+) -> list[tuple[HostedHarnessScenario, dict[str, Any]]]:
+    """Persist the authored suite and return the identity row each document was written to.
+
+    Each document goes where ``plan_pairs`` places it.
+    """
+    pairs: list[tuple[HostedHarnessScenario, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for planned in plan_pairs(job, docs, exact=exact):
+        seen.add(planned.key)
+        fields = {
+            "number": planned.number,
+            **scenario_fields(planned.doc, planned.key),
+        }
+        row = planned.row
         if row is None:
             row = HostedHarnessScenario.no_workspace_objects.create(
-                job=job, scenario_key=key, **fields
+                job=job, scenario_key=planned.key, **fields
             )
         else:
             fields.update(deleted=False, deleted_at=None)
             for name, value in fields.items():
                 setattr(row, name, value)
             row.save(update_fields=[*fields, "updated_at"])
-        used.add(row.id)
-        pairs.append((row, doc))
+        pairs.append((row, planned.doc))
+    if not docs:
+        return pairs
     # Only an amend prunes: a short suite on a poll may still be mid-write. The row is
     # soft-deleted even when history points at it, so old Runs retain their foreign key
     # while active-suite reads and new Run selection no longer expose it.
@@ -736,8 +769,37 @@ def _default_member_rows(
     return paired
 
 
-def apply_filters(queryset: QuerySet, params) -> QuerySet:
-    """Narrow the suite by the filter panel's query params: repeated keys OR, a `_not` suffix negates."""
+class ScenarioRows(list):
+    """Draft scenario rows, read the way the list, coverage and catalogue read rows."""
+
+    def values(self, *paths: str) -> list[dict[str, Any]]:
+        return [{path: _row_value(row, path) for path in paths} for row in self]
+
+    def values_list(self, path: str, flat: bool = False) -> list[Any]:
+        return [
+            _row_value(row, path) if flat else (_row_value(row, path),) for row in self
+        ]
+
+    def count(self) -> int:  # type: ignore[override]
+        return len(self)
+
+    def exists(self) -> bool:
+        return bool(self)
+
+
+def _row_value(row: HostedHarnessScenario, orm_path: str) -> Any:
+    """A row's value at an ORM path: a column, a JSON column's key or a relation's field."""
+    head, _, tail = orm_path.partition("__")
+    value = getattr(row, head, None)
+    if not tail:
+        return value
+    if head in _COLUMNS.values():
+        return value.get(tail) if isinstance(value, dict) else None
+    return getattr(value, tail, None)
+
+
+def _filter_terms(params) -> Iterator[tuple[str, str, list[str], bool]]:
+    """The filter panel's query params as (field, ORM path, values, negated)."""
     for key in params.keys():
         negated = key.endswith("_not")
         field = key[:-4] if negated else key
@@ -746,7 +808,29 @@ def apply_filters(queryset: QuerySet, params) -> QuerySet:
         values = [one for one in params.getlist(key) if one not in (None, "")]
         if not values:
             continue
-        path = _orm_path(field)
+        yield field, _orm_path(field), values, negated
+
+
+def _filtered_rows(rows: ScenarioRows, params) -> ScenarioRows:
+    for field, path, values, negated in _filter_terms(params):
+
+        def matches(
+            row: HostedHarnessScenario, path=path, field=field, values=values
+        ) -> bool:
+            held = _row_value(row, path)
+            if field in _LIST_FIELDS:
+                return isinstance(held, list) and any(one in held for one in values)
+            return held in values
+
+        rows = ScenarioRows(row for row in rows if matches(row) != negated)
+    return rows
+
+
+def apply_filters(queryset: QuerySet, params) -> QuerySet:
+    """Narrow the suite by the filter panel's query params: repeated keys OR, a `_not` suffix negates."""
+    if isinstance(queryset, ScenarioRows):
+        return _filtered_rows(queryset, params)
+    for field, path, values, negated in _filter_terms(params):
         lookup = (
             f"{path}__contains"
             if _BY_VALUE[field]["value"] in _LIST_FIELDS
@@ -766,6 +850,22 @@ def apply_search(queryset: QuerySet, term: str) -> QuerySet:
     words = (term or "").split()
     if not words:
         return queryset
+    if isinstance(queryset, ScenarioRows):
+        return ScenarioRows(
+            row
+            for row in queryset
+            if all(
+                any(
+                    word.lower() in str(value or "").lower()
+                    for value in (
+                        str(row.name or "").replace("_", " "),
+                        str(row.scenario_key or "").replace("_", " "),
+                        *(getattr(row, field) for field in SEARCHABLE),
+                    )
+                )
+                for word in words
+            )
+        )
     queryset = queryset.annotate(
         readable_name=Replace("name", Value("_"), Value(" ")),
         readable_folder=Replace("scenario_key", Value("_"), Value(" ")),
@@ -940,7 +1040,17 @@ def scenario_status(row: HostedHarnessScenario) -> str:
 def apply_ordering(queryset: QuerySet, ordering: str) -> QuerySet:
     """Sort by a column the client named, defaulting to the suite's own order."""
     allowed = {"number", "-number", "name", "-name", "use_case", "-use_case"}
-    return queryset.order_by(ordering if ordering in allowed else "number")
+    ordering = ordering if ordering in allowed else "number"
+    if isinstance(queryset, ScenarioRows):
+        field = ordering.lstrip("-")
+        return ScenarioRows(
+            sorted(
+                queryset,
+                key=lambda row: getattr(row, field) or (0 if field == "number" else ""),
+                reverse=ordering.startswith("-"),
+            )
+        )
+    return queryset.order_by(ordering)
 
 
 def grouped(rows: list[dict[str, Any]], group_by: str) -> list[dict[str, Any]]:

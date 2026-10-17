@@ -33,6 +33,7 @@ import {
   projectConversation,
   conversationInFlight,
   conversationWaiting,
+  draftsBlocked,
 } from "./conversationProjection";
 
 const NO_WORKSPACE =
@@ -368,6 +369,8 @@ export function useWorkspaceChat(env, { source } = {}) {
     // frozen chat (job ended without a saved workspace, conversation retired)
     // can keep an open question on the backend, but there is nothing to do.
     waiting: !frozen && conversationWaiting(conversation),
+    // The chat holds Save (see draftsBlocked).
+    draftsBlocked: draftsBlocked(conversation),
     // A nudge waits for an answer: the collapsed chat shows its dot.
     nudgePending: Boolean(nudges?.pendingEnvironment || nudges?.pendingSuite),
   };

@@ -620,6 +620,71 @@ class HarnessVersionsSerializer(serializers.Serializer):
     suite = HarnessVersionSerializer(many=True)
 
 
+class HarnessDraftItemSerializer(HarnessVersionSerializer):
+    """An unsaved draft of the environment or the suite, as the Save bar shows it."""
+
+    stale = serializers.BooleanField(
+        help_text="Whether the default moved since the draft started; Save refuses it."
+    )
+    revision = serializers.IntegerField(help_text="Bumped on every edit to the draft.")
+    last_edited_by = HarnessVersionPersonSerializer(allow_null=True)
+    updated_at = serializers.DateTimeField()
+    parent_label = serializers.CharField(
+        allow_null=True, help_text="The version the draft started from."
+    )
+    default_label = serializers.CharField(
+        allow_null=True, help_text="The piece's default now."
+    )
+    changes = serializers.DictField(
+        child=serializers.IntegerField(),
+        help_text=(
+            "Counts against the parent: added, removed and changed for the suite;"
+            " tools, rules, sub_goals and world_files for the environment."
+        ),
+    )
+
+
+class HarnessDraftsSerializer(serializers.Serializer):
+    """The environment's open drafts, and drafts an update set aside."""
+
+    environment = HarnessDraftItemSerializer(allow_null=True)
+    suite = HarnessDraftItemSerializer(allow_null=True)
+    set_aside = HarnessDraftItemSerializer(many=True)
+
+
+class HarnessDraftSaveItemSerializer(StrictInputSerializer):
+    piece = serializers.ChoiceField(choices=("environment", "suite"))
+    expected_parent_id = serializers.UUIDField(
+        allow_null=True, help_text="The draft's parent the caller saw."
+    )
+    expected_revision = serializers.IntegerField(
+        required=False, min_value=0, help_text="The draft's revision the caller saw."
+    )
+
+
+class HarnessDraftSaveSerializer(serializers.Serializer):
+    drafts = HarnessDraftSaveItemSerializer(many=True, min_length=1, max_length=2)
+    idempotency_key = serializers.RegexField(
+        r"^[A-Za-z0-9_-]+$",
+        max_length=128,
+        help_text="Repeating a Save with the same key repeats its answer.",
+    )
+
+    def validate_drafts(self, value):
+        pieces = [one["piece"] for one in value]
+        if len(set(pieces)) != len(pieces):
+            raise serializers.ValidationError("Each piece may be saved once.")
+        return value
+
+
+class HarnessDraftSaveResponseSerializer(serializers.Serializer):
+    saved = serializers.DictField(
+        child=HarnessVersionSerializer(),
+        help_text="Each saved piece's new default version, by piece.",
+    )
+    versions = HarnessVersionsSerializer()
+
+
 class HarnessDefaultMoveSerializer(serializers.Serializer):
     expected_default_id = serializers.UUIDField(
         allow_null=True,

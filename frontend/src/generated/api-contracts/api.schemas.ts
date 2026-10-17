@@ -17617,6 +17617,216 @@ export interface HarnessCompareApi {
   versions: HarnessCompareVersionsApi;
 }
 
+export type HarnessDraftItemApiStatus =
+  (typeof HarnessDraftItemApiStatus)[keyof typeof HarnessDraftItemApiStatus];
+
+export const HarnessDraftItemApiStatus = {
+  draft: "draft",
+  active: "active",
+  discarded: "discarded",
+} as const;
+
+export interface HarnessVersionPersonApi {
+  /** @minLength 1 */
+  id: string;
+  name: string;
+}
+
+/**
+ * An agent version's non-secret source facts.
+ */
+export type HarnessDraftItemApiSource = { [key: string]: unknown };
+
+/**
+ * An agent version's last check: check statuses and names only.
+ */
+export type HarnessDraftItemApiPreflightReport = { [key: string]: unknown };
+
+/**
+ * Counts against the parent: added, removed and changed for the suite; tools, rules, sub_goals and world_files for the environment.
+ */
+export type HarnessDraftItemApiChanges = { [key: string]: number };
+
+export interface HarnessDraftItemApi {
+  id: string;
+  /** @minLength 1 */
+  label: string | null;
+  status: HarnessDraftItemApiStatus;
+  is_default: boolean;
+  created_at: string;
+  created_by: HarnessVersionPersonApi | null;
+  /** @minLength 1 */
+  origin: string | null;
+  summary: string;
+  /** @minLength 1 */
+  hash: string | null;
+  parent_id: string | null;
+  derived_from_agent_version_id: string | null;
+  scenario_count: number | null;
+  /** An agent version's non-secret source facts. */
+  source: HarnessDraftItemApiSource | null;
+  /** The default agent version's prompt; null on every other item. */
+  prompt: string | null;
+  /** @minLength 1 */
+  preflight_status: string | null;
+  /** An agent version's last check: check statuses and names only. */
+  preflight_report: HarnessDraftItemApiPreflightReport | null;
+  preflighted_at: string | null;
+  /** When an agent version's latest check was asked for. */
+  check_started_at: string | null;
+  /** An agent version's credential names, provider keys included. */
+  credential_names: string[] | null;
+  /** The variables an agent version's source reads, when known. */
+  required_variable_names: string[] | null;
+  /**
+   * Why a passed agent version is or isn't this environment's default, as last recorded.
+   * @minLength 1
+   */
+  activation_outcome: string | null;
+  /** Whether this environment asked for an agent version. */
+  requested_here: boolean | null;
+  /** Whether an agent version can be picked for a run of this environment or made its default. */
+  pickable: boolean | null;
+  /** Whether this environment can discard an agent version. */
+  discardable: boolean | null;
+  /** Whether the default moved since the draft started; Save refuses it. */
+  stale: boolean;
+  /** Bumped on every edit to the draft. */
+  revision: number;
+  last_edited_by: HarnessVersionPersonApi | null;
+  updated_at: string;
+  /**
+   * The version the draft started from.
+   * @minLength 1
+   */
+  parent_label: string | null;
+  /**
+   * The piece's default now.
+   * @minLength 1
+   */
+  default_label: string | null;
+  /** Counts against the parent: added, removed and changed for the suite; tools, rules, sub_goals and world_files for the environment. */
+  changes: HarnessDraftItemApiChanges;
+}
+
+export interface HarnessDraftsApi {
+  environment: HarnessDraftItemApi | null;
+  suite: HarnessDraftItemApi | null;
+  set_aside: HarnessDraftItemApi[];
+}
+
+export type HarnessDraftSaveItemApiPiece =
+  (typeof HarnessDraftSaveItemApiPiece)[keyof typeof HarnessDraftSaveItemApiPiece];
+
+export const HarnessDraftSaveItemApiPiece = {
+  environment: "environment",
+  suite: "suite",
+} as const;
+
+export interface HarnessDraftSaveItemApi {
+  piece: HarnessDraftSaveItemApiPiece;
+  /** The draft's parent the caller saw. */
+  expected_parent_id: string | null;
+  /**
+   * The draft's revision the caller saw.
+   * @minimum 0
+   */
+  expected_revision?: number;
+}
+
+export interface HarnessDraftSaveApi {
+  drafts: HarnessDraftSaveItemApi[];
+  /**
+   * Repeating a Save with the same key repeats its answer.
+   * @minLength 1
+   * @maxLength 128
+   * @pattern ^[A-Za-z0-9_-]+$
+   */
+  idempotency_key: string;
+}
+
+export type HarnessVersionApiStatus =
+  (typeof HarnessVersionApiStatus)[keyof typeof HarnessVersionApiStatus];
+
+export const HarnessVersionApiStatus = {
+  draft: "draft",
+  active: "active",
+  discarded: "discarded",
+} as const;
+
+/**
+ * An agent version's non-secret source facts.
+ */
+export type HarnessVersionApiSource = { [key: string]: unknown };
+
+/**
+ * An agent version's last check: check statuses and names only.
+ */
+export type HarnessVersionApiPreflightReport = { [key: string]: unknown };
+
+export interface HarnessVersionApi {
+  id: string;
+  /** @minLength 1 */
+  label: string | null;
+  status: HarnessVersionApiStatus;
+  is_default: boolean;
+  created_at: string;
+  created_by: HarnessVersionPersonApi | null;
+  /** @minLength 1 */
+  origin: string | null;
+  summary: string;
+  /** @minLength 1 */
+  hash: string | null;
+  parent_id: string | null;
+  derived_from_agent_version_id: string | null;
+  scenario_count: number | null;
+  /** An agent version's non-secret source facts. */
+  source: HarnessVersionApiSource | null;
+  /** The default agent version's prompt; null on every other item. */
+  prompt: string | null;
+  /** @minLength 1 */
+  preflight_status: string | null;
+  /** An agent version's last check: check statuses and names only. */
+  preflight_report: HarnessVersionApiPreflightReport | null;
+  preflighted_at: string | null;
+  /** When an agent version's latest check was asked for. */
+  check_started_at: string | null;
+  /** An agent version's credential names, provider keys included. */
+  credential_names: string[] | null;
+  /** The variables an agent version's source reads, when known. */
+  required_variable_names: string[] | null;
+  /**
+   * Why a passed agent version is or isn't this environment's default, as last recorded.
+   * @minLength 1
+   */
+  activation_outcome: string | null;
+  /** Whether this environment asked for an agent version. */
+  requested_here: boolean | null;
+  /** Whether an agent version can be picked for a run of this environment or made its default. */
+  pickable: boolean | null;
+  /** Whether this environment can discard an agent version. */
+  discardable: boolean | null;
+}
+
+/**
+ * Each saved piece's new default version, by piece.
+ */
+export type HarnessDraftSaveResponseApiSaved = {
+  [key: string]: HarnessVersionApi;
+};
+
+export interface HarnessVersionsApi {
+  agent: HarnessVersionApi[];
+  environment: HarnessVersionApi[];
+  suite: HarnessVersionApi[];
+}
+
+export interface HarnessDraftSaveResponseApi {
+  /** Each saved piece's new default version, by piece. */
+  saved: HarnessDraftSaveResponseApiSaved;
+  versions: HarnessVersionsApi;
+}
+
 export interface HarnessEnvironmentAddEvaluationApi {
   /**
    * @minLength 1
@@ -17906,12 +18116,6 @@ export interface HarnessNudgeReplacementApi {
   trigger_label: string | null;
 }
 
-export interface HarnessVersionPersonApi {
-  /** @minLength 1 */
-  id: string;
-  name: string;
-}
-
 export interface HarnessNudgeApi {
   id: string;
   target: HarnessNudgeApiTarget;
@@ -18027,75 +18231,6 @@ export interface HarnessEnvironmentRunEvaluationsApi {
 export interface HarnessEnvironmentRunEvaluationsQueuedApi {
   /** How many of the run's calls were queued for grading. */
   call_execution_count: number;
-}
-
-export type HarnessVersionApiStatus =
-  (typeof HarnessVersionApiStatus)[keyof typeof HarnessVersionApiStatus];
-
-export const HarnessVersionApiStatus = {
-  draft: "draft",
-  active: "active",
-  discarded: "discarded",
-} as const;
-
-/**
- * An agent version's non-secret source facts.
- */
-export type HarnessVersionApiSource = { [key: string]: unknown };
-
-/**
- * An agent version's last check: check statuses and names only.
- */
-export type HarnessVersionApiPreflightReport = { [key: string]: unknown };
-
-export interface HarnessVersionApi {
-  id: string;
-  /** @minLength 1 */
-  label: string | null;
-  status: HarnessVersionApiStatus;
-  is_default: boolean;
-  created_at: string;
-  created_by: HarnessVersionPersonApi | null;
-  /** @minLength 1 */
-  origin: string | null;
-  summary: string;
-  /** @minLength 1 */
-  hash: string | null;
-  parent_id: string | null;
-  derived_from_agent_version_id: string | null;
-  scenario_count: number | null;
-  /** An agent version's non-secret source facts. */
-  source: HarnessVersionApiSource | null;
-  /** The default agent version's prompt; null on every other item. */
-  prompt: string | null;
-  /** @minLength 1 */
-  preflight_status: string | null;
-  /** An agent version's last check: check statuses and names only. */
-  preflight_report: HarnessVersionApiPreflightReport | null;
-  preflighted_at: string | null;
-  /** When an agent version's latest check was asked for. */
-  check_started_at: string | null;
-  /** An agent version's credential names, provider keys included. */
-  credential_names: string[] | null;
-  /** The variables an agent version's source reads, when known. */
-  required_variable_names: string[] | null;
-  /**
-   * Why a passed agent version is or isn't this environment's default, as last recorded.
-   * @minLength 1
-   */
-  activation_outcome: string | null;
-  /** Whether this environment asked for an agent version. */
-  requested_here: boolean | null;
-  /** Whether an agent version can be picked for a run of this environment or made its default. */
-  pickable: boolean | null;
-  /** Whether this environment can discard an agent version. */
-  discardable: boolean | null;
-}
-
-export interface HarnessVersionsApi {
-  agent: HarnessVersionApi[];
-  environment: HarnessVersionApi[];
-  suite: HarnessVersionApi[];
 }
 
 export interface HarnessAgentConfigChangeApi {
@@ -19541,6 +19676,11 @@ export type HarnessConversationOverviewApiEarlierMessagesItem = {
   [key: string]: string;
 };
 
+/**
+ * The unsaved changes by piece, where the environment has drafts.
+ */
+export type HarnessConversationOverviewApiDrafts = { [key: string]: string };
+
 export interface HarnessConversationOverviewApi {
   environment: HarnessConversationOverviewApiEnvironment;
   scenario_count: number;
@@ -19549,6 +19689,8 @@ export interface HarnessConversationOverviewApi {
   recent_runs: HarnessConversationOverviewApiRecentRunsItem[];
   build_changes: HarnessConversationOverviewApiBuildChangesItem[];
   earlier_messages: HarnessConversationOverviewApiEarlierMessagesItem[];
+  /** The unsaved changes by piece, where the environment has drafts. */
+  drafts?: HarnessConversationOverviewApiDrafts;
 }
 
 export interface HarnessConversationPublishApi {

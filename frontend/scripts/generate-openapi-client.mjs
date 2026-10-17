@@ -614,36 +614,60 @@ export type ${jsonAlias} = JsonValueApi;`,
 
     // Orval drops Swagger 2.0 x-nullable: environment versions carry null labels
     // (unnumbered drafts), creators, origins, hashes, parents and pre-versioning
-    // diffs.
-    for (const [field, valueType] of [
-      ["label", "string"],
-      ["created_by", "HarnessVersionPersonApi"],
-      ["origin", "string"],
-      ["hash", "string"],
-      ["parent_id", "string"],
-      ["derived_from_agent_version_id", "string"],
-      ["scenario_count", "number"],
-      ["source", "HarnessVersionApiSource"],
-      ["prompt", "string"],
-      ["preflight_status", "string"],
-      ["preflight_report", "HarnessVersionApiPreflightReport"],
-      ["preflighted_at", "string"],
-      ["check_started_at", "string"],
-      ["credential_names", "string[]"],
-      ["required_variable_names", "string[]"],
-      ["activation_outcome", "string"],
-      ["requested_here", "boolean"],
-      ["pickable", "boolean"],
-      ["discardable", "boolean"],
+    // diffs. A draft item is a version item plus its editor (its parent and
+    // default labels match the "label" anchor too).
+    for (const [typeName, extra] of [
+      ["HarnessVersionApi", []],
+      ["HarnessDraftItemApi", [["last_edited_by", "HarnessVersionPersonApi"]]],
     ]) {
+      for (const [field, valueType] of [
+        ["label", "string"],
+        ["created_by", "HarnessVersionPersonApi"],
+        ["origin", "string"],
+        ["hash", "string"],
+        ["parent_id", "string"],
+        ["derived_from_agent_version_id", "string"],
+        ["scenario_count", "number"],
+        ["source", `${typeName}Source`],
+        ["prompt", "string"],
+        ["preflight_status", "string"],
+        ["preflight_report", `${typeName}PreflightReport`],
+        ["preflighted_at", "string"],
+        ["check_started_at", "string"],
+        ["credential_names", "string[]"],
+        ["required_variable_names", "string[]"],
+        ["activation_outcome", "string"],
+        ["requested_here", "boolean"],
+        ["pickable", "boolean"],
+        ["discardable", "boolean"],
+        ...extra,
+      ]) {
+        schemas = assertReplaceInNamedBlock(
+          schemas,
+          `export interface ${typeName} {`,
+          `${field}: ${valueType};`,
+          `${field}: ${valueType} | null;`,
+          `${typeName}.${field} nullable`,
+        );
+      }
+    }
+    // A piece without unsaved changes has no draft; a Save names the parent it saw.
+    for (const piece of ["environment", "suite"]) {
       schemas = assertReplaceInNamedBlock(
         schemas,
-        "export interface HarnessVersionApi {",
-        `${field}: ${valueType};`,
-        `${field}: ${valueType} | null;`,
-        `HarnessVersionApi.${field} nullable`,
+        "export interface HarnessDraftsApi {",
+        `${piece}: HarnessDraftItemApi;`,
+        `${piece}: HarnessDraftItemApi | null;`,
+        `HarnessDraftsApi.${piece} nullable`,
       );
     }
+    schemas = assertReplaceInNamedBlock(
+      schemas,
+      "export interface HarnessDraftSaveItemApi {",
+      "expected_parent_id: string;",
+      "expected_parent_id: string | null;",
+      "HarnessDraftSaveItemApi.expected_parent_id nullable",
+    );
     schemas = assertReplaceInNamedBlock(
       schemas,
       "export interface HarnessVersionDiffApi {",
@@ -978,6 +1002,8 @@ export type ${jsonAlias} = JsonValueApi;`,
       "SimulateApiHarnessEnvironmentsVersionsResponse",
       "SimulateApiHarnessEnvironmentsVersionsMoveDefaultResponse",
       "SimulateApiHarnessEnvironmentsVersionsAgentDiscardAgentVersionResponse",
+      "SimulateApiHarnessEnvironmentsDraftsResponse",
+      "SimulateApiHarnessEnvironmentsDraftsSaveDraftsResponse",
     ];
     for (const [anchor, label] of [
       ['"label": zod.string().min(1)', "label"],
@@ -1059,6 +1085,43 @@ export type ${jsonAlias} = JsonValueApi;`,
         );
       }
     }
+    // A draft item adds its editor and labels; a piece without a draft is null, and a
+    // Save names the parent it saw, null for none.
+    const draftsResponse =
+      "export const SimulateApiHarnessEnvironmentsDraftsResponse =";
+    for (const [anchor, label] of [
+      ['"parent_label": zod.string().min(1)', "parent_label"],
+      ['"default_label": zod.string().min(1)', "default_label"],
+      [
+        `"last_edited_by": zod.object({
+  "id": zod.string().min(1),
+  "name": zod.string()
+})`,
+        "last_edited_by",
+      ],
+    ]) {
+      zod = assertReplaceInNamedBlock(
+        zod,
+        draftsResponse,
+        anchor,
+        `${anchor}.nullable()`,
+        `SimulateApiHarnessEnvironmentsDraftsResponse.${label} nullable`,
+      );
+    }
+    zod = assertReplaceRegexInNamedBlock(
+      zod,
+      draftsResponse,
+      /("(?:environment|suite)": zod\.object\(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}\))/g,
+      "$1.nullable()",
+      "SimulateApiHarnessEnvironmentsDraftsResponse.pieces nullable",
+    );
+    zod = assertReplaceInNamedBlock(
+      zod,
+      "export const SimulateApiHarnessEnvironmentsDraftsSaveDraftsBody =",
+      '"expected_parent_id": zod.string().uuid()',
+      '"expected_parent_id": zod.string().uuid().nullable()',
+      "SimulateApiHarnessEnvironmentsDraftsSaveDraftsBody.expected_parent_id nullable",
+    );
     zod = assertReplaceInNamedBlock(
       zod,
       "export const SimulateApiHarnessEnvironmentsVersionsMoveDefaultBody =",

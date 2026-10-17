@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1076,
+  endpointCount: 1079,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28182,6 +28182,56 @@ export const OPENAPI_CONTRACT = Object.freeze({
           200: {
             $ref: "#/definitions/HarnessCompare",
           },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/drafts/": {
+      get: {
+        operationId: "simulate_api_harness-environments_drafts",
+        runtimeRequestValidation: false,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/HarnessDrafts",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/drafts/save/": {
+      post: {
+        operationId: "simulate_api_harness-environments_drafts_save_drafts",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/HarnessDraftSave",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/HarnessDraftSaveResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/drafts/{piece}/": {
+      delete: {
+        operationId: "simulate_api_harness-environments_discard_draft",
+        runtimeRequestValidation: false,
+        runtimeResponseValidation: false,
+        requestBody: null,
+        queryParameters: {},
+        responses: {
           default: {
             $ref: "#/definitions/ManagementAPIErrorResponse",
           },
@@ -62946,6 +62996,16 @@ export const OPENAPI_CONTRACT = Object.freeze({
             },
           },
         },
+        drafts: {
+          title: "Drafts",
+          description:
+            "The unsaved changes by piece, where the environment has drafts.",
+          type: "object",
+          additionalProperties: {
+            type: "string",
+            "x-nullable": true,
+          },
+        },
       },
     },
     HarnessConversationOverviewQuery: {
@@ -63279,6 +63339,61 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "string",
           format: "uuid",
           "x-nullable": true,
+        },
+      },
+    },
+    HarnessDraftSave: {
+      required: ["drafts", "idempotency_key"],
+      type: "object",
+      properties: {
+        drafts: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessDraftSaveItem",
+          },
+        },
+        idempotency_key: {
+          title: "Idempotency key",
+          description: "Repeating a Save with the same key repeats its answer.",
+          type: "string",
+          pattern: "^[A-Za-z0-9_-]+$",
+          maxLength: 128,
+          minLength: 1,
+        },
+      },
+    },
+    HarnessDraftSaveResponse: {
+      required: ["saved", "versions"],
+      type: "object",
+      properties: {
+        saved: {
+          title: "Saved",
+          description: "Each saved piece's new default version, by piece.",
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/HarnessVersion",
+          },
+        },
+        versions: {
+          $ref: "#/definitions/HarnessVersions",
+        },
+      },
+    },
+    HarnessDrafts: {
+      required: ["environment", "suite", "set_aside"],
+      type: "object",
+      properties: {
+        environment: {
+          $ref: "#/definitions/HarnessDraftItem",
+        },
+        suite: {
+          $ref: "#/definitions/HarnessDraftItem",
+        },
+        set_aside: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessDraftItem",
+          },
         },
       },
     },
@@ -93221,6 +93336,258 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "boolean",
         },
       },
+    },
+    HarnessDraftSaveItem: {
+      required: ["piece", "expected_parent_id"],
+      type: "object",
+      properties: {
+        piece: {
+          title: "Piece",
+          type: "string",
+          enum: ["environment", "suite"],
+        },
+        expected_parent_id: {
+          title: "Expected parent id",
+          description: "The draft's parent the caller saw.",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        expected_revision: {
+          title: "Expected revision",
+          description: "The draft's revision the caller saw.",
+          type: "integer",
+          minimum: 0,
+        },
+      },
+    },
+    HarnessDraftItem: {
+      required: [
+        "id",
+        "label",
+        "status",
+        "is_default",
+        "created_at",
+        "created_by",
+        "origin",
+        "summary",
+        "hash",
+        "parent_id",
+        "derived_from_agent_version_id",
+        "scenario_count",
+        "source",
+        "prompt",
+        "preflight_status",
+        "preflight_report",
+        "preflighted_at",
+        "check_started_at",
+        "credential_names",
+        "required_variable_names",
+        "activation_outcome",
+        "requested_here",
+        "pickable",
+        "discardable",
+        "stale",
+        "revision",
+        "last_edited_by",
+        "updated_at",
+        "parent_label",
+        "default_label",
+        "changes",
+      ],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          enum: ["draft", "active", "discarded"],
+        },
+        is_default: {
+          title: "Is default",
+          type: "boolean",
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          format: "date-time",
+        },
+        created_by: {
+          $ref: "#/definitions/HarnessVersionPerson",
+        },
+        origin: {
+          title: "Origin",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        summary: {
+          title: "Summary",
+          type: "string",
+        },
+        hash: {
+          title: "Hash",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        parent_id: {
+          title: "Parent id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        derived_from_agent_version_id: {
+          title: "Derived from agent version id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        scenario_count: {
+          title: "Scenario count",
+          type: "integer",
+          "x-nullable": true,
+        },
+        source: {
+          title: "Source",
+          description: "An agent version's non-secret source facts.",
+          type: "object",
+          "x-nullable": true,
+        },
+        prompt: {
+          title: "Prompt",
+          description:
+            "The default agent version's prompt; null on every other item.",
+          type: "string",
+          "x-nullable": true,
+        },
+        preflight_status: {
+          title: "Preflight status",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        preflight_report: {
+          title: "Preflight report",
+          description:
+            "An agent version's last check: check statuses and names only.",
+          type: "object",
+          "x-nullable": true,
+        },
+        preflighted_at: {
+          title: "Preflighted at",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        check_started_at: {
+          title: "Check started at",
+          description: "When an agent version's latest check was asked for.",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        credential_names: {
+          description:
+            "An agent version's credential names, provider keys included.",
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          "x-nullable": true,
+        },
+        required_variable_names: {
+          description:
+            "The variables an agent version's source reads, when known.",
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          "x-nullable": true,
+        },
+        activation_outcome: {
+          title: "Activation outcome",
+          description:
+            "Why a passed agent version is or isn't this environment's default, as last recorded.",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        requested_here: {
+          title: "Requested here",
+          description: "Whether this environment asked for an agent version.",
+          type: "boolean",
+          "x-nullable": true,
+        },
+        pickable: {
+          title: "Pickable",
+          description:
+            "Whether an agent version can be picked for a run of this environment or made its default.",
+          type: "boolean",
+          "x-nullable": true,
+        },
+        discardable: {
+          title: "Discardable",
+          description: "Whether this environment can discard an agent version.",
+          type: "boolean",
+          "x-nullable": true,
+        },
+        stale: {
+          title: "Stale",
+          description:
+            "Whether the default moved since the draft started; Save refuses it.",
+          type: "boolean",
+        },
+        revision: {
+          title: "Revision",
+          description: "Bumped on every edit to the draft.",
+          type: "integer",
+        },
+        last_edited_by: {
+          $ref: "#/definitions/HarnessVersionPerson",
+        },
+        updated_at: {
+          title: "Updated at",
+          type: "string",
+          format: "date-time",
+        },
+        parent_label: {
+          title: "Parent label",
+          description: "The version the draft started from.",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        default_label: {
+          title: "Default label",
+          description: "The piece's default now.",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        changes: {
+          title: "Changes",
+          description:
+            "Counts against the parent: added, removed and changed for the suite; tools, rules, sub_goals and world_files for the environment.",
+          type: "object",
+          additionalProperties: {
+            type: "integer",
+          },
+        },
+      },
+      "x-nullable": true,
     },
     HarnessEnvironmentOfferedEval: {
       required: [

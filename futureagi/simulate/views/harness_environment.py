@@ -14,6 +14,9 @@ from simulate.serializers.harness_environment import (
     HarnessCompareQuerySerializer,
     HarnessCompareSerializer,
     HarnessDefaultMoveSerializer,
+    HarnessDraftSaveResponseSerializer,
+    HarnessDraftSaveSerializer,
+    HarnessDraftsSerializer,
     HarnessEnvironmentAddEvaluationSerializer,
     HarnessEnvironmentAvailableEvalsSerializer,
     HarnessEnvironmentDetailSerializer,
@@ -330,6 +333,69 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         if identifier is None:
             raise version_reads.version_not_found()
         return Response(version_reads.suite_members(job, identifier))
+
+    @validated_request(responses={200: HarnessDraftsSerializer})
+    @action(detail=True, methods=["get"], url_path="drafts")
+    def drafts(self, request, pk=None):
+        """The environment's unsaved changes, for the Save bar."""
+        from simulate.services.harness_versioning.drafts import list_drafts
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        return Response(list_drafts(job))
+
+    @validated_request(
+        request_serializer=HarnessDraftSaveSerializer,
+        responses={200: HarnessDraftSaveResponseSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(detail=True, methods=["post"], url_path=r"drafts/save")
+    def save_drafts(self, request, pk=None):
+        """Make every named draft live together; returns the new defaults and every
+        version."""
+        from simulate.services.harness_versioning.drafts import SaveRequest, save_drafts
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        body = request.validated_data
+        return Response(
+            save_drafts(
+                job,
+                {
+                    one["piece"]: SaveRequest(
+                        expected_parent_id=one["expected_parent_id"],
+                        expected_revision=one.get("expected_revision"),
+                    )
+                    for one in body["drafts"]
+                },
+                idempotency_key=body["idempotency_key"],
+                user=request.user,
+            )
+        )
+
+    @swagger_auto_schema(
+        responses={204: "Discarded"},
+        operation_id="simulate_api_harness-environments_discard_draft",
+    )
+    @action(
+        detail=True,
+        methods=["delete"],
+        url_path=r"drafts/(?P<piece>environment|suite)",
+    )
+    def discard_draft(self, request, pk=None, piece=None):
+        """Set one piece's unsaved changes aside; discarding none is not an error."""
+        from simulate.services.harness_versioning.drafts import discard_draft
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        discard_draft(job, piece, user=request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @validated_request(
         query_serializer=HarnessNudgeListQuerySerializer,

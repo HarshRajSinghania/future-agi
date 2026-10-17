@@ -16,11 +16,12 @@ import {
 import {
   VERSION_PIECES,
   isVersioningDisabled,
+  useDrafts,
   useEnvironmentVersions,
   useRunPlan,
   useSuiteMembers,
 } from "src/api/simulate-environments/versions";
-import { RUN_DIALOG_COPY as COPY } from "../workspace.constants";
+import { DRAFTS_COPY, RUN_DIALOG_COPY as COPY } from "../workspace.constants";
 import { inlineRunError, planRefusal } from "./runErrors";
 
 // Only versions a run can take are offered: an active environment or scenario
@@ -53,6 +54,9 @@ export default function RunDialog({
 }) {
   const versions = useEnvironmentVersions(env?.id, { enabled: open });
   const { data } = versions;
+  const { data: drafts } = useDrafts(env?.id, {
+    enabled: open && Boolean(env?.versioning?.enabled),
+  });
   const [overrides, setOverrides] = useState(() => ({
     ...(initialPicks || {}),
   }));
@@ -139,8 +143,11 @@ export default function RunDialog({
   const suite = options.suite.find((one) => one.id === selected.suite);
   const runAll = scenarioIds === undefined;
   // Run-all of the default suite runs the server's current list; of another
-  // suite, that suite's scenarios, so it needs them.
-  const needsMembers = runAll && Boolean(picks.suite);
+  // suite, that suite's scenarios, so it needs them. With versioning on the
+  // list may show unsaved changes, so the default's are named instead.
+  const needsMembers =
+    runAll &&
+    Boolean(picks.suite || (env?.versioning?.enabled && selected.suite));
   const members = useSuiteMembers(env?.id, selected.suite, {
     enabled: open && Boolean(selected.suite) && (!runAll || needsMembers),
   });
@@ -275,6 +282,11 @@ export default function RunDialog({
             {line}
           </Typography>
         )}
+        {drafts?.any && (
+          <Alert severity="info" data-testid="run-drafts-note">
+            {DRAFTS_COPY.notInRun}
+          </Alert>
+        )}
         {blocked && (
           <Typography
             sx={{ typography: "s2", color: "error.main" }}
@@ -361,7 +373,10 @@ export default function RunDialog({
 
 RunDialog.propTypes = {
   open: PropTypes.bool,
-  env: PropTypes.shape({ id: PropTypes.string }),
+  env: PropTypes.shape({
+    id: PropTypes.string,
+    versioning: PropTypes.shape({ enabled: PropTypes.bool }),
+  }),
   // Undefined runs every scenario.
   scenarioIds: PropTypes.arrayOf(PropTypes.string),
   trials: PropTypes.number,

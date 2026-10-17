@@ -43,6 +43,7 @@ import BuildingStage from "../buildEnvironment/building/BuildingStage";
 import WorkspaceHeader from "./WorkspaceHeader";
 import SystemBanners from "./SystemBanners";
 import VersionBar from "./VersionBar";
+import DraftBar from "./drafts/DraftBar";
 import TemplateLockBanner from "./TemplateLockBanner";
 import WorkspacePanels from "./WorkspacePanels";
 import RunDialog from "./run/RunDialog";
@@ -81,7 +82,8 @@ const blockedReason = (envState) => {
 export default function EnvironmentWorkspace() {
   const navigate = useNavigate();
   const { envId } = useParams();
-  const { env, source, bootstrapState, notFound, error, refetch } = useEnvironment(envId);
+  const { env, source, bootstrapState, notFound, error, refetch, chatSaving } =
+    useEnvironment(envId);
   // A real (backed) env's applied evals live on the environment detail
   // (evaluations.selected), not
   // the client store — so the Evaluations tab count + the "no evals" gap must
@@ -463,6 +465,13 @@ export default function EnvironmentWorkspace() {
 
       <SystemBanners env={env} />
       <VersionBar env={env} envState={envState} />
+      <DraftBar
+        env={env}
+        busy={Boolean(chat.running || chat.draftsBlocked || chatSaving)}
+        onViewChanges={(piece, id) =>
+          setTab("versions", { version: `${piece}:${id}` })
+        }
+      />
 
       {/* A template-seeded env is read-only until forked — the banner states the
           lock and offers the fork. */}
