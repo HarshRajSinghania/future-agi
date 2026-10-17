@@ -56,6 +56,20 @@ def test_agent_change_detection_runs_on_the_default_queue():
         assert wrapper not in registry.get_activities_for_queue(QUEUE_RUNNER)
 
 
+def test_nudge_activities_run_on_the_default_queue():
+    from simulate.tasks.harness_nudges import (
+        raise_harness_environment_nudge,
+        reconcile_harness_environment_nudges,
+    )
+    from simulate.temporal.constants import QUEUE_RUNNER
+    from tfc.temporal.drop_in.decorator import _ACTIVITY_WRAPPERS
+
+    for task in (raise_harness_environment_nudge, reconcile_harness_environment_nudges):
+        wrapper = _ACTIVITY_WRAPPERS[task.name]
+        assert wrapper in registry.get_activities_for_queue("default")
+        assert wrapper not in registry.get_activities_for_queue(QUEUE_RUNNER)
+
+
 def test_usage_temporal_registry_prefers_cloud(monkeypatch):
     cloud_registry = MagicMock()
     import_module = MagicMock(

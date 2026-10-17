@@ -179,6 +179,26 @@ class TestBudget:
         assert others == ["ok", "ok", "budget"]
         assert get.call_count == 4
 
+    def test_comparisons_have_a_cap_and_an_org_share_and_leave_the_poller_its_calls(
+        self,
+    ):
+        with patch.object(github.requests, "get", return_value=_response()):
+            greedy = [
+                github_get("/x", accept="a", purpose="compare", owner="org-a").status
+                for _ in range(3)
+            ]
+            others = [
+                github_get("/x", accept="a", purpose="compare", owner=owner).status
+                for owner in ("org-b", "org-b", "org-c", "org-d")
+            ]
+            polls = [
+                github_get("/x", accept="a", purpose="poll", reserve=20).status
+                for _ in range(31)
+            ]
+        assert greedy == ["ok", "ok", "budget"]
+        assert others == ["ok", "ok", "ok", "budget"]
+        assert polls == ["ok"] * 30 + ["budget"]
+
     def test_creation_checks_have_a_cap_and_an_org_share_of_their_own(self, settings):
         settings.HARNESS_GITHUB_CREATE_BUDGET = 4
         settings.HARNESS_GITHUB_CREATE_SHARE = 2
@@ -215,6 +235,23 @@ class TestBudget:
             ]
         assert creates == ["ok"] * 25 + ["budget"]
         assert polls == ["ok"] * 15 + ["budget"]
+
+    def test_every_cap_full_by_default_still_leaves_the_poller_calls(self):
+        with patch.object(github.requests, "get", return_value=_response()):
+            for n in range(25):
+                github_get("/x", accept="a", purpose="create", owner=f"org-{n}")
+            for _ in range(10):
+                github_get("/x", accept="a", purpose="webhook")
+            compares = [
+                github_get("/x", accept="a", purpose="compare", owner=f"org-{n}").status
+                for n in range(6)
+            ]
+            polls = [
+                github_get("/x", accept="a", purpose="poll", reserve=20).status
+                for _ in range(11)
+            ]
+        assert compares == ["ok"] * 5 + ["budget"]
+        assert polls == ["ok"] * 10 + ["budget"]
 
     def test_a_new_hour_starts_a_new_count(self):
         with patch.object(github.requests, "get", return_value=_response()):

@@ -74,13 +74,18 @@ export default function BuilderConsole({
     [],
   );
 
+  // Follow the transcript only as it grows, not when a card's state changes.
+  const count = turns?.length ?? 0;
+  const lastTurn = turns?.[count - 1];
+  const lastId = lastTurn?.id;
+  const lastSteps = lastTurn?.steps?.length;
   useEffect(() => {
     if (!active) return;
     // Scroll only the message list. scrollIntoView would also scroll every
     // ancestor, including the collapsing column's clip box mid-animation.
     const list = listRef.current;
     list?.scrollTo?.({ top: list.scrollHeight, behavior: "smooth" });
-  }, [turns, running, canStop, active]);
+  }, [count, lastId, lastSteps, running, canStop, active]);
 
   // Frozen === the env is not Live yet, so the builder can't accept edits. It
   // blocks the composer exactly like `running`, but persists across turns.

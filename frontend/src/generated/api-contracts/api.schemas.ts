@@ -17804,6 +17804,150 @@ export interface SimulateEvalConfigResponseApi {
   readonly editable?: boolean;
 }
 
+export type HarnessNudgeApiTarget =
+  (typeof HarnessNudgeApiTarget)[keyof typeof HarnessNudgeApiTarget];
+
+export const HarnessNudgeApiTarget = {
+  environment: "environment",
+  suite: "suite",
+} as const;
+
+export type HarnessNudgeApiState =
+  (typeof HarnessNudgeApiState)[keyof typeof HarnessNudgeApiState];
+
+export const HarnessNudgeApiState = {
+  pending: "pending",
+  answered_no: "answered_no",
+  queued: "queued",
+  running: "running",
+  applied: "applied",
+  no_change: "no_change",
+  replaced: "replaced",
+  failed: "failed",
+} as const;
+
+export type HarnessNudgeApiSummary = { [key: string]: unknown };
+
+export type HarnessNudgeFileApiStatus =
+  (typeof HarnessNudgeFileApiStatus)[keyof typeof HarnessNudgeFileApiStatus];
+
+export const HarnessNudgeFileApiStatus = {
+  added: "added",
+  removed: "removed",
+  modified: "modified",
+  renamed: "renamed",
+  copied: "copied",
+} as const;
+
+export interface HarnessNudgeFileApi {
+  /** @minLength 1 */
+  path: string;
+  status: HarnessNudgeFileApiStatus;
+  /** @minLength 1 */
+  previous_path: string | null;
+  additions: number | null;
+  deletions: number | null;
+  has_patch: boolean;
+  /**
+   * Why the file's patch isn't kept: secret_path, too_large, binary, budget or redaction_unavailable.
+   * @minLength 1
+   */
+  patch_omitted: string | null;
+}
+
+export interface HarnessNudgeVariablesApi {
+  added: string[];
+  removed: string[];
+  changed: string[];
+  /** Names whose values couldn't be read, so they may have changed. */
+  unknown: string[];
+}
+
+/**
+ * The agent source's kind, whether it changed, and its from/to ids.
+ */
+export type HarnessNudgeFactsApiSource = { [key: string]: unknown };
+
+export type HarnessNudgeFactsApiEnvironmentDiff = { [key: string]: unknown };
+
+export interface HarnessNudgeFactsApi {
+  /** The agent source's kind, whether it changed, and its from/to ids. */
+  source?: HarnessNudgeFactsApiSource;
+  changed_files?: HarnessNudgeFileApi[];
+  files_total?: number | null;
+  files_truncated?: boolean;
+  /** A roll back to an earlier commit. */
+  reversed?: boolean;
+  /**
+   * Why the file changes aren't listed: private_repository, no_commit, repository_changed, not_linear, rate_limited, github_error, archive_missing, archive_unreadable or archive_too_large.
+   * @minLength 1
+   */
+  files_unavailable?: string | null;
+  prompt_changed?: boolean;
+  variables?: HarnessNudgeVariablesApi;
+  settings_changed?: string[];
+  /** Whether the agent version is already this environment's default. */
+  agent_default_moved?: boolean;
+  environment_diff?: HarnessNudgeFactsApiEnvironmentDiff | null;
+  environment_summary?: string;
+  from_environment_version_id?: string | null;
+}
+
+export interface HarnessNudgeErrorApi {
+  /** @minLength 1 */
+  code: string;
+  /** @minLength 1 */
+  message?: string;
+}
+
+export interface HarnessNudgeReplacementApi {
+  id: string;
+  /** @minLength 1 */
+  trigger_label: string | null;
+}
+
+export interface HarnessVersionPersonApi {
+  /** @minLength 1 */
+  id: string;
+  name: string;
+}
+
+export interface HarnessNudgeApi {
+  id: string;
+  target: HarnessNudgeApiTarget;
+  state: HarnessNudgeApiState;
+  facts: HarnessNudgeFactsApi;
+  trigger_agent_version: RunVersionLabelApi | null;
+  base_agent_version: RunVersionLabelApi | null;
+  base_environment_version: RunVersionLabelApi | null;
+  base_suite_version: RunVersionLabelApi | null;
+  result_environment_version: RunVersionLabelApi | null;
+  result_suite_version: RunVersionLabelApi | null;
+  summary: HarnessNudgeApiSummary | null;
+  error: HarnessNudgeErrorApi | null;
+  closed_at: string | null;
+  queued_behind_input: boolean;
+  can_stop: boolean;
+  replaced_by: HarnessNudgeReplacementApi | null;
+  /** The nudge's card in the environment's chat. */
+  card_message_id: string | null;
+  answered_by: HarnessVersionPersonApi | null;
+  answered_at: string | null;
+  created_at: string;
+}
+
+export type HarnessNudgeAnswerApiAnswer =
+  (typeof HarnessNudgeAnswerApiAnswer)[keyof typeof HarnessNudgeAnswerApiAnswer];
+
+export const HarnessNudgeAnswerApiAnswer = {
+  yes: "yes",
+  no: "no",
+} as const;
+
+export interface HarnessNudgeAnswerApi {
+  answer: HarnessNudgeAnswerApiAnswer;
+}
+
 export type HarnessRunWarningApiPiece =
   (typeof HarnessRunWarningApiPiece)[keyof typeof HarnessRunWarningApiPiece];
 
@@ -17893,12 +18037,6 @@ export const HarnessVersionApiStatus = {
   active: "active",
   discarded: "discarded",
 } as const;
-
-export interface HarnessVersionPersonApi {
-  /** @minLength 1 */
-  id: string;
-  name: string;
-}
 
 /**
  * An agent version's non-secret source facts.
@@ -35161,6 +35299,14 @@ export type SimulateApiHarnessEnvironmentsCompareParams = {
    * The run to compare against; the previous completed run if absent.
    */
   against_execution_id?: string;
+};
+
+export type SimulateApiHarnessEnvironmentsNudgesParams = {
+  /**
+   * Comma-separated nudge states to list.
+   * @minLength 1
+   */
+  state?: string;
 };
 
 export type SimulateApiHarnessEnvironmentsRunPlanParams = {

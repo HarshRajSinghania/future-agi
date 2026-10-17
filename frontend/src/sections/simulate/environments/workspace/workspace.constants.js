@@ -118,14 +118,6 @@ export const WORKSPACE_COPY = {
     deriving: "Scenarios and personas are still deriving.",
     tail: "You can leave and come back. This page will fill in as each stage lands.",
   },
-  // Banner shown when an older env version is pinned — the amber pin is the
-  // control, this is the reminder so edits do not silently sit on the wrong world.
-  offLatest: {
-    title: (label) => `Editing off ${label}`,
-    body: (active, newest) =>
-      `Latest is ${newest}. Runs from here will stamp against ${active}, and any edits sit on ${active}, not on the latest world.`,
-    action: (label) => `Switch to ${label}`,
-  },
   // The gap-count badge on a tab: a blocking setup gap the reader still owns.
   // The tooltip heads the list of gap titles routed to that tab.
   gaps: {
@@ -393,6 +385,15 @@ export const AGENT_VERSIONS_COPY = {
       archive_source_not_found: "The upload expired; upload the folder again.",
     },
     error: "Couldn't save the change. Try again in a moment.",
+  },
+  // The environment nudge for a version, the same one the chat card shows.
+  nudge: {
+    title: "This environment can be rebuilt with this version",
+    files: (n) => `${n} file${n === 1 ? "" : "s"} changed`,
+    variables: (n) => `${n} variable${n === 1 ? "" : "s"} changed`,
+    prompt: "prompt changed",
+    settings: "settings changed",
+    skipped: "Update skipped",
   },
 };
 

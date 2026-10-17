@@ -461,7 +461,7 @@ export default function EnvironmentWorkspace() {
       />
       {creditBanner}
 
-      <SystemBanners env={env} envState={envState} patch={patch} />
+      <SystemBanners env={env} />
       <VersionBar env={env} envState={envState} />
 
       {/* A template-seeded env is read-only until forked — the banner states the
@@ -470,7 +470,9 @@ export default function EnvironmentWorkspace() {
 
       <Box sx={{ flex: 1, minHeight: 0 }}>
         <ChatSplitPane
-          busy={chat.running || chat.inFlight || chat.waiting}
+          busy={
+            chat.running || chat.inFlight || chat.waiting || chat.nudgePending
+          }
           chat={({ collapse, open, collapseRef }) => (
             <BuilderConsole
               turns={chat.turns}

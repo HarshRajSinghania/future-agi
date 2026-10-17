@@ -5486,6 +5486,10 @@ def freeze_authoring_archive(
             prepare_payload=lambda payload: _authored_payload(payload, body),
             consumes_extend_marker=extending,
         )
+        if extending:
+            from simulate.services.harness_versioning.nudges import schedule_reconcile
+
+            schedule_reconcile(job.id)
         return
     store_authoring_archive(job, body, advance_lifecycle=False)
     if job.environment_id is None and is_versioned(job):

@@ -131,6 +131,20 @@ export function projectConversation(conversation) {
         turns.push({ id: m.message_id, role: "user", text: m.content });
         continue;
       }
+      // A nudge card is its own system turn: never inside a builder turn or the
+      // background activity, and the next event starts a fresh builder turn.
+      if (m.role === "system" && m.payload?.nudge_id) {
+        builder = null;
+        turns.push({
+          id: m.message_id,
+          role: "system",
+          kind: "nudge",
+          nudgeId: m.payload.nudge_id,
+          target: m.payload.nudge_target,
+          text: m.content,
+        });
+        continue;
+      }
       if (m.kind === "question" || m.kind === "confirmation") {
         const b = startBuilder();
         const answered = Object.prototype.hasOwnProperty.call(answerFor, m.message_id);

@@ -9,6 +9,7 @@ import Iconify from "src/components/iconify";
 
 import { BUILD_TONES } from "../buildTones";
 import AskUserQuestionCard from "./AskUserQuestionCard";
+import NudgeCard from "./NudgeCard";
 
 const MONO = "ui-monospace, Menlo, monospace";
 
@@ -72,6 +73,8 @@ export function Turn({ turn }) {
     );
   }
 
+  if (turn.role === "system") return <NudgeCard turn={turn} />;
+
   return (
     <Stack spacing={1.5}>
       {turn.title && (
@@ -92,7 +95,7 @@ export function Turn({ turn }) {
 Turn.propTypes = {
   turn: PropTypes.shape({
     id: PropTypes.string,
-    role: PropTypes.oneOf(["builder", "user"]),
+    role: PropTypes.oneOf(["builder", "user", "system"]),
     title: PropTypes.string,
     text: PropTypes.string,
     steps: PropTypes.arrayOf(STEP_SHAPE),

@@ -36281,6 +36281,341 @@ export const SimulateApiHarnessEnvironmentsRemoveEvaluationParams = zod.object({
 });
 
 /**
+ * This environment's offers to rebuild after a change, newest first.
+ */
+export const SimulateApiHarnessEnvironmentsNudgesParams = zod.object({
+  id: zod.string(),
+});
+
+export const SimulateApiHarnessEnvironmentsNudgesQueryParams = zod.object({
+  state: zod
+    .string()
+    .min(1)
+    .optional()
+    .describe("Comma-separated nudge states to list."),
+});
+
+export const SimulateApiHarnessEnvironmentsNudgesResponseItem = zod.object({
+  id: zod.string().uuid(),
+  target: zod.enum(["environment", "suite"]),
+  state: zod.enum([
+    "pending",
+    "answered_no",
+    "queued",
+    "running",
+    "applied",
+    "no_change",
+    "replaced",
+    "failed",
+  ]),
+  facts: zod.object({
+    source: zod
+      .object({})
+      .passthrough()
+      .optional()
+      .describe(
+        "The agent source's kind, whether it changed, and its from/to ids.",
+      ),
+    changed_files: zod
+      .array(
+        zod.object({
+          path: zod.string().min(1),
+          status: zod.enum([
+            "added",
+            "removed",
+            "modified",
+            "renamed",
+            "copied",
+          ]),
+          previous_path: zod.string().min(1).nullable(),
+          additions: zod.number().nullable(),
+          deletions: zod.number().nullable(),
+          has_patch: zod.boolean(),
+          patch_omitted: zod
+            .string()
+            .min(1)
+            .nullable()
+            .describe(
+              "Why the file's patch isn't kept: secret_path, too_large, binary, budget or redaction_unavailable.",
+            ),
+        }),
+      )
+      .optional(),
+    files_total: zod.number().nullable().optional(),
+    files_truncated: zod.boolean().optional(),
+    reversed: zod
+      .boolean()
+      .optional()
+      .describe("A roll back to an earlier commit."),
+    files_unavailable: zod
+      .string()
+      .min(1)
+      .nullable()
+      .optional()
+      .describe(
+        "Why the file changes aren't listed: private_repository, no_commit, repository_changed, not_linear, rate_limited, github_error, archive_missing, archive_unreadable or archive_too_large.",
+      ),
+    prompt_changed: zod.boolean().optional(),
+    variables: zod
+      .object({
+        added: zod.array(zod.string().min(1)),
+        removed: zod.array(zod.string().min(1)),
+        changed: zod.array(zod.string().min(1)),
+        unknown: zod
+          .array(zod.string().min(1))
+          .describe(
+            "Names whose values couldn't be read, so they may have changed.",
+          ),
+      })
+      .optional(),
+    settings_changed: zod.array(zod.string().min(1)).optional(),
+    agent_default_moved: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Whether the agent version is already this environment's default.",
+      ),
+    environment_diff: zod.object({}).passthrough().nullable().optional(),
+    environment_summary: zod.string().optional(),
+    from_environment_version_id: zod.string().uuid().nullable().optional(),
+  }),
+  trigger_agent_version: zod
+    .object({
+      id: zod.string().uuid().optional(),
+      label: zod.string().min(1).nullable().optional(),
+    })
+    .nullable(),
+  base_agent_version: zod
+    .object({
+      id: zod.string().uuid().optional(),
+      label: zod.string().min(1).nullable().optional(),
+    })
+    .nullable(),
+  base_environment_version: zod
+    .object({
+      id: zod.string().uuid().optional(),
+      label: zod.string().min(1).nullable().optional(),
+    })
+    .nullable(),
+  base_suite_version: zod
+    .object({
+      id: zod.string().uuid().optional(),
+      label: zod.string().min(1).nullable().optional(),
+    })
+    .nullable(),
+  result_environment_version: zod
+    .object({
+      id: zod.string().uuid().optional(),
+      label: zod.string().min(1).nullable().optional(),
+    })
+    .nullable(),
+  result_suite_version: zod
+    .object({
+      id: zod.string().uuid().optional(),
+      label: zod.string().min(1).nullable().optional(),
+    })
+    .nullable(),
+  summary: zod.object({}).passthrough().nullable(),
+  error: zod
+    .object({
+      code: zod.string().min(1),
+      message: zod.string().min(1).optional(),
+    })
+    .nullable(),
+  closed_at: zod.string().datetime({ offset: true }).nullable(),
+  queued_behind_input: zod.boolean(),
+  can_stop: zod.boolean(),
+  replaced_by: zod
+    .object({
+      id: zod.string().uuid(),
+      trigger_label: zod.string().min(1).nullable(),
+    })
+    .nullable(),
+  card_message_id: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("The nudge's card in the environment's chat."),
+  answered_by: zod
+    .object({
+      id: zod.string().min(1),
+      name: zod.string(),
+    })
+    .nullable(),
+  answered_at: zod.string().datetime({ offset: true }).nullable(),
+  created_at: zod.string().datetime({ offset: true }),
+});
+export const SimulateApiHarnessEnvironmentsNudgesResponse = zod.array(
+  SimulateApiHarnessEnvironmentsNudgesResponseItem,
+);
+
+/**
+ * Skip ("no") or Rebuild ("yes") a pending nudge; returns the nudge.
+ */
+export const SimulateApiHarnessEnvironmentsNudgesAnswerNudgeParams = zod.object(
+  {
+    id: zod.string(),
+    nudge_id: zod.string(),
+  },
+);
+
+export const SimulateApiHarnessEnvironmentsNudgesAnswerNudgeBody = zod.object({
+  answer: zod.enum(["yes", "no"]),
+});
+
+export const SimulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse =
+  zod.object({
+    id: zod.string().uuid(),
+    target: zod.enum(["environment", "suite"]),
+    state: zod.enum([
+      "pending",
+      "answered_no",
+      "queued",
+      "running",
+      "applied",
+      "no_change",
+      "replaced",
+      "failed",
+    ]),
+    facts: zod.object({
+      source: zod
+        .object({})
+        .passthrough()
+        .optional()
+        .describe(
+          "The agent source's kind, whether it changed, and its from/to ids.",
+        ),
+      changed_files: zod
+        .array(
+          zod.object({
+            path: zod.string().min(1),
+            status: zod.enum([
+              "added",
+              "removed",
+              "modified",
+              "renamed",
+              "copied",
+            ]),
+            previous_path: zod.string().min(1).nullable(),
+            additions: zod.number().nullable(),
+            deletions: zod.number().nullable(),
+            has_patch: zod.boolean(),
+            patch_omitted: zod
+              .string()
+              .min(1)
+              .nullable()
+              .describe(
+                "Why the file's patch isn't kept: secret_path, too_large, binary, budget or redaction_unavailable.",
+              ),
+          }),
+        )
+        .optional(),
+      files_total: zod.number().nullable().optional(),
+      files_truncated: zod.boolean().optional(),
+      reversed: zod
+        .boolean()
+        .optional()
+        .describe("A roll back to an earlier commit."),
+      files_unavailable: zod
+        .string()
+        .min(1)
+        .nullable()
+        .optional()
+        .describe(
+          "Why the file changes aren't listed: private_repository, no_commit, repository_changed, not_linear, rate_limited, github_error, archive_missing, archive_unreadable or archive_too_large.",
+        ),
+      prompt_changed: zod.boolean().optional(),
+      variables: zod
+        .object({
+          added: zod.array(zod.string().min(1)),
+          removed: zod.array(zod.string().min(1)),
+          changed: zod.array(zod.string().min(1)),
+          unknown: zod
+            .array(zod.string().min(1))
+            .describe(
+              "Names whose values couldn't be read, so they may have changed.",
+            ),
+        })
+        .optional(),
+      settings_changed: zod.array(zod.string().min(1)).optional(),
+      agent_default_moved: zod
+        .boolean()
+        .optional()
+        .describe(
+          "Whether the agent version is already this environment's default.",
+        ),
+      environment_diff: zod.object({}).passthrough().nullable().optional(),
+      environment_summary: zod.string().optional(),
+      from_environment_version_id: zod.string().uuid().nullable().optional(),
+    }),
+    trigger_agent_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullable().optional(),
+      })
+      .nullable(),
+    base_agent_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullable().optional(),
+      })
+      .nullable(),
+    base_environment_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullable().optional(),
+      })
+      .nullable(),
+    base_suite_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullable().optional(),
+      })
+      .nullable(),
+    result_environment_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullable().optional(),
+      })
+      .nullable(),
+    result_suite_version: zod
+      .object({
+        id: zod.string().uuid().optional(),
+        label: zod.string().min(1).nullable().optional(),
+      })
+      .nullable(),
+    summary: zod.object({}).passthrough().nullable(),
+    error: zod
+      .object({
+        code: zod.string().min(1),
+        message: zod.string().min(1).optional(),
+      })
+      .nullable(),
+    closed_at: zod.string().datetime({ offset: true }).nullable(),
+    queued_behind_input: zod.boolean(),
+    can_stop: zod.boolean(),
+    replaced_by: zod
+      .object({
+        id: zod.string().uuid(),
+        trigger_label: zod.string().min(1).nullable(),
+      })
+      .nullable(),
+    card_message_id: zod
+      .string()
+      .uuid()
+      .nullable()
+      .describe("The nudge's card in the environment's chat."),
+    answered_by: zod
+      .object({
+        id: zod.string().min(1),
+        name: zod.string(),
+      })
+      .nullable(),
+    answered_at: zod.string().datetime({ offset: true }).nullable(),
+    created_at: zod.string().datetime({ offset: true }),
+  });
+
+/**
  * The versions a run of these picks would use and what to warn about; no
 writes. An absent pick is the environment's default.
  */

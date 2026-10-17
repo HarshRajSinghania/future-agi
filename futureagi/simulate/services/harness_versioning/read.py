@@ -363,13 +363,18 @@ def _default_prompt(
     else:
         config = (getattr(facts, "agent_payload", None) or {}).get("config") or {}
         prompt = config.get("target_system_prompt")
-    if not isinstance(prompt, str):
-        prompt = (
-            AgentVersion._base_manager.filter(id=version.id)
-            .values_list("description", flat=True)
-            .first()
-        )
-    return prompt or None
+    return _prompt_or_description(version, prompt) or None
+
+
+def _prompt_or_description(version: AgentVersion, prompt: Any) -> str | None:
+    """A configured prompt; else the agent version's description."""
+    if isinstance(prompt, str):
+        return prompt
+    return (
+        AgentVersion._base_manager.filter(id=version.id)
+        .values_list("description", flat=True)
+        .first()
+    )
 
 
 def _agent_item(

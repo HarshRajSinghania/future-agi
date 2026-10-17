@@ -17,6 +17,13 @@ import {
   harnessIdempotencyKey,
 } from "src/api/harness/harness";
 
+vi.mock("src/utils/axios", () => ({
+  default: { get: vi.fn(), post: vi.fn() },
+}));
+
+import axios from "src/utils/axios";
+import { nudgesKey } from "../versions";
+
 const ENV = { id: "job-1", name: "Support triage" };
 
 const conversationWith = (over = {}) => ({
@@ -315,5 +322,149 @@ describe("useWorkspaceChat (real)", () => {
     const payload = sendHarnessConversationMessage.mock.calls[0][1];
     expect(payload.kind).toBe("interrupt");
     expect(payload.content.length).toBeGreaterThan(0);
+  });
+});
+
+describe("useWorkspaceChat nudges", () => {
+  const VERSIONED = { ...ENV, versioning: { enabled: true, nudges_enabled: true } };
+  const card = (nudgeId, over = {}) => ({
+    message_id: `m-${nudgeId}`,
+    role: "system",
+    kind: "status",
+    state: "completed",
+    content: "Agent v3 changed: prompt. Rebuild the environment?",
+    payload: { nudge_id: nudgeId, nudge_target: "environment", trigger_label: "v3" },
+    created_at: "2026-09-22T10:00:00Z",
+    sequence: 1,
+    ...over,
+  });
+  const nudge = (id, over = {}) => ({
+    id,
+    target: "environment",
+    state: "pending",
+    facts: { prompt_changed: true },
+    trigger_agent_version: { id: "a3", label: "v3" },
+    ...over,
+  });
+  const nudgeCalls = (spy) =>
+    spy.mock.calls.filter(([f]) => f.queryKey.join() === nudgesKey("job-1").join());
+  const jobCalls = (spy) =>
+    spy.mock.calls.filter(([f]) => f.queryKey.join() === "harness-job,job-1");
+
+  const renderNudges = (messages, list, env = VERSIONED) => {
+    const conversation = conversationWith({ messages });
+    getHarnessJob.mockResolvedValue(jobWith(conversation));
+    axios.get.mockResolvedValue({ data: list });
+    const { client, Wrapper } = wrapper();
+    client.setQueryData(["harness-job", "job-1"], jobWith(conversation));
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const view = renderHook(
+      (props) => useWorkspaceChat(props.env, { source: "harness" }),
+      { wrapper: Wrapper, initialProps: { env } },
+    );
+    return { ...view, client, spy };
+  };
+
+  beforeEach(() => {
+    getHarnessJob.mockReset();
+    axios.get.mockReset();
+    axios.post.mockReset();
+  });
+
+  it("attaches the nudge and Skip to its card and answers no", async () => {
+    axios.post.mockResolvedValue({ data: nudge("n1", { state: "answered_no" }) });
+    const { result } = renderNudges([card("n1")], [nudge("n1")]);
+    await waitFor(() => expect(result.current.turns[0].nudge).toBeDefined());
+    const turn = result.current.turns[0];
+    expect(turn).toMatchObject({ role: "system", nudgeId: "n1", nudgesEnabled: true });
+    expect(turn.nudge.facts.promptChanged).toBe(true);
+    expect(result.current.nudgePending).toBe(true);
+    await act(async () => turn.onSkipNudge());
+    expect(axios.post).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/job-1/nudges/n1/answer/",
+      { answer: "no" },
+    );
+    await waitFor(() => expect(result.current.turns[0].skipped).toBe(true));
+    // Once its line took focus, a remounted card doesn't take it again.
+    act(() => result.current.turns[0].onSkippedFocused());
+    await waitFor(() => expect(result.current.turns[0].skipped).toBe(false));
+  });
+
+  it("asks for the list again once for a card whose nudge isn't listed", async () => {
+    const { client, result, spy } = renderNudges([card("n9")], [nudge("n1")]);
+    await waitFor(() => expect(nudgeCalls(spy)).toHaveLength(1));
+    // The conversation moves on and the card is still unlisted: not asked again.
+    const reply = { message_id: "a1", role: "assistant", kind: "message", state: "completed", content: "hi", created_at: "2026-09-22T10:00:02Z", sequence: 2 };
+    act(() => client.setQueryData(["harness-job", "job-1"], jobWith(conversationWith({ messages: [card("n9"), reply] }))));
+    await waitFor(() => expect(result.current.turns).toHaveLength(2));
+    expect(nudgeCalls(spy)).toHaveLength(1);
+    expect(result.current.turns.find((t) => t.nudgeId === "n9").nudge).toBeUndefined();
+  });
+
+  it("asks for the conversation again once for a nudge without its card", async () => {
+    const { client, spy, result } = renderNudges([], [nudge("n1")]);
+    await waitFor(() => expect(jobCalls(spy)).toHaveLength(1));
+    // The conversation moves on, still without the card: not asked again.
+    const reply = { message_id: "a1", role: "assistant", kind: "message", state: "completed", content: "hi", created_at: "2026-09-22T10:00:02Z", sequence: 2 };
+    act(() => client.setQueryData(["harness-job", "job-1"], jobWith(conversationWith({ messages: [reply] }))));
+    await waitFor(() => expect(result.current.turns).toHaveLength(1));
+    expect(jobCalls(spy)).toHaveLength(1);
+  });
+
+  it("asks for the conversation again once when a nudge's state moves", async () => {
+    const { client, spy } = renderNudges([card("n1")], [nudge("n1")]);
+    await waitFor(() => expect(client.getQueryData(nudgesKey("job-1"))).toBeDefined());
+    expect(jobCalls(spy)).toHaveLength(0);
+    act(() => client.setQueryData(nudgesKey("job-1"), [nudge("n1", { state: "replaced" })]));
+    await waitFor(() => expect(jobCalls(spy)).toHaveLength(1));
+    act(() => client.setQueryData(nudgesKey("job-1"), [nudge("n1", { state: "replaced", summary: "x" })]));
+    await waitFor(() => expect(client.getQueryData(nudgesKey("job-1"))[0].summary).toBe("x"));
+    expect(jobCalls(spy)).toHaveLength(1);
+  });
+
+  it("keeps the last list through a failed poll and drops it once versioning is off", async () => {
+    const { client, result } = renderNudges([card("n1")], [nudge("n1")]);
+    client.setQueryDefaults(nudgesKey("job-1"), { retryDelay: 0 });
+    await waitFor(() => expect(result.current.turns[0].nudge).toBeDefined());
+    const failedPoll = () =>
+      act(() => client.refetchQueries({ queryKey: nudgesKey("job-1") }));
+
+    axios.get.mockRejectedValue({ statusCode: 500 });
+    await failedPoll();
+    await waitFor(() =>
+      expect(client.getQueryState(nudgesKey("job-1")).status).toBe("error"),
+    );
+    expect(result.current.turns[0].nudge.id).toBe("n1");
+    expect(result.current.nudgePending).toBe(true);
+
+    axios.get.mockRejectedValue({
+      statusCode: 404,
+      error: "versioning_disabled",
+    });
+    await failedPoll();
+    await waitFor(() => expect(result.current.turns[0].nudge).toBeUndefined());
+    expect(result.current.nudgePending).toBe(false);
+  });
+
+  it("drops the last list once the environment turns versioning off", async () => {
+    const { result, rerender } = renderNudges([card("n1")], [nudge("n1")]);
+    await waitFor(() => expect(result.current.turns[0].nudge).toBeDefined());
+
+    rerender({ env: { ...VERSIONED, versioning: { enabled: false } } });
+
+    expect(result.current.turns[0].nudge).toBeUndefined();
+    expect(result.current.nudgePending).toBe(false);
+  });
+
+  it("isn't pending once the nudge is answered, and asks nothing while versioning is off", async () => {
+    const answered = renderNudges([card("n1")], [nudge("n1", { state: "answered_no" })]);
+    await waitFor(() => expect(answered.result.current.turns[0].nudge).toBeDefined());
+    expect(answered.result.current.nudgePending).toBe(false);
+
+    axios.get.mockClear();
+    const off = renderNudges([card("n1")], [nudge("n1")], ENV);
+    expect(axios.get).not.toHaveBeenCalled();
+    expect(off.result.current.turns[0].nudge).toBeUndefined();
+    expect(off.result.current.nudgePending).toBe(false);
   });
 });

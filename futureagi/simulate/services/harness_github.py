@@ -92,12 +92,18 @@ def _count(key: str) -> int:
         return 1
 
 
+# Setting name, one owner's hourly share and the hourly cap of each capped bucket.
+# All three caps full (25 + 10 + 5) still leave the poller 10 of the default 50 calls
+# an hour; with them idle it has its 30 (50 less its reserve of 20). A comparison is
+# one call, two for a roll back, and is cached for ten minutes.
+_BUCKETS = {"create": ("CREATE", 3, 25), "compare": ("COMPARE", 2, 5)}
+
+
 def _limits(bucket: str) -> tuple[int, int]:
     """One owner's hourly share of ``bucket`` and its hourly cap; pushes' otherwise."""
-    # Both caps full still leave the poller 15 of the default 50 calls an hour.
-    name, cap = ("CREATE", 25) if bucket == "create" else ("WEBHOOK", 10)
+    name, share, cap = _BUCKETS.get(bucket, ("WEBHOOK", 3, 10))
     return (
-        int(getattr(settings, f"HARNESS_GITHUB_{name}_SHARE", 3)),
+        int(getattr(settings, f"HARNESS_GITHUB_{name}_SHARE", share)),
         int(getattr(settings, f"HARNESS_GITHUB_{name}_BUDGET", cap)),
     )
 
@@ -114,12 +120,12 @@ def within_share(bucket: str, owner: str | None) -> bool:
 
 def _take_call(reserve: int, purpose: str, owner: str | None = None) -> bool:
     """Count one call against the hour, unless it would eat into ``reserve``. Push
-    re-reads (by repository owner, one App installation) and creation checks (by
-    organization) have caps of their own, of which one owner gets a share, and never
-    take a reserving caller's calls."""
+    re-reads (by repository owner, one App installation), creation checks and
+    comparisons (by organization) have caps of their own, of which one owner gets a
+    share, and never take a reserving caller's calls."""
     budget = int(getattr(settings, "HARNESS_GITHUB_HOURLY_BUDGET", 50))
     key = _hour_key()
-    capped = ("webhook", "create")
+    capped = ("webhook", "create", "compare")
     if reserve:
         left = remaining()
         if left is not None and left <= reserve:

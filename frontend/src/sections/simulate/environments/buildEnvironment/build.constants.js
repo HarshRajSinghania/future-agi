@@ -47,3 +47,73 @@ export const PIPELINE_CHECKS_COPY = {
   heading: "Setup: building the environment",
   queued: "queued",
 };
+
+// The nudge card in the chat: what changed (names only, never values) and
+// whether to rebuild the environment or its scenarios.
+export const NUDGE_COPY = {
+  changed: (label) => `Agent ${label} changed`,
+  available: (label) => `Agent ${label} is available`,
+  notDefault: "It isn't this environment's default yet.",
+  suiteChanged: (label) => `The environment changed (${label})`,
+  source: {
+    commit: (from, to) => `Commit ${from} → ${to}`,
+    rolledBack: (to) => `Rolled back to commit ${to}`,
+    archive: "New upload",
+    provider: "Assistant changed",
+    phone: "Phone number changed",
+    livekit: "Agent name changed",
+    other: "Source changed",
+  },
+  filesMore: (count) => `and ${count} more`,
+  filesTruncated: "Only some of the changed files are listed.",
+  filesUnavailable: (reason) => `File changes aren't available (${reason})`,
+  unavailableReasons: {
+    private_repository: "private repository",
+    no_commit: "no commit recorded",
+    repository_changed: "the repository changed",
+    not_linear: "the history isn't linear",
+    rate_limited: "GitHub's rate limit was reached",
+    github_error: "GitHub couldn't be read",
+    archive_missing: "the upload is missing",
+    archive_unreadable: "the upload couldn't be read",
+    archive_too_large: "the upload is too large",
+  },
+  promptChanged: "Prompt changed",
+  variables: {
+    added: "Added",
+    removed: "Removed",
+    changed: "Changed",
+    unknown: "May have changed",
+  },
+  settingsChanged: (names) => `Settings changed: ${names.join(", ")}`,
+  question: {
+    environment: "Rebuild the environment?",
+    suite: "Rebuild the scenarios?",
+  },
+  rebuild: "Rebuild",
+  rebuildUnavailable: "Rebuild isn't available yet.",
+  rebuildOff: "Rebuilding is turned off for this environment.",
+  skip: "Skip",
+  skipFor: (subject) => `Skip: ${subject}`,
+  skipping: "Skipping…",
+  skipError: "Couldn't skip. Try again.",
+  // An answer the server refused, by error code.
+  errors: {
+    nudge_closed: "This update was already answered or closed.",
+    nudge_not_found: "This update no longer exists.",
+    nudges_disabled: "Rebuilding is turned off for this environment.",
+    rebuild_unavailable: "Rebuild isn't available yet.",
+  },
+  states: {
+    answered_no: "Skipped. The current version stays.",
+    no_change: "No change needed",
+    failed: "Closed",
+    queued: "Rebuild queued",
+    running: "Rebuilding…",
+    applied: "Rebuilt",
+  },
+  replacedByAgent: (label) => `Replaced by agent ${label}`,
+  replacedByEnvironment: (label) => `Replaced by environment ${label}`,
+  replacedSameTrigger: "Updated for a newer environment version",
+  replaced: "Replaced by a newer update",
+};

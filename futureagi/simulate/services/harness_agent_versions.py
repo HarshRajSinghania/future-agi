@@ -51,6 +51,10 @@ _NOT_DEDUPED = (Status.FAILED, Status.DISCARDED)
 _RETRYABLE = (Status.FAILED, Status.PENDING)
 # The environment payload's record of its default's last move by hand.
 HAND_MOVE_KEY = "agent_default_hand_move"
+# Activations turned down for a reason the environment may want to override: offered.
+_OFFERED = frozenset(
+    {"default_moved_by_hand", "not_parent_default", "rollback_unavailable"}
+)
 # How long another environment's request holds a version against a discard when
 # nothing recorded is still going to move it.
 _WAIT_LIMIT = timedelta(hours=1)
@@ -450,18 +454,27 @@ def _version_values(organization_id: Any, version_id: Any) -> dict[str, str] | N
         return None
     secret_set = credential_set(runtime)
     try:
-        pinned_secrets = {
-            **secret_set.env,
-            **{
-                alias: one.content.decode("utf-8")
-                for alias, one in secret_set.files.items()
-            },
-        }
         # The version's own provider row only: a definition's legacy row is not its.
-        pinned_secrets.update(_row_values(_own_provider_row(version_id)))
+        pinned_secrets = _flat_values(
+            secret_set, _row_values(_own_provider_row(version_id))
+        )
     except Exception:  # noqa: BLE001 - nothing of a value may reach the error
         raise _credential_unavailable() from None
     return pinned_secrets
+
+
+def _flat_values(
+    secret_set: Any, provider_secrets: Mapping[str, str], errors: str = "strict"
+) -> dict[str, str]:
+    """A credential set's variables, files (decoded) and provider values, by name."""
+    return {
+        **secret_set.env,
+        **{
+            alias: one.content.decode("utf-8", errors)
+            for alias, one in secret_set.files.items()
+        },
+        **provider_secrets,
+    }
 
 
 def _legacy_values(
@@ -1669,6 +1682,7 @@ def _activate_on(
     """Move one environment that asked for ``version`` to it, unless a newer version
     of the agent is already its default or the default was moved since; an
     ``explicit`` request moves it from any default."""
+    from simulate.services.harness_versioning.nudges import schedule_environment_nudge
     from simulate.services.harness_versioning.versions import move_agent
     from simulate.services.hosted_harness import agent_version_pickable
 
@@ -1704,6 +1718,7 @@ def _activate_on(
         if _busy(locked):
             # TODO: move it once the build or extend finishes (steps 10/14).
             return "environment_busy"
+        outgoing = locked.agent_version_id
         try:
             with transaction.atomic():
                 # Asked for again by hand: an earlier request never undoes it.
@@ -1714,6 +1729,12 @@ def _activate_on(
                 )
         except HostedHarnessError as exc:
             return exc.code
+        schedule_environment_nudge(
+            locked.id,
+            version.id,
+            default_moved=True,
+            outgoing_agent_version_id=outgoing,
+        )
     return "activated"
 
 
@@ -1758,6 +1779,8 @@ def _activate(
     explicit: bool = False,
     user: Any = None,
 ) -> list[Any]:
+    from simulate.services.harness_versioning.nudges import schedule_environment_nudge
+
     moved = []
     outcomes: dict[str, str] = {}
     errors: list[Exception] = []
@@ -1784,7 +1807,6 @@ def _activate(
                 version.id,
                 environment_id,
             )
-            # TODO: raise the environment nudge (step 12).
         elif outcome != "already_default":
             logger.info(
                 "harness_agent_version_not_activated version=%s environment=%s"
@@ -1793,6 +1815,8 @@ def _activate(
                 environment_id,
                 outcome,
             )
+        if outcome in _OFFERED:
+            schedule_environment_nudge(environment_id, version.id, default_moved=False)
     _record_activation(version.id, outcomes)
     if errors:
         # A transient failure: the activity runs again and moves what is left.
@@ -1810,6 +1834,7 @@ def activate_agent_version(version: AgentVersion) -> list[Any]:
     none, moves no environment. Returns the environments moved.
     """
     from simulate.services.harness_versioning.assembly import legacy_runtime
+    from simulate.services.harness_versioning.nudges import schedule_environment_nudge
 
     runtime = (
         HarnessAgentVersionRuntime.no_workspace_objects.select_related("parent")
@@ -1827,6 +1852,7 @@ def activate_agent_version(version: AgentVersion) -> list[Any]:
         for environment_id in payload.get("requested_by_environments") or []
     ]
     others = []
+    # TODO: offer legacy sharers a version of their own (Q6).
     if parent is not None and not legacy_runtime(parent):
         others = [
             str(environment_id)
@@ -1848,8 +1874,9 @@ def activate_agent_version(version: AgentVersion) -> list[Any]:
             ),
         )
         return []
-    # TODO: nudge these environments, naming the changed variables (step 12).
     _record_activation(version.id, dict.fromkeys(others, "not_requested"))
+    for environment_id in others:
+        schedule_environment_nudge(environment_id, version.id, default_moved=False)
     return _activate(version, requested)
 
 

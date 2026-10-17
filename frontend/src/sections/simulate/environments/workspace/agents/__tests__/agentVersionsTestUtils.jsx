@@ -4,9 +4,11 @@ import { useState } from "react";
 // "pending", or { error }. `calls` keeps every request.
 export const mutations = {};
 export const resetMutations = () => {
-  ["move", "discard", "retry", "change", "upload", "create"].forEach((name) => {
-    mutations[name] = { answer: undefined, data: undefined, calls: [] };
-  });
+  ["move", "discard", "retry", "change", "upload", "create", "answer"].forEach(
+    (name) => {
+      mutations[name] = { answer: undefined, data: undefined, calls: [] };
+    },
+  );
 };
 resetMutations();
 
@@ -15,6 +17,7 @@ export function useFakeMutation(name, onAnswer) {
   return {
     isPending: Boolean(status.pending),
     isError: Boolean(status.error),
+    isSuccess: Boolean(status.success),
     error: status.error || null,
     variables: status.variables,
     reset: () => {
@@ -33,7 +36,7 @@ export function useFakeMutation(name, onAnswer) {
         onError?.(mutation.answer.error);
       } else {
         onAnswer?.(mutation);
-        setStatus({ variables });
+        setStatus({ success: true, variables });
         onSuccess?.(mutation.data);
       }
       onSettled?.();

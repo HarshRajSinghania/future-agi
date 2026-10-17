@@ -19,6 +19,10 @@ const {
   useChangeCredentials,
   useCreateAgentVersion,
   useRefreshWhenChecked,
+  useNudges,
+  useAnswerNudge,
+  nudgesKey,
+  nudgeFromApi,
   canMakeDefault,
   runPlanKey,
   environmentVersionsKey,
@@ -742,9 +746,10 @@ describe("agent version checks", () => {
     expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
       { queryKey: harnessEnvironmentKey("env-1") },
       { queryKey: harnessJobQuery("env-1").queryKey },
+      { queryKey: nudgesKey("env-1") },
     ]);
     rerender({ versions: passed });
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(3);
   });
 
   it("refreshes nothing when nothing was pending", () => {
@@ -980,4 +985,168 @@ describe("useChangeCredentials", () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(spy).not.toHaveBeenCalled();
   });
+});
+
+describe("nudges", () => {
+  const PATH = "/simulate/api/harness-environments/env-1/nudges/";
+  const NUDGE = {
+    id: "n1",
+    target: "environment",
+    state: "pending",
+    facts: {
+      source: { kind: "github", changed: true, from: "abc", to: "def" },
+      changed_files: [
+        { path: "tools/a.py", status: "modified", previous_path: null },
+      ],
+      files_unavailable: null,
+      prompt_changed: true,
+      variables: { added: ["NEW_KEY"], removed: [], changed: [], unknown: [] },
+      settings_changed: ["config.phone_number"],
+      agent_default_moved: true,
+    },
+    trigger_agent_version: { id: "a2", label: "v2" },
+    replaced_by: null,
+    card_message_id: "m1",
+    queued_behind_input: false,
+  };
+  const SUITE = {
+    id: "n2",
+    target: "suite",
+    state: "pending",
+    facts: {
+      environment_diff: {
+        "tools.get_order": { added: true },
+        "sub_goals.refund_policy": { changed: true },
+      },
+      environment_summary: "1 tool added",
+      from_environment_version_id: "e1",
+    },
+    base_environment_version: { id: "e2", label: "v2" },
+  };
+  const intervalOf = () => {
+    const query = client
+      .getQueryCache()
+      .find({ queryKey: nudgesKey("env-1"), exact: true });
+    return query.options.refetchInterval(query);
+  };
+
+  it("maps facts deeply to camelCase, leaving the suite diff's keys as sent", () => {
+    const nudge = nudgeFromApi(NUDGE);
+    expect(nudge).toMatchObject({
+      triggerAgentVersion: { id: "a2", label: "v2" },
+      cardMessageId: "m1",
+      queuedBehindInput: false,
+      facts: {
+        changedFiles: [{ path: "tools/a.py", previousPath: null }],
+        filesUnavailable: null,
+        promptChanged: true,
+        settingsChanged: ["config.phone_number"],
+        agentDefaultMoved: true,
+      },
+    });
+    const suite = nudgeFromApi(SUITE);
+    expect(Object.keys(suite.facts.environmentDiff)).toEqual([
+      "tools.get_order",
+      "sub_goals.refund_policy",
+    ]);
+    expect(suite.facts.environmentSummary).toBe("1 tool added");
+    expect(suite.facts.fromEnvironmentVersionId).toBe("e1");
+  });
+
+  it("lists an environment's nudges, by id and the pending one per target", async () => {
+    axios.get.mockResolvedValue({ data: [NUDGE, SUITE] });
+    const { result } = renderHook(() => useNudges("env-1"), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(axios.get).toHaveBeenCalledWith(PATH);
+    expect(result.current.data.list.map((one) => one.id)).toEqual(["n1", "n2"]);
+    expect(result.current.data.byId.n2.target).toBe("suite");
+    expect(result.current.data.pendingEnvironment.id).toBe("n1");
+    expect(result.current.data.pendingSuite.id).toBe("n2");
+  });
+
+  it("asks nothing while versioning is off", () => {
+    renderHook(() => useNudges("env-1", { enabled: false }), { wrapper });
+    expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it("polls every 30 s, and every 5 s while a rebuild is queued or running", async () => {
+    axios.get.mockResolvedValue({ data: [NUDGE] });
+    const { result } = renderHook(() => useNudges("env-1"), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(intervalOf()).toBe(30000);
+    client.setQueryData(nudgesKey("env-1"), [{ ...NUDGE, state: "running" }]);
+    expect(intervalOf()).toBe(5000);
+    client.setQueryData(nudgesKey("env-1"), [{ ...NUDGE, state: "queued" }]);
+    expect(intervalOf()).toBe(5000);
+  });
+
+  it("stops polling once the list is gone", async () => {
+    client.setQueryData(nudgesKey("env-1"), [{ ...NUDGE, state: "running" }]);
+    axios.get.mockRejectedValue({
+      statusCode: 404,
+      error: "versioning_disabled",
+    });
+    const { result } = renderHook(() => useNudges("env-1"), { wrapper });
+    const { status } = await act(() => result.current.refetch());
+    expect(status).toBe("error");
+    expect(intervalOf()).toBe(false);
+  });
+
+  it("skips a nudge, updates its row and refreshes what follows it", async () => {
+    client.setQueryData(nudgesKey("env-1"), [NUDGE, SUITE]);
+    axios.post.mockResolvedValue({ data: { ...NUDGE, state: "answered_no" } });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useAnswerNudge("env-1"), { wrapper });
+    await act(() =>
+      result.current.mutateAsync({ nudgeId: "n1", answer: "no" }),
+    );
+    expect(axios.post).toHaveBeenCalledWith(
+      "/simulate/api/harness-environments/env-1/nudges/n1/answer/",
+      { answer: "no" },
+    );
+    expect(
+      client.getQueryData(nudgesKey("env-1")).map((one) => one.state),
+    ).toEqual(["answered_no", "pending"]);
+    expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: nudgesKey("env-1") },
+      { queryKey: [...environmentVersionsKey("env-1"), "run-plan"] },
+      { queryKey: harnessJobQuery("env-1").queryKey },
+    ]);
+  });
+
+  it("refreshes the list when the nudge was closed meanwhile", async () => {
+    axios.post.mockRejectedValue({
+      statusCode: 409,
+      error: "nudge_closed",
+      state: "replaced",
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useAnswerNudge("env-1"), { wrapper });
+    await act(() =>
+      result.current
+        .mutateAsync({ nudgeId: "n1", answer: "no" })
+        .catch(() => {}),
+    );
+    expect(spy.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: nudgesKey("env-1") },
+    ]);
+  });
+
+  it.each(["nudges_disabled", "rebuild_unavailable"])(
+    "refreshes nothing when a rebuild is refused (%s)",
+    async (code) => {
+      axios.post.mockRejectedValue({ statusCode: 409, error: code });
+      const spy = vi.spyOn(client, "invalidateQueries");
+      const { result } = renderHook(() => useAnswerNudge("env-1"), {
+        wrapper,
+      });
+      await act(() =>
+        result.current
+          .mutateAsync({ nudgeId: "n1", answer: "yes" })
+          .catch(() => {}),
+      );
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(spy).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -793,6 +793,19 @@ def record_authoring(
         locked.suite_version = suite_version
         locked.content_updated_at = timezone.now()
         locked.save(update_fields=update_fields)
+        if (
+            base_environment is not None
+            and environment_version.id != base_environment.id
+        ):
+            from simulate.services.harness_versioning.nudges import (
+                schedule_environment_moved,
+            )
+
+            schedule_environment_moved(
+                locked.id,
+                from_environment_version_id=base_environment.id,
+                environment_version_id=environment_version.id,
+            )
 
     job.refresh_from_db()
     return RecordedVersions(
@@ -1183,6 +1196,7 @@ def _move_agent_default(
 ) -> HostedHarnessJob:
     from simulate.models import AgentVersion
     from simulate.services.harness_agent_versions import hand_move, require_agent_pick
+    from simulate.services.harness_versioning.nudges import schedule_environment_nudge
 
     # Locked, so a concurrent discard sees this move before its in-use check.
     require_agent_pick(
@@ -1198,6 +1212,12 @@ def _move_agent_default(
         raise _conflict("agent", current)
     version = AgentVersion.no_workspace_objects.get(id=version_id)
     move_agent(locked, version, moved=hand_move(user, version.id))
+    schedule_environment_nudge(
+        locked.id,
+        version.id,
+        default_moved=True,
+        outgoing_agent_version_id=current.id if current is not None else None,
+    )
     logger.info(
         "harness_default_moved piece=agent from=%s to=%s actor=%s",
         current.id if current is not None else None,
@@ -1339,7 +1359,21 @@ def move_default(
         locked.payload = payload
         locked.content_updated_at = timezone.now()
         locked.save(update_fields=update_fields)
-        # TODO: offer the suite nudge after an environment move (step 12).
+        if piece == "environment":
+            from simulate.services.harness_versioning.nudges import (
+                schedule_environment_moved,
+            )
+
+            schedule_environment_moved(
+                locked.id,
+                from_environment_version_id=current.id if current else None,
+                environment_version_id=version.id,
+            )
+        elif piece == "suite":
+            from simulate.services.harness_versioning.nudges import schedule_reconcile
+
+            # A pending suite card the new suite is proved against closes.
+            schedule_reconcile(locked.id)
         # TODO: refuse with rebuild_running while a build or extend runs (step 14).
         # TODO: offer to re-apply a version's draft edits (includes_draft_edits) once
         # drafts exist (steps 13/14).

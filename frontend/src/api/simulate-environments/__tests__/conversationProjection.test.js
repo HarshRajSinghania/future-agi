@@ -236,6 +236,93 @@ describe("projectConversation", () => {
   });
 });
 
+describe("projectConversation nudge cards", () => {
+  const card = (over = {}) =>
+    msg({
+      message_id: "n-msg",
+      role: "system",
+      kind: "status",
+      content: "Agent v3 changed: prompt. Rebuild the environment?",
+      payload: { nudge_id: "n1", nudge_target: "environment", trigger_label: "v3" },
+      created_at: "2026-09-22T10:00:01Z",
+      ...over,
+    });
+
+  it("projects a nudge message to its own system turn", () => {
+    const turns = projectConversation({ messages: [card()], events: [] });
+    expect(turns).toEqual([
+      {
+        id: "n-msg",
+        role: "system",
+        kind: "nudge",
+        nudgeId: "n1",
+        target: "environment",
+        text: "Agent v3 changed: prompt. Rebuild the environment?",
+      },
+    ]);
+  });
+
+  it("splits a builder turn, so the next tool starts a new one", () => {
+    const turns = projectConversation({
+      messages: [card()],
+      events: [
+        evt({ event_id: "e1", kind: "tool_started", function_call_id: "c1", emitted_at: "2026-09-22T10:00:00Z", payload: { label: "Read" } }),
+        evt({ event_id: "e2", kind: "tool_started", function_call_id: "c2", emitted_at: "2026-09-22T10:00:02Z", payload: { label: "Write" } }),
+      ],
+    });
+    expect(turns.map((t) => t.role)).toEqual(["builder", "system", "builder"]);
+    expect(turns[0].steps.map((s) => s.label)).toEqual(["Read"]);
+    expect(turns[2].steps.map((s) => s.label)).toEqual(["Write"]);
+  });
+
+  it("never lands inside background run activity", () => {
+    const turns = projectConversation({
+      messages: [card()],
+      events: [
+        evt({ event_id: "e1", emitted_at: "2026-09-22T10:00:00Z", payload: { event: { text: "reading" } } }),
+        evt({ event_id: "e2", emitted_at: "2026-09-22T10:00:02Z", payload: { event: { text: "writing" } } }),
+      ],
+    });
+    expect(turns.map((t) => t.role)).toEqual(["builder", "system", "builder"]);
+    expect(turns[0].title).toBe("Background run activity");
+    expect(turns[2].title).toBe("Background run activity");
+  });
+
+  it("keeps a tool that is still running when a card arrives mid-turn", () => {
+    const turns = projectConversation({
+      state: "responding",
+      messages: [card()],
+      events: [
+        evt({
+          event_id: "e1",
+          kind: "tool_started",
+          function_call_id: "c1",
+          emitted_at: "2026-09-22T10:00:00Z",
+          payload: { label: "Read" },
+        }),
+      ],
+    });
+    expect(turns.map((t) => t.role)).toEqual(["builder", "system", "builder"]);
+    expect(turns[0].steps[0]).toMatchObject({
+      label: "Read",
+      state: "running",
+    });
+  });
+
+  it("keeps a system message without a nudge as a builder note", () => {
+    const turns = projectConversation({
+      messages: [card({ payload: {}, content: "Saved." })],
+      events: [],
+    });
+    expect(turns[0].role).toBe("builder");
+    expect(turns[0].steps[0]).toMatchObject({ kind: "note", text: "Saved." });
+  });
+
+  it("is never in flight", () => {
+    expect(conversationInFlight({ state: "idle", messages: [card()] })).toBe(false);
+  });
+});
+
 describe("conversationWaiting", () => {
   const question = { message_id: "q1", kind: "question_requested" };
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from simulate.models import HarnessNudge
 from simulate.serializers.harness_job import (
     TARGET_SYSTEM_PROMPT_MAX_CHARS,
     HarnessRunPinnedVersionsSerializer,
@@ -740,3 +741,127 @@ class HarnessSuiteMemberSerializer(serializers.Serializer):
     number = serializers.IntegerField()
     name = serializers.CharField(allow_blank=True)
     use_case = serializers.CharField(allow_blank=True)
+
+
+NUDGE_STATES = tuple(HarnessNudge.State.values)
+
+
+class HarnessNudgeFileSerializer(serializers.Serializer):
+    path = serializers.CharField()
+    status = serializers.ChoiceField(
+        choices=("added", "removed", "modified", "renamed", "copied")
+    )
+    previous_path = serializers.CharField(allow_null=True)
+    additions = serializers.IntegerField(allow_null=True)
+    deletions = serializers.IntegerField(allow_null=True)
+    has_patch = serializers.BooleanField()
+    patch_omitted = serializers.CharField(
+        allow_null=True,
+        help_text=(
+            "Why the file's patch isn't kept: secret_path, too_large, binary, budget"
+            " or redaction_unavailable."
+        ),
+    )
+
+
+class HarnessNudgeVariablesSerializer(serializers.Serializer):
+    """Variable names only; never a value."""
+
+    added = serializers.ListField(child=serializers.CharField())
+    removed = serializers.ListField(child=serializers.CharField())
+    changed = serializers.ListField(child=serializers.CharField())
+    unknown = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Names whose values couldn't be read, so they may have changed.",
+    )
+
+
+class HarnessNudgeFactsSerializer(serializers.Serializer):
+    """What changed: an environment nudge's agent facts, or a suite nudge's environment
+    diff. Names, paths, statuses and counts; never a value or a patch."""
+
+    source = serializers.JSONField(
+        required=False,
+        help_text="The agent source's kind, whether it changed, and its from/to ids.",
+    )
+    changed_files = HarnessNudgeFileSerializer(many=True, required=False)
+    files_total = serializers.IntegerField(required=False, allow_null=True)
+    files_truncated = serializers.BooleanField(required=False)
+    reversed = serializers.BooleanField(
+        required=False, help_text="A roll back to an earlier commit."
+    )
+    files_unavailable = serializers.CharField(
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Why the file changes aren't listed: private_repository, no_commit,"
+            " repository_changed, not_linear, rate_limited, github_error,"
+            " archive_missing, archive_unreadable or archive_too_large."
+        ),
+    )
+    prompt_changed = serializers.BooleanField(required=False)
+    variables = HarnessNudgeVariablesSerializer(required=False)
+    settings_changed = serializers.ListField(
+        child=serializers.CharField(), required=False
+    )
+    agent_default_moved = serializers.BooleanField(
+        required=False,
+        help_text="Whether the agent version is already this environment's default.",
+    )
+    environment_diff = serializers.JSONField(required=False, allow_null=True)
+    environment_summary = serializers.CharField(required=False, allow_blank=True)
+    from_environment_version_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class HarnessNudgeReplacementSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    trigger_label = serializers.CharField(allow_null=True)
+
+
+class HarnessNudgeErrorSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    message = serializers.CharField(required=False)
+
+
+class HarnessNudgeSerializer(serializers.Serializer):
+    """An offer to rebuild the environment or its suite after a change."""
+
+    id = serializers.UUIDField()
+    target = serializers.ChoiceField(choices=HarnessNudge.Target.values)
+    state = serializers.ChoiceField(choices=NUDGE_STATES)
+    facts = HarnessNudgeFactsSerializer()
+    trigger_agent_version = RunVersionLabelSerializer(allow_null=True)
+    base_agent_version = RunVersionLabelSerializer(allow_null=True)
+    base_environment_version = RunVersionLabelSerializer(allow_null=True)
+    base_suite_version = RunVersionLabelSerializer(allow_null=True)
+    result_environment_version = RunVersionLabelSerializer(allow_null=True)
+    result_suite_version = RunVersionLabelSerializer(allow_null=True)
+    summary = serializers.JSONField(allow_null=True)
+    error = HarnessNudgeErrorSerializer(allow_null=True)
+    closed_at = serializers.DateTimeField(allow_null=True)
+    queued_behind_input = serializers.BooleanField()
+    can_stop = serializers.BooleanField()
+    replaced_by = HarnessNudgeReplacementSerializer(allow_null=True)
+    card_message_id = serializers.UUIDField(
+        allow_null=True, help_text="The nudge's card in the environment's chat."
+    )
+    answered_by = HarnessVersionPersonSerializer(allow_null=True)
+    answered_at = serializers.DateTimeField(allow_null=True)
+    created_at = serializers.DateTimeField()
+
+
+class HarnessNudgeListQuerySerializer(serializers.Serializer):
+    state = serializers.CharField(
+        required=False, help_text="Comma-separated nudge states to list."
+    )
+
+    def validate_state(self, value):
+        states = [one.strip() for one in value.split(",") if one.strip()]
+        unknown = sorted(set(states) - set(NUDGE_STATES))
+        if unknown:
+            raise serializers.ValidationError(f"Unknown state: {', '.join(unknown)}")
+        return states
+
+
+class HarnessNudgeAnswerSerializer(serializers.Serializer):
+    answer = serializers.ChoiceField(choices=("yes", "no"))

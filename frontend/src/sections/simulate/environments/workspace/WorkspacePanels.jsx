@@ -141,7 +141,6 @@ export default function WorkspacePanels({
           <OverviewPanel
             env={env}
             envState={serverEnvState}
-            patch={patch}
             onGo={go}
             agentConnected={!!envState?.agent}
             locked={locked}

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { camelCase } from "lodash";
 import axios from "src/utils/axios";
 import { apiPath } from "src/api/contracts/api-surface";
 
@@ -10,7 +11,8 @@ import { apiPath } from "src/api/contracts/api-surface";
  * The endpoints answer 404 while versioning is switched off, so every read is
  * gated on `enabled` — the workspace passes `env.versioning.enabled`. The writes
  * move a default to another version, and set aside, re-check or re-credential an
- * agent version.
+ * agent version. Nudges propose rebuilding the environment (or its scenarios)
+ * after its agent (or environment) changed; they can be listed and skipped.
  */
 
 export const VERSION_PIECES = ["agent", "environment", "suite"];
@@ -51,6 +53,14 @@ const retryAgentPath = (envId, versionId) =>
   );
 const secretValuesPath = () =>
   apiPath("/simulate/api/harness-jobs/secret-values/");
+
+const nudgesPath = (envId) =>
+  apiPath("/simulate/api/harness-environments/{id}/nudges/", { id: envId });
+const answerNudgePath = (envId, nudgeId) =>
+  apiPath("/simulate/api/harness-environments/{id}/nudges/{nudge_id}/answer/", {
+    id: envId,
+    nudge_id: nudgeId,
+  });
 
 const runPlanPath = (envId) =>
   apiPath("/simulate/api/harness-environments/{id}/run-plan/", { id: envId });
@@ -113,6 +123,12 @@ export const getRunPlan = async (envId, picks) =>
   (await axios.get(runPlanPath(envId), { params: versionPickFields(picks) }))
     .data;
 
+export const getNudges = async (envId) =>
+  (await axios.get(nudgesPath(envId))).data;
+
+export const answerNudge = async (envId, nudgeId, answer) =>
+  (await axios.post(answerNudgePath(envId, nudgeId), { answer })).data;
+
 export const environmentVersionsKey = (envId) => [
   "harness-env-versions",
   envId,
@@ -128,6 +144,11 @@ export const suiteMembersKey = (envId, versionId) => [
   ...environmentVersionsKey(envId),
   "members",
   versionId,
+];
+
+export const nudgesKey = (envId) => [
+  ...environmentVersionsKey(envId),
+  "nudges",
 ];
 
 export const runPlanKey = (envId, picks = {}) => [
@@ -408,7 +429,102 @@ export function useRefreshWhenChecked(envId, agentVersions) {
         queryKey: ["harness-environment", envId],
       });
       queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
+      queryClient.invalidateQueries({ queryKey: nudgesKey(envId) });
     }
     wasPending.current = pending;
   }, [pending, envId, queryClient]);
+}
+
+// Rebuild ("yes") is answered 409 until rebuilding lands; it shows disabled.
+// TODO: enable Rebuild (step 14).
+export const REBUILD_AVAILABLE = false;
+
+// The diff and summary of a suite nudge are keyed by contract paths, tool
+// names and sub-goal keys, so their keys stay as the server wrote them.
+const VERBATIM_FACTS = new Set(["environment_diff", "environment_summary"]);
+
+const camelDeep = (value) => {
+  if (Array.isArray(value)) return value.map(camelDeep);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, inner]) => [
+      camelCase(key),
+      VERBATIM_FACTS.has(key) ? inner : camelDeep(inner),
+    ]),
+  );
+};
+
+// A nudge in camelCase. Its facts carry names, paths, statuses and counts
+// only; the server never sends a value or a patch.
+export const nudgeFromApi = (item = {}) => {
+  const nudge = camelDeep(item);
+  return { ...nudge, facts: nudge.facts || {} };
+};
+
+const NUDGE_ACTIVE_STATES = new Set(["queued", "running"]);
+const NUDGE_ACTIVE_POLL_MS = 5000;
+const NUDGE_POLL_MS = 30000;
+
+export const toNudges = (data) => {
+  const list = (Array.isArray(data) ? data : []).map(nudgeFromApi);
+  const pending = (target) =>
+    list.find(
+      (nudge) => nudge.target === target && nudge.state === "pending",
+    ) || null;
+  return {
+    list,
+    byId: Object.fromEntries(list.map((nudge) => [nudge.id, nudge])),
+    pendingEnvironment: pending("environment"),
+    pendingSuite: pending("suite"),
+  };
+};
+
+export function useNudges(envId, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: nudgesKey(envId),
+    queryFn: () => getNudges(envId),
+    select: toNudges,
+    enabled: Boolean(envId) && enabled,
+    retry: retryUnlessNotFound,
+    refetchInterval: (query) => {
+      if (errorStatus(query.state.error) === 404) return false;
+      return Array.isArray(query.state.data) &&
+        query.state.data.some((item) => NUDGE_ACTIVE_STATES.has(item?.state))
+        ? NUDGE_ACTIVE_POLL_MS
+        : NUDGE_POLL_MS;
+    },
+    meta: { errorHandled: true },
+  });
+}
+
+// Answer a nudge. The answered nudge replaces its cached row; the run plan's
+// warnings and the job's conversation follow it, so both are asked again. A
+// nudge closed meanwhile refreshes the list so the card shows its state.
+export function useAnswerNudge(envId) {
+  const queryClient = useQueryClient();
+  const refreshNudges = () =>
+    queryClient.invalidateQueries({ queryKey: nudgesKey(envId) });
+  return useMutation({
+    meta: { errorHandled: true },
+    mutationFn: ({ nudgeId, answer }) => answerNudge(envId, nudgeId, answer),
+    onSuccess: (data) => {
+      if (data?.id) {
+        queryClient.setQueryData(nudgesKey(envId), (prev) =>
+          Array.isArray(prev)
+            ? prev.map((item) => (item?.id === data.id ? data : item))
+            : prev,
+        );
+      }
+      refreshNudges();
+      queryClient.invalidateQueries({
+        queryKey: [...environmentVersionsKey(envId), "run-plan"],
+      });
+      queryClient.invalidateQueries({ queryKey: ["harness-job", envId] });
+    },
+    onError: (error) => {
+      if (errorStatus(error) === 409 && error?.error === "nudge_closed") {
+        refreshNudges();
+      }
+    },
+  });
 }

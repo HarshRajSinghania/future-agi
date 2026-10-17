@@ -313,6 +313,42 @@ describe("EnvironmentWorkspace route shell", () => {
     }
   });
 
+  it("keeps the collapsed chat's dot on while a nudge waits for an answer", async () => {
+    const conversation = {
+      state: "warm_idle",
+      runtime: { available: true },
+      messages: [{ message_id: "m1", role: "system", kind: "status", state: "completed", content: "Agent v2 changed: prompt. Rebuild the environment?", payload: { nudge_id: "n1", nudge_target: "environment" }, created_at: NOW, sequence: 1 }],
+      events: [],
+    };
+    const nudgesAre = (state) =>
+      axios.get.mockImplementation((url) => {
+        if (url.endsWith("/nudges/")) {
+          return Promise.resolve({ data: [{ id: "n1", target: "environment", state, facts: {}, card_message_id: "m1" }] });
+        }
+        return Promise.reject(Object.assign(new Error("Not found"), { statusCode: 404 }));
+      });
+    const job = { ...COMPLETED_JOB, versioning: { enabled: true, nudges_enabled: true }, conversation };
+    window.localStorage.setItem("simEnv.chatPane.collapsed", "true");
+    try {
+      nudgesAre("pending");
+      getHarnessJob.mockResolvedValue(job);
+      const first = renderWorkspace("/dashboard/simulate/environments/job-done");
+      expect(await screen.findByTestId("chat-split-busy")).toBeInTheDocument();
+      first.unmount();
+
+      // Skipped: nothing waits on the user any more.
+      nudgesAre("answered_no");
+      renderWorkspace("/dashboard/simulate/environments/job-done");
+      // The card shows the skip once the list is in.
+      expect(
+        await screen.findByText("Skipped. The current version stays."),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-split-busy")).not.toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem("simEnv.chatPane.collapsed");
+    }
+  });
+
   it("renders the run detail as its own full page, without the workspace chrome", async () => {
     getHarnessJob.mockResolvedValue(COMPLETED_JOB);
 

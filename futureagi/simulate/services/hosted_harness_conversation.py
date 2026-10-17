@@ -520,6 +520,33 @@ def enqueue_message(
         return conversation, message, True
 
 
+def post_system_message(
+    job: HostedHarnessJob, *, content: str, payload: dict[str, Any]
+) -> HostedHarnessConversationMessage:
+    """A completed system line in the job's conversation; it starts no turn, is never
+    delivered to the harness and leaves the conversation's state as it is."""
+    with transaction.atomic():
+        ensure_conversation(job)
+        conversation = (
+            HostedHarnessConversation.no_workspace_objects.select_for_update().get(
+                job=job
+            )
+        )
+        message = HostedHarnessConversationMessage.no_workspace_objects.create(
+            conversation=conversation,
+            sequence=conversation.next_message_sequence,
+            role=HostedHarnessConversationMessage.Role.SYSTEM,
+            kind=HostedHarnessConversationMessage.Kind.STATUS,
+            state=HostedHarnessConversationMessage.State.COMPLETED,
+            stage=conversation.current_stage,
+            content=content,
+            payload=payload,
+        )
+        conversation.next_message_sequence += 1
+        conversation.save(update_fields=["next_message_sequence", "updated_at"])
+    return message
+
+
 def issue_conversation_capability(
     conversation: HostedHarnessConversation,
     *,

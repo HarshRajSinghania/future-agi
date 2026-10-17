@@ -26,7 +26,6 @@ const renderPanel = (props = {}) =>
     <OverviewPanel
       env={MOCK_WORLD}
       envState={connectedState}
-      patch={vi.fn()}
       onGo={vi.fn()}
       agentConnected
       {...props}

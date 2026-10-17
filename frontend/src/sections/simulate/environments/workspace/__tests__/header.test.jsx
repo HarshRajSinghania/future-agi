@@ -433,37 +433,19 @@ describe("EnvVersionPin", () => {
   });
 });
 
-describe("off-latest banner", () => {
-  it("shows the switch-back banner when an older version is pinned", () => {
-    render(
-      <SystemBanners
-        env={ENV}
-        envState={{ scenarios: [1, 2, 3], activeEnvVersion: "v1" }}
-        patch={vi.fn()}
-      />,
-    );
-    expect(screen.getByText(/Switch to v3/)).toBeInTheDocument();
-    expect(screen.getByText(/Editing off v1/)).toBeInTheDocument();
-  });
-});
-
 describe("SystemBanners", () => {
   it("renders the building banner from the env build status", () => {
     render(
       <SystemBanners
         env={{ ...ENV, buildStatus: "building", buildProgress: { done: 5, total: 7 } }}
-        envState={{ scenarios: [1, 2, 3] }}
-        patch={vi.fn()}
       />
     );
     expect(screen.getByText("Environment is still being built")).toBeInTheDocument();
     expect(screen.getByText(/5 of 7 steps done/)).toBeInTheDocument();
   });
 
-  it("renders nothing on a latest, ready environment", () => {
-    const { container } = render(
-      <SystemBanners env={ENV} envState={{ scenarios: [1, 2, 3] }} patch={vi.fn()} />
-    );
+  it("renders nothing on a ready environment", () => {
+    const { container } = render(<SystemBanners env={ENV} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1074,
+  endpointCount: 1076,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28270,6 +28270,53 @@ export const OPENAPI_CONTRACT = Object.freeze({
         requestBody: null,
         queryParameters: {},
         responses: {
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/nudges/": {
+      get: {
+        operationId: "simulate_api_harness-environments_nudges",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          state: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+        },
+        responses: {
+          200: {
+            type: "array",
+            items: {
+              $ref: "#/definitions/HarnessNudge",
+            },
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/simulate/api/harness-environments/{id}/nudges/{nudge_id}/answer/": {
+      post: {
+        operationId: "simulate_api_harness-environments_nudges_answer_nudge",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/HarnessNudgeAnswer",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/HarnessNudge",
+          },
           default: {
             $ref: "#/definitions/ManagementAPIErrorResponse",
           },
@@ -63907,6 +63954,135 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessNudge: {
+      required: [
+        "id",
+        "target",
+        "state",
+        "facts",
+        "trigger_agent_version",
+        "base_agent_version",
+        "base_environment_version",
+        "base_suite_version",
+        "result_environment_version",
+        "result_suite_version",
+        "summary",
+        "error",
+        "closed_at",
+        "queued_behind_input",
+        "can_stop",
+        "replaced_by",
+        "card_message_id",
+        "answered_by",
+        "answered_at",
+        "created_at",
+      ],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        target: {
+          title: "Target",
+          type: "string",
+          enum: ["environment", "suite"],
+        },
+        state: {
+          title: "State",
+          type: "string",
+          enum: [
+            "pending",
+            "answered_no",
+            "queued",
+            "running",
+            "applied",
+            "no_change",
+            "replaced",
+            "failed",
+          ],
+        },
+        facts: {
+          $ref: "#/definitions/HarnessNudgeFacts",
+        },
+        trigger_agent_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        base_agent_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        base_environment_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        base_suite_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        result_environment_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        result_suite_version: {
+          $ref: "#/definitions/RunVersionLabel",
+        },
+        summary: {
+          title: "Summary",
+          type: "object",
+          "x-nullable": true,
+        },
+        error: {
+          $ref: "#/definitions/HarnessNudgeError",
+        },
+        closed_at: {
+          title: "Closed at",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        queued_behind_input: {
+          title: "Queued behind input",
+          type: "boolean",
+        },
+        can_stop: {
+          title: "Can stop",
+          type: "boolean",
+        },
+        replaced_by: {
+          $ref: "#/definitions/HarnessNudgeReplacement",
+        },
+        card_message_id: {
+          title: "Card message id",
+          description: "The nudge's card in the environment's chat.",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+        answered_by: {
+          $ref: "#/definitions/HarnessVersionPerson",
+        },
+        answered_at: {
+          title: "Answered at",
+          type: "string",
+          format: "date-time",
+          "x-nullable": true,
+        },
+        created_at: {
+          title: "Created at",
+          type: "string",
+          format: "date-time",
+        },
+      },
+    },
+    HarnessNudgeAnswer: {
+      required: ["answer"],
+      type: "object",
+      properties: {
+        answer: {
+          title: "Answer",
+          type: "string",
+          enum: ["yes", "no"],
+        },
+      },
+    },
     HarnessPreflight: {
       required: ["agent", "artifacts"],
       type: "object",
@@ -94458,6 +94634,150 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    HarnessNudgeError: {
+      required: ["code"],
+      type: "object",
+      properties: {
+        code: {
+          title: "Code",
+          type: "string",
+          minLength: 1,
+        },
+        message: {
+          title: "Message",
+          type: "string",
+          minLength: 1,
+        },
+      },
+      "x-nullable": true,
+    },
+    HarnessNudgeFacts: {
+      type: "object",
+      properties: {
+        source: {
+          title: "Source",
+          description:
+            "The agent source's kind, whether it changed, and its from/to ids.",
+          type: "object",
+        },
+        changed_files: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessNudgeFile",
+          },
+        },
+        files_total: {
+          title: "Files total",
+          type: "integer",
+          "x-nullable": true,
+        },
+        files_truncated: {
+          title: "Files truncated",
+          type: "boolean",
+        },
+        reversed: {
+          title: "Reversed",
+          description: "A roll back to an earlier commit.",
+          type: "boolean",
+        },
+        files_unavailable: {
+          title: "Files unavailable",
+          description:
+            "Why the file changes aren't listed: private_repository, no_commit, repository_changed, not_linear, rate_limited, github_error, archive_missing, archive_unreadable or archive_too_large.",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        prompt_changed: {
+          title: "Prompt changed",
+          type: "boolean",
+        },
+        variables: {
+          $ref: "#/definitions/HarnessNudgeVariables",
+        },
+        settings_changed: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        agent_default_moved: {
+          title: "Agent default moved",
+          description:
+            "Whether the agent version is already this environment's default.",
+          type: "boolean",
+        },
+        environment_diff: {
+          title: "Environment diff",
+          type: "object",
+          "x-nullable": true,
+        },
+        environment_summary: {
+          title: "Environment summary",
+          type: "string",
+        },
+        from_environment_version_id: {
+          title: "From environment version id",
+          type: "string",
+          format: "uuid",
+          "x-nullable": true,
+        },
+      },
+    },
+    HarnessNudgeReplacement: {
+      required: ["id", "trigger_label"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+        },
+        trigger_label: {
+          title: "Trigger label",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+      },
+      "x-nullable": true,
+    },
+    HarnessVersionPerson: {
+      required: ["id", "name"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          minLength: 1,
+        },
+        name: {
+          title: "Name",
+          type: "string",
+        },
+      },
+      "x-nullable": true,
+    },
+    RunVersionLabel: {
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          format: "uuid",
+          readOnly: true,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          readOnly: true,
+          minLength: 1,
+          "x-nullable": true,
+        },
+      },
+      "x-nullable": true,
+    },
     HarnessPreflightCheck: {
       required: ["id", "label", "status", "detail", "missing", "fix"],
       type: "object",
@@ -110576,22 +110896,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    HarnessVersionPerson: {
-      required: ["id", "name"],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          minLength: 1,
-        },
-        name: {
-          title: "Name",
-          type: "string",
-        },
-      },
-      "x-nullable": true,
-    },
     HarnessAgentConfigChange: {
       type: "object",
       properties: {
@@ -110663,25 +110967,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Eval pass rate",
           description: "Context only; never decides the verdict.",
           type: "number",
-          "x-nullable": true,
-        },
-      },
-      "x-nullable": true,
-    },
-    RunVersionLabel: {
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          format: "uuid",
-          readOnly: true,
-        },
-        label: {
-          title: "Label",
-          type: "string",
-          readOnly: true,
-          minLength: 1,
           "x-nullable": true,
         },
       },
@@ -111178,6 +111463,94 @@ export const OPENAPI_CONTRACT = Object.freeze({
         error: {
           title: "Error",
           type: "string",
+        },
+      },
+    },
+    HarnessNudgeFile: {
+      required: [
+        "path",
+        "status",
+        "previous_path",
+        "additions",
+        "deletions",
+        "has_patch",
+        "patch_omitted",
+      ],
+      type: "object",
+      properties: {
+        path: {
+          title: "Path",
+          type: "string",
+          minLength: 1,
+        },
+        status: {
+          title: "Status",
+          type: "string",
+          enum: ["added", "removed", "modified", "renamed", "copied"],
+        },
+        previous_path: {
+          title: "Previous path",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        additions: {
+          title: "Additions",
+          type: "integer",
+          "x-nullable": true,
+        },
+        deletions: {
+          title: "Deletions",
+          type: "integer",
+          "x-nullable": true,
+        },
+        has_patch: {
+          title: "Has patch",
+          type: "boolean",
+        },
+        patch_omitted: {
+          title: "Patch omitted",
+          description:
+            "Why the file's patch isn't kept: secret_path, too_large, binary, budget or redaction_unavailable.",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+      },
+    },
+    HarnessNudgeVariables: {
+      required: ["added", "removed", "changed", "unknown"],
+      type: "object",
+      properties: {
+        added: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        removed: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        changed: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        unknown: {
+          description:
+            "Names whose values couldn't be read, so they may have changed.",
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
         },
       },
     },

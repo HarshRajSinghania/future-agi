@@ -618,6 +618,8 @@ import type {
   HarnessJobExtendApi,
   HarnessJobReadApi,
   HarnessManifestApi,
+  HarnessNudgeAnswerApi,
+  HarnessNudgeApi,
   HarnessPreflightApi,
   HarnessPreflightResponseApi,
   HarnessResultReceiptApi,
@@ -1150,6 +1152,7 @@ import type {
   SimulateApiHarnessConversationsSessionStoreParams,
   SimulateApiHarnessEnvironmentsCompareParams,
   SimulateApiHarnessEnvironmentsListParams,
+  SimulateApiHarnessEnvironmentsNudgesParams,
   SimulateApiHarnessEnvironmentsRunPlanParams,
   SimulateApiHarnessEnvironmentsVersionsVersionDiffParams,
   SimulateApiHarnessJobsSecretFileUploadBody,
@@ -59058,6 +59061,119 @@ export const simulateApiHarnessEnvironmentsRemoveEvaluation = async (
     {
       ...options,
       method: "DELETE",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsNudgesResponse200 = {
+  data: HarnessNudgeApi[];
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsNudgesResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsNudgesResponseSuccess =
+  simulateApiHarnessEnvironmentsNudgesResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsNudgesResponseError =
+  simulateApiHarnessEnvironmentsNudgesResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsNudgesResponse =
+  | simulateApiHarnessEnvironmentsNudgesResponseSuccess
+  | simulateApiHarnessEnvironmentsNudgesResponseError;
+
+export const getSimulateApiHarnessEnvironmentsNudgesUrl = (
+  id: string,
+  params?: SimulateApiHarnessEnvironmentsNudgesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/simulate/api/harness-environments/${id}/nudges/?${stringifiedParams}`
+    : `/simulate/api/harness-environments/${id}/nudges/`;
+};
+
+/**
+ * This environment's offers to rebuild after a change, newest first.
+ */
+export const simulateApiHarnessEnvironmentsNudges = async (
+  id: string,
+  params?: SimulateApiHarnessEnvironmentsNudgesParams,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsNudgesResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsNudgesResponse>(
+    getSimulateApiHarnessEnvironmentsNudgesUrl(id, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse200 = {
+  data: HarnessNudgeApi;
+  status: 200;
+};
+
+export type simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200>;
+};
+
+export type simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponseSuccess =
+  simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse200 & {
+    headers: Headers;
+  };
+export type simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponseError =
+  simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponseDefault & {
+    headers: Headers;
+  };
+
+export type simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse =
+  | simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponseSuccess
+  | simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponseError;
+
+export const getSimulateApiHarnessEnvironmentsNudgesAnswerNudgeUrl = (
+  id: string,
+  nudgeId: string,
+) => {
+  return `/simulate/api/harness-environments/${id}/nudges/${nudgeId}/answer/`;
+};
+
+/**
+ * Skip ("no") or Rebuild ("yes") a pending nudge; returns the nudge.
+ */
+export const simulateApiHarnessEnvironmentsNudgesAnswerNudge = async (
+  id: string,
+  nudgeId: string,
+  harnessNudgeAnswerApi: HarnessNudgeAnswerApi,
+  options?: RequestInit,
+): Promise<simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse> => {
+  return apiMutator<simulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse>(
+    getSimulateApiHarnessEnvironmentsNudgesAnswerNudgeUrl(id, nudgeId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(harnessNudgeAnswerApi),
     },
   );
 };

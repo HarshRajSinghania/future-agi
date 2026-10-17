@@ -5,8 +5,6 @@ import userEvent from "@testing-library/user-event";
 import AgentHeroCard from "../AgentHeroCard";
 import VersionHistoryCard from "../VersionHistoryCard";
 import AgentCard from "../AgentCard";
-import PromoteDialog from "../PromoteDialog";
-import DivergenceBanner from "../DivergenceBanner";
 
 const VERSIONS = [
   { id: "v1", label: "v1", connectedAt: "2026-01-01T10:00:00Z", note: "First version connected" },
@@ -108,39 +106,5 @@ describe("AgentCard", () => {
     );
     await user.click(screen.getByRole("button", { name: /expand details/i }));
     expect(onToggleExpand).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("PromoteDialog", () => {
-  it("fires onConfirm when Update environment is clicked", async () => {
-    const user = userEvent.setup();
-    const onConfirm = vi.fn();
-    render(<PromoteDialog agent={AGENT} onCancel={vi.fn()} onConfirm={onConfirm} />);
-    await user.click(screen.getByRole("button", { name: /update environment/i }));
-    expect(onConfirm).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not render when no agent is being promoted", () => {
-    render(<PromoteDialog agent={null} onCancel={vi.fn()} onConfirm={vi.fn()} />);
-    expect(screen.queryByText(/update environment from this agent/i)).toBeNull();
-  });
-});
-
-describe("DivergenceBanner", () => {
-  it("shows the active label and fires restore and promote", async () => {
-    const user = userEvent.setup();
-    const onPromote = vi.fn();
-    const onRestore = vi.fn();
-    render(<DivergenceBanner activeLabel="v3" onPromote={onPromote} onRestore={onRestore} />);
-
-    expect(screen.getByText("v3")).toBeInTheDocument();
-    const banner = screen.getByText(/scenarios and rules still come from the source/i);
-    expect(banner).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /restore to source/i }));
-    expect(onRestore).toHaveBeenCalledTimes(1);
-
-    await user.click(screen.getByRole("button", { name: /promote to source/i }));
-    expect(onPromote).toHaveBeenCalledTimes(1);
   });
 });

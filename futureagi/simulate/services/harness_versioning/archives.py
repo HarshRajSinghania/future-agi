@@ -106,14 +106,7 @@ def read_archive(body: bytes) -> dict[str, bytes]:
     inflated = 0
     try:
         with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
-            for count, member in enumerate(archive, start=1):
-                if count > MAX_ARCHIVE_ENTRIES:
-                    raise _too_large()
-                if member.issym() or member.islnk() or member.isdev():
-                    raise _invalid(member.name)
-                path = _member_path(member.name)
-                if not member.isfile():
-                    continue
+            for path, member in _regular_members(archive):
                 if not path or path in files:
                     raise _invalid(member.name)
                 if len(files) >= MAX_ARCHIVE_FILES:
@@ -259,13 +252,55 @@ def put_archive(key: str, body: bytes) -> None:
 
 
 def archive_exists(key: str) -> bool:
+    return archive_size(key) is not None
+
+
+def archive_size(key: str) -> int | None:
+    """A stored archive's compressed size; ``None`` when it is gone."""
     try:
-        get_storage_client().stat_object(UPLOAD_BUCKET_NAME, key)
+        stat = get_storage_client().stat_object(UPLOAD_BUCKET_NAME, key)
     except S3Error as exc:
         if exc.code in {"NoSuchKey", "NoSuchBucket"}:
-            return False
+            return None
         raise
-    return True
+    return int(getattr(stat, "size", 0) or 0)
+
+
+def _regular_members(archive: tarfile.TarFile):
+    for count, member in enumerate(archive, start=1):
+        if count > MAX_ARCHIVE_ENTRIES:
+            raise _too_large()
+        if member.issym() or member.islnk() or member.isdev():
+            raise _invalid(member.name)
+        path = _member_path(member.name)
+        if member.isfile():
+            yield path, member
+
+
+def member_digests(body: bytes, chunk: int = 64 * 1024) -> dict[str, tuple[str, int]]:
+    """Each regular member's sha256 and size, read in chunks."""
+    digests: dict[str, tuple[str, int]] = {}
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
+        for path, member in _regular_members(archive):
+            if not path:
+                continue
+            digest = hashlib.sha256()
+            source = archive.extractfile(member)
+            while source is not None and (block := source.read(chunk)):
+                digest.update(block)
+            digests[path] = (digest.hexdigest(), member.size)
+    return digests
+
+
+def read_members(body: bytes, paths: set[str], max_size: int) -> dict[str, bytes]:
+    """The named regular members of at most ``max_size`` bytes."""
+    found: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
+        for path, member in _regular_members(archive):
+            if path in paths and member.size <= max_size:
+                source = archive.extractfile(member)
+                found[path] = source.read() if source is not None else b""
+    return found
 
 
 def get_archive(key: str) -> bytes:

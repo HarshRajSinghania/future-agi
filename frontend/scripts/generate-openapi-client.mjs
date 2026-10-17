@@ -736,6 +736,57 @@ export type ${jsonAlias} = JsonValueApi;`,
       "readonly label?: string | null;",
       "RunVersionLabelApi.label nullable",
     );
+    // Orval drops Swagger 2.0 x-nullable: a nudge's versions, outcome and answer are
+    // null until they apply, and a file's counts and reasons when unknown.
+    for (const [typeName, fields] of [
+      ["HarnessNudgeReplacementApi", [["trigger_label", "string"]]],
+      [
+        "HarnessNudgeFileApi",
+        [
+          ["previous_path", "string"],
+          ["additions", "number"],
+          ["deletions", "number"],
+          ["patch_omitted", "string"],
+        ],
+      ],
+      [
+        "HarnessNudgeFactsApi",
+        [
+          ["files_total?", "number"],
+          ["files_unavailable?", "string"],
+          ["environment_diff?", "HarnessNudgeFactsApiEnvironmentDiff"],
+          ["from_environment_version_id?", "string"],
+        ],
+      ],
+      [
+        "HarnessNudgeApi",
+        [
+          ["trigger_agent_version", "RunVersionLabelApi"],
+          ["base_agent_version", "RunVersionLabelApi"],
+          ["base_environment_version", "RunVersionLabelApi"],
+          ["base_suite_version", "RunVersionLabelApi"],
+          ["result_environment_version", "RunVersionLabelApi"],
+          ["result_suite_version", "RunVersionLabelApi"],
+          ["summary", "HarnessNudgeApiSummary"],
+          ["error", "HarnessNudgeErrorApi"],
+          ["closed_at", "string"],
+          ["replaced_by", "HarnessNudgeReplacementApi"],
+          ["card_message_id", "string"],
+          ["answered_by", "HarnessVersionPersonApi"],
+          ["answered_at", "string"],
+        ],
+      ],
+    ]) {
+      for (const [field, valueType] of fields) {
+        schemas = assertReplaceInNamedBlock(
+          schemas,
+          `export interface ${typeName} {`,
+          `${field}: ${valueType};`,
+          `${field}: ${valueType} | null;`,
+          `${typeName}.${field} nullable`,
+        );
+      }
+    }
     for (const typeName of ["TestExecutionItemResponseApi", "RunExecutionApi"]) {
       for (const field of [
         "environment_version",
@@ -1107,6 +1158,43 @@ export type ${jsonAlias} = JsonValueApi;`,
         "$1.nullish()$2.nullish()",
         `${response} run versions nullable`,
       );
+    }
+    // The same nullable nudge fields.
+    for (const response of [
+      "SimulateApiHarnessEnvironmentsNudgesResponseItem",
+      "SimulateApiHarnessEnvironmentsNudgesAnswerNudgeResponse",
+    ]) {
+      for (const [pattern, label] of [
+        [
+          /("(?:label|trigger_label|previous_path|patch_omitted|files_unavailable)": zod\.string\(\)\.min\(1\))/g,
+          "texts",
+        ],
+        [/("(?:additions|deletions|files_total)": zod\.number\(\))/g, "counts"],
+        [
+          /("(?:environment_diff|summary)": zod\.object\(\{\s*\}\)\.passthrough\(\))/g,
+          "documents",
+        ],
+        [
+          /("(?:from_environment_version_id|card_message_id)": zod\.string\(\)\.uuid\(\))/g,
+          "ids",
+        ],
+        [
+          /("(?:trigger_agent_version|base_agent_version|base_environment_version|base_suite_version|result_environment_version|result_suite_version|replaced_by|error|answered_by)": zod\.object\(\{[^{}]*\}\))/g,
+          "objects",
+        ],
+        [
+          /("(?:closed_at|answered_at)": zod\.string\(\)\.datetime\(\{[^}]*\}\))/g,
+          "times",
+        ],
+      ]) {
+        zod = assertReplaceRegexInNamedBlock(
+          zod,
+          `export const ${response} =`,
+          pattern,
+          "$1.nullable()",
+          `${response}.${label} nullable`,
+        );
+      }
     }
     for (const body of [
       "SimulateApiHarnessEnvironmentsRunBody",

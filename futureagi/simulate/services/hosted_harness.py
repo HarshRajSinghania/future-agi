@@ -1582,6 +1582,11 @@ def delete_environment(job: HostedHarnessJob) -> None:
         locked = HostedHarnessJob.no_workspace_objects.select_for_update().get(
             id=job.id
         )
+        from simulate.services.harness_versioning.nudges import (
+            close_environment_nudges,
+        )
+
+        close_environment_nudges(locked, code="environment_deleted")
         active_children = list(
             HostedHarnessJob.no_workspace_objects.select_for_update()
             .filter(environment=locked)
@@ -2438,6 +2443,14 @@ def record_cleanup(
                 *finish_deferred_delete(job),
             ]
         )
+        if (
+            job.environment_id is None
+            and job.test_execution_id is None
+            and job.state == HostedHarnessJob.State.COMPLETED
+        ):
+            from simulate.services.harness_versioning.nudges import schedule_reconcile
+
+            schedule_reconcile(job.id)
         if job.test_execution_id:
             execution_status = {
                 HostedHarnessJob.State.COMPLETED: TestExecution.ExecutionStatus.COMPLETED,

@@ -19,7 +19,6 @@ import AgentVersionsPanel from "../agents/AgentVersionsPanel";
 import { GroupHeading, Fact } from "./OverviewPrimitives";
 import AgentSummarySection from "./AgentSummarySection";
 import SourceReadCard from "./SourceReadCard";
-import AgentRefreshBanner from "./AgentRefreshBanner";
 import NextStepsChecklist from "./NextStepsChecklist";
 import StateSummary from "./StateSummary";
 import { UseCasesCard, AmendmentsCard } from "./OverviewCards";
@@ -46,8 +45,7 @@ const CONNECTOR_LABEL = {
  * title instead — they are labels, not content.
  *
  * Non-twin path only — the twin-backed sections are not ported. The
- * "agent moved ahead" refresh banner (unlocked envs), the getting-started
- * checklist (envs with no agent and no derived world yet) and the
+ * getting-started checklist (envs with no agent and no derived world yet) and the
  * source-to-sandbox map (envs with a derived world) render at the designer's
  * positions. An unlocked env's "Manage versions" opens its agent versions in a
  * side drawer overlaid on this tab (the user never leaves Overview); a locked
@@ -66,7 +64,6 @@ const dependsFromContract = (dependencies) =>
 export default function OverviewPanel({
   env,
   envState,
-  patch,
   onGo,
   agentConnected,
   locked = false,
@@ -173,12 +170,6 @@ export default function OverviewPanel({
           canManageVersions ? () => setAgentDrawerOpen(true) : undefined
         }
       />
-
-      {/* Optional re-derive prompt when the attached agent has moved ahead of
-          the world; only an unlocked env can re-derive. */}
-      {!locked && (
-        <AgentRefreshBanner env={env} envState={envState} patch={patch} />
-      )}
 
       {/* State-of-the-env summary tiles + latest run — the "how's this env doing
           right now?" answer. Each tile jumps to the tab it summarises. For a
@@ -288,7 +279,6 @@ export default function OverviewPanel({
 OverviewPanel.propTypes = {
   env: ENV_SHAPE.isRequired,
   envState: ENV_STATE_SHAPE,
-  patch: PropTypes.func,
   onGo: PropTypes.func,
   agentConnected: PropTypes.bool,
   locked: PropTypes.bool,

@@ -12,21 +12,25 @@ import {
   canMakeDefault,
   isStuck,
   isVersioningDisabled,
+  useAnswerNudge,
   useDiscardAgentVersion,
   useEnvironmentVersions,
   useMoveDefault,
+  useNudges,
   useRetryAgentVersion,
 } from "src/api/simulate-environments/versions";
 import {
   AGENT_VERSIONS_COPY as COPY,
   VERSIONS_COPY,
 } from "../workspace.constants";
+import { NudgeStateLine } from "../../buildEnvironment/console/NudgeCard";
 import { refusalText } from "../evals/refusalText";
 import MakeDefaultConfirm from "../versions/MakeDefaultConfirm";
 import VersionHeader from "../versions/VersionHeader";
 import AgentCredentials from "./AgentCredentials";
 import AgentSourceChange from "./AgentSourceChange";
 import { PreflightReport } from "./PreflightStatus";
+import RebuildAction from "./RebuildAction";
 import { activationText, named } from "./agentVersionStatus";
 
 // Only this environment's own changes: its default and the versions it
@@ -209,8 +213,8 @@ DiscardConfirm.propTypes = {
 
 // The environment's agent versions on real data: each version's check and
 // why it is or isn't the default, the default's credentials, and the actions
-// that move the default, set a version aside or check it again.
-// TODO: step 12 adds Rebuild / Skip for the newest version's nudge here.
+// that move the default, set a version aside or check it again, and the
+// environment nudge on the version that raised it.
 export default function AgentVersionsPanel({ env }) {
   const envId = env?.id;
   const enabled = Boolean(env?.versioning?.enabled);
@@ -220,6 +224,8 @@ export default function AgentVersionsPanel({ env }) {
   const move = useMoveDefault(envId);
   const discard = useDiscardAgentVersion(envId);
   const retry = useRetryAgentVersion(envId);
+  const { data: nudges } = useNudges(envId, { enabled });
+  const answer = useAnswerNudge(envId);
   const [confirming, setConfirming] = useState(null);
   const announcement = useCheckAnnouncement(data?.agent);
 
@@ -246,6 +252,15 @@ export default function AgentVersionsPanel({ env }) {
     discard.reset();
     retry.reset();
   };
+  const pendingNudge = nudges?.pendingEnvironment;
+  const answeringThis = answer.variables?.nudgeId === pendingNudge?.id;
+  // The newest environment nudge a version raised, to say it was skipped.
+  const latestNudge = (version) =>
+    nudges?.list.find(
+      (nudge) =>
+        nudge.target === "environment" &&
+        nudge.triggerAgentVersion?.id === version.id,
+    );
   const close = () => setConfirming(null);
   // The dialog stays mounted while it fades out, after the choice is cleared.
   const confirmMove = () =>
@@ -320,6 +335,37 @@ export default function AgentVersionsPanel({ env }) {
                       {failure}
                     </Typography>
                   )}
+                  {pendingNudge?.triggerAgentVersion?.id === version.id ? (
+                    <RebuildAction
+                      nudge={pendingNudge}
+                      label={named(version)}
+                      nudgesEnabled={env.versioning?.nudges_enabled !== false}
+                      answering={answeringThis && answer.isPending}
+                      error={
+                        answeringThis && answer.isError
+                          ? answer.error
+                          : undefined
+                      }
+                      onSkipNudge={() =>
+                        answer.mutate({
+                          nudgeId: pendingNudge.id,
+                          answer: "no",
+                        })
+                      }
+                    />
+                  ) : (
+                    latestNudge(version)?.state === "answered_no" && (
+                      <NudgeStateLine
+                        focus={
+                          answer.isSuccess &&
+                          answer.variables?.nudgeId === latestNudge(version).id
+                        }
+                        sx={{ typography: "s3", mt: 0.5 }}
+                      >
+                        {COPY.nudge.skipped}
+                      </NudgeStateLine>
+                    )
+                  )}
                 </Box>
               );
             })}
@@ -348,6 +394,9 @@ export default function AgentVersionsPanel({ env }) {
 AgentVersionsPanel.propTypes = {
   env: PropTypes.shape({
     id: PropTypes.string,
-    versioning: PropTypes.shape({ enabled: PropTypes.bool }),
+    versioning: PropTypes.shape({
+      enabled: PropTypes.bool,
+      nudges_enabled: PropTypes.bool,
+    }),
   }).isRequired,
 };

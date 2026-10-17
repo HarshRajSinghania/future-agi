@@ -35,19 +35,6 @@ export const AGENT_CARD_COPY = {
   expand: "Expand details",
   collapse: "Collapse details",
   copy: "Copy",
-  promoteTitle: "Update environment from this agent?",
-  promoteIntro: "The environment re-reads its contract, tools and rules from",
-  promoteImpactsLead: ". That means:",
-  cancel: "Cancel",
-  updateEnvironment: "Update environment",
-  restoreToSource: "Restore to source",
-};
-
-// The divergence sentence is split so the active label can render in a mono
-// span between the two halves.
-export const DIVERGENCE_COPY = {
-  lead: "Runs target",
-  trail: ". Scenarios and rules still come from the source.",
 };
 
 // Mock environment credentials the cards display. Named as mock so the live
@@ -56,28 +43,3 @@ export const MOCK_CREDENTIALS = {
   testPhoneNumber: "+1 (415) 555-0182",
   environmentToken: "fagi_sim_sk_9c2f4b7ae15d8306",
 };
-
-// The impact rows shown in the promote-to-source dialog. Data, not markup, so
-// the dialog stays a thin renderer.
-export const PROMOTE_IMPACT_ROWS = [
-  {
-    icon: "solar:document-text-linear",
-    title: "Contract regenerates",
-    body: "Tools and rules will change to whatever this agent declares.",
-  },
-  {
-    icon: "solar:layers-minimalistic-linear",
-    title: "Scenarios re-derive",
-    body: "Each goes back through pre-verification. Ones that no longer pass move to a stale archive.",
-  },
-  {
-    icon: "solar:shield-check-linear",
-    title: "Evaluations may shift",
-    body: "Preset evals referencing the old contract get re-evaluated. Custom evals are kept.",
-  },
-  {
-    icon: "solar:history-linear",
-    title: "Old source stays attached",
-    body: "It moves to Additional agents so you can still run against it and compare.",
-  },
-];

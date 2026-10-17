@@ -15,7 +15,7 @@ import {
 } from "./agentVersionsTestUtils";
 
 // Each hook is stubbed; tests set what the server answered.
-const state = { versions: undefined, loadError: null };
+const state = { versions: undefined, loadError: null, nudges: [] };
 vi.mock("src/api/simulate-environments/versions", async () => {
   const actual = await vi.importActual(
     "src/api/simulate-environments/versions",
@@ -40,6 +40,10 @@ vi.mock("src/api/simulate-environments/versions", async () => {
     useRetryAgentVersion: vi.fn(() => useFakeMutation("retry", seed)),
     useChangeCredentials: vi.fn(() => useFakeMutation("change")),
     useCreateAgentVersion: vi.fn(() => useFakeMutation("create")),
+    useNudges: vi.fn((envId, { enabled } = {}) => ({
+      data: enabled ? actual.toNudges(state.nudges) : undefined,
+    })),
+    useAnswerNudge: vi.fn(() => useFakeMutation("answer")),
   };
 });
 vi.mock("src/api/simulate-environments/environments", () => ({
@@ -124,6 +128,7 @@ const button = (id, name) => within(rowOf(id)).queryByRole("button", { name });
 beforeEach(() => {
   state.versions = VERSIONS;
   state.loadError = null;
+  state.nudges = [];
   resetMutations();
 });
 
@@ -648,5 +653,129 @@ describe("AgentVersionsPanel", () => {
     expect(
       screen.getByText("There's no default agent version yet."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("AgentVersionsPanel nudges", () => {
+  const nudge = (over) => ({
+    id: "n1",
+    target: "environment",
+    state: "pending",
+    facts: {
+      changed_files: [{ path: "tools/a.py", status: "modified" }],
+      variables: { added: [], removed: [], changed: ["API_KEY"], unknown: [] },
+      prompt_changed: true,
+    },
+    trigger_agent_version: { id: "a6", label: "v6" },
+    ...over,
+  });
+  // The nudge sits under the version's row, beside its refusals.
+  const actionOf = (id) =>
+    within(rowOf(id).parentElement).queryByTestId(/^rebuild-action-/);
+
+  it("puts Rebuild and Skip on the row of the version that raised the nudge only", () => {
+    state.nudges = [nudge()];
+    render(<AgentVersionsPanel env={ENV} />);
+    const action = actionOf("a6");
+    expect(action).toHaveTextContent(
+      "1 file changed · 1 variable changed · prompt changed",
+    );
+    expect(
+      within(action).getByRole("button", { name: "Rebuild" }),
+    ).toBeDisabled();
+    expect(
+      within(action).getByText("Rebuild isn't available yet."),
+    ).toBeVisible();
+    ["a7", "a5", "a4"].forEach((id) => expect(actionOf(id)).toBeNull());
+  });
+
+  it("skips through the answer endpoint", async () => {
+    state.nudges = [nudge()];
+    const user = userEvent.setup();
+    render(<AgentVersionsPanel env={ENV} />);
+    await user.click(
+      within(actionOf("a6")).getByRole("button", { name: "Skip: v6" }),
+    );
+    expect(mutations.answer.calls).toEqual([{ nudgeId: "n1", answer: "no" }]);
+  });
+
+  it("explains a refused skip", async () => {
+    state.nudges = [nudge()];
+    mutations.answer.answer = {
+      error: { statusCode: 409, error: "nudge_closed", state: "replaced" },
+    };
+    const user = userEvent.setup();
+    render(<AgentVersionsPanel env={ENV} />);
+    await user.click(
+      within(actionOf("a6")).getByRole("button", { name: "Skip: v6" }),
+    );
+    expect(within(actionOf("a6")).getByRole("alert")).toHaveTextContent(
+      "This update was already answered or closed.",
+    );
+  });
+
+  it("keeps a refused skip off the nudge that replaced it", async () => {
+    state.nudges = [nudge()];
+    mutations.answer.answer = {
+      error: { statusCode: 409, error: "nudge_closed", state: "replaced" },
+    };
+    const user = userEvent.setup();
+    const { rerender } = render(<AgentVersionsPanel env={ENV} />);
+    await user.click(
+      within(actionOf("a6")).getByRole("button", { name: "Skip: v6" }),
+    );
+    state.nudges = [nudge({ id: "n2" })];
+    rerender(<AgentVersionsPanel env={ENV} />);
+    expect(within(actionOf("a6")).queryByRole("alert")).toBeNull();
+    expect(
+      within(actionOf("a6")).getByRole("button", { name: "Skip: v6" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps a skip in flight off the nudge that replaced it", async () => {
+    state.nudges = [nudge()];
+    mutations.answer.answer = "pending";
+    const user = userEvent.setup();
+    const { rerender } = render(<AgentVersionsPanel env={ENV} />);
+    await user.click(
+      within(actionOf("a6")).getByRole("button", { name: "Skip: v6" }),
+    );
+    state.nudges = [nudge({ id: "n2" })];
+    rerender(<AgentVersionsPanel env={ENV} />);
+    expect(
+      within(actionOf("a6")).getByRole("button", { name: "Skip: v6" }),
+    ).toBeEnabled();
+  });
+
+  it("moves focus to the skipped line after a Skip here", async () => {
+    state.nudges = [nudge()];
+    const user = userEvent.setup();
+    const { rerender } = render(<AgentVersionsPanel env={ENV} />);
+    await user.click(
+      within(actionOf("a6")).getByRole("button", { name: "Skip: v6" }),
+    );
+    state.nudges = [nudge({ state: "answered_no" })];
+    rerender(<AgentVersionsPanel env={ENV} />);
+    const line = within(rowOf("a6").parentElement).getByRole("status");
+    expect(line).toHaveTextContent("Update skipped");
+    expect(line).toHaveFocus();
+  });
+
+  it("says a skipped update was skipped, with no actions", () => {
+    state.nudges = [nudge({ state: "answered_no" })];
+    render(<AgentVersionsPanel env={ENV} />);
+    expect(actionOf("a6")).toBeNull();
+    expect(
+      within(rowOf("a6").parentElement).getByText("Update skipped"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows nothing without a nudge, or for a suite nudge", () => {
+    state.nudges = [
+      nudge({ id: "n2", target: "suite", trigger_agent_version: null }),
+    ];
+    render(<AgentVersionsPanel env={ENV} />);
+    expect(screen.queryByTestId(/^rebuild-action-/)).toBeNull();
+    expect(screen.queryByText("Update skipped")).toBeNull();
   });
 });

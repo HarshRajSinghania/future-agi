@@ -147,15 +147,6 @@ export const packStatsFor = (env) => {
 export const ruleRowsFor = (env) =>
   (env?.rules || []).map((subject, i) => ({ id: `rule-${i}`, subject }));
 
-// The "agent moved ahead" refresh banner copy.
-export const REFRESH_COPY = {
-  title: (label) => `Agent ${label} is newer than this environment`,
-  body: (label) =>
-    `Optional: re-derive the world against ${label}, or keep running the current one.`,
-  action: "Refresh environment",
-  note: (label) => `Re-derived against agent ${label}`,
-};
-
 // The getting-started checklist copy. Steps are static prose; the counts and
 // env name are folded in at render.
 export const CHECKLIST_COPY = {

@@ -124,6 +124,29 @@ def _credential_warnings(runtime: HarnessAgentVersionRuntime) -> list[dict[str, 
     return warnings
 
 
+def _nudge_warnings(
+    environment: HostedHarnessJob, agent_version: Any, environment_version: Any
+) -> list[dict[str, Any]]:
+    """An unanswered or skipped update of this agent for the picked environment."""
+    from simulate.services.harness_versioning.nudges import open_nudge_for_run
+
+    nudge = open_nudge_for_run(environment.id, agent_version.id, environment_version.id)
+    if nudge is None:
+        return []
+    label = _message_label(
+        _agent_label(agent_version.version_name, agent_version.version_number)
+    )
+    environment_label = _message_label(_label(environment_version.version_number))
+    message = (
+        f"Agent {label} has an update for environment {environment_label} that"
+        " hasn't been answered"
+        if nudge.state == "pending"
+        else f"The update for agent {label} was skipped; environment"
+        f" {environment_label} wasn't rebuilt for it"
+    )
+    return [_warning("nudge_open", message, "agent")]
+
+
 def run_warnings(
     environment: HostedHarnessJob,
     pins: ResolvedPins | None,
@@ -171,7 +194,10 @@ def run_warnings(
         warnings.extend(_credential_warnings(pins.runtime))
     # TODO: source_unavailable (piece agent) once a GitHub commit can be checked
     # cheaply; today only a sandbox clone resolves one.
-    # TODO: nudge_open with nudges (step 12).
+    if agent_version is not None and built_with != agent_version.id:
+        warnings.extend(
+            _nudge_warnings(environment, agent_version, environment_version)
+        )
     if not _prepares(pins):
         return warnings
     if failed_before or (

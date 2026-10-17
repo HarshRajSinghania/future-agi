@@ -25,6 +25,9 @@ from simulate.serializers.harness_environment import (
     HarnessEnvironmentRunEvaluationsQueuedSerializer,
     HarnessEnvironmentRunEvaluationsSerializer,
     HarnessEnvironmentToolCallEvaluationSerializer,
+    HarnessNudgeAnswerSerializer,
+    HarnessNudgeListQuerySerializer,
+    HarnessNudgeSerializer,
     HarnessRunPlanQuerySerializer,
     HarnessRunPlanSerializer,
     HarnessSuiteMemberSerializer,
@@ -327,6 +330,56 @@ class HarnessEnvironmentViewSet(viewsets.ViewSet):
         if identifier is None:
             raise version_reads.version_not_found()
         return Response(version_reads.suite_members(job, identifier))
+
+    @validated_request(
+        query_serializer=HarnessNudgeListQuerySerializer,
+        responses={200: HarnessNudgeSerializer(many=True)},
+        reject_unknown_fields=True,
+    )
+    @action(detail=True, methods=["get"], url_path="nudges")
+    def nudges(self, request, pk=None):
+        """This environment's offers to rebuild after a change, newest first."""
+        from simulate.services.harness_versioning.nudges import list_nudges
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        states = request.validated_query_data.get("state")
+        return Response(list_nudges(job, states=states))
+
+    @validated_request(
+        request_serializer=HarnessNudgeAnswerSerializer,
+        responses={200: HarnessNudgeSerializer},
+        reject_unknown_fields=True,
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"nudges/(?P<nudge_id>[0-9a-fA-F-]{36})/answer",
+    )
+    def answer_nudge(self, request, pk=None, nudge_id=None):
+        """Skip ("no") or Rebuild ("yes") a pending nudge; returns the nudge."""
+        from simulate.services.harness_versioning.nudges import (
+            answer_nudge,
+            nudge_not_found,
+        )
+
+        version_reads.require_versioning()
+        job = self._job(request, pk)
+        if job is None:
+            return self._not_found()
+        identifier = _uuid_or_none(nudge_id)
+        if identifier is None:
+            raise nudge_not_found()
+        return Response(
+            answer_nudge(
+                job,
+                identifier,
+                answer=request.validated_data["answer"],
+                user=request.user,
+            )
+        )
 
     @validated_request(
         query_serializer=HarnessRunPlanQuerySerializer,

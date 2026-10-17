@@ -193,17 +193,3 @@ export function StatPill({ value, label }) {
   );
 }
 StatPill.propTypes = { value: PropTypes.node, label: PropTypes.string };
-
-// One impact line in the promote dialog: icon, title, explanatory body.
-export function ImpactRow({ icon, title, body }) {
-  return (
-    <Stack direction="row" alignItems="flex-start" spacing={1.25}>
-      <Iconify icon={icon} width={15} sx={{ color: "text.subtitle", mt: "2px", flexShrink: 0 }} />
-      <Box>
-        <Typography sx={{ typography: "s2", fontWeight: "fontWeightSemiBold" }}>{title}</Typography>
-        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{body}</Typography>
-      </Box>
-    </Stack>
-  );
-}
-ImpactRow.propTypes = { icon: PropTypes.string, title: PropTypes.string, body: PropTypes.string };
