@@ -15,6 +15,7 @@ To drop the translation entirely, delete this module and its one call site in
 # through unchanged, so provider-native reasons and future codes are preserved.
 _SDK_TO_CANONICAL = {
     "simulator_end_call": "customer-ended-call",
+    "transferred": "assistant-forwarded-call",
     "customer_end_call": "customer-ended-call",
     "assistant_end_call": "assistant-ended-call",
     "target_end_call": "assistant-ended-call",
