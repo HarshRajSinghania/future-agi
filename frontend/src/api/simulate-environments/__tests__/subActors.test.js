@@ -10,11 +10,15 @@ describe("sub-actors", () => {
     const world = stageOutputsToWorld([
       {
         kind: "cast",
-        data: { sub_actors: [{ id: "subactor_service", name: "Service", role: "behind a tool" }] },
+        data: {
+          sub_actors: [
+            { id: "subactor_service", name: "Service", role: "behind a tool", behaviour: { prompt: "fails" }, origin: "derived" },
+          ],
+        },
       },
     ]);
     expect(world.cast.subActors).toEqual([
-      { id: "subactor_service", name: "Service", role: "behind a tool", channel: "" },
+      { id: "subactor_service", name: "Service", role: "behind a tool", channel: "", prompt: "fails", origin: "derived" },
     ]);
     expect(stageOutputsToWorld([{ kind: "contract", data: {} }])).toBeNull();
   });
@@ -37,7 +41,7 @@ describe("sub-actors", () => {
     });
     expect(chat.turns[0]).toMatchObject({ role: "sub_actor", speakerName: "Friend" });
 
-    const [row] = functionCallTranscriptRows([{ name: "book", error: "fault:timeout:subactor_service" }]);
+    const [row] = functionCallTranscriptRows([{ name: "book", fault: "timeout", sub_actor: "subactor_service" }]);
     expect(row.content).toContain("injected timeout");
     const [plain] = functionCallTranscriptRows([{ name: "book" }]);
     expect(plain.content).not.toContain("injected");

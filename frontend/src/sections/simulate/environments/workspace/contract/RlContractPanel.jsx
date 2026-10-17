@@ -4,9 +4,7 @@ import { Box, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { episodeContract } from "src/api/simulate-environments/_fixtures/rlContract";
 import SectionCard from "../../components/SectionCard";
-// Actors section (ActorsPanel) is commented out below — it was a dummy cast from
-// the fixture ACTOR_LIBRARY, not backed by §6. To be picked up later.
-// import ActorsPanel from "./ActorsPanel";
+import ActorsPanel from "./ActorsPanel";
 import CapabilityGraph from "../overview/CapabilityGraph";
 import WorldInternalsSection from "./WorldInternalsSection";
 
@@ -141,13 +139,10 @@ export default function RlContractPanel({ env, envState, patch, locked = false, 
         </Stack>
       </SectionCard>
 
-      {/*
-        Actors section removed — it was a dummy cast from the fixture
-        ACTOR_LIBRARY (not backed by §6), and actors were also dropped from the
-        capability graph (now Personas only). To be picked up later if a real
-        actors field lands.
-        <ActorsPanel env={env} envState={envState} patch={patch} onGo={onGo} locked={locked} />
-      */}
+      {/* Only an environment's own cast: the fixture library is not shown as if it were real. */}
+      {env.cast?.subActors?.length > 0 && (
+        <ActorsPanel env={env} envState={envState} patch={patch} locked={locked} />
+      )}
     </Box>
   );
 }

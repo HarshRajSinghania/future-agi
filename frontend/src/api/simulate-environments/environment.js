@@ -140,7 +140,14 @@ export function stageOutputsToWorld(stageOutputs = []) {
   }
   if (scenarios.length) world.scenarios = scenarios;
   const subActors = (castOut?.sub_actors || [])
-    .map((one) => ({ id: one?.id, name: one?.name, role: one?.role || "", channel: one?.channel || "" }))
+    .map((one) => ({
+      id: one?.id,
+      name: one?.name,
+      role: one?.role || "",
+      channel: one?.channel || "",
+      prompt: one?.behaviour?.prompt || "",
+      origin: one?.origin || "",
+    }))
     .filter((one) => one.id);
   if (subActors.length) world.cast = { subActors };
 

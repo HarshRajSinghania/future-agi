@@ -17,7 +17,7 @@ import AgentRefreshBanner from "./AgentRefreshBanner";
 import NextStepsChecklist from "./NextStepsChecklist";
 import StateSummary from "./StateSummary";
 import { UseCasesCard, AmendmentsCard } from "./OverviewCards";
-import { CastCard, DependsOnCard } from "./WorldCards";
+import { DependsOnCard } from "./WorldCards";
 
 // Display names for the real connector (§1/§6 `settings.agent.connector`,
 // surfaced here as `envState.agent.typeId` — the job poll's detected connector).
@@ -164,11 +164,6 @@ export default function OverviewPanel({ env, envState, patch, onGo, agentConnect
             dependsOn={backedWorld ? dependsFromContract(backedWorld.dependencies) : contract.dependsOn}
           />
         </Grid>
-        {env.cast?.subActors?.length > 0 && (
-          <Grid item xs={12} md={5}>
-            <CastCard cast={env.cast} scenarios={envState?.scenarios} />
-          </Grid>
-        )}
       </Grid>
 
       {/* Agent version-management drawer — commented out with the "Manage

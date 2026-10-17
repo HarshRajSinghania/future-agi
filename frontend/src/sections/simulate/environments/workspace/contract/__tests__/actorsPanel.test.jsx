@@ -107,4 +107,19 @@ describe("ActorsPanel create / edit / remove flow", () => {
     expect(screen.queryByRole("button", { name: /remove from this environment/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /edit: saving creates a new version/i })).toBeNull();
   });
+
+  it("shows a built environment's own cast read-only, with the scenarios that bring each in", () => {
+    const env = {
+      ...voiceEnv,
+      cast: { subActors: [{ id: "rep", name: "Human Support Specialist", role: "answers transfers", channel: "transfer_leg", prompt: "Greets the caller" }] },
+    };
+    const scenarios = [{ subActors: ["rep"] }, { subActors: [] }];
+    render(<ActorsPanel env={env} envState={{ scenarios }} patch={vi.fn()} onGo={vi.fn()} />);
+    expect(screen.getByText("Human Support Specialist")).toBeInTheDocument();
+    expect(screen.getByText(/In this environment \(1\)/)).toBeInTheDocument();
+    expect(screen.getByText("used by 1")).toBeInTheDocument();
+    expect(screen.queryByText("Fraud desk")).toBeNull();
+    expect(screen.queryByRole("button", { name: /create actor/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /remove from this environment/i })).toBeNull();
+  });
 });

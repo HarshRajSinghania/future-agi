@@ -3,7 +3,7 @@
 // twin service generates (t.agentType !== "twin_backed").
 // TODO: drop this fixture once the templates endpoint lands and the
 // query hook reads from axios instead.
-import { castForTemplate } from "./templateCasts";
+import { castForTemplate } from "./actors";
 
 const TEMPLATES = [
   {

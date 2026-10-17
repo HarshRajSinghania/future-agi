@@ -37,36 +37,6 @@ export function SeededDataCard({ env }) {
 }
 SeededDataCard.propTypes = { env: ENV_SHAPE.isRequired };
 
-// The world's sub-actors, each with how many scenarios bring it in.
-export function CastCard({ cast, scenarios }) {
-  const bound = (id) => (scenarios || []).filter((one) => (one.subActors || []).includes(id)).length;
-  return (
-    <SectionCard title={OVERVIEW_COPY.castTitle} subtitle={OVERVIEW_COPY.castSubtitle}>
-      <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-        {cast.subActors.map((one) => (
-          <Stack key={one.id} direction="row" alignItems="center" spacing={2} sx={{ px: 2.5, py: 1.25 }}>
-            <Box flex={1} minWidth={0}>
-              <Typography sx={{ typography: "s2", fontWeight: "fontWeightSemiBold" }}>{one.name || one.id}</Typography>
-              {one.role && <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{one.role}</Typography>}
-            </Box>
-            <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-              {OVERVIEW_COPY.castUsedBy(bound(one.id))}
-            </Typography>
-          </Stack>
-        ))}
-      </Stack>
-    </SectionCard>
-  );
-}
-CastCard.propTypes = {
-  cast: PropTypes.shape({
-    subActors: PropTypes.arrayOf(
-      PropTypes.shape({ id: PropTypes.string, name: PropTypes.string, role: PropTypes.string }),
-    ),
-  }).isRequired,
-  scenarios: PropTypes.array,
-};
-
 // The services built and torn down with the environment.
 export function DependsOnCard({ dependsOn }) {
   const rows = dependsOn || [];
