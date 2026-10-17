@@ -734,19 +734,21 @@ class TestAmend:
         document = json.loads(replayed[f"scenarios/{NAMES[0]}/scenario.json"])
         assert document["background_noise"] == "street"
 
-    def test_an_amend_before_versions_exist_keeps_the_legacy_overwrite(
+    def test_an_amend_before_versions_exist_writes_a_new_unversioned_object(
         self, user, workspace, storage
     ):
         environment = _environment(user, workspace, "amend-legacy")
         key = environment.payload["metadata"]["authoring_object_key"]
-        storage.objects[key] = _authoring()
+        original = storage.objects[key] = _authoring()
 
         returned = rewrite_authoring_scenarios(
             environment,
             [_scenario(NAMES[0], background_noise="street"), _scenario(NAMES[1])],
         )
 
-        assert returned == key
+        assert returned != key
+        assert returned == environment.payload["metadata"]["authoring_object_key"]
+        assert storage.objects[key] == original
         assert not _versions(HarnessSuiteVersion, environment)
 
 

@@ -11,8 +11,6 @@ import SourceToSandboxMap from "../SourceToSandboxMap";
 describe("Overview extras wired into OverviewPanel", () => {
   const connected = {
     agent: { via: "endpoint", values: {} },
-    agentVersions: [{ label: "v1" }],
-    activeAgentVersion: "v1",
     scenarios: [],
   };
 
@@ -30,7 +28,7 @@ describe("Overview extras wired into OverviewPanel", () => {
       <OverviewPanel
         env={{ ...MOCK_WORLD, tools: [], rules: [], seed: { tables: [] } }}
         envState={{ scenarios: [] }}
-       
+
         onGo={vi.fn()}
         agentConnected={false}
       />
@@ -67,7 +65,7 @@ describe("NextStepsChecklist", () => {
     renderChecklist({ onGo });
 
     // Connecting an agent is deferred (no Agents tab) — the CTA is disabled
-    // behind the coming-soon tooltip rather than a button that no-ops.
+    // rather than a button that no-ops.
     expect(screen.getByRole("button", { name: /connect agent/i })).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: /add scenarios/i }));

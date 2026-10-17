@@ -70,6 +70,18 @@ def test_nudge_activities_run_on_the_default_queue():
         assert wrapper not in registry.get_activities_for_queue(QUEUE_RUNNER)
 
 
+def test_the_removed_authoring_activity_is_not_registered():
+    from simulate.temporal.constants import QUEUE_RUNNER
+
+    names = {
+        definition.name
+        for activity in registry.get_activities_for_queue(QUEUE_RUNNER)
+        if (definition := getattr(activity, "__temporal_activity_definition", None))
+    }
+    assert "launch_hosted_harness_job" in names
+    assert "author_hosted_harness_job" not in names
+
+
 def test_usage_temporal_registry_prefers_cloud(monkeypatch):
     cloud_registry = MagicMock()
     import_module = MagicMock(

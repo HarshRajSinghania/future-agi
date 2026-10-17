@@ -1840,6 +1840,8 @@ class HostedHarnessGateway:
                 retryable=True,
             ) from exc
 
+    # TODO: no caller since the authoring activity was removed; delete with its
+    # sandbox helpers.
     def author(self, job: HostedHarnessJob) -> bytes:
         """Run ALK authoring inside an isolated managed sandbox.
 
@@ -5303,21 +5305,25 @@ def rewrite_authoring_scenarios(
         if recorded is None:
             raise AuthoringArchiveKept("the change could not be saved")
         return recorded.pair_key
-    client.put_object(
-        bucket_name=UPLOAD_BUCKET_NAME,
-        object_name=object_key,
-        data=io.BytesIO(rewritten),
-        length=len(rewritten),
-        content_type="application/gzip",
-    )
-    payload = dict(job.payload or {})
-    metadata = dict(payload.get("metadata") or {})
-    metadata["authoring_revision"] = authoring_content_digest(rewritten)
-    payload["metadata"] = metadata
-    job.payload = payload
-    job.content_updated_at = timezone.now()
-    job.save(update_fields=["payload", "content_updated_at", "updated_at"])
-    return object_key
+    # A new content-keyed object; an archive a run replayed is never overwritten.
+    from simulate.services.harness_versioning import archives
+
+    new_key = archives.pair_key(job.organization_id, job.id, rewritten)
+    archives.put_archive(new_key, rewritten)
+    with transaction.atomic():
+        locked = HostedHarnessJob.no_workspace_objects.select_for_update().get(
+            pk=job.pk
+        )
+        payload = dict(locked.payload or {})
+        metadata = dict(payload.get("metadata") or {})
+        metadata["authoring_object_key"] = new_key
+        metadata["authoring_revision"] = authoring_content_digest(rewritten)
+        payload["metadata"] = metadata
+        locked.payload = payload
+        locked.content_updated_at = timezone.now()
+        locked.save(update_fields=["payload", "content_updated_at", "updated_at"])
+    job.refresh_from_db()
+    return new_key
 
 
 def rewrite_conversation_scenarios(job: HostedHarnessJob, suite: list[dict]) -> int:
@@ -5604,24 +5610,11 @@ def _note_freeze_failure(job: HostedHarnessJob, attempt_number: int) -> None:
 
 
 def store_authoring_archive(
-    job: HostedHarnessJob,
-    body: bytes,
-    *,
-    advance_lifecycle: bool = True,
-    in_place: bool = False,
+    job: HostedHarnessJob, body: bytes, *, advance_lifecycle: bool = True
 ) -> str:
-    """Persist fresh authoring output and attach its opaque key to the hosted job.
-
-    ``in_place`` overwrites the environment's current archive object instead of adding one, so
-    an edit leaves exactly one copy.
-    """
+    """Persist fresh authoring output and attach its opaque key to the hosted job."""
     digest = hashlib.sha256(body).hexdigest()
-    current = str(((job.payload or {}).get("metadata") or {}).get("authoring_object_key") or "")
-    object_key = (
-        current
-        if in_place and current
-        else f"harness-authoring/{job.organization_id}/{job.id}/{digest}.tar.gz"
-    )
+    object_key = f"harness-authoring/{job.organization_id}/{job.id}/{digest}.tar.gz"
     client = get_storage_client()
     ensure_bucket(client, UPLOAD_BUCKET_NAME)
     client.put_object(

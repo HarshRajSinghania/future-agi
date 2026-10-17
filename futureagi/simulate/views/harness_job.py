@@ -26,7 +26,6 @@ from simulate.serializers.harness_job import (
     HarnessRunCreateSerializer,
     HarnessScenarioAmendSerializer,
     HarnessSecretFileUploadResponseSerializer,
-    HarnessSecretValuesResponseSerializer,
     HarnessSecretValuesSerializer,
     HarnessSourceUploadResponseSerializer,
 )
@@ -37,7 +36,6 @@ from simulate.serializers.hosted_harness_conversation import (
 from simulate.services.harness_credentials import (
     HOSTED_FILE_KEY_PREFIX,
     credential_file_ref,
-    mint_secret_refs,
     request_scope,
     store_credential_file,
 )
@@ -220,28 +218,19 @@ class HarnessJobViewSet(viewsets.ViewSet):
 
     @validated_request(
         request_serializer=HarnessSecretValuesSerializer,
-        responses={
-            201: HarnessSecretValuesResponseSerializer,
-            202: HarnessAgentCredentialsResponseSerializer,
-        },
+        responses={202: HarnessAgentCredentialsResponseSerializer},
         reject_unknown_fields=True,
     )
     @action(detail=False, methods=["post"], url_path="secret-values")
     @swagger_auto_schema(
         request_body=HarnessSecretValuesSerializer,
-        responses={
-            201: HarnessSecretValuesResponseSerializer,
-            202: HarnessAgentCredentialsResponseSerializer,
-        },
+        responses={202: HarnessAgentCredentialsResponseSerializer},
     )
     def secret_values(self, request):
-        """Persist uploaded agent values encrypted and return opaque hosted refs.
+        """Make an environment's next agent version from new credential values.
 
-        Values are intentionally separate from platform/model-provider settings. They are scoped
-        to the submitting organization and only resolved inside the selected hosted job.
-
-        With ``environment_id`` the values (and staged ``files``) make that environment's
-        next agent version instead; it is checked next and returned with 202.
+        The values (and staged ``files``) are stored encrypted on the new version, which
+        is checked next and returned with 202.
         """
         organization, _workspace = request_scope(request)
         if organization is None:
@@ -249,12 +238,7 @@ class HarnessJobViewSet(viewsets.ViewSet):
                 {"detail": "an organization is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if request.validated_data.get("environment_id") is not None:
-            return self._agent_credentials(request, organization)
-        refs = mint_secret_refs(
-            organization, request.validated_data["environment_values"]
-        )
-        return Response({"secret_refs": refs}, status=status.HTTP_201_CREATED)
+        return self._agent_credentials(request, organization)
 
     @staticmethod
     def _agent_credentials(request, organization):

@@ -188,7 +188,6 @@ export function harnessEnvState(item, world) {
       : []);
 
   const connector = item?.credentials?.detected_connectors?.[0] || "auto";
-  const version = { label: "v1", note: "First run of this environment.", createdAt: status.updated_at };
 
   return {
     agent: {
@@ -201,10 +200,6 @@ export function harnessEnvState(item, world) {
     scenarioSource: "harness",
     evals: [],
     runs: [],
-    agentVersions: [version],
-    envVersions: [version],
-    activeAgentVersion: "v1",
-    activeEnvVersion: "v1",
   };
 }
 

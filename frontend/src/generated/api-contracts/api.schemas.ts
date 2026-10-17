@@ -18912,21 +18912,13 @@ export type HarnessSecretValuesApiEnvironmentValues = { [key: string]: string };
 export interface HarnessSecretValuesApi {
   /** Values by name; may be empty only when an environment's files are given. */
   environment_values: HarnessSecretValuesApiEnvironmentValues;
-  /** Change this environment's agent credentials: the values make its next agent version instead of being stored as secret refs. */
-  environment_id?: string;
+  /** Change this environment's agent credentials: the values make its next agent version. */
+  environment_id: string;
   /**
    * Credential files staged through secret-files/, by their refs.
    * @maxItems 10
    */
   files?: SecretReferenceApi[];
-}
-
-export type HarnessSecretValuesResponseApiSecretRefs = {
-  [key: string]: SecretReferenceApi;
-};
-
-export interface HarnessSecretValuesResponseApi {
-  secret_refs: HarnessSecretValuesResponseApiSecretRefs;
 }
 
 export interface HarnessSourceUploadResponseApi {

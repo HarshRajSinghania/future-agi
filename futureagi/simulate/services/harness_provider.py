@@ -1226,6 +1226,7 @@ def _environment_agent_maker(
     return make
 
 
+# TODO: delete with the HARNESS_VERSIONING_ENABLED kill switch.
 def _secret_ref_minter(secret_values):
     """A hook storing the values after the request digest, so a replay mints none."""
     from simulate.services.harness_credentials import mint_secret_refs

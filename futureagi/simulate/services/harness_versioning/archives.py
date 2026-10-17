@@ -230,7 +230,7 @@ def suite_key(organization_id: object, job_id: object, body: bytes) -> str:
 
 
 def sealed_key(organization_id: object, job_id: object, body: bytes) -> str:
-    # TODO: the run-start bundle cache replaces this interim copy in step 6.
+    # Content-addressed copy of a build's sealed bundle; READY cache rows point at it.
     return f"harness-sealed/{organization_id}/{job_id}/{sha256_hex(body)}.tar.gz"
 
 

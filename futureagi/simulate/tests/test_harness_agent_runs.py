@@ -564,26 +564,25 @@ class TestSecretValues:
     def _post(self, auth_client, body):
         return auth_client.post(SECRET_VALUES, body, format="json")
 
-    def test_without_an_environment_refs_are_stored_as_before(self, auth_client, user):
+    def test_without_an_environment_nothing_is_stored(self, auth_client, user):
         before = HostedHarnessSecret.objects.count()
 
         response = self._post(
             auth_client, {"environment_values": {"OPENAI_API_KEY": "val-openai-new"}}
         )
-        empty = self._post(auth_client, {"environment_values": {}})
-
-        assert response.status_code == 201
-        [(alias, ref)] = response.json()["secret_refs"].items()
-        assert alias == "OPENAI_API_KEY"
-        assert ref["key"].startswith("harness-openai_api_key-")
-        assert HostedHarnessSecret.objects.count() == before + 1
-        assert empty.status_code == 400
-        assert (
-            self._post(
-                auth_client, {"environment_values": {"A": "b"}, "files": []}
-            ).status_code
-            == 400
+        empty = self._post(
+            auth_client,
+            {
+                "environment_id": "00000000-0000-0000-0000-000000000000",
+                "environment_values": {},
+            },
         )
+
+        assert response.status_code == 400
+        assert empty.status_code == 400
+        assert "environment_id" in response.content.decode()
+        assert "val-openai-new" not in response.content.decode()
+        assert HostedHarnessSecret.objects.count() == before
 
     def test_with_an_environment_it_makes_the_next_agent_version(
         self,

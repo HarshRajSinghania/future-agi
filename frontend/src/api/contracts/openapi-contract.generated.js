@@ -28719,9 +28719,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         queryParameters: {},
         responses: {
-          201: {
-            $ref: "#/definitions/HarnessSecretValuesResponse",
-          },
           202: {
             $ref: "#/definitions/HarnessAgentCredentialsResponse",
           },
@@ -64669,7 +64666,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
       },
     },
     HarnessSecretValues: {
-      required: ["environment_values"],
+      required: ["environment_values", "environment_id"],
       type: "object",
       properties: {
         environment_values: {
@@ -64686,7 +64683,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         environment_id: {
           title: "Environment id",
           description:
-            "Change this environment's agent credentials: the values make its next agent version instead of being stored as secret refs.",
+            "Change this environment's agent credentials: the values make its next agent version.",
           type: "string",
           format: "uuid",
         },
@@ -64698,19 +64695,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
             $ref: "#/definitions/SecretReference",
           },
           maxItems: 10,
-        },
-      },
-    },
-    HarnessSecretValuesResponse: {
-      required: ["secret_refs"],
-      type: "object",
-      properties: {
-        secret_refs: {
-          title: "Secret refs",
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/SecretReference",
-          },
         },
       },
     },

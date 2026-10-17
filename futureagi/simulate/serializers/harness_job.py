@@ -924,10 +924,9 @@ class HarnessSecretValuesSerializer(serializers.Serializer):
         ),
     )
     environment_id = serializers.UUIDField(
-        required=False,
         help_text=(
             "Change this environment's agent credentials: the values make its next"
-            " agent version instead of being stored as secret refs."
+            " agent version."
         ),
     )
     files = serializers.ListField(
@@ -938,20 +937,7 @@ class HarnessSecretValuesSerializer(serializers.Serializer):
     )
 
     def validate(self, attrs):
-        if attrs.get("environment_id") is None:
-            if "files" in attrs:
-                raise serializers.ValidationError(
-                    {"files": "files are only taken with environment_id"}
-                )
-            if not attrs["environment_values"]:
-                raise serializers.ValidationError(
-                    {
-                        "environment_values": [
-                            self.fields["environment_values"].error_messages["empty"]
-                        ]
-                    }
-                )
-        elif not attrs["environment_values"] and not attrs.get("files"):
+        if not attrs["environment_values"] and not attrs.get("files"):
             raise serializers.ValidationError(
                 {"environment_values": "give at least one value or file"}
             )
@@ -962,10 +948,6 @@ class HarnessSecretValuesSerializer(serializers.Serializer):
         if problems:
             raise serializers.ValidationError(problems[0])
         return values
-
-
-class HarnessSecretValuesResponseSerializer(serializers.Serializer):
-    secret_refs = serializers.DictField(child=SecretReferenceSerializer())
 
 
 # ── Read DTO response serializers ───────────────────────────────────────

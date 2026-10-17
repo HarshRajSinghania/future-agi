@@ -39225,12 +39225,9 @@ export const SimulateApiHarnessJobsSecretFileUploadBody = zod.object({
 });
 
 /**
- * Values are intentionally separate from platform/model-provider settings. They are scoped
-to the submitting organization and only resolved inside the selected hosted job.
-
-With ``environment_id`` the values (and staged ``files``) make that environment's
-next agent version instead; it is checked next and returned with 202.
- * @summary Persist uploaded agent values encrypted and return opaque hosted refs.
+ * The values (and staged ``files``) are stored encrypted on the new version, which
+is checked next and returned with 202.
+ * @summary Make an environment's next agent version from new credential values.
  */
 export const simulateApiHarnessJobsSecretValuesBodyEnvironmentValuesMaxOne = 65536;
 
@@ -39255,9 +39252,8 @@ export const SimulateApiHarnessJobsSecretValuesBody = zod.object({
   environment_id: zod
     .string()
     .uuid()
-    .optional()
     .describe(
-      "Change this environment's agent credentials: the values make its next agent version instead of being stored as secret refs.",
+      "Change this environment's agent credentials: the values make its next agent version.",
     ),
   files: zod
     .array(

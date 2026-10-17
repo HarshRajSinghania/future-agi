@@ -51853,8 +51853,8 @@
         "/simulate/api/harness-jobs/secret-values/": {
             "post": {
                 "operationId": "simulate_api_harness-jobs_secret_values",
-                "summary": "Persist uploaded agent values encrypted and return opaque hosted refs.",
-                "description": "Values are intentionally separate from platform/model-provider settings. They are scoped\nto the submitting organization and only resolved inside the selected hosted job.\n\nWith ``environment_id`` the values (and staged ``files``) make that environment's\nnext agent version instead; it is checked next and returned with 202.",
+                "summary": "Make an environment's next agent version from new credential values.",
+                "description": "The values (and staged ``files``) are stored encrypted on the new version, which\nis checked next and returned with 202.",
                 "parameters": [
                     {
                         "name": "data",
@@ -51866,12 +51866,6 @@
                     }
                 ],
                 "responses": {
-                    "201": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/HarnessSecretValuesResponse"
-                        }
-                    },
                     "202": {
                         "description": "",
                         "schema": {
@@ -128088,7 +128082,8 @@
         },
         "HarnessSecretValues": {
             "required": [
-                "environment_values"
+                "environment_values",
+                "environment_id"
             ],
             "type": "object",
             "properties": {
@@ -128104,7 +128099,7 @@
                 },
                 "environment_id": {
                     "title": "Environment id",
-                    "description": "Change this environment's agent credentials: the values make its next agent version instead of being stored as secret refs.",
+                    "description": "Change this environment's agent credentials: the values make its next agent version.",
                     "type": "string",
                     "format": "uuid"
                 },
@@ -128115,21 +128110,6 @@
                         "$ref": "#/definitions/SecretReference"
                     },
                     "maxItems": 10
-                }
-            }
-        },
-        "HarnessSecretValuesResponse": {
-            "required": [
-                "secret_refs"
-            ],
-            "type": "object",
-            "properties": {
-                "secret_refs": {
-                    "title": "Secret refs",
-                    "type": "object",
-                    "additionalProperties": {
-                        "$ref": "#/definitions/SecretReference"
-                    }
                 }
             }
         },

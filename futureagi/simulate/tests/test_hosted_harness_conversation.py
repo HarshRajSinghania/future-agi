@@ -711,9 +711,9 @@ def test_completed_chat_turn_publishes_its_checkpoint_to_the_environment(
         promote, "apply_async", lambda args, **_: promote._original_func(*args)
     )
     environment = _run_environment(user, workspace, "chat-publish")
-    _prime_environment_archive(
-        environment, storage, _chat_checkpoint(NAMES[:2], one_liner="original")
-    )
+    original = _chat_checkpoint(NAMES[:2], one_liner="original")
+    _prime_environment_archive(environment, storage, original)
+    old_key = environment.payload["metadata"]["authoring_object_key"]
     conversation, command, _ = enqueue_message(
         environment, content="Add a PIN scenario", client_request_id="add-pin"
     )
@@ -764,9 +764,13 @@ def test_completed_chat_turn_publishes_its_checkpoint_to_the_environment(
     outputs = {one["kind"]: one["data"] for one in environment.stage_outputs}
     assert [one["name"] for one in outputs["scenarios"]] == list(NAMES)
     assert outputs["contract"]["one_liner"] == "finished"
-    promoted = _archive_paths(
-        storage.objects[environment.payload["metadata"]["authoring_object_key"]]
+    new_key = environment.payload["metadata"]["authoring_object_key"]
+    assert storage.objects[old_key] == original
+    assert new_key == (
+        f"harness-authoring/{environment.organization_id}/{environment.id}/"
+        f"{hashlib.sha256(storage.objects[new_key]).hexdigest()}.tar.gz"
     )
+    promoted = _archive_paths(storage.objects[new_key])
     assert f"scenarios/{NAMES[2]}/ready.py" in promoted
     assert not [path for path in promoted if path.startswith(".") or path == "cost.json"]
 

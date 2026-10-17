@@ -634,7 +634,6 @@ import type {
   HarnessScenarioOperationResponseApi,
   HarnessSecretFileUploadResponseApi,
   HarnessSecretValuesApi,
-  HarnessSecretValuesResponseApi,
   HarnessSourceUploadResponseApi,
   HarnessSuiteMemberApi,
   HarnessUsageRequestApi,
@@ -60167,11 +60166,6 @@ export const simulateApiHarnessJobsSecretFileUpload = async (
   );
 };
 
-export type simulateApiHarnessJobsSecretValuesResponse201 = {
-  data: HarnessSecretValuesResponseApi;
-  status: 201;
-};
-
 export type simulateApiHarnessJobsSecretValuesResponse202 = {
   data: HarnessAgentCredentialsResponseApi;
   status: 202;
@@ -60179,15 +60173,13 @@ export type simulateApiHarnessJobsSecretValuesResponse202 = {
 
 export type simulateApiHarnessJobsSecretValuesResponseDefault = {
   data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 201 | 202>;
+  status: Exclude<HTTPStatusCodes, 202>;
 };
 
-export type simulateApiHarnessJobsSecretValuesResponseSuccess = (
-  | simulateApiHarnessJobsSecretValuesResponse201
-  | simulateApiHarnessJobsSecretValuesResponse202
-) & {
-  headers: Headers;
-};
+export type simulateApiHarnessJobsSecretValuesResponseSuccess =
+  simulateApiHarnessJobsSecretValuesResponse202 & {
+    headers: Headers;
+  };
 export type simulateApiHarnessJobsSecretValuesResponseError =
   simulateApiHarnessJobsSecretValuesResponseDefault & {
     headers: Headers;
@@ -60202,12 +60194,9 @@ export const getSimulateApiHarnessJobsSecretValuesUrl = () => {
 };
 
 /**
- * Values are intentionally separate from platform/model-provider settings. They are scoped
-to the submitting organization and only resolved inside the selected hosted job.
-
-With ``environment_id`` the values (and staged ``files``) make that environment's
-next agent version instead; it is checked next and returned with 202.
- * @summary Persist uploaded agent values encrypted and return opaque hosted refs.
+ * The values (and staged ``files``) are stored encrypted on the new version, which
+is checked next and returned with 202.
+ * @summary Make an environment's next agent version from new credential values.
  */
 export const simulateApiHarnessJobsSecretValues = async (
   harnessSecretValuesApi: HarnessSecretValuesApi,

@@ -1469,8 +1469,8 @@ def require_agent_pick(
     if not agent_version_pickable(environment, version_id):
         raise _not_pickable("agent")
     if not agent_pick_allowed(environment, version_id, runtime):
-        # TODO: run a legacy version from the payload it was recorded with (steps
-        # 10/16); until then it would run the current payload under its older label.
+        # TODO: run a legacy agent version from the payload it was recorded with;
+        # until then it would run the current payload under its older label.
         raise HostedHarnessError(
             "version_not_pickable",
             refusal,

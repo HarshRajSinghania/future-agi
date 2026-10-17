@@ -1037,6 +1037,22 @@ asks. Unless you want that (see [Reset a password](#reset-a-password)), delete
 the line from your `.env` and run `docker compose up -d`. `./bin/install`
 warns while the line is there.
 
+**Simulation environment versioning.** `HARNESS_VERSIONING_ENABLED` is off
+by default. Before you turn it on, give the environments you already have
+their first versions (in Standalone, use `app` in place of `backend`):
+
+```bash
+docker compose exec backend python manage.py harness_versions_backfill --check
+docker compose exec backend python manage.py harness_versions_backfill
+```
+
+`--check` changes nothing and lists what the backfill would do; fix every
+error it reports first. Then set `HARNESS_VERSIONING_ENABLED=true` in `.env`
+and run `docker compose up -d`. The backfill is safe to run again later, for
+example for environments that were busy the first time. See the
+[configuration reference](https://docs.futureagi.com/docs/self-hosting/configuration/reference)
+for the two flags that follow it.
+
 **Pinning versions.** In Standalone, `FUTURE_AGI_VERSION` tags the app image.
 In Distributed each image is versioned on its own: `FUTURE_AGI_VERSION` for
 the backend and workers, `FRONTEND_VERSION`, `AGENTCC_GATEWAY_VERSION`,

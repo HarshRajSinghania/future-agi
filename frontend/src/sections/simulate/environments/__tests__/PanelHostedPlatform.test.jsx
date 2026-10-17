@@ -13,18 +13,16 @@ vi.mock("react-router-dom", async () => {
   return { ...actual, useNavigate: () => navigate };
 });
 
-// A hosted platform's API key is sent write-only with preflight and create; it is
-// never exchanged for a stored ref, so storeHarnessSecretValues must stay unused.
+// A hosted platform's API key is sent write-only with preflight and create.
 vi.mock("src/api/harness/harness", () => ({
   preflightHarnessJob: vi.fn(),
-  storeHarnessSecretValues: vi.fn(),
   createHarnessJob: vi.fn(),
   harnessIdempotencyKey: vi.fn(() => `idem-${(keySeq += 1)}`),
   getHarnessJob: vi.fn(),
   listHarnessJobs: vi.fn(),
 }));
 
-const { preflightHarnessJob, storeHarnessSecretValues, createHarnessJob } = await import(
+const { preflightHarnessJob, createHarnessJob } = await import(
   "src/api/harness/harness"
 );
 const { enqueueSnackbar } = await import("notistack");
@@ -62,7 +60,6 @@ beforeEach(() => {
   navigate.mockReset();
   preflightHarnessJob.mockReset();
   createHarnessJob.mockReset();
-  storeHarnessSecretValues.mockReset();
   enqueueSnackbar.mockReset();
 });
 
@@ -228,7 +225,6 @@ describe("PanelHostedPlatform", () => {
       LIVEKIT_API_KEY: "lk-key",
       LIVEKIT_API_SECRET: "lk-secret",
     });
-    expect(storeHarnessSecretValues).not.toHaveBeenCalled();
     const staged = useEnvironmentsStore.getState().draft;
     expect(staged).toMatchObject({ provider: "livekit", agentId: "returns-agent" });
     expect(staged.apiKey).toBeUndefined();
@@ -270,7 +266,6 @@ describe("PanelHostedPlatform", () => {
       expect(navigate).toHaveBeenCalledWith("/dashboard/simulate/environments/job-plat"),
     );
     expect(createdBody().credential_values).toEqual({ VAPI_API_KEY: "sk-x" });
-    expect(storeHarnessSecretValues).not.toHaveBeenCalled();
     const staged = useEnvironmentsStore.getState().draft;
     expect(staged).toMatchObject({
       kind: "platform",

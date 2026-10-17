@@ -1160,8 +1160,8 @@ def _pinned_agent_prompt(test_execution: TestExecution) -> str:
     )
     if runtime is not None and own_credential_set(runtime):
         return version.description or ""
-    # TODO: a legacy version's own recorded prompt once legacy versions record
-    # their payload (steps 10/16).
+    # TODO: a legacy version's own recorded prompt, once legacy versions record
+    # their payload.
     return configured_prompt(payload)
 
 

@@ -1,18 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
-// Values are never exchanged for stored refs any more; the mock proves it.
-vi.mock("src/api/harness/harness", () => ({
-  storeHarnessSecretValues: vi.fn(),
-}));
-
-const { storeHarnessSecretValues } = await import("src/api/harness/harness");
 const { prepareSourceForBuild, redactSource } = await import(
   "../prepareSourceForBuild"
 );
-
-beforeEach(() => {
-  storeHarnessSecretValues.mockReset();
-});
 
 describe("redactSource", () => {
   it("strips plaintext apiKey, apiSecret and envText but keeps opaque fields", () => {
@@ -44,10 +34,6 @@ describe("redactSource", () => {
 });
 
 describe("prepareSourceForBuild", () => {
-  afterEach(() => {
-    expect(storeHarnessSecretValues).not.toHaveBeenCalled();
-  });
-
   it("maps a hosted provider's apiKey to its fixed alias and redacts the raw key", async () => {
     const { draft, credentialValues } = await prepareSourceForBuild({
       kind: "platform",

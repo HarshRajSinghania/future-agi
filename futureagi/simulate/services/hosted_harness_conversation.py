@@ -1913,10 +1913,7 @@ def promote_conversation_checkpoint(
                         status_code=409,
                     )
             else:
-                # Only an unversioned archive is overwritten; version keys are never reused.
-                store_authoring_archive(
-                    environment, archive, advance_lifecycle=False, in_place=True
-                )
+                store_authoring_archive(environment, archive, advance_lifecycle=False)
             metadata = dict(environment.payload["metadata"])
             metadata["conversation_checkpoints"] = checkpoints
             metadata.pop("conversation_checkpoint", None)

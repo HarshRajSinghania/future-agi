@@ -16,8 +16,6 @@ import { HardRulesCard } from "../OverviewCards";
 
 const connectedState = {
   agent: { via: "endpoint", typeId: "livekit", values: {} },
-  agentVersions: [{ label: "v1", note: "First build." }],
-  activeAgentVersion: "v1",
   scenarios: [],
 };
 
