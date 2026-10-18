@@ -83,6 +83,9 @@ function ChoiceCard({
         tabIndex={disabled ? -1 : 0}
         onClick={disabled ? undefined : onSelect}
         onKeyDown={(event) => {
+          // Only keys aimed at the radio itself: the size menu inside it
+          // (portalled, but still bubbling through React) handles its own.
+          if (event.target !== event.currentTarget) return;
           if (!disabled && (event.key === "Enter" || event.key === " ")) {
             event.preventDefault();
             onSelect();

@@ -452,6 +452,23 @@ describe("the Ask page", () => {
     expect(screen.getByRole("heading", { name: QUESTION })).toBeInTheDocument();
   });
 
+  it("picks a sample size from the keyboard", async () => {
+    renderAt(askLink(PROJECT, { unit: "sessions", label: "Past 7D" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    const select = screen.getByRole("combobox", { name: /Sample size/ });
+    select.focus();
+    fireEvent.keyDown(select, { key: "ArrowDown" });
+    const option = await screen.findByRole("option", {
+      name: "2,000 sessions",
+    });
+    // Enter on the menu's option must not reach the card's own Enter
+    // handler, which would re-choose the old size.
+    fireEvent.keyDown(option, { key: "Enter" });
+    expect(
+      screen.getByRole("radio", { name: /A sample of 2,000/ }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
   it("restates the credits before reading every row of a big view", async () => {
     fakes.estimate.mockResolvedValue({
       ...ESTIMATE,
