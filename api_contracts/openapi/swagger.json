@@ -52104,6 +52104,91 @@
                 }
             ]
         },
+        "/simulate/api/harness/conversations/{id}/overview/": {
+            "post": {
+                "operationId": "simulate_api_harness_conversations_overview",
+                "description": "",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationOverviewQuery"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationOverview"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/simulate/api/harness/conversations/{id}/publish/": {
+            "post": {
+                "operationId": "simulate_api_harness_conversations_publish",
+                "description": "",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationPublish"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationPublish"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/harness/conversations/{id}/rerun/": {
             "post": {
                 "operationId": "simulate_api_harness_conversations_rerun",
@@ -52169,6 +52254,132 @@
                 "tags": [
                     "simulate"
                 ]
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/simulate/api/harness/conversations/{id}/runs/": {
+            "post": {
+                "operationId": "simulate_api_harness_conversations_runs",
+                "description": "",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationRunsQuery"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationRunsQuery"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/simulate/api/harness/conversations/{id}/runs/start/": {
+            "post": {
+                "operationId": "simulate_api_harness_conversations_runs_start_run",
+                "description": "",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationRunStart"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationRunStart"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
+        "/simulate/api/harness/conversations/{id}/scenarios/": {
+            "post": {
+                "operationId": "simulate_api_harness_conversations_scenarios",
+                "description": "",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationScenarioQuery"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/HarnessConversationScenarioQuery"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true
             },
             "parameters": [
                 {
@@ -127773,6 +127984,20 @@
                     "type": "string",
                     "maxLength": 128,
                     "minLength": 1
+                },
+                "target_stage": {
+                    "title": "Target stage",
+                    "type": "string",
+                    "enum": [
+                        "understand",
+                        "environment",
+                        "scenarios"
+                    ]
+                },
+                "scenario_delta": {
+                    "title": "Scenario delta",
+                    "type": "integer",
+                    "minimum": 1
                 }
             }
         },
@@ -128904,6 +129129,20 @@
                     "type": "string",
                     "maxLength": 128,
                     "minLength": 1
+                },
+                "target_stage": {
+                    "title": "Target stage",
+                    "type": "string",
+                    "enum": [
+                        "understand",
+                        "environment",
+                        "scenarios"
+                    ]
+                },
+                "scenario_delta": {
+                    "title": "Scenario delta",
+                    "type": "integer",
+                    "minimum": 1
                 }
             }
         },
@@ -129093,6 +129332,98 @@
                 }
             }
         },
+        "HarnessConversationOverviewQuery": {
+            "type": "object",
+            "properties": {}
+        },
+        "HarnessConversationOverview": {
+            "required": [
+                "environment",
+                "scenario_count",
+                "use_cases",
+                "coverage",
+                "recent_runs",
+                "build_changes",
+                "earlier_messages"
+            ],
+            "type": "object",
+            "properties": {
+                "environment": {
+                    "title": "Environment",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string",
+                        "x-nullable": true
+                    }
+                },
+                "scenario_count": {
+                    "title": "Scenario count",
+                    "type": "integer"
+                },
+                "use_cases": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string",
+                            "x-nullable": true
+                        }
+                    }
+                },
+                "coverage": {
+                    "title": "Coverage",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string",
+                        "x-nullable": true
+                    }
+                },
+                "recent_runs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string",
+                            "x-nullable": true
+                        }
+                    }
+                },
+                "build_changes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string",
+                            "x-nullable": true
+                        }
+                    }
+                },
+                "earlier_messages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string",
+                            "x-nullable": true
+                        }
+                    }
+                }
+            }
+        },
+        "HarnessConversationPublish": {
+            "required": [
+                "digest"
+            ],
+            "type": "object",
+            "properties": {
+                "digest": {
+                    "title": "Digest",
+                    "type": "string",
+                    "maxLength": 128,
+                    "minLength": 1
+                }
+            }
+        },
         "HarnessConversationRerun": {
             "type": "object",
             "properties": {}
@@ -129142,6 +129473,129 @@
                 "receipts": {
                     "title": "Receipts",
                     "type": "object"
+                }
+            }
+        },
+        "HarnessConversationRunsQuery": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "title": "Run id",
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "limit": {
+                    "title": "Limit",
+                    "type": "integer",
+                    "maximum": 50,
+                    "minimum": 1
+                }
+            }
+        },
+        "HarnessConversationRunStart": {
+            "type": "object",
+            "properties": {
+                "numbers": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "maxItems": 5000
+                },
+                "ranges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 1
+                        }
+                    },
+                    "maxItems": 100
+                },
+                "trials": {
+                    "title": "Trials",
+                    "type": "integer",
+                    "default": 1,
+                    "maximum": 20,
+                    "minimum": 1
+                },
+                "operation_id": {
+                    "title": "Operation id",
+                    "type": "string",
+                    "maxLength": 64
+                }
+            }
+        },
+        "HarnessConversationScenarioQuery": {
+            "type": "object",
+            "properties": {
+                "numbers": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "maxItems": 5000
+                },
+                "ranges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 1
+                        }
+                    },
+                    "maxItems": 100
+                },
+                "names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 255,
+                        "minLength": 1
+                    },
+                    "maxItems": 500
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "minLength": 1
+                    },
+                    "maxItems": 1000
+                },
+                "search": {
+                    "title": "Search",
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "filters": {
+                    "title": "Filters",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string",
+                        "x-nullable": true
+                    }
+                },
+                "page": {
+                    "title": "Page",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "page_size": {
+                    "title": "Page size",
+                    "type": "integer",
+                    "maximum": 100,
+                    "minimum": 1
+                },
+                "full": {
+                    "title": "Full",
+                    "type": "boolean",
+                    "default": false
                 }
             }
         },
@@ -136798,8 +137252,7 @@
                 },
                 "type": {
                     "title": "Type",
-                    "type": "string",
-                    "minLength": 1
+                    "type": "string"
                 },
                 "value": {
                     "title": "Value",
@@ -136823,7 +137276,13 @@
                 "status": {
                     "title": "Status",
                     "type": "string",
-                    "minLength": 1
+                    "enum": [
+                        "pending",
+                        "succeeded",
+                        "failed",
+                        "timed_out",
+                        "skipped"
+                    ]
                 }
             }
         },
@@ -136875,7 +137334,10 @@
                 "outcome",
                 "cost_breakdown_cents",
                 "evaluations",
-                "function_calls"
+                "function_calls",
+                "scoring_status",
+                "csat_status",
+                "csat_reason"
             ],
             "type": "object",
             "properties": {
@@ -137345,6 +137807,35 @@
                     "items": {
                         "$ref": "#/definitions/SimulateRunV3FunctionCall"
                     }
+                },
+                "scoring_status": {
+                    "title": "Scoring status",
+                    "type": "string",
+                    "enum": [
+                        "not_applicable",
+                        "pending",
+                        "succeeded",
+                        "failed",
+                        "timed_out"
+                    ]
+                },
+                "csat_status": {
+                    "title": "Csat status",
+                    "type": "string",
+                    "enum": [
+                        "not_applicable",
+                        "pending",
+                        "succeeded",
+                        "failed",
+                        "timed_out",
+                        "skipped"
+                    ]
+                },
+                "csat_reason": {
+                    "title": "Csat reason",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
                 }
             }
         },
@@ -139286,6 +139777,90 @@
                 }
             }
         },
+        "SimulateRunV3ScoringCounts": {
+            "required": [
+                "not_applicable",
+                "pending",
+                "succeeded",
+                "failed",
+                "timed_out"
+            ],
+            "type": "object",
+            "properties": {
+                "not_applicable": {
+                    "title": "Not applicable",
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "pending": {
+                    "title": "Pending",
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "succeeded": {
+                    "title": "Succeeded",
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "failed": {
+                    "title": "Failed",
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "timed_out": {
+                    "title": "Timed out",
+                    "type": "integer",
+                    "minimum": 0
+                }
+            }
+        },
+        "SimulateRunV3CallsSummary": {
+            "required": [
+                "total",
+                "outcomes",
+                "measured",
+                "pass_rate",
+                "duration",
+                "latency",
+                "tokens",
+                "cost_cents",
+                "scoring"
+            ],
+            "type": "object",
+            "properties": {
+                "total": {
+                    "title": "Total",
+                    "type": "integer"
+                },
+                "outcomes": {
+                    "$ref": "#/definitions/OutcomeCounts"
+                },
+                "measured": {
+                    "title": "Measured",
+                    "type": "integer"
+                },
+                "pass_rate": {
+                    "title": "Pass rate",
+                    "type": "number",
+                    "x-nullable": true
+                },
+                "duration": {
+                    "$ref": "#/definitions/MetricStats"
+                },
+                "latency": {
+                    "$ref": "#/definitions/MetricStats"
+                },
+                "tokens": {
+                    "$ref": "#/definitions/TotalMetricStats"
+                },
+                "cost_cents": {
+                    "$ref": "#/definitions/TotalMetricStats"
+                },
+                "scoring": {
+                    "$ref": "#/definitions/SimulateRunV3ScoringCounts"
+                }
+            }
+        },
         "RunCall": {
             "required": [
                 "id",
@@ -139318,7 +139893,10 @@
                 "csat",
                 "ended_reason",
                 "error_message",
-                "evaluations"
+                "evaluations",
+                "scoring_status",
+                "csat_status",
+                "csat_reason"
             ],
             "type": "object",
             "properties": {
@@ -139495,6 +140073,35 @@
                     "items": {
                         "$ref": "#/definitions/SimulateRunV3EvaluationResult"
                     }
+                },
+                "scoring_status": {
+                    "title": "Scoring status",
+                    "type": "string",
+                    "enum": [
+                        "not_applicable",
+                        "pending",
+                        "succeeded",
+                        "failed",
+                        "timed_out"
+                    ]
+                },
+                "csat_status": {
+                    "title": "Csat status",
+                    "type": "string",
+                    "enum": [
+                        "not_applicable",
+                        "pending",
+                        "succeeded",
+                        "failed",
+                        "timed_out",
+                        "skipped"
+                    ]
+                },
+                "csat_reason": {
+                    "title": "Csat reason",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
                 }
             }
         },
@@ -139709,7 +140316,7 @@
                     "$ref": "#/definitions/RunExecution"
                 },
                 "summary": {
-                    "$ref": "#/definitions/RunSummary"
+                    "$ref": "#/definitions/SimulateRunV3CallsSummary"
                 },
                 "count": {
                     "title": "Count",
