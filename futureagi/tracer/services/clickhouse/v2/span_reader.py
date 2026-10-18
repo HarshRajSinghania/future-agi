@@ -591,6 +591,19 @@ class CHSpanReader:
         id_to_survivor = {str(a): str(s) for (a, s) in rows}
         return {i: id_to_survivor.get(i, i) for i in ids}
 
+    def _session_alias_ids(self, survivor_id: str) -> list[str]:
+        """Every raw ``trace_session_id`` that resolves to ``survivor_id``: the
+        survivor itself and each id the remap consolidates onto it."""
+        from tracer.services.clickhouse.v2.id_remap_sql import survivor_map_subquery
+
+        rows = self._client.query(
+            "SELECT DISTINCT toString(any_id) "
+            f"FROM ({survivor_map_subquery('trace_session_id_remap')}) "
+            "WHERE survivor_id = toUUID(%(s)s)",
+            parameters={"s": str(survivor_id)},
+        ).result_rows
+        return sorted({str(survivor_id), *(str(r[0]) for r in rows)})
+
     @staticmethod
     def _session_filter_remap() -> tuple[str, str]:
         """Return ``(join_clause, resolved_predicate)`` for a single-session
@@ -2392,12 +2405,30 @@ class CHSpanReader:
         # The span-side remap join + ``<resolved> = %(sid)s`` predicate (same as
         # the single-session filter ``distinct_session_ids_with_filters`` uses).
         session_join, session_pred = self._session_filter_remap()
+        # The resolved predicate is computed through the remap join, so no index
+        # can serve it and the read scanned every span of the project (219k
+        # spans and ~30 MB of memory for a 6-span session). Narrow the FINAL
+        # read to the traces holding a span with a raw id that can resolve to
+        # this session -- the survivor or any id remapped onto it. They are
+        # found without FINAL, so a span whose session changed in a later
+        # version is still a candidate; ``trace_id`` is stable across versions,
+        # so its bloom index prunes safely under FINAL; and the resolved
+        # predicate still decides membership.
+        aliases = self._session_alias_ids(resolved_input)
         # No is_deleted predicate — see _FINAL_SKIP_INDEX_SETTINGS.
         rows = self._client.query(
             f"SELECT DISTINCT toString(spans.trace_id) AS tid "
             f"FROM spans FINAL {session_join} "
-            f"WHERE spans.project_id = %(p)s AND {session_pred}",
-            parameters={"p": str(project_id), "sid": resolved_input},
+            f"WHERE spans.project_id = %(p)s "
+            f"AND spans.trace_id IN ("
+            f"SELECT trace_id FROM spans "
+            f"WHERE project_id = %(p)s AND trace_session_id IN %(aliases)s"
+            f") AND {session_pred}",
+            parameters={
+                "p": str(project_id),
+                "sid": resolved_input,
+                "aliases": tuple(aliases),
+            },
             settings=_FINAL_SKIP_INDEX_SETTINGS,
         ).result_rows
         return [str(r[0]) for r in rows]
