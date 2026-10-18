@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildPivot } from "../askPivot";
+import { buildTimeGrid } from "../askPivot";
 import { findPatterns } from "../askStats";
+import { matchesFilter, summarizeRecords } from "../askSummary";
 import {
   buildTimeline,
   clampWindow,
@@ -43,15 +44,18 @@ describe("a real run", () => {
     expect(
       timeline.columns.reduce((sum, column) => sum + column.errors, 0),
     ).toBe(errorIds.length);
-    const pivot = buildPivot({
-      records: run.records,
-      questions: run.questions,
-      configId: question.configId,
-      answer: "No",
+    const grid = buildTimeGrid({
+      summary: summarizeRecords({
+        records: run.records,
+        questions: run.questions,
+        window: run.window,
+        now,
+      }),
+      question,
       window: run.window,
       now,
     });
-    const lastDay = pivot.rows[pivot.rows.length - 1].date.getTime();
+    const lastDay = grid.rows[grid.rows.length - 1].date.getTime();
     expect(lastDay).toBeLessThanOrEqual(now);
   });
 
@@ -91,7 +95,14 @@ describe("a real run", () => {
     expect(error).toBeTruthy();
     expect(error.k).toBe(errorIds.length);
     expect(error.n).toBe(errorIds.length);
-    expect(new Set(error.ids)).toEqual(new Set(errorIds));
+    expect(error.filter).toEqual({ group: "error:error" });
+    expect(
+      new Set(
+        run.records
+          .filter((r) => matchesFilter(r, error.filter))
+          .map((r) => r.id),
+      ),
+    ).toEqual(new Set(errorIds));
     expect(error.q).toBeLessThan(0.1);
     // The errors fall within two hours; whether that is one local day
     // depends on the time zone the test runs in.
@@ -106,7 +117,9 @@ describe("a real run", () => {
     // Every callout's numbers are its own counts, and at most five.
     expect(result.patterns.length).toBeLessThanOrEqual(5);
     result.patterns.forEach((p) => {
-      expect(p.ids).toHaveLength(p.n);
+      expect(
+        run.records.filter((r) => matchesFilter(r, p.filter)).length,
+      ).toBeGreaterThanOrEqual(p.n);
       expect(p.text).toContain(`${p.k} of ${p.n}`);
     });
   });
@@ -137,7 +150,11 @@ describe("a real run", () => {
     expect(result.answered).toBe(8);
     result.patterns.forEach((p) => {
       expect(p.n).toBeLessThanOrEqual(8);
-      p.ids.forEach((id) => expect(answered.has(id)).toBe(true));
+      // Only answered rows are counted.
+      const counted = records.filter(
+        (r) => matchesFilter(r, p.filter) && answered.has(r.id),
+      );
+      expect(counted.length).toBeGreaterThanOrEqual(p.n);
     });
   });
 });

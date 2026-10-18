@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1070,
+  endpointCount: 1076,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -35270,6 +35270,462 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    "/tracer/instant-eval/control/": {
+      post: {
+        operationId: "tracer_instant-eval_control_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InstantEvalControlRequest",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InstantEvalControlResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          409: {
+            $ref: "#/definitions/InstantEvalLimitError",
+          },
+          422: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/InstantEvalLimitError",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/instant-eval/estimate/": {
+      post: {
+        operationId: "tracer_instant-eval_estimate_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InstantEvalEstimateRequest",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InstantEvalEstimateResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          422: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/instant-eval/export/": {
+      get: {
+        operationId: "tracer_instant-eval_export_list",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          project_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          eval_task_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          unit: {
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["traces", "spans", "sessions", "users"],
+            },
+          },
+          config_ids: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 2000,
+            },
+          },
+          tz: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+              default: "UTC",
+            },
+          },
+          config_id: {
+            required: false,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          answer: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 500,
+            },
+          },
+          answers: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 4000,
+            },
+          },
+          time_from: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+            },
+          },
+          time_to: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+            },
+          },
+          group: {
+            required: false,
+            schema: {
+              type: "array",
+              items: {
+                type: "string",
+                maxLength: 300,
+                minLength: 1,
+              },
+              maxItems: 50,
+            },
+          },
+          user: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 255,
+            },
+          },
+          model: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 255,
+            },
+          },
+          error: {
+            required: false,
+            schema: {
+              type: "boolean",
+            },
+          },
+          unsure: {
+            required: false,
+            schema: {
+              type: "boolean",
+              default: false,
+            },
+          },
+          q: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 200,
+            },
+          },
+          cursor: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 500,
+            },
+          },
+          page_size: {
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 1,
+              maximum: 1500,
+              default: 50,
+            },
+          },
+          compact: {
+            required: false,
+            schema: {
+              type: "boolean",
+              default: false,
+            },
+          },
+          sort: {
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["time", "-time", "confidence"],
+              default: "-time",
+            },
+          },
+        },
+        responses: {
+          200: {
+            type: "string",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/instant-eval/rows/": {
+      get: {
+        operationId: "tracer_instant-eval_rows_list",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          project_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          eval_task_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          unit: {
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["traces", "spans", "sessions", "users"],
+            },
+          },
+          config_ids: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 2000,
+            },
+          },
+          tz: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+              default: "UTC",
+            },
+          },
+          config_id: {
+            required: false,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          answer: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 500,
+            },
+          },
+          answers: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 4000,
+            },
+          },
+          time_from: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+            },
+          },
+          time_to: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+            },
+          },
+          group: {
+            required: false,
+            schema: {
+              type: "array",
+              items: {
+                type: "string",
+                maxLength: 300,
+                minLength: 1,
+              },
+              maxItems: 50,
+            },
+          },
+          user: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 255,
+            },
+          },
+          model: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 255,
+            },
+          },
+          error: {
+            required: false,
+            schema: {
+              type: "boolean",
+            },
+          },
+          unsure: {
+            required: false,
+            schema: {
+              type: "boolean",
+              default: false,
+            },
+          },
+          q: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 200,
+            },
+          },
+          cursor: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 500,
+            },
+          },
+          page_size: {
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 1,
+              maximum: 1500,
+              default: 50,
+            },
+          },
+          compact: {
+            required: false,
+            schema: {
+              type: "boolean",
+              default: false,
+            },
+          },
+          sort: {
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["time", "-time", "confidence"],
+              default: "-time",
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/InstantEvalRowsResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
     "/tracer/instant-eval/runs/": {
       get: {
         operationId: "tracer_instant-eval_runs_list",
@@ -35326,6 +35782,119 @@ export const OPENAPI_CONTRACT = Object.freeze({
         responses: {
           200: {
             $ref: "#/definitions/InstantEvalRunsResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/instant-eval/start/": {
+      post: {
+        operationId: "tracer_instant-eval_start_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InstantEvalStartRequest",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InstantEvalStartResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          409: {
+            $ref: "#/definitions/InstantEvalLimitError",
+          },
+          422: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/InstantEvalLimitError",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
+    "/tracer/instant-eval/summary/": {
+      get: {
+        operationId: "tracer_instant-eval_summary_list",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: null,
+        queryParameters: {
+          project_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          eval_task_id: {
+            required: true,
+            schema: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          unit: {
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["traces", "spans", "sessions", "users"],
+            },
+          },
+          config_ids: {
+            required: false,
+            schema: {
+              type: "string",
+              maxLength: 2000,
+            },
+          },
+          tz: {
+            required: false,
+            schema: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+              default: "UTC",
+            },
+          },
+        },
+        responses: {
+          200: {
+            $ref: "#/definitions/InstantEvalSummaryResponse",
           },
           400: {
             $ref: "#/definitions/ApiErrorResponse",
@@ -64940,6 +65509,226 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InstantEvalControlRequest: {
+      required: ["project_id", "eval_task_id", "action"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        eval_task_id: {
+          title: "Eval task id",
+          type: "string",
+          format: "uuid",
+        },
+        action: {
+          title: "Action",
+          type: "string",
+          enum: ["pause", "resume", "cancel", "retry_failed", "read_more"],
+        },
+        more: {
+          title: "More",
+          type: "integer",
+          minimum: 1,
+          "x-nullable": true,
+        },
+        confirm: {
+          title: "Confirm",
+          type: "boolean",
+          default: false,
+        },
+      },
+    },
+    InstantEvalControlResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InstantEvalControl",
+        },
+      },
+    },
+    InstantEvalEstimateRequest: {
+      required: ["project_id", "unit"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          enum: ["traces", "spans", "sessions", "users"],
+        },
+        filters: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              column_id: {
+                type: "string",
+                description: "Column or attribute id to filter on.",
+              },
+              property_id: {
+                type: "string",
+                description:
+                  "Optional stable namespaced Property Registry identity.",
+              },
+              display_name: {
+                type: "string",
+                description: "Optional UI label for chips and saved views.",
+              },
+              source: {
+                type: "string",
+                description:
+                  "Optional source surface for mixed-source filters, for example traces, datasets, or simulation.",
+              },
+              output_type: {
+                type: "string",
+                description:
+                  "Optional metric output type metadata used by eval and annotation filters.",
+              },
+              filter_config: {
+                type: "object",
+                properties: {
+                  filter_type: {
+                    type: "string",
+                    description:
+                      "Canonical field type, for example text, number, boolean, datetime, categorical, thumbs, annotator, array, or map. Legacy json is value-sensitive for SPAN_ATTRIBUTE filters: list values become array and object values become map.",
+                  },
+                  filter_op: {
+                    type: "string",
+                    description:
+                      "Canonical operator from api_contracts/filter_contract.json, for example equals, not_equals, in, not_in, between, not_between, is_null, or is_not_null.",
+                  },
+                  filter_value: {
+                    description:
+                      "Scalar, list, range tuple, boolean, or null depending on filter_op and filter_type.",
+                  },
+                  col_type: {
+                    type: "string",
+                    description:
+                      "Column family such as SYSTEM_METRIC, SPAN_ATTRIBUTE, EVAL_METRIC, ANNOTATION, or NORMAL.",
+                  },
+                  attribute_value_types: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      enum: ["string", "number", "boolean"],
+                      "x-nullable": true,
+                    },
+                    description:
+                      "Optional storage-family provenance aligned one-for-one with filter_value for mixed SPAN_ATTRIBUTE in/not_in filters. Null entries retain filter_type semantics for manually entered values.",
+                  },
+                },
+                required: ["filter_type", "filter_op"],
+                additionalProperties: false,
+              },
+            },
+            required: ["column_id", "filter_config"],
+            additionalProperties: false,
+          },
+          default: [],
+        },
+        ids: {
+          type: "array",
+          items: {
+            type: "string",
+            maxLength: 255,
+            minLength: 1,
+          },
+          maxItems: 5000,
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          minimum: 1,
+          "x-nullable": true,
+        },
+        questions: {
+          title: "Questions",
+          type: "integer",
+          default: 1,
+          maximum: 5,
+          minimum: 1,
+        },
+      },
+    },
+    InstantEvalEstimateResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InstantEvalEstimate",
+        },
+      },
+    },
+    InstantEvalLimitError: {
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: false,
+        },
+        type: {
+          title: "Type",
+          type: "string",
+          "x-nullable": true,
+        },
+        code: {
+          title: "Code",
+          type: "string",
+          "x-nullable": true,
+        },
+        detail: {
+          title: "Detail",
+          type: "string",
+          "x-nullable": true,
+        },
+        message: {
+          title: "Message",
+          type: "string",
+          "x-nullable": true,
+        },
+        error: {
+          title: "Error",
+          type: "string",
+          "x-nullable": true,
+        },
+        result: {
+          $ref: "#/definitions/InstantEvalLimitDetail",
+        },
+      },
+    },
+    InstantEvalRowsResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InstantEvalRowsResult",
+        },
+      },
+    },
     InstantEvalRunsResponse: {
       required: ["result"],
       type: "object",
@@ -64951,6 +65740,149 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         result: {
           $ref: "#/definitions/InstantEvalRunsResult",
+        },
+      },
+    },
+    InstantEvalStartRequest: {
+      required: ["project_id", "unit", "config_ids"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          enum: ["traces", "spans", "sessions", "users"],
+        },
+        filters: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              column_id: {
+                type: "string",
+                description: "Column or attribute id to filter on.",
+              },
+              property_id: {
+                type: "string",
+                description:
+                  "Optional stable namespaced Property Registry identity.",
+              },
+              display_name: {
+                type: "string",
+                description: "Optional UI label for chips and saved views.",
+              },
+              source: {
+                type: "string",
+                description:
+                  "Optional source surface for mixed-source filters, for example traces, datasets, or simulation.",
+              },
+              output_type: {
+                type: "string",
+                description:
+                  "Optional metric output type metadata used by eval and annotation filters.",
+              },
+              filter_config: {
+                type: "object",
+                properties: {
+                  filter_type: {
+                    type: "string",
+                    description:
+                      "Canonical field type, for example text, number, boolean, datetime, categorical, thumbs, annotator, array, or map. Legacy json is value-sensitive for SPAN_ATTRIBUTE filters: list values become array and object values become map.",
+                  },
+                  filter_op: {
+                    type: "string",
+                    description:
+                      "Canonical operator from api_contracts/filter_contract.json, for example equals, not_equals, in, not_in, between, not_between, is_null, or is_not_null.",
+                  },
+                  filter_value: {
+                    description:
+                      "Scalar, list, range tuple, boolean, or null depending on filter_op and filter_type.",
+                  },
+                  col_type: {
+                    type: "string",
+                    description:
+                      "Column family such as SYSTEM_METRIC, SPAN_ATTRIBUTE, EVAL_METRIC, ANNOTATION, or NORMAL.",
+                  },
+                  attribute_value_types: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      enum: ["string", "number", "boolean"],
+                      "x-nullable": true,
+                    },
+                    description:
+                      "Optional storage-family provenance aligned one-for-one with filter_value for mixed SPAN_ATTRIBUTE in/not_in filters. Null entries retain filter_type semantics for manually entered values.",
+                  },
+                },
+                required: ["filter_type", "filter_op"],
+                additionalProperties: false,
+              },
+            },
+            required: ["column_id", "filter_config"],
+            additionalProperties: false,
+          },
+          default: [],
+        },
+        ids: {
+          type: "array",
+          items: {
+            type: "string",
+            maxLength: 255,
+            minLength: 1,
+          },
+          maxItems: 5000,
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          minimum: 1,
+          "x-nullable": true,
+        },
+        config_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            format: "uuid",
+          },
+          maxItems: 5,
+          minItems: 1,
+        },
+        confirm: {
+          title: "Confirm",
+          type: "boolean",
+          default: false,
+        },
+      },
+    },
+    InstantEvalStartResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InstantEvalStart",
+        },
+      },
+    },
+    InstantEvalSummaryResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InstantEvalSummary",
         },
       },
     },
@@ -95273,6 +96205,177 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InstantEvalControl: {
+      required: ["status", "message"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "string",
+          minLength: 1,
+        },
+        message: {
+          title: "Message",
+          type: "string",
+          minLength: 1,
+        },
+        rows_requested: {
+          title: "Rows requested",
+          type: "integer",
+        },
+        retried: {
+          title: "Retried",
+          type: "integer",
+        },
+      },
+    },
+    InstantEvalEstimate: {
+      required: [
+        "population",
+        "population_is_lower_bound",
+        "rows_to_read",
+        "questions",
+        "credits_estimate",
+        "seconds_estimate",
+        "needs_confirm",
+        "max_rows",
+        "confirm_rows",
+        "default_sample_size",
+        "sessions_per_user",
+        "choices",
+        "quota_limited",
+        "quota_message",
+        "quota_max_rows",
+        "plan_rate_per_min",
+      ],
+      type: "object",
+      properties: {
+        population: {
+          title: "Population",
+          type: "integer",
+        },
+        population_is_lower_bound: {
+          title: "Population is lower bound",
+          type: "boolean",
+        },
+        rows_to_read: {
+          title: "Rows to read",
+          type: "integer",
+        },
+        questions: {
+          title: "Questions",
+          type: "integer",
+        },
+        credits_estimate: {
+          title: "Credits estimate",
+          type: "number",
+        },
+        seconds_estimate: {
+          title: "Seconds estimate",
+          type: "integer",
+        },
+        needs_confirm: {
+          title: "Needs confirm",
+          type: "boolean",
+        },
+        max_rows: {
+          title: "Max rows",
+          type: "integer",
+        },
+        confirm_rows: {
+          title: "Confirm rows",
+          type: "integer",
+        },
+        default_sample_size: {
+          title: "Default sample size",
+          type: "integer",
+          "x-nullable": true,
+        },
+        sessions_per_user: {
+          title: "Sessions per user",
+          type: "integer",
+          "x-nullable": true,
+        },
+        choices: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InstantEvalChoice",
+          },
+        },
+        quota_limited: {
+          title: "Quota limited",
+          type: "boolean",
+        },
+        quota_message: {
+          title: "Quota message",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        quota_max_rows: {
+          title: "Quota max rows",
+          type: "integer",
+          "x-nullable": true,
+        },
+        plan_rate_per_min: {
+          title: "Plan rate per min",
+          type: "number",
+          "x-nullable": true,
+        },
+      },
+    },
+    InstantEvalLimitDetail: {
+      required: ["message", "error_code"],
+      type: "object",
+      properties: {
+        message: {
+          title: "Message",
+          type: "string",
+          minLength: 1,
+        },
+        error_code: {
+          title: "Error code",
+          type: "string",
+          minLength: 1,
+        },
+        rows_to_read: {
+          title: "Rows to read",
+          type: "integer",
+        },
+        credits_estimate: {
+          title: "Credits estimate",
+          type: "number",
+        },
+        runs: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InstantEvalBusyRun",
+          },
+        },
+      },
+    },
+    InstantEvalRowsResult: {
+      required: ["rows", "next_cursor", "total"],
+      type: "object",
+      properties: {
+        rows: {
+          type: "array",
+          items: {
+            type: "object",
+          },
+        },
+        next_cursor: {
+          title: "Next cursor",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        total: {
+          title: "Total",
+          type: "integer",
+        },
+      },
+    },
     InstantEvalRunsResult: {
       required: ["runs", "has_more"],
       type: "object",
@@ -95286,6 +96389,204 @@ export const OPENAPI_CONTRACT = Object.freeze({
         has_more: {
           title: "Has more",
           type: "boolean",
+        },
+      },
+    },
+    InstantEvalStart: {
+      required: [
+        "task_id",
+        "unit",
+        "population",
+        "rows_requested",
+        "is_sample",
+        "credits_estimate",
+      ],
+      type: "object",
+      properties: {
+        task_id: {
+          title: "Task id",
+          type: "string",
+          minLength: 1,
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          minLength: 1,
+        },
+        population: {
+          title: "Population",
+          type: "integer",
+        },
+        rows_requested: {
+          title: "Rows requested",
+          type: "integer",
+        },
+        is_sample: {
+          title: "Is sample",
+          type: "boolean",
+        },
+        credits_estimate: {
+          title: "Credits estimate",
+          type: "number",
+        },
+      },
+    },
+    InstantEvalSummary: {
+      required: [
+        "status",
+        "unit",
+        "preparing",
+        "total",
+        "answered",
+        "failed",
+        "pending",
+        "not_read",
+        "started_at",
+        "finished_at",
+        "rate_per_min",
+        "eta_s",
+        "created_by",
+        "credits_estimate",
+        "credits_used",
+        "in_flight",
+        "waiting_s",
+        "active_s",
+        "idle_s",
+        "sample",
+        "window",
+        "scope",
+        "questions",
+        "counts",
+        "unsure",
+        "timeline",
+        "groups",
+        "cross",
+      ],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "string",
+          minLength: 1,
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          minLength: 1,
+        },
+        preparing: {
+          title: "Preparing",
+          type: "boolean",
+        },
+        total: {
+          title: "Total",
+          type: "integer",
+        },
+        answered: {
+          title: "Answered",
+          type: "integer",
+        },
+        failed: {
+          title: "Failed",
+          type: "integer",
+        },
+        pending: {
+          title: "Pending",
+          type: "integer",
+        },
+        not_read: {
+          title: "Not read",
+          type: "integer",
+        },
+        started_at: {
+          title: "Started at",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        finished_at: {
+          title: "Finished at",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        rate_per_min: {
+          title: "Rate per min",
+          type: "number",
+          "x-nullable": true,
+        },
+        eta_s: {
+          title: "Eta s",
+          type: "integer",
+          "x-nullable": true,
+        },
+        created_by: {
+          $ref: "#/definitions/InstantEvalPerson",
+        },
+        credits_estimate: {
+          title: "Credits estimate",
+          type: "number",
+        },
+        credits_used: {
+          title: "Credits used",
+          type: "number",
+        },
+        in_flight: {
+          title: "In flight",
+          type: "integer",
+          "x-nullable": true,
+        },
+        waiting_s: {
+          title: "Waiting s",
+          type: "integer",
+          "x-nullable": true,
+        },
+        active_s: {
+          title: "Active s",
+          type: "integer",
+          "x-nullable": true,
+        },
+        idle_s: {
+          title: "Idle s",
+          type: "integer",
+          "x-nullable": true,
+        },
+        sample: {
+          $ref: "#/definitions/InstantEvalSample",
+        },
+        window: {
+          title: "Window",
+          type: "object",
+        },
+        scope: {
+          title: "Scope",
+          type: "object",
+        },
+        questions: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/InstantEvalQuestion",
+          },
+        },
+        counts: {
+          title: "Counts",
+          type: "object",
+        },
+        unsure: {
+          title: "Unsure",
+          type: "object",
+        },
+        timeline: {
+          title: "Timeline",
+          type: "object",
+        },
+        groups: {
+          title: "Groups",
+          type: "object",
+        },
+        cross: {
+          title: "Cross",
+          type: "object",
         },
       },
     },
@@ -111787,6 +113088,90 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InstantEvalChoice: {
+      required: [
+        "sample_size",
+        "rows_to_read",
+        "credits_estimate",
+        "seconds_estimate",
+        "needs_confirm",
+        "allowed",
+        "quota_limited",
+      ],
+      type: "object",
+      properties: {
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          "x-nullable": true,
+        },
+        rows_to_read: {
+          title: "Rows to read",
+          type: "integer",
+        },
+        credits_estimate: {
+          title: "Credits estimate",
+          type: "number",
+        },
+        seconds_estimate: {
+          title: "Seconds estimate",
+          type: "integer",
+        },
+        needs_confirm: {
+          title: "Needs confirm",
+          type: "boolean",
+        },
+        allowed: {
+          title: "Allowed",
+          type: "boolean",
+        },
+        quota_limited: {
+          title: "Quota limited",
+          type: "boolean",
+        },
+      },
+    },
+    InstantEvalBusyRun: {
+      required: [
+        "task_id",
+        "project_id",
+        "question",
+        "rows",
+        "started_by",
+        "started_at",
+      ],
+      type: "object",
+      properties: {
+        task_id: {
+          title: "Task id",
+          type: "string",
+          minLength: 1,
+        },
+        project_id: {
+          title: "Project id",
+          type: "string",
+          minLength: 1,
+        },
+        question: {
+          title: "Question",
+          type: "string",
+        },
+        rows: {
+          title: "Rows",
+          type: "integer",
+        },
+        started_by: {
+          title: "Started by",
+          type: "string",
+        },
+        started_at: {
+          title: "Started at",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+      },
+    },
     InstantEvalRun: {
       required: [
         "task_id",
@@ -111881,6 +113266,115 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "string",
           minLength: 1,
           "x-nullable": true,
+        },
+        created_by: {
+          title: "Created by",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        credits_estimate: {
+          title: "Credits estimate",
+          type: "number",
+          "x-nullable": true,
+        },
+        population: {
+          title: "Population",
+          type: "integer",
+          "x-nullable": true,
+        },
+        is_sample: {
+          title: "Is sample",
+          type: "boolean",
+        },
+      },
+    },
+    InstantEvalPerson: {
+      required: ["id", "name", "email"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          minLength: 1,
+        },
+        name: {
+          title: "Name",
+          type: "string",
+        },
+        email: {
+          title: "Email",
+          type: "string",
+        },
+      },
+      "x-nullable": true,
+    },
+    InstantEvalQuestion: {
+      required: ["config_id", "question", "answer_type", "labels"],
+      type: "object",
+      properties: {
+        config_id: {
+          title: "Config id",
+          type: "string",
+          minLength: 1,
+        },
+        question: {
+          title: "Question",
+          type: "string",
+        },
+        answer_type: {
+          title: "Answer type",
+          type: "string",
+          minLength: 1,
+        },
+        labels: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+      },
+    },
+    InstantEvalSample: {
+      required: [
+        "population",
+        "population_is_lower_bound",
+        "requested",
+        "read",
+        "is_sample",
+        "can_extend",
+        "next_size",
+      ],
+      type: "object",
+      properties: {
+        population: {
+          title: "Population",
+          type: "integer",
+        },
+        population_is_lower_bound: {
+          title: "Population is lower bound",
+          type: "boolean",
+        },
+        requested: {
+          title: "Requested",
+          type: "integer",
+        },
+        read: {
+          title: "Read",
+          type: "integer",
+        },
+        is_sample: {
+          title: "Is sample",
+          type: "boolean",
+        },
+        can_extend: {
+          title: "Can extend",
+          type: "boolean",
+        },
+        next_size: {
+          title: "Next size",
+          type: "integer",
         },
       },
     },

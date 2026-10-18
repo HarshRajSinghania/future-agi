@@ -24,32 +24,180 @@ import {
   validateInstantEval,
 } from "../instantEvalPayloads";
 import {
-  LIMIT_OPTIONS,
   defaultReads,
   draftsFromQuestions,
   emptyDraft,
   filtersWindow,
   formatCount,
-  limitHelp,
-  limitOptionLabel,
-  runButtonLabel,
   unitMeta,
 } from "../instantEvalUnits";
 import { useInstantEvals } from "../useInstantEval";
 import { useJevAvailability } from "../useJevAvailability";
 import { EXAMPLES } from "./askExamples";
-import { autoLimit, useAskPopulation } from "./askPopulation";
+import {
+  MAX_HANDOVER,
+  choiceCost,
+  defaultChoice,
+  sampleSizes,
+  useAskScope,
+} from "./askPopulation";
+import { creditWords, durationWords } from "./askFilter";
 import { sourceViewLink, sourceViewTitle } from "./askLinks";
 import { scopeWords } from "./askFormat";
 
 const asDraft = (entry) => draftsFromQuestions([entry])[0];
 
-function ScopeCard({ projectId, unit, seed, population, limit }) {
+const ALL = "all";
+
+function ChoiceCard({
+  selected,
+  onSelect,
+  title,
+  detail,
+  note,
+  disabled,
+  children,
+}) {
+  return (
+    <Paper
+      variant="outlined"
+      role="radio"
+      aria-checked={selected}
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : 0}
+      onClick={disabled ? undefined : onSelect}
+      onKeyDown={(event) => {
+        if (!disabled && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      sx={{
+        flex: 1,
+        minWidth: 240,
+        p: 1.5,
+        borderRadius: 1.5,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.55 : 1,
+        borderColor: selected ? "primary.main" : "divider",
+        boxShadow: (theme) =>
+          selected ? `inset 0 0 0 1px ${theme.palette.primary.main}` : "none",
+        "&:focus-visible": {
+          outline: "2px solid",
+          outlineColor: "primary.main",
+        },
+      }}
+    >
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Box
+          aria-hidden
+          sx={{
+            width: 14,
+            height: 14,
+            borderRadius: "50%",
+            border: "2px solid",
+            borderColor: selected ? "primary.main" : "text.disabled",
+            display: "grid",
+            placeItems: "center",
+            flexShrink: 0,
+          }}
+        >
+          {selected && (
+            <Box
+              sx={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                bgcolor: "primary.main",
+              }}
+            />
+          )}
+        </Box>
+        <Typography variant="body2" fontWeight={600} sx={{ flex: 1 }}>
+          {title}
+        </Typography>
+        {children}
+      </Stack>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        component="p"
+        sx={{ mt: 0.5, pl: 3, fontVariantNumeric: "tabular-nums" }}
+      >
+        {detail}
+      </Typography>
+      {note && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="p"
+          sx={{ pl: 3 }}
+        >
+          {note}
+        </Typography>
+      )}
+    </Paper>
+  );
+}
+
+ChoiceCard.propTypes = {
+  selected: PropTypes.bool,
+  onSelect: PropTypes.func.isRequired,
+  title: PropTypes.node.isRequired,
+  detail: PropTypes.node,
+  note: PropTypes.node,
+  disabled: PropTypes.bool,
+  children: PropTypes.node,
+};
+
+const costLine = (cost, unit, estimate) => {
+  if (!cost) return "";
+  const noun = unit === "users" ? "sessions" : unitMeta(unit).plural;
+  const upTo = unit === "users" ? "up to " : "";
+  const perUser = estimate?.sessions_per_user
+    ? ` (${estimate.sessions_per_user} per user)`
+    : "";
+  // Set when the plan's rate, not Jev, decides how long a run takes.
+  const planRate = estimate?.plan_rate_per_min;
+  const pace = planRate
+    ? ` (your plan answers ${Math.round(planRate).toLocaleString()} a minute)`
+    : "";
+  return `Reads ${upTo}${cost.rows.toLocaleString()} ${noun}${perUser} · ${creditWords(
+    cost.credits,
+  )} · ${durationWords(cost.seconds)}${pace}`;
+};
+
+// "Your plan has 300 Jev answers left; up to 150 sessions fit."
+const quotaNote = (cost, unit) =>
+  cost.fitsRows
+    ? `More Jev answers than your plan has left; up to ${cost.fitsRows.toLocaleString()} ${unitMeta(unit).plural} fit.`
+    : "Your plan has no Jev answers left for now.";
+
+function ScopeCard({
+  projectId,
+  unit,
+  seed,
+  scope,
+  choice,
+  onChoose,
+  questions,
+}) {
   const meta = unitMeta(unit);
-  // The view's own words for its scope, filters counted.
-  const scope = scopeWords(seed?.label);
-  const size = population.count;
-  const asked = size ? Math.min(limit, size.count) : 0;
+  const words = scopeWords(seed?.label);
+  const { estimate } = scope;
+  const count = estimate?.population ?? 0;
+  const sizes = sampleSizes(estimate);
+  const sampled = choice !== ALL && sizes.length > 0;
+  const sampleSize = sampled ? choice : null;
+  const shownSize = sampleSize ?? defaultChoice(estimate) ?? sizes[0];
+  const sampleCost = choiceCost(estimate, shownSize, questions);
+  const allCost = choiceCost(estimate, null, questions);
+  const noun = count === 1 ? meta.noun : meta.plural;
+  const source = scope.handedOver
+    ? `handed over${words ? ` from ${words}` : ""}`
+    : scope.fallback
+      ? `, the newest in the ${sourceViewTitle(unit)} view`
+      : `in the ${sourceViewTitle(unit)} view${words ? ` · ${words}` : ""}`;
   return (
     <Paper
       variant="outlined"
@@ -62,35 +210,36 @@ function ScopeCard({ projectId, unit, seed, population, limit }) {
           sx={{ color: "text.secondary", mt: 0.25, flexShrink: 0 }}
         />
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          {population.isLoading ? (
-            <Skeleton variant="text" width={260} />
-          ) : population.isError ? (
+          {scope.isLoading ? (
+            <Skeleton variant="text" width={300} />
+          ) : scope.isError ? (
             <Typography variant="body2" color="error.main">
-              The {meta.plural} in that view couldn&apos;t be read.{" "}
+              The {meta.plural} in that view couldn&apos;t be counted.{" "}
               <Link
                 component="button"
                 type="button"
-                onClick={() => population.refetch()}
+                onClick={() => scope.refetch()}
               >
                 Retry
               </Link>
             </Typography>
           ) : (
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {formatCount(size?.count, size?.lowerBound)}{" "}
-              {size?.count === 1 ? meta.noun : meta.plural}
-              {population.handedOver
-                ? ` handed over${scope ? ` from ${scope}` : ""}`
-                : ` in the ${sourceViewTitle(unit)} view`}
-              {asked && size && asked < size.count
-                ? ` · Jev reads the newest ${formatCount(asked)}`
-                : ""}
+            <Typography
+              variant="body2"
+              sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
+            >
+              {formatCount(count, estimate?.population_is_lower_bound)} {noun}{" "}
+              {source}
             </Typography>
           )}
           <Typography variant="caption" color="text.secondary" component="p">
-            {population.handedOver
-              ? "Exactly the rows handed over."
-              : scope || "The rows the view shows, newest first."}{" "}
+            {scope.tooMany
+              ? `Only the first ${MAX_HANDOVER.toLocaleString()} rows handed over are read.`
+              : scope.fallback
+                ? `The server can't count these filters, so Jev reads the newest ${count.toLocaleString()} the view shows.`
+                : scope.handedOver
+                  ? "Exactly the rows handed over."
+                  : "Counted with the view's own filters and date range."}{" "}
             <Link
               component={RouterLink}
               to={sourceViewLink(projectId, unit)}
@@ -101,6 +250,73 @@ function ScopeCard({ projectId, unit, seed, population, limit }) {
           </Typography>
         </Box>
       </Stack>
+      {estimate && count > 0 && (
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={1.25}
+          role="radiogroup"
+          aria-label="How many to read"
+          sx={{ mt: 1.75 }}
+        >
+          {sizes.length > 0 && (
+            <ChoiceCard
+              selected={sampled}
+              onSelect={() => onChoose(shownSize)}
+              title={
+                <>
+                  A sample of{" "}
+                  <Box
+                    component="span"
+                    sx={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {shownSize.toLocaleString()}
+                  </Box>
+                </>
+              }
+              detail={`${costLine(sampleCost, unit, estimate)}. Picked at random; the same rows each time.`}
+              note={
+                sampleCost?.quotaLimited ? quotaNote(sampleCost, unit) : null
+              }
+            >
+              <TextField
+                select
+                size="small"
+                variant="standard"
+                value={shownSize}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => onChoose(Number(event.target.value))}
+                SelectProps={{
+                  renderValue: () => "Change",
+                  inputProps: { "aria-label": "Sample size" },
+                }}
+                sx={{ minWidth: 64, "& .MuiInput-input": { fontSize: 12 } }}
+              >
+                {sizes.map((size) => (
+                  <MenuItem key={size} value={size}>
+                    {size.toLocaleString()} {meta.plural}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </ChoiceCard>
+          )}
+          <ChoiceCard
+            selected={!sampled}
+            onSelect={() => onChoose(ALL)}
+            disabled={!allCost?.allowed}
+            title={`${sizes.length ? "All " : "Every one of the "}${count.toLocaleString()}`}
+            detail={costLine(allCost, unit, estimate)}
+            note={
+              allCost?.quotaLimited
+                ? quotaNote(allCost, unit)
+                : !allCost?.allowed
+                  ? `Over the ${estimate.max_rows.toLocaleString()}-row limit for one run. Read a sample, or narrow the view.`
+                  : allCost.needsConfirm
+                    ? "You confirm the credits before it starts."
+                    : null
+            }
+          />
+        </Stack>
+      )}
     </Paper>
   );
 }
@@ -109,14 +325,17 @@ ScopeCard.propTypes = {
   projectId: PropTypes.string.isRequired,
   unit: PropTypes.string.isRequired,
   seed: PropTypes.object,
-  population: PropTypes.object.isRequired,
-  limit: PropTypes.number.isRequired,
+  scope: PropTypes.object.isRequired,
+  choice: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+  onChoose: PropTypes.func.isRequired,
+  questions: PropTypes.number.isRequired,
 };
 
 /**
- * A new question, full page: what Jev should answer about every row handed
- * over from a view, what it reads of each, and how many rows. Asking starts
- * the run at once; the page then shows every row filling in.
+ * A new question, full page: what Jev should answer about the rows of a view
+ * (or the rows handed over), what it reads of each, and whether to read a
+ * random sample or every row, with what each costs. A run past the confirm
+ * size restates its credits before it starts.
  */
 export default function AskComposer({
   projectId,
@@ -128,7 +347,7 @@ export default function AskComposer({
 }) {
   const meta = unitMeta(unit);
   const jev = useJevAvailability();
-  const population = useAskPopulation({ projectId, unit, seed });
+  const scope = useAskScope({ projectId, unit, seed });
   const saved = useInstantEvals(projectId, { unit });
   const [questions, setQuestions] = useState(() =>
     seed?.questions?.length
@@ -136,25 +355,20 @@ export default function AskComposer({
       : [emptyDraft()],
   );
   const [reads, setReads] = useState(() => defaultReads(unit));
-  // Until a size is picked, the run covers the whole view (up to the largest
-  // size), so the timeline shows the whole window.
-  const [pickedLimit, setLimit] = useState(null);
+  // A sample of 1,000 above 1,000 rows, else every row, until one is picked.
+  const [picked, setPicked] = useState(null);
+  const [confirming, setConfirming] = useState(false);
   const [touched, setTouched] = useState(false);
   const errors = questions.map((question) =>
     validateInstantEval(question, meta.noun),
   );
   const readChoices = readsFor(unit);
-  const limitChoices = population.handedOver
-    ? [population.items.length]
-    : LIMIT_OPTIONS[unit] || LIMIT_OPTIONS.traces;
-  const limit =
-    pickedLimit ??
-    (population.handedOver
-      ? population.items.length
-      : autoLimit(limitChoices, population.count?.count, unit));
-  const coverage = population.count
-    ? Math.min(limit, population.count.count)
-    : limit;
+  const estimate = scope.estimate;
+  const choice = picked ?? defaultChoice(estimate) ?? ALL;
+  const sampleSize = choice === ALL ? null : choice;
+  const filled = Math.max(1, questions.filter((q) => q.question.trim()).length);
+  const cost = choiceCost(estimate, sampleSize, filled);
+  const count = estimate?.population ?? 0;
 
   const addQuestion = (entry) =>
     setQuestions((prev) => {
@@ -168,23 +382,31 @@ export default function AskComposer({
       return [...prev, draft];
     });
 
-  const ask = () => {
+  const ask = (confirmed = false) => {
     setTouched(true);
-    if (errors.some(Boolean) || !population.items.length) return;
+    if (errors.some(Boolean) || !count || !cost?.allowed) return;
+    if (cost.needsConfirm && !confirmed) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
     onAsk({
       questions,
       reads,
-      items: population.items.slice(0, limit),
-      filters: seed?.filters || [],
-      handedOver: population.handedOver,
+      filters: scope.filters,
+      ids: scope.ids,
+      sampleSize,
+      confirm: confirmed,
+      handedOver: scope.handedOver,
       window: filtersWindow(seed?.filters) || null,
+      rows: cost.rows,
     });
   };
 
   const showExamples = !questions.some((question) => question.question.trim());
   const recent = (saved.items || []).slice(0, 6);
   const nothingInView =
-    !population.isLoading && !population.isError && !population.items.length;
+    !scope.isLoading && !scope.isError && Boolean(estimate) && !count;
 
   return (
     <Stack spacing={3} sx={{ maxWidth: 880 }}>
@@ -226,8 +448,13 @@ export default function AskComposer({
         projectId={projectId}
         unit={unit}
         seed={seed}
-        population={population}
-        limit={limit}
+        scope={scope}
+        choice={choice}
+        onChoose={(next) => {
+          setPicked(next);
+          setConfirming(false);
+        }}
+        questions={filled}
       />
 
       <Stack spacing={1.25}>
@@ -296,16 +523,10 @@ export default function AskComposer({
         </Box>
       )}
 
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" },
-          gap: 2,
-          alignItems: "start",
-        }}
-      >
+      <Box sx={{ maxWidth: 432 }}>
         <TextField
           select
+          fullWidth
           size="small"
           label="Jev reads"
           value={reads}
@@ -331,27 +552,6 @@ export default function AskComposer({
             </MenuItem>
           ))}
         </TextField>
-        <TextField
-          select
-          size="small"
-          label={unit === "users" ? "Users" : meta.title}
-          value={limitChoices.includes(limit) ? limit : ""}
-          onChange={(event) => setLimit(Number(event.target.value))}
-          helperText={
-            population.handedOver
-              ? "Every row handed over."
-              : limitHelp({ unit, limit })
-          }
-          disabled={population.handedOver}
-        >
-          {limitChoices.map((value) => (
-            <MenuItem key={value} value={value}>
-              {population.handedOver
-                ? `All ${formatCount(value)} ${unitMeta(unit).plural}`
-                : limitOptionLabel(unit, value)}
-            </MenuItem>
-          ))}
-        </TextField>
       </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
@@ -359,6 +559,34 @@ export default function AskComposer({
         <Alert severity="info">
           There are no {meta.plural} in that view to ask about. Widen its date
           range or filters in {sourceViewTitle(unit)}.
+        </Alert>
+      )}
+
+      {confirming && cost && (
+        <Alert
+          severity="warning"
+          icon={<Iconify icon="mdi:cash-check" width={20} />}
+          action={
+            <Stack direction="row" spacing={1}>
+              <Button size="small" onClick={() => setConfirming(false)}>
+                Back
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                color="warning"
+                disabled={starting}
+                onClick={() => ask(true)}
+              >
+                Start
+              </Button>
+            </Stack>
+          }
+        >
+          Read {cost.rows.toLocaleString()} {meta.plural}? That is{" "}
+          {creditWords(cost.credits)} for {filled} question
+          {filled === 1 ? "" : "s"}, and takes {durationWords(cost.seconds)}.
+          You can pause or cancel it while it runs.
         </Alert>
       )}
 
@@ -370,10 +598,12 @@ export default function AskComposer({
             !jev.available ||
             jev.isLoading ||
             starting ||
-            population.isLoading ||
-            nothingInView
+            scope.isLoading ||
+            nothingInView ||
+            !cost?.allowed ||
+            confirming
           }
-          onClick={ask}
+          onClick={() => ask(false)}
           startIcon={
             starting ? (
               <CircularProgress size={16} color="inherit" />
@@ -384,9 +614,17 @@ export default function AskComposer({
         >
           {starting
             ? "Starting…"
-            : population.isLoading
+            : scope.isLoading
               ? `Counting the ${meta.plural}…`
-              : runButtonLabel({ unit, coverage })}
+              : cost
+                ? `Ask Jev about ${sampleSize ? "a sample of " : ""}${cost.rows.toLocaleString()} ${
+                    unit === "users"
+                      ? "sessions"
+                      : cost.rows === 1
+                        ? meta.noun
+                        : meta.plural
+                  }`
+                : `Ask Jev`}
         </Button>
         <Typography
           variant="caption"

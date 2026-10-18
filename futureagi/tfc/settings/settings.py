@@ -1564,3 +1564,15 @@ EVAL_SPAN_READ_SOURCE = os.getenv("EVAL_SPAN_READ_SOURCE", "postgres").lower()
 # Concurrent Jev calls per worker process (ee/jev/client.py). Instant eval
 # drains up to 32 rows at once, so a worker that serves it wants at least that.
 JEV_MAX_CONCURRENT = int(os.getenv("JEV_MAX_CONCURRENT", "8"))
+
+# Instant eval at scale (tracer/views/instant_eval.py). The server refuses a run
+# above MAX_ROWS, asks the person to confirm the credits above CONFIRM_ROWS, and
+# lets an organization run at most MAX_ACTIVE_PER_ORG at a time.
+INSTANT_EVAL_MAX_ROWS = int(os.getenv("INSTANT_EVAL_MAX_ROWS", "100000"))
+INSTANT_EVAL_CONFIRM_ROWS = int(os.getenv("INSTANT_EVAL_CONFIRM_ROWS", "5000"))
+INSTANT_EVAL_MAX_ACTIVE_PER_ORG = int(os.getenv("INSTANT_EVAL_MAX_ACTIVE_PER_ORG", "2"))
+# Rows a run is assumed to read a minute, for the time estimate before it
+# starts (a run's page shows the measured rate once answers land).
+INSTANT_EVAL_ASSUMED_ROWS_PER_MIN = float(
+    os.getenv("INSTANT_EVAL_ASSUMED_ROWS_PER_MIN", "300")
+)

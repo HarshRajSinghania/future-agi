@@ -5,7 +5,15 @@ import {
   defaultAnswer,
   resolveFocus,
 } from "../askAnswers";
-import { PIVOTS, buildPivot, shareLevel } from "../askPivot";
+import {
+  PIVOTS,
+  buildMatrix,
+  buildTimeGrid,
+  nicePeak,
+  shareLevel,
+  wilsonLower,
+} from "../askPivot";
+import { matchesFilter, summarizeRecords } from "../askSummary";
 import {
   benjaminiHochberg,
   findPatterns,
@@ -202,12 +210,24 @@ describe("timeline binning", () => {
     });
     const day = new Date(run.outage.day).getTime();
     const from = timeline.columns.findIndex((c) => c.start === day + 14 * HOUR);
-    const { ids, label } = selectColumns(timeline.columns, from + 1, from);
+    const { count, filter, label } = selectColumns(
+      timeline.columns,
+      from + 1,
+      from,
+    );
     const expected = run.records
       .filter((r) => {
         const ms = new Date(r.time).getTime();
         return ms >= day + 14 * HOUR && ms < day + 18 * HOUR;
       })
+      .map((r) => r.id);
+    expect(filter).toEqual({
+      time_from: new Date(day + 14 * HOUR).toISOString(),
+      time_to: new Date(day + 18 * HOUR).toISOString(),
+    });
+    expect(count).toBe(expected.length);
+    const ids = run.records
+      .filter((r) => matchesFilter(r, filter))
       .map((r) => r.id);
     expect(new Set(ids)).toEqual(new Set(expected));
     run.outage.ids.forEach((id) => expect(ids).toContain(id));
@@ -272,7 +292,8 @@ describe("findPatterns", () => {
         `^“No” on \\w+ \\d+, 2–5 PM: 9 of 9 \\(100%\\) vs \\d+% elsewhere$`,
       ),
     );
-    expect(new Set(first.ids)).toEqual(new Set(run.outage.ids));
+    const selected = run.records.filter((r) => matchesFilter(r, first.filter));
+    expect(new Set(selected.map((r) => r.id))).toEqual(new Set(run.outage.ids));
     expect(first.q).toBeLessThan(0.1);
   });
 
@@ -280,7 +301,7 @@ describe("findPatterns", () => {
     const errors = result.patterns.filter((p) => p.dimension === "error");
     expect(errors.length).toBeLessThanOrEqual(1);
     if (errors.length) {
-      expect(errors[0].text).toMatch(/when the run hit an error/);
+      expect(errors[0].text).toMatch(/when the trace had an error/);
       expect(errors[0].when).toMatch(
         new RegExp(`^all ${OUTAGE_ERRORS} on \\w+ \\d+, 2–5 PM$`),
       );
@@ -288,9 +309,18 @@ describe("findPatterns", () => {
     const windows = result.patterns.filter((p) => p.dimension === "window");
     expect(windows).toHaveLength(1);
     expect(result.patterns.length).toBeLessThanOrEqual(5);
-    // Every callout's numbers are its own counts.
+    // Every callout's numbers are its own counts, and its filter selects
+    // exactly the rows it counted.
     result.patterns.forEach((p) => {
-      expect(p.ids).toHaveLength(p.n);
+      const answered = run.records.filter(
+        (r) =>
+          matchesFilter(r, p.filter) &&
+          answerState(r, RESOLVED).state === "answered",
+      );
+      expect(answered).toHaveLength(p.n);
+      expect(
+        answered.filter((r) => answerState(r, RESOLVED).answer === "No"),
+      ).toHaveLength(p.k);
       expect(p.text).toContain(`${p.k} of ${p.n}`);
     });
   });
@@ -352,77 +382,134 @@ describe("findPatterns", () => {
 });
 
 describe("heatmap pivots", () => {
+  const summary = summarizeRecords({
+    records: run.records,
+    questions: QUESTIONS,
+    window: run.window,
+  });
+  const pad = (n) => String(n).padStart(2, "0");
+  const dayKey = (date) =>
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+
   it("lays out Day × Hour with the outage cells full of No", () => {
-    const pivot = buildPivot({
-      records: run.records,
-      questions: QUESTIONS,
-      configId: RESOLVED,
-      answer: "No",
+    const grid = buildTimeGrid({
+      summary,
+      question: QUESTIONS[0],
       window: run.window,
     });
-    expect(pivot.rows).toHaveLength(7);
-    expect(pivot.columns).toHaveLength(24);
-    const day = run.outage.day;
-    const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
-    const cells = [14, 15, 16].map((hour) => pivot.cells.get(`${key}|${hour}`));
-    expect(cells.reduce((sum, c) => sum + c.matches, 0)).toBe(OUTAGE_COUNT);
-    cells.forEach((cell) => expect(cell.matches).toBe(cell.answered));
-    expect(pivot.overall.answered).toBe(run.records.length);
+    expect(grid.rows).toHaveLength(7);
+    expect(grid.columns).toHaveLength(24);
+    const key = dayKey(run.outage.day);
+    const cells = [14, 15, 16].map((hour) => grid.cells.get(`${key}|${hour}`));
+    const no = cells.reduce((sum, c) => sum + c.byLabel.get("No"), 0);
+    expect(no).toBe(OUTAGE_COUNT);
+    cells.forEach((cell) => expect(cell.byLabel.get("No")).toBe(cell.answered));
+    expect(grid.overall.answered).toBe(run.records.length);
+    // A cell selects its hour.
+    const cell = grid.cells.get(`${key}|14`);
+    expect(
+      run.records.filter((r) => matchesFilter(r, cell.filter)),
+    ).toHaveLength(cell.n);
   });
 
-  it("keeps the 15 busiest users, and models by day", () => {
-    const users = buildPivot({
-      records: run.records,
-      questions: QUESTIONS,
-      configId: RESOLVED,
-      answer: "No",
-      pivot: "userDay",
+  it("sums the weeks by weekday, and goes to 3-hour blocks when hours are thin", () => {
+    const week = buildTimeGrid({
+      summary,
+      question: QUESTIONS[0],
+      pivot: "weekdayHour",
       window: run.window,
+    });
+    expect(week.rows.map((r) => r.label)).toEqual([
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Sun",
+    ]);
+    expect(week.overall.answered).toBe(run.records.length);
+    const dense = buildTimeGrid({
+      summary,
+      question: QUESTIONS[1],
+      window: run.window,
+      resolution: "dense",
+    });
+    expect(dense.step).toBeGreaterThan(1);
+    expect(dense.columns).toHaveLength(24 / dense.step);
+    expect(dense.overall.answered).toBe(run.records.length);
+  });
+
+  it("lists the busiest users, and models, by answer", () => {
+    const users = buildMatrix({
+      summary,
+      questions: QUESTIONS,
+      question: QUESTIONS[0],
+      pivot: "user",
     });
     expect(users.rows).toHaveLength(15);
     expect(users.rows.map((r) => r.key)).toContain(REPEAT_USER);
     expect(users.hidden).toBeGreaterThan(0);
-    const models = buildPivot({
-      records: run.records,
+    // The customer who never gets an answer stands out as "No".
+    expect(users.standOut.get(`${REPEAT_USER}|No`)).toBeTruthy();
+    const models = buildMatrix({
+      summary,
       questions: QUESTIONS,
-      configId: RESOLVED,
-      answer: "No",
-      pivot: "modelDay",
-      window: run.window,
+      question: QUESTIONS[0],
+      pivot: "model",
     });
     expect(models.rows.map((r) => r.key).sort()).toEqual([
       "claude-haiku-5-5",
       "gpt-4o-mini",
     ]);
+    expect(models.cellFilter(models.rows[0], models.columns[1])).toEqual({
+      group: `model:${models.rows[0].key}`,
+      config_id: RESOLVED,
+      answer: "No",
+    });
   });
 
   it("crosses two questions' answers", () => {
-    const pivot = buildPivot({
-      records: run.records,
+    const matrix = buildMatrix({
+      summary,
       questions: QUESTIONS,
-      configId: RESOLVED,
-      answer: "No",
+      question: QUESTIONS[0],
       pivot: "questions",
     });
-    expect(pivot.rows.map((r) => r.key)).toEqual(["Yes", "No"]);
-    expect(pivot.columns.map((c) => c.key)).toEqual(QUESTIONS[1].labels);
-    const total = [...pivot.cells.values()].reduce(
-      (sum, c) => sum + c.total,
-      0,
-    );
+    expect(matrix.rows.map((r) => r.key)).toEqual(["Yes", "No"]);
+    expect(matrix.columns.map((c) => c.key)).toEqual(QUESTIONS[1].labels);
+    const total = matrix.rows.reduce((sum, row) => sum + row.answered, 0);
     expect(total).toBe(run.records.length);
-    expect(pivot.against.configId).toBe(TOPIC);
+    expect(matrix.against.configId).toBe(TOPIC);
+    const filter = matrix.cellFilter(matrix.rows[1], matrix.columns[0]);
+    const k = run.records.filter((r) => matchesFilter(r, filter)).length;
+    expect(k).toBe(matrix.rows[1].counts.get(QUESTIONS[1].labels[0]));
     expect(PIVOTS.map((p) => p.value)).toEqual([
       "dayHour",
-      "userDay",
+      "weekdayHour",
       "modelDay",
-      "questions",
+      "user",
+      "model",
+      "turns",
     ]);
   });
 
-  it("maps a share to five steps", () => {
-    expect([0, 0.1, 0.25, 0.26, 0.5, 0.74, 1].map(shareLevel)).toEqual([
-      0, 1, 1, 2, 2, 3, 4,
-    ]);
+  it("maps a share to five steps, up to a peak", () => {
+    expect(
+      [0, 0.1, 0.25, 0.26, 0.5, 0.74, 1].map((s) => shareLevel(s)),
+    ).toEqual([0, 1, 1, 2, 2, 3, 4]);
+    expect(shareLevel(0.4, 0.4)).toBe(4);
+    expect(shareLevel(0.2, 0.4)).toBe(2);
+    expect(nicePeak([0.12, 0.31])).toBe(0.4);
+    expect(nicePeak([0.93])).toBe(1);
+    expect(nicePeak([])).toBe(0.1);
+  });
+
+  it("shades a cell by the share it surely has", () => {
+    // 4 of 4 is not "surely 100%": the 95% Wilson interval starts near 51%.
+    expect(wilsonLower(4, 4)).toBeCloseTo(0.5101, 3);
+    expect(wilsonLower(400, 1000)).toBeCloseTo(0.3701, 3);
+    expect(wilsonLower(0, 10)).toBe(0);
+    expect(wilsonLower(0, 0)).toBe(0);
   });
 });

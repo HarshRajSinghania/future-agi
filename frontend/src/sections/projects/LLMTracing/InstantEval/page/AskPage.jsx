@@ -27,8 +27,9 @@ import {
   readHandoff,
 } from "src/sections/projects/observeHandoff";
 import {
+  AskBusy,
   HISTORY_KEY,
-  startAsk,
+  startAskRun,
   useInstantEvalHistory,
   useInstantEvals,
 } from "../useInstantEval";
@@ -78,10 +79,8 @@ function RunPane({
     projectId,
     taskId,
     unit,
-    seedItems: launch?.items,
     questions: launch?.questions,
     startedAt: launch?.startedAt,
-    window: launch?.window,
   });
   // A run opened by its link alone learns its unit from the server, so the
   // URL (and the tab bar) can follow it.
@@ -261,15 +260,15 @@ export default function AskPage() {
     questions,
     existingItems,
     reads,
-    items,
     filters,
-    handedOver,
+    ids,
+    sampleSize,
+    confirm,
     window,
     label,
   }) => {
     const startedAt = new Date().toISOString();
     const shown = {
-      items,
       questions:
         existingItems ||
         questions.map((q) => ({
@@ -285,28 +284,20 @@ export default function AskPage() {
     setPending(shown);
     setStartError(null);
     try {
-      const started = await startAsk({
+      const started = await startAskRun({
         projectId: observeId,
         unit,
         questions,
         existingItems,
         reads,
-        items,
         filters,
-        handedOver,
+        ids,
+        sampleSize,
+        confirm,
       });
-      if (started.empty) {
-        setPending(null);
-        setStartError(started.empty);
-        return;
-      }
       setLaunches((current) => ({
         ...current,
-        [started.taskId]: {
-          ...shown,
-          items: started.items,
-          questions: started.questions,
-        },
+        [started.taskId]: { ...shown, questions: started.questions },
       }));
       setPending(null);
       refreshHistory();
@@ -318,27 +309,28 @@ export default function AskPage() {
     } catch (error) {
       setPending(null);
       setStartError(
-        getSafeActionErrorMessage(
-          error,
-          "Jev couldn't start. Check the question and try again.",
-        ),
+        error instanceof AskBusy || error?.name === "AskNeedsConfirm"
+          ? error.message
+          : getSafeActionErrorMessage(
+              error,
+              "Jev couldn't start. Check the question and try again.",
+            ),
       );
     }
   };
 
+  // The same questions over the same rows: the view's filters and sample
+  // (the same hash-ordered rows), or the same rows handed over.
   const runAgain = async (run) => {
+    const scope = run.summary?.scope || {};
     setRerunning(true);
     try {
       await launchRun({
         existingItems: run.questions,
-        items: run.records.map((record) => ({
-          id: record.id,
-          time: record.time,
-          user_id: record.user_id,
-          trace_id: record.trace_id,
-        })),
-        filters: launches[runId]?.filters || [],
-        handedOver: true,
+        filters: scope.filters || [],
+        ids: scope.ids || undefined,
+        sampleSize: scope.sample_size ?? null,
+        confirm: true,
         window: run.window,
         label: launches[runId]?.label,
       });

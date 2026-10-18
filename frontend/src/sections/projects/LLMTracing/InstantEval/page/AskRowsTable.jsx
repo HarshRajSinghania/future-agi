@@ -1,9 +1,11 @@
-import React, { useState } from "react";
+import React from "react";
 import PropTypes from "prop-types";
 import {
   Box,
   Button,
   Chip,
+  CircularProgress,
+  Skeleton,
   Stack,
   Table,
   TableBody,
@@ -21,7 +23,8 @@ import { answerColor } from "../results/answerColors";
 import { answerState } from "./viz";
 import { facetLine } from "./askFormat";
 
-const PAGE = 50;
+// The table never holds more rows than this; past it, export them.
+const TABLE_MAX_ROWS = 1500;
 // More questions than this share one column.
 const MAX_ANSWER_COLUMNS = 3;
 
@@ -58,7 +61,7 @@ function AnswerCell({ record, question }) {
       </Typography>
     );
   return (
-    <Stack direction="row" spacing={0.75} alignItems="center">
+    <Stack direction="row" spacing={0.75} alignItems="baseline">
       <Box
         sx={{
           width: 8,
@@ -72,8 +75,9 @@ function AnswerCell({ record, question }) {
       <Typography
         variant="body2"
         fontWeight={600}
-        noWrap
+        title={answerText(answer)}
         color={state === "answered" ? "text.primary" : "text.secondary"}
+        sx={{ lineHeight: 1.3, wordBreak: "break-word" }}
       >
         {answerText(answer)}
       </Typography>
@@ -99,8 +103,10 @@ AnswerCell.propTypes = {
 };
 
 /**
- * The rows behind the charts, newest first: when, who, what the row was
- * about, and each answer. A click opens the row in its view.
+ * The rows behind the charts, newest first, a page at a time from the
+ * server: when, who, what the row was about, and each answer. The filter
+ * chip names what the charts selected; Export writes every selected row.
+ * A click opens the row in its view.
  */
 export default function AskRowsTable({
   records,
@@ -110,14 +116,22 @@ export default function AskRowsTable({
   filterLabel,
   onClearFilter,
   total,
+  runTotal,
+  loading,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+  onExport,
 }) {
-  const [shown, setShown] = useState(PAGE);
   const meta = unitMeta(unit);
   const isUser = unit === "users";
   const answerColumns = questions.slice(0, MAX_ANSWER_COLUMNS);
-  const heading = filterLabel
-    ? `${records.length.toLocaleString()} of ${total.toLocaleString()} ${meta.plural}`
-    : `${records.length.toLocaleString()} ${records.length === 1 ? meta.noun : meta.plural}`;
+  const count = total ?? records.length;
+  const heading =
+    filterLabel && runTotal != null
+      ? `${count.toLocaleString()} of ${runTotal.toLocaleString()} ${meta.plural}`
+      : `${count.toLocaleString()} ${count === 1 ? meta.noun : meta.plural}`;
+  const full = records.length >= TABLE_MAX_ROWS;
 
   return (
     <Box
@@ -151,8 +165,21 @@ export default function AskRowsTable({
             size="small"
             label={filterLabel}
             onDelete={onClearFilter}
+            title={filterLabel}
             sx={{ maxWidth: 420 }}
           />
+        )}
+        <Box sx={{ flex: 1 }} />
+        {onExport && (
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<Iconify icon="mdi:download-outline" width={16} />}
+            onClick={onExport}
+            disabled={!count}
+          >
+            Export CSV
+          </Button>
         )}
       </Stack>
       <Box sx={{ overflowX: "auto" }}>
@@ -178,7 +205,16 @@ export default function AskRowsTable({
             </TableRow>
           </TableHead>
           <TableBody>
-            {records.slice(0, shown).map((record) => (
+            {loading &&
+              !records.length &&
+              [0, 1, 2].map((key) => (
+                <TableRow key={`loading-${key}`}>
+                  <TableCell colSpan={3 + answerColumns.length}>
+                    <Skeleton variant="text" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            {records.slice(0, TABLE_MAX_ROWS).map((record) => (
               <TableRow
                 key={record.id}
                 hover
@@ -244,7 +280,7 @@ export default function AskRowsTable({
           </TableBody>
         </Table>
       </Box>
-      {!records.length && (
+      {!records.length && !loading && (
         <Typography
           variant="body2"
           color="text.secondary"
@@ -253,15 +289,34 @@ export default function AskRowsTable({
           No {meta.plural} match.
         </Typography>
       )}
-      {records.length > shown && (
+      {hasMore && !full && (
         <Box sx={{ px: 2, py: 1 }}>
           <Button
             size="small"
-            onClick={() => setShown((count) => count + PAGE)}
+            disabled={loadingMore}
+            onClick={() => onLoadMore?.()}
+            startIcon={
+              loadingMore ? (
+                <CircularProgress size={14} color="inherit" />
+              ) : null
+            }
           >
-            Show {Math.min(PAGE, records.length - shown)} more
+            Show {Math.min(50, count - records.length).toLocaleString()} more
+            {" · "}
+            {records.length.toLocaleString()} of {count.toLocaleString()} shown
           </Button>
         </Box>
+      )}
+      {hasMore && full && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="p"
+          sx={{ px: 2, py: 1.25 }}
+        >
+          Showing the first {TABLE_MAX_ROWS.toLocaleString()}. Export CSV for
+          all {count.toLocaleString()}, or narrow them on the charts.
+        </Typography>
       )}
     </Box>
   );
@@ -274,5 +329,11 @@ AskRowsTable.propTypes = {
   onOpen: PropTypes.func.isRequired,
   filterLabel: PropTypes.string,
   onClearFilter: PropTypes.func,
-  total: PropTypes.number.isRequired,
+  total: PropTypes.number,
+  runTotal: PropTypes.number,
+  loading: PropTypes.bool,
+  hasMore: PropTypes.bool,
+  loadingMore: PropTypes.bool,
+  onLoadMore: PropTypes.func,
+  onExport: PropTypes.func,
 };

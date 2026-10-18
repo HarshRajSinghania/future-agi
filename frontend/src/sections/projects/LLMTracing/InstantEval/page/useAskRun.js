@@ -1,57 +1,63 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import axios, { endpoints } from "src/utils/axios";
-import { historyRun, useInstantEvals } from "../useInstantEval";
+import { useInstantEvals } from "../useInstantEval";
 
-// One Instant eval run as the Ask page reads it: every row it asks about, from
-// the moment it starts, each filling in with Jev's answers while they land.
+// One Instant eval run as the Ask page reads it, at any size. The server
+// aggregates: one summary (progress, answer counts, the timeline and every
+// group the charts need, as counts) is read every 2 s while the run is live,
+// and the same summary serves a run of 100 rows or 100,000. Only a run of up
+// to 1,500 rows also reads its rows, for the charts' square-per-row mode;
+// the rows table pages through the rows endpoint on its own (useAskRows).
 //
-//   useAskRun({ projectId, taskId, unit, seedItems }) -> {
-//     status: "loading" | "running" | "done" | "error",
-//     startedAt, elapsedMs, answered, total,
-//     questions: [{ configId, question, answerType, labels }],
-//     records: [{ id, unit, time, user_id, end_user_id, label, excerpt,
-//                 trace_id, facets: { model, turns, duration_ms, error },
-//                 answers: { [configId]: { answer, confidence, explanation,
-//                                          status } } }],
-//     window: [isoStart, isoEnd] | null,
+//   useAskRun({ projectId, taskId, unit, questions, startedAt, tz }) -> {
+//     status: "loading" | "preparing" | "running" | "paused" | "done"
+//             | "cancelled" | "stalled" | "error",
+//     summary,              // GET /tracer/instant-eval/summary/ result
+//     records | null,       // every row, when the run has ≤ 1,500
+//     questions: [{ configId, question, answerType, labels, ... }],
+//     total, answered, failed, pending, notRead, rate, eta, sample,
+//     startedAt, elapsedMs, window: [isoStart, isoEnd] | null,
+//     control(action, options),  // pause | resume | cancel | retry_failed | read_more
 //   }
-//
-// A missing answers key means the row hasn't been read yet; an answer of null
-// with status "pending" or "running" means Jev is reading it.
 
-export const ANSWERS_POLL_MS = 1500;
-const RUN_POLL_MS = 5000;
+export const SUMMARY_POLL_MS = 2000;
+// A slow summary means a busy server: poll it less often, never on top of
+// a poll still in flight.
+export const SLOW_POLL_MS = 5000;
+export const SLOWER_POLL_MS = 10000;
+
+/** How long to wait before the next poll of a live run, by how long the last took. */
+export const livePollMs = (lastMs) =>
+  lastMs > 3000
+    ? SLOWER_POLL_MS
+    : lastMs > 1000
+      ? SLOW_POLL_MS
+      : SUMMARY_POLL_MS;
+// A run that stopped before finishing is looked at again now and then, in
+// case it wasn't stopped after all.
+export const STALLED_POLL_MS = 15000;
+export const SQUARES_MAX = 1500;
 const TICK_MS = 1000;
-const IN_FLIGHT = new Set(["pending", "running"]);
-const TERMINAL = new Set(["completed", "failed", "paused", "deleted"]);
-const NO_FACETS = { model: null, turns: null, duration_ms: null, error: null };
+const LIVE = new Set(["pending", "running"]);
 
 const result = (response) => response?.data?.result;
 const finite = (value) =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
-export const askRunKeys = {
-  run: (projectId, taskId) => ["ask-run", projectId, taskId],
-  answers: (projectId, taskId, unit, configIds) => [
-    "ask-run-answers",
-    projectId,
-    taskId,
-    unit,
-    configIds,
-  ],
+export const viewerTimeZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
 };
 
-/** The run's History entry: its questions, unit, reads and progress. */
-export async function fetchAskRun({ projectId, taskId, signal }) {
-  const response = await axios.get(endpoints.project.instantEvalRuns(), {
-    params: { project_id: projectId, task_id: taskId, page_size: 1 },
-    signal,
-  });
-  const run = result(response)?.runs?.[0];
-  if (!run) throw new Error("This run could not be found.");
-  return run;
-}
+export const askRunKeys = {
+  summary: (projectId, taskId, tz) => ["ask-summary", projectId, taskId, tz],
+  records: (projectId, taskId, tz) => ["ask-records", projectId, taskId, tz],
+  rows: (projectId, taskId) => ["ask-rows", projectId, taskId],
+};
 
 function toAnswer(entry = {}) {
   const answer =
@@ -69,7 +75,7 @@ function toAnswer(entry = {}) {
   };
 }
 
-/** One row of the answers endpoint as a record. */
+/** One row of the rows endpoint as a record. */
 export function toRecord(row, unit) {
   const facets = row.facets || {};
   return {
@@ -97,68 +103,119 @@ export function toRecord(row, unit) {
   };
 }
 
-// A row handed over from the view, before the answers endpoint has it.
-const seedRecord = (item, unit) => ({
-  id: String(item.id),
-  unit,
-  time: item.time || null,
-  user_id: item.user_id || "",
-  end_user_id: unit === "users" ? String(item.id) : "",
-  label: "",
-  excerpt: "",
-  trace_id: item.trace_id || null,
-  facets: NO_FACETS,
-  answers: {},
-});
-
-const newestFirst = (a, b) =>
-  new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime();
+const SEPARATOR = " · ";
 
 /**
- * Every row of the run, newest first: the answers endpoint's rows, plus any
- * handed-over row it hasn't returned yet, so each square shows from the start.
+ * Question text as the page shows it: without "Instant eval · ", and without
+ * a leading "Name · " that every question of the run shares (a run named
+ * "Synthetic scale test · …" shows "What did the customer come for?").
  */
-export function mergeRecords(rows = [], seedItems = [], unit) {
-  const known = new Set(rows.map((row) => row.id));
-  const missing = seedItems
-    .filter((item) => item?.id && !known.has(String(item.id)))
-    .map((item) => seedRecord(item, unit));
-  return [...rows, ...missing].sort(newestFirst);
+export function displayQuestions(texts = []) {
+  const stripped = texts.map((text) =>
+    (text || "").replace(/^Instant eval · /, ""),
+  );
+  const prefixOf = (text) => {
+    const at = text.indexOf(SEPARATOR);
+    return at > 0 ? text.slice(0, at + SEPARATOR.length) : null;
+  };
+  const prefix = prefixOf(stripped[0] || "");
+  const shared =
+    prefix &&
+    stripped.every(
+      (text) => text.startsWith(prefix) && text.length > prefix.length,
+    );
+  return shared ? stripped.map((text) => text.slice(prefix.length)) : stripped;
 }
 
-/** Every question of the row has its answer (a failure counts). */
-export const isAnswered = (record, configIds) =>
-  configIds.length > 0 &&
-  configIds.every((configId) => {
-    const entry = record.answers?.[configId];
-    return Boolean(entry?.answer) && !IN_FLIGHT.has(entry.status);
+/** The summary's questions, with what their saved evaluators add. */
+export function summaryQuestions(summary, configsById = {}) {
+  const items = summary?.questions || [];
+  const shown = displayQuestions(
+    items.map(
+      (item) => item.question || configsById[item.config_id]?.question || "",
+    ),
+  );
+  return items.map((item, index) => {
+    const saved = configsById[item.config_id] || {};
+    return {
+      configId: item.config_id,
+      question: shown[index],
+      fullQuestion: item.question || saved.question || "",
+      answerType: item.answer_type || saved.answerType,
+      labels: item.labels?.length ? item.labels : saved.labels || [],
+      definitions: saved.definitions || {},
+      ...(saved.reads ? { reads: saved.reads } : {}),
+      ...(saved.templateId ? { templateId: saved.templateId } : {}),
+    };
   });
-
-/** The earliest and latest row times, as the timeline's default window. */
-export function windowOf(records = []) {
-  const times = records
-    .filter((record) => record.time)
-    .map((record) => new Date(record.time).getTime())
-    .filter(Number.isFinite);
-  if (!times.length) return null;
-  return [
-    new Date(Math.min(...times)).toISOString(),
-    new Date(Math.max(...times)).toISOString(),
-  ];
 }
 
-/** The run's questions, from their saved evaluators (or what the run says). */
-export function runQuestions(run, configsById = {}) {
-  if (!run) return [];
-  return historyRun(run, configsById).items.map((item) => ({
-    configId: item.configId,
-    question: item.question,
-    answerType: item.answerType,
-    labels: item.labels || [],
-    definitions: item.definitions || {},
-    ...(item.reads ? { reads: item.reads } : {}),
-    ...(item.templateId ? { templateId: item.templateId } : {}),
-  }));
+/** The run's window: the view's, or the span of its rows. */
+export function summaryWindow(summary) {
+  if (!summary) return null;
+  const timeline = summary.timeline || {};
+  if (Number.isFinite(timeline.from) && Number.isFinite(timeline.to))
+    return [
+      new Date(timeline.from).toISOString(),
+      new Date(timeline.to).toISOString(),
+    ];
+  if (summary.window?.from && summary.window?.to)
+    return [summary.window.from, summary.window.to];
+  return null;
+}
+
+/** The page's status word for a summary. */
+export function runStatus(summary) {
+  if (!summary) return "loading";
+  if (summary.status === "cancelled") return "cancelled";
+  if (summary.status === "stalled") return "stalled";
+  if (summary.status === "pausing") return "pausing";
+  if (summary.status === "paused") return "paused";
+  if (LIVE.has(summary.status))
+    return summary.preparing ? "preparing" : "running";
+  return "done";
+}
+
+/** Read a run's summary; a 304 keeps what the page already has. */
+export async function fetchSummary({ projectId, taskId, tz, etag, signal }) {
+  const response = await axios.get(endpoints.project.instantEvalSummary(), {
+    params: { project_id: projectId, eval_task_id: taskId, tz },
+    headers: etag ? { "If-None-Match": etag } : undefined,
+    validateStatus: (code) => code === 200 || code === 304,
+    signal,
+  });
+  return {
+    notModified: response.status === 304,
+    etag: response.headers?.etag || null,
+    summary: response.status === 304 ? null : result(response),
+  };
+}
+
+/** Every row of a run of up to 1,500, newest first, for the squares. */
+export async function fetchRecords({ projectId, taskId, tz, unit, signal }) {
+  const response = await axios.get(endpoints.project.instantEvalRows(), {
+    params: {
+      project_id: projectId,
+      eval_task_id: taskId,
+      tz,
+      compact: true,
+      page_size: SQUARES_MAX,
+    },
+    signal,
+  });
+  return (result(response)?.rows || []).map((row) => toRecord(row, unit));
+}
+
+/** Pause, resume, cancel, retry the failed rows or read more of a sample. */
+export async function controlRun({ projectId, taskId, action, more, confirm }) {
+  const response = await axios.post(endpoints.project.instantEvalControl(), {
+    project_id: projectId,
+    eval_task_id: taskId,
+    action,
+    ...(more !== undefined ? { more } : {}),
+    ...(confirm ? { confirm: true } : {}),
+  });
+  return result(response);
 }
 
 function useClock(running) {
@@ -173,158 +230,181 @@ function useClock(running) {
 }
 
 /**
- * A run of the Ask page. `seedItems` are the rows handed over when it was
- * asked ({id, time, user_id}); `questions` and `startedAt` describe a run
- * that is still being created (no `taskId` yet); `window` is the view's date
- * window when known.
+ * A run of the Ask page. `questions` and `startedAt` describe a run that is
+ * still being created (no `taskId` yet).
  */
 export function useAskRun({
   projectId,
   taskId,
   unit: unitHint,
-  seedItems,
   questions: pendingQuestions,
   startedAt: launchedAt,
-  window: viewWindow,
+  tz,
 }) {
+  const zone = tz || viewerTimeZone();
+  const queryClient = useQueryClient();
   const saved = useInstantEvals(projectId, { enabled: Boolean(projectId) });
   const configsById = useMemo(
     () => Object.fromEntries(saved.all.map((item) => [item.configId, item])),
     [saved.all],
   );
-  const doneRef = useRef(false);
+  const etag = useRef(null);
+  // How often to read the summary again, or false.
+  const liveRef = useRef(SUMMARY_POLL_MS);
+  // How long the last summary read took.
+  const pollMs = useRef(0);
 
-  const run = useQuery({
-    queryKey: askRunKeys.run(projectId, taskId),
+  const summaryKey = askRunKeys.summary(projectId, taskId, zone);
+  const summaryQuery = useQuery({
+    queryKey: summaryKey,
     enabled: Boolean(projectId && taskId),
-    queryFn: ({ signal }) => fetchAskRun({ projectId, taskId, signal }),
-    refetchInterval: () => (doneRef.current ? false : RUN_POLL_MS),
-    retry: 1,
+    queryFn: async ({ signal }) => {
+      const started = Date.now();
+      try {
+        const read = await fetchSummary({
+          projectId,
+          taskId,
+          tz: zone,
+          etag: etag.current,
+          signal,
+        });
+        if (read.notModified) {
+          const previous = queryClient.getQueryData(summaryKey);
+          if (previous) return previous;
+          etag.current = null;
+          return (await fetchSummary({ projectId, taskId, tz: zone, signal }))
+            .summary;
+        }
+        etag.current = read.etag;
+        return read.summary;
+      } finally {
+        pollMs.current = Date.now() - started;
+      }
+    },
+    refetchInterval: () => liveRef.current,
+    retry: 2,
     meta: { errorHandled: true },
   });
-  const unit = run.data?.unit || unitHint || "sessions";
+  const summary = summaryQuery.data || null;
+  const status = summary
+    ? runStatus(summary)
+    : summaryQuery.isError
+      ? "error"
+      : "loading";
+  // The next poll starts this long after the last one finished (the
+  // interval restarts with each result), so polls never pile up.
+  liveRef.current =
+    !summary ||
+    status === "running" ||
+    status === "preparing" ||
+    status === "pausing"
+      ? livePollMs(pollMs.current)
+      : status === "stalled"
+        ? STALLED_POLL_MS
+        : false;
+
+  const unit = summary?.unit || unitHint || "sessions";
+  const total = summary?.total ?? 0;
+  const settled = (summary?.answered ?? 0) + (summary?.failed ?? 0);
+
+  // The squares: every row of a small run, read again as answers land.
+  const wantRecords = Boolean(
+    summary && !summary.preparing && total > 0 && total <= SQUARES_MAX,
+  );
+  // While answers land, the squares are read again every twentieth of the
+  // run (50 answers of 1,000), not on every poll; once it ends, in full.
+  const runLive = status === "running" || status === "preparing";
+  const recordsStep = Math.max(1, Math.ceil(total / 20));
+  const recordsMark = runLive ? Math.floor(settled / recordsStep) : settled;
+  const recordsQuery = useQuery({
+    queryKey: [
+      ...askRunKeys.records(projectId, taskId, zone),
+      recordsMark,
+      total,
+      runLive,
+    ],
+    enabled: wantRecords,
+    queryFn: ({ signal }) =>
+      fetchRecords({ projectId, taskId, tz: zone, unit, signal }),
+    placeholderData: (previous) => previous,
+    staleTime: Infinity,
+    retry: 2,
+    meta: { errorHandled: true },
+  });
+  const records = wantRecords ? recordsQuery.data || null : null;
+
   const questions = useMemo(
     () =>
-      run.data
-        ? runQuestions(run.data, configsById)
+      summary
+        ? summaryQuestions(summary, configsById)
         : (pendingQuestions || []).map((item) => ({
             configId: item.configId || "",
             question: item.question,
             answerType: item.answerType,
             labels: item.labels || [],
           })),
-    [run.data, configsById, pendingQuestions],
-  );
-  const configIds = useMemo(
-    () => questions.map((item) => item.configId).filter(Boolean),
-    [questions],
+    [summary, configsById, pendingQuestions],
   );
 
-  // Polls never overlap: react-query reuses a read still in flight.
-  const answers = useQuery({
-    queryKey: askRunKeys.answers(projectId, taskId, unit, configIds.join(",")),
-    enabled: Boolean(projectId && taskId && configIds.length),
-    queryFn: async ({ signal }) => {
-      const response = await axios.get(endpoints.project.instantEvalAnswers(), {
-        params: {
-          project_id: projectId,
-          eval_task_id: taskId,
-          unit,
-          config_ids: configIds.join(","),
-        },
-        signal,
-      });
-      return (result(response)?.rows || [])
-        .filter((row) => row?.id)
-        .map((row) => toRecord(row, unit));
-    },
-    refetchInterval: () => (doneRef.current ? false : ANSWERS_POLL_MS),
-    retry: 2,
-    meta: { errorHandled: true },
-  });
-
-  const records = useMemo(
-    () => mergeRecords(answers.data || [], seedItems || [], unit),
-    [answers.data, seedItems, unit],
-  );
-  const total = records.length;
-  const answered = useMemo(
-    () => records.filter((record) => isAnswered(record, configIds)).length,
-    [records, configIds],
-  );
-
-  // Done once every row has its answers, or the task ended and an answers
-  // read after that shows what it left.
-  const taskEnded =
-    TERMINAL.has(run.data?.status) &&
-    answers.dataUpdatedAt > (run.dataUpdatedAt || Infinity);
-  const done =
-    Boolean(answers.data) && total > 0 && (answered >= total || taskEnded);
-  doneRef.current = done;
-
-  const [doneAt, setDoneAt] = useState(null);
-  useEffect(() => {
-    if (done && !doneAt) setDoneAt(Date.now());
-    if (!done && doneAt) setDoneAt(null);
-  }, [done, doneAt]);
-  // The run's own finish time arrives with the next History read.
-  useEffect(() => {
-    if (done && !run.data?.finished_at && taskId) run.refetch();
-    // Once, when the answers say the run is done.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [done]);
-
-  // A run asked on this page counts from the click, on this browser's
-  // clock, so its time never jumps back when the task's own arrives. Others
-  // count from the task's creation to its last answer.
-  const startedAt = launchedAt || run.data?.created_at || null;
-  const running = !done && Boolean(startedAt);
-  const now = useClock(running);
-  const doneIso = doneAt ? new Date(doneAt).toISOString() : null;
-  const finishedAt = done
-    ? launchedAt
-      ? doneIso
-      : run.data?.finished_at || doneIso
-    : null;
+  const startedAt = launchedAt || summary?.started_at || null;
+  const finishedAt = summary?.finished_at || null;
+  const live = status === "running" || status === "preparing";
+  const now = useClock(live || (!summary && Boolean(launchedAt)));
   const elapsedMs = startedAt
     ? Math.max(
         0,
-        (finishedAt ? new Date(finishedAt).getTime() : now) -
+        (finishedAt && !live ? new Date(finishedAt).getTime() : now) -
           new Date(startedAt).getTime(),
       )
     : null;
 
-  const failed =
-    (run.isError && !run.data) || (answers.isError && !answers.data);
-  let status = "running";
-  if (failed) status = "error";
-  else if (done) status = "done";
-  else if (!total && !answers.data) status = "loading";
+  const window = useMemo(() => summaryWindow(summary), [summary]);
 
-  const windowRange = useMemo(
-    () => (viewWindow?.length === 2 ? viewWindow : windowOf(records)),
-    [viewWindow, records],
-  );
+  const control = async (action, options = {}) => {
+    const response = await controlRun({
+      projectId,
+      taskId,
+      action,
+      ...options,
+    });
+    etag.current = null;
+    liveRef.current = SUMMARY_POLL_MS;
+    await summaryQuery.refetch();
+    return response;
+  };
 
   return {
+    taskId: taskId || null,
     status,
+    summary,
+    records,
+    recordsLoading: wantRecords && !recordsQuery.data,
+    questions,
+    total,
+    answered: summary?.answered ?? 0,
+    failed: summary?.failed ?? 0,
+    pending: summary?.pending ?? 0,
+    notRead: summary?.not_read ?? 0,
+    rate: summary?.rate_per_min ?? null,
+    eta: summary?.eta_s ?? null,
+    sample: summary?.sample || null,
+    createdBy: summary?.created_by || null,
+    creditsUsed: summary?.credits_used ?? null,
     startedAt,
     elapsedMs,
-    answered,
-    total,
-    questions,
-    records,
-    window: windowRange,
-    // Beyond the contract, for the page around the charts.
+    window,
+    tz: zone,
     unit,
     // The unit the server reports for the run, once it has been read.
-    knownUnit: run.data?.unit || null,
-    reads: run.data?.reads || null,
-    taskStatus: run.data?.status || null,
-    error: failed ? run.error || answers.error : null,
+    knownUnit: summary?.unit || null,
+    reads: questions[0]?.reads || null,
+    taskStatus: summary?.status || null,
+    error: summaryQuery.isError && !summary ? summaryQuery.error : null,
     refetch: () => {
-      run.refetch();
-      answers.refetch();
+      etag.current = null;
+      summaryQuery.refetch();
+      if (wantRecords) recordsQuery.refetch();
     },
+    control,
   };
 }

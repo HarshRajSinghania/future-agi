@@ -47,16 +47,20 @@ def _select(task, task_queue, *, workflow_confirmed_stopped: bool = False):
     )
 
 
-# Instant eval: a person is waiting on a small, bounded run, so it drains in
-# one batch with high concurrency instead of waves of 10 behind a 50-row
-# barrier. Larger or regular historical tasks keep the conservative defaults.
-INSTANT_MAX_ROWS = 500
+# Instant eval: a person is watching the answers land, so a run drains in
+# batches of up to 200 with 32 evals in flight instead of waves of 10 behind a
+# 50-row barrier, whatever its size. Each worker process still holds at most
+# JEV_MAX_CONCURRENT Jev calls at once. Regular historical tasks keep the
+# conservative defaults.
+INSTANT_BATCH_SIZE = 200
 INSTANT_MAX_CONCURRENT = 32
+# A worker that dies mid-answer is noticed after a minute, not five.
+INSTANT_HEARTBEAT_S = 60
 
 
 def _instant_sizing(task) -> dict:
     limit = getattr(task, "spans_limit", None) or 0
-    if not 0 < limit <= INSTANT_MAX_ROWS:
+    if limit <= 0:
         return {}
     try:
         configs = list(task.evals.values_list("config", flat=True))
@@ -66,10 +70,13 @@ def _instant_sizing(task) -> dict:
         isinstance(c, dict) and c.get("instant_eval") for c in configs
     ):
         return {}
-    return {
-        "batch_size": min(limit, 200),
+    sizing = {
+        "batch_size": min(limit, INSTANT_BATCH_SIZE),
         "max_concurrent": min(limit, INSTANT_MAX_CONCURRENT),
+        "heartbeat_s": INSTANT_HEARTBEAT_S,
     }
+    logger.info("instant_eval_sizing", task_id=str(task.id), **sizing)
+    return sizing
 
 
 def start_eval_task_workflow_sync(

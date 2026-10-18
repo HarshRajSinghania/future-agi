@@ -10,11 +10,14 @@ import { palette } from "src/theme/palette";
 import { askLink } from "src/sections/projects/observeHandoff";
 
 const fakes = vi.hoisted(() => ({
-  startAsk: vi.fn(),
+  startAskRun: vi.fn(),
+  estimate: vi.fn(),
   runs: [],
   // useAskRun's answer, by task id; a run being created has none.
   askRuns: {},
   askRunArgs: [],
+  rowsArgs: [],
+  control: vi.fn(),
 }));
 
 vi.mock("src/components/iconify", () => ({ default: () => null }));
@@ -27,7 +30,8 @@ vi.mock("../../useJevAvailability", () => ({
 }));
 vi.mock("../../useInstantEval", async (importOriginal) => ({
   ...(await importOriginal()),
-  startAsk: fakes.startAsk,
+  startAskRun: fakes.startAskRun,
+  estimateAsk: fakes.estimate,
   useInstantEvals: () => ({ all: [], items: [], isLoading: false }),
   useInstantEvalHistory: () => ({
     runs: fakes.runs,
@@ -44,37 +48,78 @@ vi.mock("../useAskRun", async (importOriginal) => {
     ...actual,
     useAskRun: (args) => {
       fakes.askRunArgs.push(args);
-      const { taskId, unit, seedItems, questions, startedAt } = args;
+      const { taskId, unit, questions, startedAt } = args;
       return (
         fakes.askRuns[taskId] || {
-          status: "running",
+          taskId: taskId || null,
+          status: "loading",
+          summary: null,
           startedAt,
           elapsedMs: 0,
           answered: 0,
-          total: seedItems?.length || 0,
+          failed: 0,
+          pending: 0,
+          notRead: 0,
+          total: 0,
           questions: (questions || []).map((q) => ({ configId: "", ...q })),
-          records: actual.mergeRecords([], seedItems || [], unit),
+          records: null,
+          sample: null,
           window: null,
           unit,
           reads: null,
           refetch: () => {},
+          control: fakes.control,
         }
       );
     },
   };
 });
+// The rows the table pages through, filtered as the charts select.
+vi.mock("../useAskRows", () => ({
+  useAskRows: (args) => {
+    fakes.rowsArgs.push(args);
+    const run = Object.values(fakes.askRuns).find(
+      (item) => item.taskId === args.taskId,
+    );
+    const all = run?.records || [];
+    const { filter } = args;
+    const rows = all.filter(
+      (record) =>
+        (!filter?.answer ||
+          record.answers[filter.config_id]?.answer === filter.answer) &&
+        (!filter?.time_from ||
+          (record.time >= filter.time_from && record.time < filter.time_to)),
+    );
+    return {
+      rows,
+      total: rows.length,
+      isLoading: false,
+      hasMore: false,
+      isFetchingMore: false,
+      loadMore: () => {},
+    };
+  },
+  fetchRowIds: vi.fn(async () => []),
+  downloadRowsCsv: vi.fn(),
+}));
 // The charts are B's; here they only stand in for a click on them.
 vi.mock("../viz", async (importOriginal) => ({
   ...(await importOriginal()),
-  AskTimeline: ({ records, onSelect, onFocus, questions }) => (
+  AskTimeline: ({ records, summary, onSelect, onFocus, questions }) => (
     <div data-testid="timeline">
-      <span>{records.length} squares</span>
-      <span>
-        {records.filter((r) => !Object.keys(r.answers).length).length} not yet
-      </span>
+      <span>{records ? `${records.length} squares` : "columns"}</span>
+      <span>{summary ? `${summary.total} counted` : "nothing counted"}</span>
       <button
         type="button"
-        onClick={() => onSelect(["s1", "s2"], "Tue Oct 13, 2–4 PM")}
+        onClick={() =>
+          onSelect(
+            {
+              time_from: "2026-10-13T14:00:00Z",
+              time_to: "2026-10-13T16:00:00Z",
+            },
+            "Tue Oct 13, 2–4 PM",
+          )
+        }
       >
         Select the outage
       </button>
@@ -170,30 +215,127 @@ const answered = (id, time, user, answer) => ({
   },
 });
 
-const doneRun = {
-  status: "done",
+const QUESTIONS = [
+  {
+    configId: CONFIG,
+    question: QUESTION,
+    answerType: "yes_no",
+    labels: ["Yes", "No"],
+  },
+];
+
+const runOf = ({
+  status = "done",
+  total = 3,
+  answered: done = 3,
+  failed = 0,
+  sample = null,
+  records,
+} = {}) => ({
+  taskId: "task-sessions",
+  status,
   startedAt: "2026-10-15T10:00:00Z",
   elapsedMs: 21000,
-  answered: 3,
-  total: 3,
-  questions: [
-    {
-      configId: CONFIG,
-      question: QUESTION,
-      answerType: "yes_no",
-      labels: ["Yes", "No"],
-    },
-  ],
-  records: [
-    answered("s3", "2026-10-14T09:00:00Z", "cust_kai", "Yes"),
-    answered("s2", "2026-10-13T15:20:00Z", "cust_ben", "No"),
-    answered("s1", "2026-10-13T14:10:00Z", "cust_ada", "No"),
-  ],
+  answered: done,
+  failed,
+  pending: total - done - failed,
+  notRead: 0,
+  total,
+  rate: status === "running" ? 152 : null,
+  eta: status === "running" ? 240 : null,
+  createdBy: { name: "Nikhil", email: "n@example.com" },
+  questions: QUESTIONS,
+  records:
+    records === undefined
+      ? [
+          answered("s3", "2026-10-14T09:00:00Z", "cust_kai", "Yes"),
+          answered("s2", "2026-10-13T15:20:00Z", "cust_ben", "No"),
+          answered("s1", "2026-10-13T14:10:00Z", "cust_ada", "No"),
+        ]
+      : records,
+  sample,
+  summary: {
+    total,
+    credits_estimate: 0.18,
+    counts: { [CONFIG]: { Yes: 620, No: 380, __error__: failed } },
+    sample,
+    scope: { filters: [], sample_size: sample?.requested ?? null, ids: null },
+  },
   window: ["2026-10-13T14:10:00Z", "2026-10-14T09:00:00Z"],
   unit: "sessions",
   reads: "transcript",
+  tz: "UTC",
   refetch: () => {},
+  control: fakes.control,
+});
+
+const doneRun = runOf();
+
+const ESTIMATE = {
+  population: 104233,
+  population_is_lower_bound: false,
+  rows_to_read: 1000,
+  questions: 1,
+  credits_estimate: 60,
+  seconds_estimate: 210,
+  needs_confirm: false,
+  max_rows: 100000,
+  confirm_rows: 5000,
+  default_sample_size: 1000,
+  sessions_per_user: null,
+  choices: [
+    {
+      sample_size: 500,
+      rows_to_read: 500,
+      seconds_estimate: 110,
+      needs_confirm: false,
+      allowed: true,
+    },
+    {
+      sample_size: 1000,
+      rows_to_read: 1000,
+      seconds_estimate: 210,
+      needs_confirm: false,
+      allowed: true,
+    },
+    {
+      sample_size: 2000,
+      rows_to_read: 2000,
+      seconds_estimate: 410,
+      needs_confirm: false,
+      allowed: true,
+    },
+    {
+      sample_size: 5000,
+      rows_to_read: 5000,
+      seconds_estimate: 1010,
+      needs_confirm: false,
+      allowed: true,
+    },
+    {
+      sample_size: null,
+      rows_to_read: 104233,
+      seconds_estimate: 20857,
+      needs_confirm: true,
+      allowed: false,
+    },
+  ],
 };
+
+const smallEstimate = (count) => ({
+  ...ESTIMATE,
+  population: count,
+  default_sample_size: null,
+  choices: [
+    {
+      sample_size: null,
+      rows_to_read: count,
+      seconds_estimate: 10 + count * 0.2,
+      needs_confirm: count > 5000,
+      allowed: true,
+    },
+  ],
+});
 
 const historyItem = (taskId, unit, question) => ({
   taskId,
@@ -217,24 +359,144 @@ const historyItem = (taskId, unit, question) => ({
 });
 
 beforeEach(() => {
-  fakes.startAsk.mockReset();
+  fakes.startAskRun.mockReset();
+  fakes.estimate.mockReset();
+  fakes.estimate.mockResolvedValue(ESTIMATE);
+  fakes.control.mockReset();
+  fakes.control.mockResolvedValue({ status: "paused", message: "Paused." });
   fakes.runs = [];
   fakes.askRuns = {};
   fakes.askRunArgs = [];
+  fakes.rowsArgs = [];
   globalThis.sessionStorage?.clear?.();
   globalThis.localStorage?.clear?.();
 });
 
 describe("the Ask page", () => {
-  it("asks about the rows handed over and opens the run, every row showing at once", async () => {
+  it("reads a sample of a big view by default and opens the run", async () => {
     let finishStart;
-    fakes.startAsk.mockImplementation(
+    fakes.startAskRun.mockImplementation(
       () =>
         new Promise((resolve) => {
           finishStart = resolve;
         }),
     );
-    // Evaluate → Ask a question on Sessions, Past 7 days.
+    const filters = [
+      {
+        column_id: "created_at",
+        filter_config: {
+          filter_type: "datetime",
+          filter_op: "between",
+          filter_value: ["2026-10-08T00:00:00Z", "2026-10-15T00:00:00Z"],
+        },
+      },
+    ];
+    renderAt(askLink(PROJECT, { unit: "sessions", label: "Past 7D", filters }));
+    expect(where().params).toMatchObject({ new: "1", tab: "sessions" });
+    expect(
+      await screen.findByText(/104,233 sessions in the Sessions view/),
+    ).toBeInTheDocument();
+    // The server counted the view with its own filters.
+    expect(fakes.estimate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: PROJECT,
+        unit: "sessions",
+        filters,
+      }),
+    );
+    const sample = screen.getByRole("radio", { name: /A sample of 1,000/ });
+    expect(sample).toHaveAttribute("aria-checked", "true");
+    expect(
+      within(sample).getByText(/Reads 1,000 sessions · about 60 credits/),
+    ).toBeInTheDocument();
+    // Every row is over the limit for one run.
+    expect(screen.getByRole("radio", { name: /All 104,233/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
+      target: { value: QUESTION },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Ask Jev about a sample of 1,000 sessions",
+      }),
+    );
+    expect(
+      screen.getByText("Saving the question and starting Jev…"),
+    ).toBeInTheDocument();
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: PROJECT,
+        unit: "sessions",
+        filters,
+        sampleSize: 1000,
+        confirm: false,
+        questions: [expect.objectContaining({ question: QUESTION })],
+      }),
+    );
+
+    await act(async () => {
+      finishStart({ taskId: "task-1", questions: QUESTIONS });
+    });
+    const launched = fakes.askRunArgs
+      .filter((args) => args.taskId === "task-1")
+      .at(-1);
+    expect(launched.startedAt).toBe(fakes.askRunArgs[0].startedAt);
+    expect(where().params).toEqual({
+      run: "task-1",
+      unit: "sessions",
+      tab: "sessions",
+    });
+    expect(screen.getByRole("heading", { name: QUESTION })).toBeInTheDocument();
+  });
+
+  it("restates the credits before reading every row of a big view", async () => {
+    fakes.estimate.mockResolvedValue({
+      ...ESTIMATE,
+      population: 20000,
+      choices: [
+        ...ESTIMATE.choices.slice(0, 4),
+        {
+          sample_size: null,
+          rows_to_read: 20000,
+          seconds_estimate: 4010,
+          needs_confirm: true,
+          allowed: true,
+        },
+      ],
+    });
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-2",
+      questions: QUESTIONS,
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions", filters: [] }));
+    fireEvent.click(await screen.findByRole("radio", { name: /All 20,000/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
+      target: { value: QUESTION },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Ask Jev about 20,000 sessions" }),
+    );
+    expect(fakes.startAskRun).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/Read 20,000 sessions\? That is about 1,200 credits/),
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({ sampleSize: null, confirm: true }),
+    );
+  });
+
+  it("asks about exactly the rows handed over", async () => {
+    fakes.estimate.mockResolvedValue(smallEstimate(3));
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-3",
+      questions: QUESTIONS,
+    });
     renderAt(
       askLink(PROJECT, {
         unit: "sessions",
@@ -243,70 +505,9 @@ describe("the Ask page", () => {
         filters: [],
       }),
     );
-    expect(where().params).toMatchObject({
-      new: "1",
-      unit: "sessions",
-      tab: "sessions",
-    });
     expect(
-      screen.getByRole("heading", { name: "Ask Jev about these sessions" }),
+      await screen.findByText(/3 sessions handed over from Past 7 days/),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/3 sessions handed over from Past 7 days/),
-    ).toBeInTheDocument();
-
-    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
-      target: { value: QUESTION },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
-    );
-
-    // While the task is created, every square is there, none read yet.
-    expect(
-      screen.getByText("Saving the question and starting Jev…"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("3 squares")).toBeInTheDocument();
-    expect(screen.getByText("3 not yet")).toBeInTheDocument();
-    expect(fakes.startAsk).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: PROJECT,
-        unit: "sessions",
-        handedOver: true,
-        items: POPULATION,
-        questions: [expect.objectContaining({ question: QUESTION })],
-      }),
-    );
-
-    await act(async () => {
-      finishStart({
-        taskId: "task-1",
-        questions: doneRun.questions,
-        items: POPULATION,
-      });
-    });
-    // The run counts from the click, with the rows it was asked about.
-    const launched = fakes.askRunArgs
-      .filter((args) => args.taskId === "task-1")
-      .at(-1);
-    expect(launched.startedAt).toBe(fakes.askRunArgs[0].startedAt);
-    expect(launched.startedAt).toBeTruthy();
-    expect(launched.seedItems).toEqual(POPULATION);
-    // The run's own address, still on the Sessions tab.
-    expect(where().params).toEqual({
-      run: "task-1",
-      unit: "sessions",
-      tab: "sessions",
-    });
-    expect(screen.getByRole("heading", { name: QUESTION })).toBeInTheDocument();
-    expect(
-      screen.getByText(/Sessions · Past 7 days · 3 sessions/),
-    ).toBeInTheDocument();
-  });
-
-  it("keeps the question as typed when Jev can't start", async () => {
-    fakes.startAsk.mockRejectedValue(new Error("boom"));
-    renderAt(askLink(PROJECT, { unit: "sessions", population: POPULATION }));
     fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
       target: { value: QUESTION },
     });
@@ -315,7 +516,32 @@ describe("the Ask page", () => {
         screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
       );
     });
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ["s1", "s2", "s3"], sampleSize: null }),
+    );
+  });
+
+  it("names the runs in flight when the organization is at its limit", async () => {
+    const { AskBusy } = await import("../../useInstantEval");
+    fakes.estimate.mockResolvedValue(smallEstimate(3));
+    fakes.startAskRun.mockRejectedValue(
+      new AskBusy({
+        message:
+          "Your organization already has 2 Instant eval runs in progress, the most it runs at once: “Was it resolved?” (1,000 rows, started by Ada).",
+      }),
+    );
+    renderAt(askLink(PROJECT, { unit: "sessions", population: POPULATION }));
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Question 1" }),
+      { target: { value: QUESTION } },
+    );
+    await screen.findByText(/3 sessions handed over/);
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
+      );
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(/started by Ada/);
     expect(screen.getByRole("textbox", { name: "Question 1" })).toHaveValue(
       QUESTION,
     );
@@ -389,25 +615,191 @@ describe("the Ask page", () => {
     renderAt(
       `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
     );
+    // A run of a few rows draws a square each; the counts come with it.
+    expect(screen.getByText("3 squares")).toBeInTheDocument();
+    expect(screen.getByText("3 counted")).toBeInTheDocument();
     const table = () =>
       screen.getByRole("region", { name: "Sessions asked about" });
     const rows = () => within(table()).getAllByRole("row").length - 1;
     expect(rows()).toBe(3);
 
     fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    expect(fakes.rowsArgs.at(-1).filter).toEqual({
+      config_id: CONFIG,
+      answer: "No",
+    });
     expect(rows()).toBe(2);
     expect(within(table()).getByText(`No · ${QUESTION}`)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Select the outage" }));
+    expect(fakes.rowsArgs.at(-1).filter).toEqual({
+      time_from: "2026-10-13T14:00:00Z",
+      time_to: "2026-10-13T16:00:00Z",
+    });
     expect(rows()).toBe(2);
+    expect(within(table()).getByText("Tue Oct 13, 2–4 PM")).toBeInTheDocument();
     const bar = screen.getByRole("region", { name: "Selected rows" });
     expect(within(bar).getByText(/2 sessions/)).toBeInTheDocument();
-    expect(
-      within(bar).getByRole("link", { name: /Show in Traces/ }),
-    ).toHaveAttribute("href", expect.stringContaining("session_id"));
 
     fireEvent.click(within(bar).getByRole("button", { name: "Clear" }));
     expect(rows()).toBe(3);
     expect(screen.queryByRole("region", { name: "Selected rows" })).toBeNull();
+  });
+
+  it("estimates the whole view from a sample and reads more of it", async () => {
+    const sample = {
+      population: 104233,
+      population_is_lower_bound: false,
+      requested: 1000,
+      read: 1000,
+      is_sample: true,
+      can_extend: true,
+      next_size: 1000,
+    };
+    fakes.askRuns["task-sessions"] = runOf({
+      total: 1000,
+      answered: 1000,
+      sample,
+      records: null,
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    // Too many rows for squares: the charts draw the counts.
+    expect(screen.getByText("columns")).toBeInTheDocument();
+    expect(screen.getByText("≈ 38% No (95% CI 35–41%)")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1,000 of 104,233 sessions read/),
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Read 1,000 more" }));
+    });
+    expect(fakes.control).toHaveBeenCalledWith("read_more", { more: 1000 });
+  });
+
+  it("says how far the rows Jev couldn't answer could move a sample's estimate", async () => {
+    const sample = {
+      population: 24473,
+      population_is_lower_bound: false,
+      requested: 1000,
+      read: 1000,
+      is_sample: true,
+      can_extend: true,
+      next_size: 1000,
+    };
+    fakes.askRuns["task-sessions"] = runOf({
+      total: 1107,
+      answered: 1000,
+      failed: 107,
+      sample,
+      records: null,
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(
+      screen.getByText(
+        /^107 of 1,107 couldn't be answered\. If they were all Yes or all No, No would be \d+–\d+%\.$/,
+      ),
+    ).toBeInTheDocument();
+    // The retry sits with the bounds, once.
+    const retries = screen.getAllByRole("button", { name: "Retry 107 rows" });
+    expect(retries).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(retries[0]);
+    });
+    expect(fakes.control).toHaveBeenCalledWith("retry_failed", {});
+  });
+
+  it("pauses a live run and retries the rows that failed", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "running",
+      total: 3000,
+      answered: 1200,
+      failed: 30,
+      records: null,
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(
+      screen.getByText(
+        /Answering 1,230 of 3,000 · 152 \/ min · about 4 min left/,
+      ),
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    });
+    expect(fakes.control).toHaveBeenCalledWith("pause", {});
+    // A live run retries its failures once it is done.
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  });
+
+  it("says a pause is draining, and when a run waits for its workers", () => {
+    const pausing = runOf({ status: "pausing", total: 1000, answered: 410 });
+    pausing.summary = { ...pausing.summary, in_flight: 6 };
+    fakes.askRuns["task-sessions"] = pausing;
+    const { unmount } = renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(
+      screen.getByText(/Pausing… 6 still answering · 410 of 1,000 read/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+    unmount();
+
+    const waiting = runOf({ status: "running", total: 1000, answered: 410 });
+    waiting.summary = { ...waiting.summary, waiting_s: 185 };
+    fakes.askRuns["task-sessions"] = waiting;
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(
+      screen.getByText(
+        /Waiting for workers… no answer for 3 min · 410 of 1,000 answered/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("retries the rows that failed once a run is done", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      total: 3000,
+      answered: 2970,
+      failed: 30,
+      records: null,
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(
+      screen.getByText(/30 rows couldn't be fully answered/),
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry 30 rows" }));
+    });
+    expect(fakes.control).toHaveBeenCalledWith("retry_failed", {});
+  });
+});
+
+describe("a run that stopped before finishing", () => {
+  it("says how far it got and resumes", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "stalled",
+      total: 3000,
+      answered: 1200,
+      records: null,
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(
+      screen.getByText(
+        "This run stopped before finishing: 1,200 of 3,000 answered",
+      ),
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    });
+    expect(fakes.control).toHaveBeenCalledWith("resume", {});
   });
 });

@@ -93,6 +93,12 @@ def _claim_batch_sync(task_id: str, n: int) -> dict:
         close_old_connections()
 
 
+def _task_paused(task_id) -> bool:
+    from tracer.models.eval_task import EvalTask, EvalTaskStatus
+
+    return EvalTask.objects.filter(id=task_id, status=EvalTaskStatus.PAUSED).exists()
+
+
 def _run_entry_sync(entry_id: str) -> dict:
     """Run one claimed entry's eval and record its terminal status.
 
@@ -105,13 +111,25 @@ def _run_entry_sync(entry_id: str) -> dict:
     """
     close_old_connections()
     try:
-        from tracer.models.observation_span import EvalLogger
+        from tracer.models.observation_span import EvalEntryStatus, EvalLogger
         from tracer.services.eval_tasks.run_entry import run_entry
 
         with eval_ch_guardrails():
             entry = EvalLogger.objects.filter(id=entry_id).first()
             if entry is None:
                 return {"entry_id": str(entry_id), "task_id": "", "status": "deleted"}
+            if _task_paused(entry.eval_task_id):
+                # Paused after this entry was claimed: a retry (or a launch the
+                # workflow had already queued) gives the entry back instead of
+                # paying for an answer nobody asked to wait for.
+                EvalLogger.objects.filter(
+                    id=entry.id, status=EvalEntryStatus.RUNNING
+                ).update(status=EvalEntryStatus.PENDING)
+                return {
+                    "entry_id": str(entry_id),
+                    "task_id": str(entry.eval_task_id or ""),
+                    "status": "paused",
+                }
             return {
                 "entry_id": str(entry_id),
                 # Carried so the activity wrapper can log which task this run
@@ -376,6 +394,7 @@ def _finalize_task_sync(task_id: str) -> dict:
         task.status = EvalTaskStatus.COMPLETED
         task.end_time = timezone.now()
         task.save(update_fields=["status", "end_time"])
+        _prewarm_instant_summary(task_id)
         return {
             "task_id": str(task_id),
             "finalized": True,
@@ -383,6 +402,21 @@ def _finalize_task_sync(task_id: str) -> dict:
         }
     finally:
         close_old_connections()
+
+
+def _prewarm_instant_summary(task_id: str) -> None:
+    """An Instant eval run that just finished is counted once now, so whoever
+    opens it next reads the count instead of waiting for it. Best effort."""
+    try:
+        from tracer.models.instant_eval import InstantEvalRun
+
+        if not InstantEvalRun.objects.filter(eval_task_id=task_id).exists():
+            return
+        from tracer.views.instant_eval_scale import prewarm_summary
+
+        prewarm_summary(task_id)
+    except Exception:
+        logger.warning("instant_eval_prewarm_failed", task_id=str(task_id), exc_info=True)
 
 
 # =============================================================================

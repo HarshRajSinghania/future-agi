@@ -12,7 +12,7 @@ import { ANSWER_TYPES } from "../../instantEvalPayloads";
 //   "skipped"   nothing to read
 //   "answered"  a label, with `unsure` when confidence < 0.6
 const IN_FLIGHT = new Set(["pending", "running", "queued"]);
-const FAILED = new Set(["error", "failed"]);
+const FAILED = new Set(["error", "errored", "failed"]);
 
 export function answerState(record, configId) {
   const entry = record?.answers?.[configId];

@@ -647,7 +647,16 @@ import type {
   InsightRunResponseApi,
   InsightUnitsResponseApi,
   InstantEvalAnswersResponseApi,
+  InstantEvalControlRequestApi,
+  InstantEvalControlResponseApi,
+  InstantEvalEstimateRequestApi,
+  InstantEvalEstimateResponseApi,
+  InstantEvalLimitErrorApi,
+  InstantEvalRowsResponseApi,
   InstantEvalRunsResponseApi,
+  InstantEvalStartRequestApi,
+  InstantEvalStartResponseApi,
+  InstantEvalSummaryResponseApi,
   InstantEvalUserSessionsApi,
   InstantEvalUserSessionsResponseApi,
   IntegrationConnectionCreateApi,
@@ -1319,7 +1328,10 @@ import type {
   TracerInsightsConfigsListParams,
   TracerInsightsRunsUnitsListParams,
   TracerInstantEvalAnswersListParams,
+  TracerInstantEvalExportListParams,
+  TracerInstantEvalRowsListParams,
   TracerInstantEvalRunsListParams,
+  TracerInstantEvalSummaryListParams,
   TracerObservabilityProviderList200,
   TracerObservabilityProviderListParams,
   TracerObservationSpanGetEvalAttributesListParams,
@@ -73025,6 +73037,373 @@ export const tracerInstantEvalAnswersList = async (
   );
 };
 
+export type tracerInstantEvalControlCreateResponse200 = {
+  data: InstantEvalControlResponseApi;
+  status: 200;
+};
+
+export type tracerInstantEvalControlCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInstantEvalControlCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInstantEvalControlCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInstantEvalControlCreateResponse409 = {
+  data: InstantEvalLimitErrorApi;
+  status: 409;
+};
+
+export type tracerInstantEvalControlCreateResponse422 = {
+  data: ApiErrorResponseApi;
+  status: 422;
+};
+
+export type tracerInstantEvalControlCreateResponse429 = {
+  data: InstantEvalLimitErrorApi;
+  status: 429;
+};
+
+export type tracerInstantEvalControlCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInstantEvalControlCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInstantEvalControlCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 403 | 404 | 409 | 422 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInstantEvalControlCreateResponseSuccess =
+  tracerInstantEvalControlCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInstantEvalControlCreateResponseError = (
+  | tracerInstantEvalControlCreateResponse400
+  | tracerInstantEvalControlCreateResponse403
+  | tracerInstantEvalControlCreateResponse404
+  | tracerInstantEvalControlCreateResponse409
+  | tracerInstantEvalControlCreateResponse422
+  | tracerInstantEvalControlCreateResponse429
+  | tracerInstantEvalControlCreateResponse500
+  | tracerInstantEvalControlCreateResponse503
+  | tracerInstantEvalControlCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInstantEvalControlCreateResponse =
+  | tracerInstantEvalControlCreateResponseSuccess
+  | tracerInstantEvalControlCreateResponseError;
+
+export const getTracerInstantEvalControlCreateUrl = () => {
+  return `/tracer/instant-eval/control/`;
+};
+
+/**
+ * Pause, resume or cancel a run, retry the rows Jev failed on, or
+read more of a sample. Resuming, retrying and reading more count
+against the organization's runs in flight.
+ */
+export const tracerInstantEvalControlCreate = async (
+  instantEvalControlRequestApi: InstantEvalControlRequestApi,
+  options?: RequestInit,
+): Promise<tracerInstantEvalControlCreateResponse> => {
+  return apiMutator<tracerInstantEvalControlCreateResponse>(
+    getTracerInstantEvalControlCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(instantEvalControlRequestApi),
+    },
+  );
+};
+
+export type tracerInstantEvalEstimateCreateResponse200 = {
+  data: InstantEvalEstimateResponseApi;
+  status: 200;
+};
+
+export type tracerInstantEvalEstimateCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInstantEvalEstimateCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInstantEvalEstimateCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInstantEvalEstimateCreateResponse422 = {
+  data: ApiErrorResponseApi;
+  status: 422;
+};
+
+export type tracerInstantEvalEstimateCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInstantEvalEstimateCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInstantEvalEstimateCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 422 | 500 | 503>;
+};
+
+export type tracerInstantEvalEstimateCreateResponseSuccess =
+  tracerInstantEvalEstimateCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInstantEvalEstimateCreateResponseError = (
+  | tracerInstantEvalEstimateCreateResponse400
+  | tracerInstantEvalEstimateCreateResponse403
+  | tracerInstantEvalEstimateCreateResponse404
+  | tracerInstantEvalEstimateCreateResponse422
+  | tracerInstantEvalEstimateCreateResponse500
+  | tracerInstantEvalEstimateCreateResponse503
+  | tracerInstantEvalEstimateCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInstantEvalEstimateCreateResponse =
+  | tracerInstantEvalEstimateCreateResponseSuccess
+  | tracerInstantEvalEstimateCreateResponseError;
+
+export const getTracerInstantEvalEstimateCreateUrl = () => {
+  return `/tracer/instant-eval/estimate/`;
+};
+
+/**
+ * How many rows a view holds, and what a sample or all of it costs.
+ */
+export const tracerInstantEvalEstimateCreate = async (
+  instantEvalEstimateRequestApi: InstantEvalEstimateRequestApi,
+  options?: RequestInit,
+): Promise<tracerInstantEvalEstimateCreateResponse> => {
+  return apiMutator<tracerInstantEvalEstimateCreateResponse>(
+    getTracerInstantEvalEstimateCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(instantEvalEstimateRequestApi),
+    },
+  );
+};
+
+export type tracerInstantEvalExportListResponse200 = {
+  data: string;
+  status: 200;
+};
+
+export type tracerInstantEvalExportListResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInstantEvalExportListResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInstantEvalExportListResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInstantEvalExportListResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInstantEvalExportListResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInstantEvalExportListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 500 | 503>;
+};
+
+export type tracerInstantEvalExportListResponseSuccess =
+  tracerInstantEvalExportListResponse200 & {
+    headers: Headers;
+  };
+export type tracerInstantEvalExportListResponseError = (
+  | tracerInstantEvalExportListResponse400
+  | tracerInstantEvalExportListResponse403
+  | tracerInstantEvalExportListResponse404
+  | tracerInstantEvalExportListResponse500
+  | tracerInstantEvalExportListResponse503
+  | tracerInstantEvalExportListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInstantEvalExportListResponse =
+  | tracerInstantEvalExportListResponseSuccess
+  | tracerInstantEvalExportListResponseError;
+
+export const getTracerInstantEvalExportListUrl = (
+  params: TracerInstantEvalExportListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/tracer/instant-eval/export/?${stringifiedParams}`
+    : `/tracer/instant-eval/export/`;
+};
+
+/**
+ * Every row the filter selects, with each question's answer,
+confidence and explanation, streamed as CSV.
+ */
+export const tracerInstantEvalExportList = async (
+  params: TracerInstantEvalExportListParams,
+  options?: RequestInit,
+): Promise<tracerInstantEvalExportListResponse> => {
+  return apiMutator<tracerInstantEvalExportListResponse>(
+    getTracerInstantEvalExportListUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type tracerInstantEvalRowsListResponse200 = {
+  data: InstantEvalRowsResponseApi;
+  status: 200;
+};
+
+export type tracerInstantEvalRowsListResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInstantEvalRowsListResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInstantEvalRowsListResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInstantEvalRowsListResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInstantEvalRowsListResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInstantEvalRowsListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 500 | 503>;
+};
+
+export type tracerInstantEvalRowsListResponseSuccess =
+  tracerInstantEvalRowsListResponse200 & {
+    headers: Headers;
+  };
+export type tracerInstantEvalRowsListResponseError = (
+  | tracerInstantEvalRowsListResponse400
+  | tracerInstantEvalRowsListResponse403
+  | tracerInstantEvalRowsListResponse404
+  | tracerInstantEvalRowsListResponse500
+  | tracerInstantEvalRowsListResponse503
+  | tracerInstantEvalRowsListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInstantEvalRowsListResponse =
+  | tracerInstantEvalRowsListResponseSuccess
+  | tracerInstantEvalRowsListResponseError;
+
+export const getTracerInstantEvalRowsListUrl = (
+  params: TracerInstantEvalRowsListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/tracer/instant-eval/rows/?${stringifiedParams}`
+    : `/tracer/instant-eval/rows/`;
+};
+
+/**
+ * One page of a run's rows with their answers, filtered by what the
+charts select: an answer, a time range, a group, unsure answers or text.
+ */
+export const tracerInstantEvalRowsList = async (
+  params: TracerInstantEvalRowsListParams,
+  options?: RequestInit,
+): Promise<tracerInstantEvalRowsListResponse> => {
+  return apiMutator<tracerInstantEvalRowsListResponse>(
+    getTracerInstantEvalRowsListUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
 export type tracerInstantEvalRunsListResponse200 = {
   data: InstantEvalRunsResponseApi;
   status: 200;
@@ -73110,6 +73489,199 @@ export const tracerInstantEvalRunsList = async (
 ): Promise<tracerInstantEvalRunsListResponse> => {
   return apiMutator<tracerInstantEvalRunsListResponse>(
     getTracerInstantEvalRunsListUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export type tracerInstantEvalStartCreateResponse200 = {
+  data: InstantEvalStartResponseApi;
+  status: 200;
+};
+
+export type tracerInstantEvalStartCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInstantEvalStartCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInstantEvalStartCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInstantEvalStartCreateResponse409 = {
+  data: InstantEvalLimitErrorApi;
+  status: 409;
+};
+
+export type tracerInstantEvalStartCreateResponse422 = {
+  data: ApiErrorResponseApi;
+  status: 422;
+};
+
+export type tracerInstantEvalStartCreateResponse429 = {
+  data: InstantEvalLimitErrorApi;
+  status: 429;
+};
+
+export type tracerInstantEvalStartCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInstantEvalStartCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInstantEvalStartCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 403 | 404 | 409 | 422 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInstantEvalStartCreateResponseSuccess =
+  tracerInstantEvalStartCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInstantEvalStartCreateResponseError = (
+  | tracerInstantEvalStartCreateResponse400
+  | tracerInstantEvalStartCreateResponse403
+  | tracerInstantEvalStartCreateResponse404
+  | tracerInstantEvalStartCreateResponse409
+  | tracerInstantEvalStartCreateResponse422
+  | tracerInstantEvalStartCreateResponse429
+  | tracerInstantEvalStartCreateResponse500
+  | tracerInstantEvalStartCreateResponse503
+  | tracerInstantEvalStartCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInstantEvalStartCreateResponse =
+  | tracerInstantEvalStartCreateResponseSuccess
+  | tracerInstantEvalStartCreateResponseError;
+
+export const getTracerInstantEvalStartCreateUrl = () => {
+  return `/tracer/instant-eval/start/`;
+};
+
+/**
+ * Start a run: the server resolves the view's rows (or reads the rows
+handed over), enforces the size and concurrency limits, and starts the
+eval task. The rows are picked by the task's first step.
+ */
+export const tracerInstantEvalStartCreate = async (
+  instantEvalStartRequestApi: InstantEvalStartRequestApi,
+  options?: RequestInit,
+): Promise<tracerInstantEvalStartCreateResponse> => {
+  return apiMutator<tracerInstantEvalStartCreateResponse>(
+    getTracerInstantEvalStartCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(instantEvalStartRequestApi),
+    },
+  );
+};
+
+export type tracerInstantEvalSummaryListResponse200 = {
+  data: InstantEvalSummaryResponseApi;
+  status: 200;
+};
+
+export type tracerInstantEvalSummaryListResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInstantEvalSummaryListResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInstantEvalSummaryListResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInstantEvalSummaryListResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInstantEvalSummaryListResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInstantEvalSummaryListResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 500 | 503>;
+};
+
+export type tracerInstantEvalSummaryListResponseSuccess =
+  tracerInstantEvalSummaryListResponse200 & {
+    headers: Headers;
+  };
+export type tracerInstantEvalSummaryListResponseError = (
+  | tracerInstantEvalSummaryListResponse400
+  | tracerInstantEvalSummaryListResponse403
+  | tracerInstantEvalSummaryListResponse404
+  | tracerInstantEvalSummaryListResponse500
+  | tracerInstantEvalSummaryListResponse503
+  | tracerInstantEvalSummaryListResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInstantEvalSummaryListResponse =
+  | tracerInstantEvalSummaryListResponseSuccess
+  | tracerInstantEvalSummaryListResponseError;
+
+export const getTracerInstantEvalSummaryListUrl = (
+  params: TracerInstantEvalSummaryListParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value
+        .filter((item) => item !== undefined && item !== null)
+        .forEach((item) => normalizedParams.append(key, item.toString()));
+    } else if (value !== undefined && value !== null) {
+      normalizedParams.append(key, value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/tracer/instant-eval/summary/?${stringifiedParams}`
+    : `/tracer/instant-eval/summary/`;
+};
+
+/**
+ * Everything the Ask page's charts draw for one run, as counts:
+progress, answer totals, a timeline in the viewer's time zone, and the
+counts per day, hour, user, model, turns and error.
+ */
+export const tracerInstantEvalSummaryList = async (
+  params: TracerInstantEvalSummaryListParams,
+  options?: RequestInit,
+): Promise<tracerInstantEvalSummaryListResponse> => {
+  return apiMutator<tracerInstantEvalSummaryListResponse>(
+    getTracerInstantEvalSummaryListUrl(params),
     {
       ...options,
       method: "GET",

@@ -4,7 +4,13 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import { palette } from "src/theme/palette";
 import { typography } from "src/theme/typography";
-import { AskHeatmap, AskPatterns, AskTimeline } from "../index";
+import {
+  AskCrossTab,
+  AskHeatmap,
+  AskPatterns,
+  AskTimeline,
+  matchesFilter,
+} from "../index";
 import {
   buildTimeline,
   columnBudget,
@@ -16,6 +22,7 @@ import {
   OUTAGE_COUNT,
   OUTAGE_ERRORS,
   QUESTIONS,
+  REPEAT_USER,
   RESOLVED,
   syntheticRun,
 } from "./fixtures/syntheticRun";
@@ -56,11 +63,31 @@ function renderViz(Component, props = {}) {
 }
 
 // The geometry AskTimeline draws at the 640px width jsdom falls back to.
+// A grid's cells read out one by one with the keyboard, as a screen reader
+// would: go(r, c) moves the cursor there and returns the words.
+function cellReader(svg) {
+  const status = svg.parentElement.querySelector("[role='status']");
+  const at = { r: 0, c: 0 };
+  fireEvent.keyDown(svg, { key: "ArrowRight" });
+  return (r, c) => {
+    const step = (key, axis, by) => {
+      fireEvent.keyDown(svg, { key });
+      at[axis] += by;
+    };
+    while (at.r < r) step("ArrowDown", "r", 1);
+    while (at.r > r) step("ArrowUp", "r", -1);
+    while (at.c < c) step("ArrowRight", "c", 1);
+    while (at.c > c) step("ArrowLeft", "c", -1);
+    return status.textContent;
+  };
+}
+
 function geometryOf(records, window) {
   const timeline = buildTimeline({
     records,
     configId: RESOLVED,
-    question: QUESTIONS[0],
+    // Stacked as the timeline stacks a Yes/No question: "No" first.
+    question: { ...QUESTIONS[0], labels: ["No", "Yes"] },
     window,
     maxColumns: columnBudget(records.length, 640),
   });
@@ -79,11 +106,12 @@ describe("AskTimeline", () => {
     expect(
       container.querySelectorAll("svg[role='img'] rect").length,
     ).toBeGreaterThanOrEqual(run.records.length);
-    const legend = screen.getByRole("button", { name: /^No \d+$/ });
+    const legend = screen.getByRole("button", { name: /^No \d+% · \d+$/ });
     const no = run.records.filter(
       (r) => r.answers[RESOLVED].answer === "No",
     ).length;
-    expect(legend).toHaveTextContent(`No${no}`);
+    const share = Math.round((no / run.records.length) * 100);
+    expect(legend).toHaveTextContent(`No${share}% · ${no}`);
     // About 100 rows across 640px: wide columns, so the squares are 12px.
     expect(
       screen.getByText(/One square per session · 4-hour columns/),
@@ -113,7 +141,7 @@ describe("AskTimeline", () => {
 
   it("focuses an answer from the legend and clears it on a second click", () => {
     const first = renderViz(AskTimeline);
-    fireEvent.click(screen.getByRole("button", { name: /^No \d+$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^No \d+% · \d+$/ }));
     expect(first.onFocus).toHaveBeenCalledWith({
       configId: RESOLVED,
       answer: "No",
@@ -122,7 +150,7 @@ describe("AskTimeline", () => {
     const focused = renderViz(AskTimeline, {
       focus: { configId: RESOLVED, answer: "No" },
     });
-    const button = screen.getByRole("button", { name: /^No \d+$/ });
+    const button = screen.getByRole("button", { name: /^No \d+% · \d+$/ });
     expect(button).toHaveAttribute("aria-pressed", "true");
     // Every square that is not "No" is dimmed.
     const dim = [
@@ -159,7 +187,14 @@ describe("AskTimeline", () => {
       clientY: baseY - 2,
     });
     expect(onSelect).toHaveBeenCalledTimes(1);
-    const [ids, label] = onSelect.mock.calls[0];
+    const [filter, label] = onSelect.mock.calls[0];
+    expect(filter).toEqual({
+      time_from: new Date(timeline.columns[from].start).toISOString(),
+      time_to: new Date(timeline.columns[from + 1].end).toISOString(),
+    });
+    const ids = run.records
+      .filter((r) => matchesFilter(r, filter))
+      .map((r) => r.id);
     run.outage.ids.forEach((id) => expect(ids).toContain(id));
     expect(label).toBe(
       rangeText(timeline.columns[from].start, timeline.columns[from + 1].end),
@@ -188,7 +223,10 @@ describe("AskTimeline", () => {
       fireEvent.keyDown(svg, { key: "ArrowRight" });
     fireEvent.keyDown(svg, { key: "Enter" });
     expect(onSelect).toHaveBeenCalledWith(
-      timeline.columns[col].items.map((item) => item.id),
+      {
+        time_from: new Date(timeline.columns[col].start).toISOString(),
+        time_to: new Date(timeline.columns[col].end).toISOString(),
+      },
       expect.any(String),
     );
   });
@@ -204,20 +242,20 @@ describe("AskTimeline", () => {
     expect(screen.getByText("Not yet")).toBeInTheDocument();
   });
 
-  it("marks the columns whose rows hit an error", () => {
+  it("marks the columns whose rows had a trace error", () => {
     const { container } = renderViz(AskTimeline);
     const marks = [...container.querySelectorAll("svg[role='img'] rect")]
       .map((rect) => rect.querySelector("title")?.textContent)
       .filter(Boolean);
     expect(marks.length).toBeGreaterThan(0);
     const total = marks.reduce(
-      (sum, text) => sum + Number(text.match(/^(\d+) hit an error$/)[1]),
+      (sum, text) => sum + Number(text.match(/^(\d+) had a trace error$/)[1]),
       0,
     );
     expect(total).toBe(OUTAGE_ERRORS);
     expect(
-      screen.getByText("Run hit an error").parentElement,
-    ).toHaveTextContent(`Run hit an error${OUTAGE_ERRORS}`);
+      screen.getByText("Trace had an error").parentElement,
+    ).toHaveTextContent(`Trace had an error${OUTAGE_ERRORS}`);
   });
 
   it("cuts a burst column at the cap with +N, a summary and a click that selects it", () => {
@@ -260,17 +298,21 @@ describe("AskTimeline", () => {
     fireEvent.mouseDown(svg, { button: 0, ...point });
     fireEvent.mouseUp(svg, point);
     expect(onOpen).not.toHaveBeenCalled();
-    const [ids, label] = onSelect.mock.calls[0];
+    const [filter, label] = onSelect.mock.calls[0];
+    const ids = records
+      .filter((r) => matchesFilter(r, filter))
+      .map((r) => r.id);
     expect(new Set(ids)).toEqual(new Set(column.items.map((item) => item.id)));
     expect(label).toBe(rangeText(column.start, column.end));
   });
 
   it("turns rows into thin slices only when even cut columns would be tiny", () => {
-    // 50 sessions every 4 hours and one 400-session burst: cut at 75, the
-    // squares would be under 6px, so every row is a slice and none is cut.
+    // 25 sessions every 4 hours and one 400-session burst (1,300 rows, still
+    // one square each): cut at 38, the squares would be under 6px, so every
+    // row is a slice and none is cut.
     const dense = [];
     for (let hour = 0; hour < 6 * 24; hour += 4)
-      for (let i = 0; i < 50; i += 1)
+      for (let i = 0; i < 25; i += 1)
         dense.push({
           ...run.records[i % run.records.length],
           id: `dense-${hour}-${i}`,
@@ -318,7 +360,10 @@ describe("AskPatterns", () => {
     fireEvent.click(
       within(item).getByRole("button", { name: `Show ${OUTAGE_COUNT}` }),
     );
-    const [ids, label] = onSelect.mock.calls[0];
+    const [filter, label] = onSelect.mock.calls[0];
+    const ids = run.records
+      .filter((r) => matchesFilter(r, filter))
+      .map((r) => r.id);
     expect(new Set(ids)).toEqual(new Set(run.outage.ids));
     expect(label).toMatch(/^“No” on \w+ \d+, 2–5 PM$/);
   });
@@ -355,13 +400,11 @@ describe("AskPatterns", () => {
         facets: { ...record.facets, error: outage.has(record.id) },
       })),
     });
-    const item = screen.getByText(/when the run hit an error/).closest("li");
+    const item = screen.getByText(/when the trace had an error/).closest("li");
     expect(item).toHaveTextContent(
       new RegExp(`elsewhere, all ${OUTAGE_COUNT} on \\w+ \\d+, 2–5 PM`),
     );
-    expect(
-      screen.getByText(/comparisons: \d+ groups checked/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/comparisons: \d+ checked/)).toBeInTheDocument();
   });
 
   it("switches the answer it looks at", () => {
@@ -374,70 +417,96 @@ describe("AskPatterns", () => {
 describe("AskHeatmap", () => {
   it("shows Day × Hour and selects a cell's rows", () => {
     const { onSelect } = renderViz(AskHeatmap);
-    const grid = screen.getByRole("grid");
-    const cells = within(grid).getAllByRole("gridcell");
-    expect(cells).toHaveLength(7 * 24);
-    const outage = cells.find(
-      (cell) =>
-        /2 PM–3 PM: \d+ of \d+ “No” \(100%\) vs \d+% overall/.test(
-          cell.getAttribute("aria-label"),
-        ) &&
-        cell.getAttribute("aria-label").includes(
-          new Date(run.outage.day).toLocaleDateString(undefined, {
-            day: "numeric",
-          }),
-        ),
+    const svg = screen.getByRole("img", {
+      name: /^Share of “No” by day and hour/,
+    });
+    // A week of hours in a few paths, not an element per cell.
+    expect(svg.querySelectorAll("rect").length).toBeLessThan(5);
+    const go = cellReader(svg);
+    const first = new Date(run.window[0]);
+    const row = Math.round(
+      (new Date(run.outage.day).setHours(12) -
+        new Date(first.getFullYear(), first.getMonth(), first.getDate(), 12)) /
+        (24 * 60 * 60 * 1000),
     );
-    expect(outage).toBeTruthy();
-    fireEvent.click(outage);
-    const [ids, label] = onSelect.mock.calls[0];
+    expect(go(row, 14)).toMatch(
+      /2 PM–3 PM: \d+ of \d+ “No” \(100%\) vs \d+% overall/,
+    );
+    fireEvent.keyDown(svg, { key: "Enter" });
+    const [filter, label] = onSelect.mock.calls[0];
+    const ids = run.records
+      .filter((r) => matchesFilter(r, filter))
+      .map((r) => r.id);
+    expect(ids.length).toBeGreaterThan(0);
     ids.forEach((id) => expect(run.outage.ids).toContain(id));
     expect(label).toMatch(/2 PM–3 PM$/);
   });
 
-  it("totals each hour along the bottom and counts rows in the cells", () => {
+  it("totals each hour along the bottom", () => {
     renderViz(AskHeatmap);
-    const grid = screen.getByRole("grid");
-    const totals = within(grid)
-      .getAllByLabelText(/^\d+ [AP]M–\d+ [AP]M: /)
-      .filter((el) => el.getAttribute("role") !== "gridcell");
-    expect(totals).toHaveLength(24);
-    const answered = totals.reduce((sum, el) => {
-      const found = el.getAttribute("aria-label").match(/: \d+ of (\d+) “No”/);
-      return sum + (found ? Number(found[1]) : 0);
-    }, 0);
+    const svg = screen.getByRole("img", {
+      name: /^Share of “No” by day and hour/,
+    });
+    const go = cellReader(svg);
+    // The row of totals sits under the 7 days.
+    let answered = 0;
+    for (let c = 0; c < 24; c += 1) {
+      const found = go(7, c).match(/: \d+ of (\d+) “No”/);
+      answered += found ? Number(found[1]) : 0;
+    }
     expect(answered).toBe(run.records.length);
-    expect(within(grid).getByText("All days, %")).toBeInTheDocument();
+    expect(within(svg).getByText("All days, %")).toBeInTheDocument();
   });
 
-  it("dots the cells with rows that hit an error", () => {
+  it("dots the cells with rows that had a trace error", () => {
     renderViz(AskHeatmap);
-    const cells = within(screen.getByRole("grid")).getAllByRole("gridcell");
-    const total = cells.reduce((sum, cell) => {
-      const found = cell
-        .getAttribute("aria-label")
-        .match(/ · (\d+) hit an error$/);
-      return sum + (found ? Number(found[1]) : 0);
-    }, 0);
-    expect(total).toBe(OUTAGE_ERRORS);
-    expect(screen.getByText("Run hit an error")).toBeInTheDocument();
-  });
-
-  it("pivots to users by day and to one question against another", () => {
-    renderViz(AskHeatmap);
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: /Rows/ }));
-    fireEvent.click(screen.getByRole("option", { name: "User × Day" }));
-    expect(
-      screen.getByText(/The 15 busiest users; \d+ more are left out\./),
-    ).toBeInTheDocument();
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: /Rows/ }));
-    fireEvent.click(
-      screen.getByRole("option", { name: "Question × Question" }),
+    const svg = screen.getByRole("img", {
+      name: /^Share of “No” by day and hour/,
+    });
+    const errored = new Set(
+      run.records
+        .filter((r) => r.facets.error)
+        .map((r) => {
+          const t = new Date(r.time);
+          return `${t.toDateString()}|${t.getHours()}`;
+        }),
     );
+    const dots = svg.querySelector("path[data-errors]");
+    expect(dots.getAttribute("d").split("m-2.5,0").length - 1).toBe(
+      errored.size,
+    );
+    expect(screen.getByText("Trace had an error")).toBeInTheDocument();
+  });
+
+  it("lists the busiest users by answer", () => {
+    renderViz(AskHeatmap);
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: /Rows/ }));
+    fireEvent.click(screen.getByRole("option", { name: "Users" }));
+    expect(
+      screen.getByText(
+        /The 15 busiest; \d+ more sessions are in the comparison/,
+      ),
+    ).toBeInTheDocument();
+    // The customer who never gets an answer is outlined in "No".
+    const outlined = within(screen.getByRole("grid"))
+      .getAllByRole("gridcell")
+      .filter((cell) => cell.dataset.standsOut);
+    expect(
+      outlined.some((cell) =>
+        cell.getAttribute("aria-label").startsWith(`${REPEAT_USER}:`),
+      ),
+    ).toBe(true);
+  });
+
+  it("lines one question's answers up against another's in their own card", () => {
+    renderViz(AskCrossTab);
+    expect(
+      screen.getByRole("region", { name: "Question against question" }),
+    ).toBeInTheDocument();
     const cells = within(screen.getByRole("grid")).getAllByRole("gridcell");
     expect(cells).toHaveLength(2 * QUESTIONS[1].labels.length);
     expect(cells[0].getAttribute("aria-label")).toMatch(
-      /^Of \d+ that answered “Yes”/,
+      /^“Did the agent resolve the customer's issue\?” was “Yes”: \d+ of \d+ answered “/,
     );
   });
 });

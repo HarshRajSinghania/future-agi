@@ -45,6 +45,14 @@ from tracer.views.instant_eval import (
     InstantEvalRunsView,
     InstantEvalUserSessionsView,
 )
+from tracer.views.instant_eval_scale import (
+    InstantEvalControlView,
+    InstantEvalEstimateView,
+    InstantEvalExportView,
+    InstantEvalRowsView,
+    InstantEvalStartView,
+    InstantEvalSummaryView,
+)
 from tracer.views.monitor import UserAlertMonitorLogView, UserAlertMonitorView
 from tracer.views.observability_provider import ObservabilityProviderViewSet
 from tracer.views.observation_span import ObservationSpanView
@@ -266,6 +274,36 @@ urlpatterns = [
         "instant-eval/runs/",
         InstantEvalRunsView.as_view(),
         name="instant-eval-runs",
+    ),
+    path(
+        "instant-eval/estimate/",
+        InstantEvalEstimateView.as_view(),
+        name="instant-eval-estimate",
+    ),
+    path(
+        "instant-eval/start/",
+        InstantEvalStartView.as_view(),
+        name="instant-eval-start",
+    ),
+    path(
+        "instant-eval/summary/",
+        InstantEvalSummaryView.as_view(),
+        name="instant-eval-summary",
+    ),
+    path(
+        "instant-eval/rows/",
+        InstantEvalRowsView.as_view(),
+        name="instant-eval-rows",
+    ),
+    path(
+        "instant-eval/export/",
+        InstantEvalExportView.as_view(),
+        name="instant-eval-export",
+    ),
+    path(
+        "instant-eval/control/",
+        InstantEvalControlView.as_view(),
+        name="instant-eval-control",
     ),
     # Agent graph — explicit path because @action doesn't register reliably with Granian reload
     path(

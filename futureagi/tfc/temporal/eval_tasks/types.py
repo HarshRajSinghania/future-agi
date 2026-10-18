@@ -33,6 +33,10 @@ class EvalTaskWorkflowInput:
     # skips the first reap on a CAN hop anyway (``already_reconciled``); a
     # finalize wait's reap on such a hop applies the blind floor.
     workflow_confirmed_stopped: bool = False
+    # Seconds without a heartbeat after which an eval's attempt is given up
+    # (its worker died) and retried; None keeps the default five minutes.
+    # Instant eval sets a minute, since a person is watching the run.
+    heartbeat_s: int | None = None
 
 
 @dataclass

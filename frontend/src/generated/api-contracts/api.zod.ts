@@ -56408,6 +56408,379 @@ export const TracerInstantEvalAnswersListResponse = zod.object({
 });
 
 /**
+ * Pause, resume or cancel a run, retry the rows Jev failed on, or
+read more of a sample. Resuming, retrying and reading more count
+against the organization's runs in flight.
+ */
+
+export const tracerInstantEvalControlCreateBodyConfirmDefault = false;
+
+export const TracerInstantEvalControlCreateBody = zod.object({
+  project_id: zod.string().uuid(),
+  eval_task_id: zod.string().uuid(),
+  action: zod.enum(["pause", "resume", "cancel", "retry_failed", "read_more"]),
+  more: zod.number().min(1).optional(),
+  confirm: zod
+    .boolean()
+    .default(tracerInstantEvalControlCreateBodyConfirmDefault),
+});
+
+export const tracerInstantEvalControlCreateResponseStatusDefault = true;
+
+export const TracerInstantEvalControlCreateResponse = zod.object({
+  status: zod
+    .boolean()
+    .default(tracerInstantEvalControlCreateResponseStatusDefault),
+  result: zod.object({
+    status: zod.string().min(1),
+    message: zod.string().min(1),
+    rows_requested: zod.number().optional(),
+    retried: zod.number().optional(),
+  }),
+});
+
+/**
+ * How many rows a view holds, and what a sample or all of it costs.
+ */
+export const tracerInstantEvalEstimateCreateBodyFiltersDefault = [];
+export const tracerInstantEvalEstimateCreateBodyIdsItemMax = 255;
+
+export const tracerInstantEvalEstimateCreateBodyIdsMax = 5000;
+
+export const tracerInstantEvalEstimateCreateBodyQuestionsDefault = 1;
+export const tracerInstantEvalEstimateCreateBodyQuestionsMax = 5;
+
+export const TracerInstantEvalEstimateCreateBody = zod.object({
+  project_id: zod.string().uuid(),
+  unit: zod.enum(["traces", "spans", "sessions", "users"]),
+  filters: zod
+    .array(
+      zod.object({
+        column_id: zod
+          .string()
+          .describe("Column or attribute id to filter on."),
+        property_id: zod
+          .string()
+          .optional()
+          .describe("Optional stable namespaced Property Registry identity."),
+        display_name: zod
+          .string()
+          .optional()
+          .describe("Optional UI label for chips and saved views."),
+        source: zod
+          .string()
+          .optional()
+          .describe(
+            "Optional source surface for mixed-source filters, for example traces, datasets, or simulation.",
+          ),
+        output_type: zod
+          .string()
+          .optional()
+          .describe(
+            "Optional metric output type metadata used by eval and annotation filters.",
+          ),
+        filter_config: zod.object({
+          filter_type: zod
+            .string()
+            .describe(
+              "Canonical field type, for example text, number, boolean, datetime, categorical, thumbs, annotator, array, or map. Legacy json is value-sensitive for SPAN_ATTRIBUTE filters: list values become array and object values become map.",
+            ),
+          filter_op: zod
+            .string()
+            .describe(
+              "Canonical operator from api_contracts/filter_contract.json, for example equals, not_equals, in, not_in, between, not_between, is_null, or is_not_null.",
+            ),
+          filter_value: zod
+            .unknown()
+            .optional()
+            .describe(
+              "Scalar, list, range tuple, boolean, or null depending on filter_op and filter_type.",
+            ),
+          col_type: zod
+            .string()
+            .optional()
+            .describe(
+              "Column family such as SYSTEM_METRIC, SPAN_ATTRIBUTE, EVAL_METRIC, ANNOTATION, or NORMAL.",
+            ),
+          attribute_value_types: zod
+            .array(zod.enum(["string", "number", "boolean"]))
+            .optional()
+            .describe(
+              "Optional storage-family provenance aligned one-for-one with filter_value for mixed SPAN_ATTRIBUTE in/not_in filters. Null entries retain filter_type semantics for manually entered values.",
+            ),
+        }),
+      }),
+    )
+    .default(tracerInstantEvalEstimateCreateBodyFiltersDefault),
+  ids: zod
+    .array(
+      zod.string().min(1).max(tracerInstantEvalEstimateCreateBodyIdsItemMax),
+    )
+    .max(tracerInstantEvalEstimateCreateBodyIdsMax)
+    .optional(),
+  sample_size: zod.number().min(1).optional(),
+  questions: zod
+    .number()
+    .min(1)
+    .max(tracerInstantEvalEstimateCreateBodyQuestionsMax)
+    .default(tracerInstantEvalEstimateCreateBodyQuestionsDefault),
+});
+
+export const tracerInstantEvalEstimateCreateResponseStatusDefault = true;
+
+export const TracerInstantEvalEstimateCreateResponse = zod.object({
+  status: zod
+    .boolean()
+    .default(tracerInstantEvalEstimateCreateResponseStatusDefault),
+  result: zod.object({
+    population: zod.number(),
+    population_is_lower_bound: zod.boolean(),
+    rows_to_read: zod.number(),
+    questions: zod.number(),
+    credits_estimate: zod.number(),
+    seconds_estimate: zod.number(),
+    needs_confirm: zod.boolean(),
+    max_rows: zod.number(),
+    confirm_rows: zod.number(),
+    default_sample_size: zod.number(),
+    sessions_per_user: zod.number(),
+    choices: zod.array(
+      zod.object({
+        sample_size: zod.number(),
+        rows_to_read: zod.number(),
+        credits_estimate: zod.number(),
+        seconds_estimate: zod.number(),
+        needs_confirm: zod.boolean(),
+        allowed: zod.boolean(),
+        quota_limited: zod.boolean(),
+      }),
+    ),
+    quota_limited: zod.boolean(),
+    quota_message: zod.string().min(1),
+    quota_max_rows: zod.number(),
+    plan_rate_per_min: zod.number(),
+  }),
+});
+
+/**
+ * Every row the filter selects, with each question's answer,
+confidence and explanation, streamed as CSV.
+ */
+export const tracerInstantEvalExportListQueryConfigIdsMax = 2000;
+
+export const tracerInstantEvalExportListQueryTzDefault = `UTC`;
+export const tracerInstantEvalExportListQueryTzMax = 64;
+
+export const tracerInstantEvalExportListQueryAnswerMax = 500;
+
+export const tracerInstantEvalExportListQueryAnswersMax = 4000;
+
+export const tracerInstantEvalExportListQueryTimeFromMax = 64;
+
+export const tracerInstantEvalExportListQueryTimeToMax = 64;
+
+export const tracerInstantEvalExportListQueryGroupItemMax = 300;
+
+export const tracerInstantEvalExportListQueryGroupMax = 50;
+
+export const tracerInstantEvalExportListQueryUserMax = 255;
+
+export const tracerInstantEvalExportListQueryModelMax = 255;
+
+export const tracerInstantEvalExportListQueryUnsureDefault = false;
+export const tracerInstantEvalExportListQueryQMax = 200;
+
+export const tracerInstantEvalExportListQueryCursorMax = 500;
+
+export const tracerInstantEvalExportListQueryPageSizeDefault = 50;
+export const tracerInstantEvalExportListQueryPageSizeMax = 1500;
+
+export const tracerInstantEvalExportListQueryCompactDefault = false;
+export const tracerInstantEvalExportListQuerySortDefault = `-time`;
+
+export const TracerInstantEvalExportListQueryParams = zod.object({
+  project_id: zod.string().uuid(),
+  eval_task_id: zod.string().uuid(),
+  unit: zod.enum(["traces", "spans", "sessions", "users"]).optional(),
+  config_ids: zod
+    .string()
+    .max(tracerInstantEvalExportListQueryConfigIdsMax)
+    .optional(),
+  tz: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryTzMax)
+    .default(tracerInstantEvalExportListQueryTzDefault),
+  config_id: zod.string().uuid().optional(),
+  answer: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryAnswerMax)
+    .optional(),
+  answers: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryAnswersMax)
+    .optional(),
+  time_from: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryTimeFromMax)
+    .optional(),
+  time_to: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryTimeToMax)
+    .optional(),
+  group: zod
+    .array(
+      zod.string().min(1).max(tracerInstantEvalExportListQueryGroupItemMax),
+    )
+    .max(tracerInstantEvalExportListQueryGroupMax)
+    .optional(),
+  user: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryUserMax)
+    .optional(),
+  model: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryModelMax)
+    .optional(),
+  error: zod.boolean().optional(),
+  unsure: zod.boolean().default(tracerInstantEvalExportListQueryUnsureDefault),
+  q: zod.string().max(tracerInstantEvalExportListQueryQMax).optional(),
+  cursor: zod
+    .string()
+    .max(tracerInstantEvalExportListQueryCursorMax)
+    .optional(),
+  page_size: zod
+    .number()
+    .min(1)
+    .max(tracerInstantEvalExportListQueryPageSizeMax)
+    .default(tracerInstantEvalExportListQueryPageSizeDefault),
+  compact: zod
+    .boolean()
+    .default(tracerInstantEvalExportListQueryCompactDefault),
+  sort: zod
+    .enum(["time", "-time", "confidence"])
+    .default(tracerInstantEvalExportListQuerySortDefault),
+});
+
+export const TracerInstantEvalExportListResponse = zod.string();
+
+/**
+ * One page of a run's rows with their answers, filtered by what the
+charts select: an answer, a time range, a group, unsure answers or text.
+ */
+export const tracerInstantEvalRowsListQueryConfigIdsMax = 2000;
+
+export const tracerInstantEvalRowsListQueryTzDefault = `UTC`;
+export const tracerInstantEvalRowsListQueryTzMax = 64;
+
+export const tracerInstantEvalRowsListQueryAnswerMax = 500;
+
+export const tracerInstantEvalRowsListQueryAnswersMax = 4000;
+
+export const tracerInstantEvalRowsListQueryTimeFromMax = 64;
+
+export const tracerInstantEvalRowsListQueryTimeToMax = 64;
+
+export const tracerInstantEvalRowsListQueryGroupItemMax = 300;
+
+export const tracerInstantEvalRowsListQueryGroupMax = 50;
+
+export const tracerInstantEvalRowsListQueryUserMax = 255;
+
+export const tracerInstantEvalRowsListQueryModelMax = 255;
+
+export const tracerInstantEvalRowsListQueryUnsureDefault = false;
+export const tracerInstantEvalRowsListQueryQMax = 200;
+
+export const tracerInstantEvalRowsListQueryCursorMax = 500;
+
+export const tracerInstantEvalRowsListQueryPageSizeDefault = 50;
+export const tracerInstantEvalRowsListQueryPageSizeMax = 1500;
+
+export const tracerInstantEvalRowsListQueryCompactDefault = false;
+export const tracerInstantEvalRowsListQuerySortDefault = `-time`;
+
+export const TracerInstantEvalRowsListQueryParams = zod.object({
+  project_id: zod.string().uuid(),
+  eval_task_id: zod.string().uuid(),
+  unit: zod.enum(["traces", "spans", "sessions", "users"]).optional(),
+  config_ids: zod
+    .string()
+    .max(tracerInstantEvalRowsListQueryConfigIdsMax)
+    .optional(),
+  tz: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryTzMax)
+    .default(tracerInstantEvalRowsListQueryTzDefault),
+  config_id: zod.string().uuid().optional(),
+  answer: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryAnswerMax)
+    .optional(),
+  answers: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryAnswersMax)
+    .optional(),
+  time_from: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryTimeFromMax)
+    .optional(),
+  time_to: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryTimeToMax)
+    .optional(),
+  group: zod
+    .array(zod.string().min(1).max(tracerInstantEvalRowsListQueryGroupItemMax))
+    .max(tracerInstantEvalRowsListQueryGroupMax)
+    .optional(),
+  user: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryUserMax)
+    .optional(),
+  model: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryModelMax)
+    .optional(),
+  error: zod.boolean().optional(),
+  unsure: zod.boolean().default(tracerInstantEvalRowsListQueryUnsureDefault),
+  q: zod.string().max(tracerInstantEvalRowsListQueryQMax).optional(),
+  cursor: zod.string().max(tracerInstantEvalRowsListQueryCursorMax).optional(),
+  page_size: zod
+    .number()
+    .min(1)
+    .max(tracerInstantEvalRowsListQueryPageSizeMax)
+    .default(tracerInstantEvalRowsListQueryPageSizeDefault),
+  compact: zod.boolean().default(tracerInstantEvalRowsListQueryCompactDefault),
+  sort: zod
+    .enum(["time", "-time", "confidence"])
+    .default(tracerInstantEvalRowsListQuerySortDefault),
+});
+
+export const tracerInstantEvalRowsListResponseStatusDefault = true;
+
+export const TracerInstantEvalRowsListResponse = zod.object({
+  status: zod.boolean().default(tracerInstantEvalRowsListResponseStatusDefault),
+  result: zod.object({
+    rows: zod.array(zod.object({}).passthrough()),
+    next_cursor: zod.string().min(1),
+    total: zod.number(),
+  }),
+});
+
+/**
  * Past Instant eval runs of a project, newest first, with their answer split.
  */
 export const tracerInstantEvalRunsListQuerySearchMax = 200;
@@ -56458,9 +56831,201 @@ export const TracerInstantEvalRunsListResponse = zod.object({
         answered: zod.number(),
         pending: zod.number(),
         finished_at: zod.string().min(1).optional(),
+        created_by: zod.string().min(1).optional(),
+        credits_estimate: zod.number().optional(),
+        population: zod.number().optional(),
+        is_sample: zod.boolean().optional(),
       }),
     ),
     has_more: zod.boolean(),
+  }),
+});
+
+/**
+ * Start a run: the server resolves the view's rows (or reads the rows
+handed over), enforces the size and concurrency limits, and starts the
+eval task. The rows are picked by the task's first step.
+ */
+export const tracerInstantEvalStartCreateBodyFiltersDefault = [];
+export const tracerInstantEvalStartCreateBodyIdsItemMax = 255;
+
+export const tracerInstantEvalStartCreateBodyIdsMax = 5000;
+
+export const tracerInstantEvalStartCreateBodyConfigIdsMax = 5;
+
+export const tracerInstantEvalStartCreateBodyConfirmDefault = false;
+
+export const TracerInstantEvalStartCreateBody = zod.object({
+  project_id: zod.string().uuid(),
+  unit: zod.enum(["traces", "spans", "sessions", "users"]),
+  filters: zod
+    .array(
+      zod.object({
+        column_id: zod
+          .string()
+          .describe("Column or attribute id to filter on."),
+        property_id: zod
+          .string()
+          .optional()
+          .describe("Optional stable namespaced Property Registry identity."),
+        display_name: zod
+          .string()
+          .optional()
+          .describe("Optional UI label for chips and saved views."),
+        source: zod
+          .string()
+          .optional()
+          .describe(
+            "Optional source surface for mixed-source filters, for example traces, datasets, or simulation.",
+          ),
+        output_type: zod
+          .string()
+          .optional()
+          .describe(
+            "Optional metric output type metadata used by eval and annotation filters.",
+          ),
+        filter_config: zod.object({
+          filter_type: zod
+            .string()
+            .describe(
+              "Canonical field type, for example text, number, boolean, datetime, categorical, thumbs, annotator, array, or map. Legacy json is value-sensitive for SPAN_ATTRIBUTE filters: list values become array and object values become map.",
+            ),
+          filter_op: zod
+            .string()
+            .describe(
+              "Canonical operator from api_contracts/filter_contract.json, for example equals, not_equals, in, not_in, between, not_between, is_null, or is_not_null.",
+            ),
+          filter_value: zod
+            .unknown()
+            .optional()
+            .describe(
+              "Scalar, list, range tuple, boolean, or null depending on filter_op and filter_type.",
+            ),
+          col_type: zod
+            .string()
+            .optional()
+            .describe(
+              "Column family such as SYSTEM_METRIC, SPAN_ATTRIBUTE, EVAL_METRIC, ANNOTATION, or NORMAL.",
+            ),
+          attribute_value_types: zod
+            .array(zod.enum(["string", "number", "boolean"]))
+            .optional()
+            .describe(
+              "Optional storage-family provenance aligned one-for-one with filter_value for mixed SPAN_ATTRIBUTE in/not_in filters. Null entries retain filter_type semantics for manually entered values.",
+            ),
+        }),
+      }),
+    )
+    .default(tracerInstantEvalStartCreateBodyFiltersDefault),
+  ids: zod
+    .array(zod.string().min(1).max(tracerInstantEvalStartCreateBodyIdsItemMax))
+    .max(tracerInstantEvalStartCreateBodyIdsMax)
+    .optional(),
+  sample_size: zod.number().min(1).optional(),
+  config_ids: zod
+    .array(zod.string().uuid())
+    .min(1)
+    .max(tracerInstantEvalStartCreateBodyConfigIdsMax),
+  confirm: zod
+    .boolean()
+    .default(tracerInstantEvalStartCreateBodyConfirmDefault),
+});
+
+export const tracerInstantEvalStartCreateResponseStatusDefault = true;
+
+export const TracerInstantEvalStartCreateResponse = zod.object({
+  status: zod
+    .boolean()
+    .default(tracerInstantEvalStartCreateResponseStatusDefault),
+  result: zod.object({
+    task_id: zod.string().min(1),
+    unit: zod.string().min(1),
+    population: zod.number(),
+    rows_requested: zod.number(),
+    is_sample: zod.boolean(),
+    credits_estimate: zod.number(),
+  }),
+});
+
+/**
+ * Everything the Ask page's charts draw for one run, as counts:
+progress, answer totals, a timeline in the viewer's time zone, and the
+counts per day, hour, user, model, turns and error.
+ */
+export const tracerInstantEvalSummaryListQueryConfigIdsMax = 2000;
+
+export const tracerInstantEvalSummaryListQueryTzDefault = `UTC`;
+export const tracerInstantEvalSummaryListQueryTzMax = 64;
+
+export const TracerInstantEvalSummaryListQueryParams = zod.object({
+  project_id: zod.string().uuid(),
+  eval_task_id: zod.string().uuid(),
+  unit: zod.enum(["traces", "spans", "sessions", "users"]).optional(),
+  config_ids: zod
+    .string()
+    .max(tracerInstantEvalSummaryListQueryConfigIdsMax)
+    .optional(),
+  tz: zod
+    .string()
+    .min(1)
+    .max(tracerInstantEvalSummaryListQueryTzMax)
+    .default(tracerInstantEvalSummaryListQueryTzDefault),
+});
+
+export const tracerInstantEvalSummaryListResponseStatusDefault = true;
+
+export const TracerInstantEvalSummaryListResponse = zod.object({
+  status: zod
+    .boolean()
+    .default(tracerInstantEvalSummaryListResponseStatusDefault),
+  result: zod.object({
+    status: zod.string().min(1),
+    unit: zod.string().min(1),
+    preparing: zod.boolean(),
+    total: zod.number(),
+    answered: zod.number(),
+    failed: zod.number(),
+    pending: zod.number(),
+    not_read: zod.number(),
+    started_at: zod.string().min(1),
+    finished_at: zod.string().min(1),
+    rate_per_min: zod.number(),
+    eta_s: zod.number(),
+    created_by: zod.object({
+      id: zod.string().min(1),
+      name: zod.string(),
+      email: zod.string(),
+    }),
+    credits_estimate: zod.number(),
+    credits_used: zod.number(),
+    in_flight: zod.number(),
+    waiting_s: zod.number(),
+    active_s: zod.number(),
+    idle_s: zod.number(),
+    sample: zod.object({
+      population: zod.number(),
+      population_is_lower_bound: zod.boolean(),
+      requested: zod.number(),
+      read: zod.number(),
+      is_sample: zod.boolean(),
+      can_extend: zod.boolean(),
+      next_size: zod.number(),
+    }),
+    window: zod.object({}).passthrough(),
+    scope: zod.object({}).passthrough(),
+    questions: zod.array(
+      zod.object({
+        config_id: zod.string().min(1),
+        question: zod.string(),
+        answer_type: zod.string().min(1),
+        labels: zod.array(zod.string().min(1)),
+      }),
+    ),
+    counts: zod.object({}).passthrough(),
+    unsure: zod.object({}).passthrough(),
+    timeline: zod.object({}).passthrough(),
+    groups: zod.object({}).passthrough(),
+    cross: zod.object({}).passthrough(),
   }),
 });
 

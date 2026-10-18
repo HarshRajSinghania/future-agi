@@ -182,7 +182,7 @@ const localMidnight = (ms) => {
  * falls on a column edge. Every bin between the first and the last is kept,
  * empty or not, so a quiet stretch shows as a gap. `items` are
  * {id, record, state, answer, unsure, rank}, bottom of the stack first;
- * `errors` counts the column's rows whose run hit an error.
+ * `errors` counts the column's rows whose trace had an error.
  */
 export function buildTimeline({
   records = [],
@@ -275,12 +275,21 @@ const timeText = (ms) => {
     : `${hours} ${suffix}`;
 };
 
+// Formatting a date is slow when each call builds its formatter, and the
+// charts name hundreds of days and stretches: keep two.
+const DAY_FORMAT = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+});
+const WEEKDAY_FORMAT = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+
+/** "Oct 13", or "Tue, Oct 13" with the weekday. */
 export const dayText = (ms, withWeekday = false) =>
-  new Date(ms).toLocaleDateString("en-US", {
-    ...(withWeekday ? { weekday: "short" } : {}),
-    month: "short",
-    day: "numeric",
-  });
+  (withWeekday ? WEEKDAY_FORMAT : DAY_FORMAT).format(new Date(ms));
 
 /**
  * A time range in words: "Oct 13, 2 PM – 6 PM", "Oct 13 – Oct 15" for whole
@@ -301,15 +310,126 @@ export function rangeText(startMs, endMs) {
     : `${dayText(startMs)}, ${timeText(startMs)} – ${dayText(endMs)}, ${timeText(endMs)}`;
 }
 
-/** The rows of columns `from`..`to` (either order) and their range label. */
+/**
+ * Columns `from`..`to` (either order) as a selection: the time filter, its
+ * label, and how many rows it holds (0 selects nothing).
+ */
 export function selectColumns(columns, from, to) {
   const lo = Math.max(0, Math.min(from, to));
   const hi = Math.min(columns.length - 1, Math.max(from, to));
-  if (!columns.length || hi < lo) return { ids: [], label: "" };
-  const ids = columns
+  if (!columns.length || hi < lo) return { count: 0, filter: null, label: "" };
+  const count = columns
     .slice(lo, hi + 1)
-    .flatMap((column) => column.items.map((item) => item.id));
-  return { ids, label: rangeText(columns[lo].start, columns[hi].end) };
+    .reduce(
+      (sum, column) => sum + (column.items ? column.items.length : column.n),
+      0,
+    );
+  return {
+    count,
+    filter: {
+      time_from: new Date(columns[lo].start).toISOString(),
+      time_to: new Date(columns[hi].end).toISOString(),
+    },
+    label: rangeText(columns[lo].start, columns[hi].end),
+  };
+}
+
+// At scale, fewer and wider columns: about 60–90 read as a shape rather than
+// a barcode.
+export const MAX_DENSITY_COLUMNS = 90;
+
+// Several bins' counts as one.
+function mergeTallies(list) {
+  const byLabel = new Map();
+  const sum = {
+    n: 0,
+    answered: 0,
+    failed: 0,
+    skipped: 0,
+    pending: 0,
+    errors: 0,
+  };
+  list.forEach((t) => {
+    Object.keys(sum).forEach((key) => {
+      sum[key] += t[key] || 0;
+    });
+    t.byLabel.forEach((count, label) =>
+      byLabel.set(label, (byLabel.get(label) || 0) + count),
+    );
+  });
+  return { ...sum, byLabel };
+}
+
+/**
+ * The density timeline's columns from the summary's bins, for one question:
+ *   {binMs, columns: [{index, start, end, n, answered, failed, skipped,
+ *    pending, errors, byLabel}], dayTicks, maxN}
+ * `tallyOf(bin)` reads a bin's counts for the question. Bins after now (and
+ * after the last row) are dropped, since a window can end at a midnight still
+ * to come, and neighbouring bins are merged so there are at most
+ * `maxColumns`.
+ */
+export function densityColumns({
+  timeline,
+  tallyOf,
+  now = Date.now(),
+  maxColumns = MAX_DENSITY_COLUMNS,
+}) {
+  const baseMs = timeline?.bin_ms || HOUR;
+  const bins = (timeline?.bins || [])
+    .map((bin) => ({ bin, t: toMs(bin.t) }))
+    .filter(({ t }) => Number.isFinite(t))
+    .sort((a, b) => a.t - b.t);
+  if (!bins.length)
+    return { binMs: baseMs, columns: [], dayTicks: [], maxN: 0 };
+  const lastRow = Math.max(
+    -Infinity,
+    ...bins.filter(({ bin }) => bin.n > 0).map(({ t }) => t),
+  );
+  const stop = Math.max(now, lastRow + baseMs);
+  const kept = bins.filter(({ t }) => t < stop);
+  const per = Math.max(1, Math.ceil(kept.length / maxColumns));
+  const columns = [];
+  for (let i = 0; i < kept.length; i += per) {
+    const group = kept.slice(i, i + per);
+    const next = kept[i + per];
+    columns.push({
+      index: columns.length,
+      start: group[0].t,
+      end: next ? next.t : group[group.length - 1].t + baseMs,
+      ...mergeTallies(group.map(({ bin }) => tallyOf(bin))),
+    });
+  }
+  // Where each local midnight falls, in columns from the left edge.
+  const dayTicks = [];
+  const first = columns[0].start;
+  const end = columns[columns.length - 1].end;
+  for (
+    let day = localMidnight(first);
+    day <= end;
+    day = localMidnight(day + DAY + 2 * HOUR)
+  ) {
+    if (day < first || day >= end) continue;
+    const column = columns.find((c) => c.start <= day && day < c.end);
+    if (column)
+      dayTicks.push({
+        at: column.index + (day - column.start) / (column.end - column.start),
+        ms: day,
+      });
+  }
+  return {
+    binMs: baseMs * per,
+    columns,
+    dayTicks,
+    maxN: Math.max(0, ...columns.map((column) => column.n)),
+  };
+}
+
+/** Like stackCap, for columns that are counts rather than stacks. */
+export function countCap(columns) {
+  return stackCap(
+    columns.map((column) => ({ items: { length: column.n || 0 } })),
+  );
 }
 
 /** "2-hour columns", "15-minute columns", "1-day columns". */

@@ -1,21 +1,48 @@
-import React, { useMemo } from "react";
+import React, { useDeferredValue, useMemo, useState } from "react";
 import PropTypes from "prop-types";
-import { Box, Button, Stack, Tooltip, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  MenuItem,
+  Stack,
+  TextField,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
-import { formatCount, formatShare } from "./askAnswers";
+import { formatCount, formatShare, isYesNo } from "./askAnswers";
+import { chartQuestions } from "./askSummary";
 import { MIN_ROWS, Q_MAX, findPatterns } from "./askStats";
-import { VizCard, quoted, useAnswerColor } from "./vizParts";
+import {
+  Swatch,
+  VizCard,
+  quoted,
+  sampleText,
+  useAnswerColor,
+  useRunData,
+  useThrottled,
+} from "./vizParts";
 
 // Patterns are only worth computing once a few rows are in.
 export const MIN_ANSWERED = 12;
+// While answers arrive, patterns are recomputed at most this often (the
+// charts take every poll).
+export const PATTERNS_EVERY_MS = 10000;
+// "Show all" lists this many at a time.
+const MORE_PAGE = 50;
+const ALL = "__all__";
 
 const DIMENSION_ICON = {
   day: "mdi:calendar-blank-outline",
   window: "mdi:clock-outline",
+  weekday: "mdi:calendar-week-outline",
+  weekpart: "mdi:calendar-weekend-outline",
+  tod: "mdi:clock-time-four-outline",
   user: "mdi:account-outline",
   users: "mdi:account-multiple-outline",
   model: "mdi:chip",
+  modelsince: "mdi:chip",
   turns: "mdi:message-reply-text-outline",
   error: "mdi:alert-circle-outline",
   question: "mdi:help-circle-outline",
@@ -70,38 +97,197 @@ ShareTrack.propTypes = {
   color: PropTypes.string,
 };
 
+// One callout: the group's answer in counts against the rest, its share on a
+// track, and "Show" for its rows. `dense` rows sit under "Show all".
+function PatternRow({
+  pattern,
+  color,
+  showSwatch,
+  inSample,
+  counted,
+  onSelect,
+  dense,
+}) {
+  const head = `${quoted(pattern.label)} ${pattern.where}`;
+  const fontSize = dense ? 12 : 13;
+  return (
+    <Stack
+      component="li"
+      direction="row"
+      spacing={1.5}
+      alignItems="center"
+      data-pattern={pattern.key}
+      sx={{
+        py: dense ? 0.5 : 1,
+        "&:not(:last-of-type)": {
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        },
+      }}
+    >
+      <Iconify
+        icon={DIMENSION_ICON[pattern.dimension] || "mdi:shape-outline"}
+        width={dense ? 14 : 16}
+        sx={{ color: "text.secondary", flexShrink: 0 }}
+      />
+      <Tooltip
+        arrow
+        placement="top-start"
+        describeChild
+        title={`Holds after correcting for ${formatCount(counted)} comparisons (${qText(pattern.q)}). Groups need at least ${MIN_ROWS} answered rows and a gap of 10 points (5 where the share doubles or halves).`}
+      >
+        <Typography
+          variant="body2"
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            fontSize,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {showSwatch && (
+            <Swatch
+              color={color}
+              size={9}
+              sx={{ display: "inline-block", mr: 0.75 }}
+            />
+          )}
+          <Box component="span" sx={{ fontWeight: dense ? 500 : 600 }}>
+            {head}
+          </Box>
+          : {formatCount(pattern.k)} of {formatCount(pattern.n)} (
+          {formatShare(pattern.rate)}) vs {formatShare(pattern.restRate)}{" "}
+          {pattern.restText}
+          {inSample}
+          {pattern.when && (
+            <Box component="span" sx={{ color: "text.secondary" }}>
+              , {pattern.when}
+            </Box>
+          )}
+          {pattern.within && (
+            <Box component="span" sx={{ color: "text.secondary" }}>
+              {" "}
+              · part of {quoted(pattern.label)} {pattern.within.where}
+            </Box>
+          )}
+        </Typography>
+      </Tooltip>
+      <ShareTrack
+        rate={pattern.rate}
+        restRate={pattern.restRate}
+        color={color}
+      />
+      <Button
+        size="small"
+        variant="outlined"
+        color="inherit"
+        onClick={() => onSelect?.(pattern.select.filter, pattern.select.label)}
+        sx={{
+          flexShrink: 0,
+          fontSize: 12,
+          py: dense ? 0 : 0.25,
+          minWidth: 88,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        Show {formatCount(pattern.select.count)}
+      </Button>
+    </Stack>
+  );
+}
+
+PatternRow.propTypes = {
+  pattern: PropTypes.object.isRequired,
+  color: PropTypes.string,
+  showSwatch: PropTypes.bool,
+  inSample: PropTypes.string,
+  counted: PropTypes.number,
+  onSelect: PropTypes.func,
+  dense: PropTypes.bool,
+};
+
 /**
- * What stands out for the answer in focus: the groups of rows (a day, a
- * stretch of an afternoon, a user, a model, a turn count, errors, another
- * question's answer) where it is clearly more or less common than elsewhere.
- * Each callout is counts only, and "Show n" selects the group.
+ * What stands out: the groups of rows (a day, a stretch of an afternoon, a
+ * weekday, the weekend, a time of day, a user, a model, a turn count, errors,
+ * another question's answer) where an answer is clearly more or less common
+ * than elsewhere. A Yes/No question looks at "No" (or the answer in focus); a
+ * category question with nothing in focus looks at every label at once.
+ * Each callout is counts only, and "Show" selects the group. The top five
+ * are shown, at most two of a kind; "Show all" lists every one that passed,
+ * with the ones that sit inside a stronger callout saying so. While the run
+ * is answering, they are recomputed at most every 10 seconds.
  */
 export default function AskPatterns({
+  summary: given,
   records,
-  questions,
+  questions: questionList,
   focus,
   onFocus,
   onSelect,
   running,
+  window,
   unit: unitProp,
 }) {
   const colorOf = useAnswerColor();
-  const unit = unitProp || records[0]?.unit || "sessions";
-  const result = useMemo(
-    () => findPatterns({ records, questions, focus, unit }),
-    [records, questions, focus, unit],
+  const { summary, questions, sample, unit } = useRunData({
+    summary: given,
+    records,
+    questions: questionList,
+    window,
+    unit: unitProp,
+    running,
+    defer: true,
+  });
+  // A new answer in focus is looked at in a background render, so the
+  // timeline and legend answer the click at once.
+  const shownFocus = useDeferredValue(focus);
+  // Recomputed at most every 10 seconds while answers arrive, and at once
+  // for a new question or answer in focus.
+  const focusKey = `${shownFocus?.configId || ""}|${shownFocus?.answer || ""}`;
+  const counts = useThrottled(
+    summary,
+    running ? PATTERNS_EVERY_MS : 0,
+    focusKey,
   );
-  const { question, answer, patterns } = result;
-  if (!question) return null;
-  const color = colorOf(question, answer);
+  const result = useMemo(
+    () =>
+      findPatterns({
+        summary: counts,
+        questions: chartQuestions(questionList, counts),
+        focus: shownFocus,
+        unit,
+      }),
+    [counts, questionList, shownFocus, unit],
+  );
+  const [moreShown, setMoreShown] = useState(0);
+  const { question, answer, patterns, more } = result;
+  if (!question || !questions.length) return null;
+  const everyLabel = !answer;
   const tooFew = result.answered < MIN_ANSWERED;
+  const inSample = sample.isSample ? " in the sample" : "";
+  const rowProps = (pattern) => ({
+    pattern,
+    color: colorOf(question, pattern.label),
+    showSwatch: everyLabel,
+    inSample,
+    counted: result.counted,
+    onSelect,
+  });
 
-  const caption = (
+  const caption = everyLabel ? (
+    <>
+      Where any answer to {quoted(question.question)} is clearly more or less
+      common than in the rest
+      {result.answered > 0 &&
+        ` (${formatCount(result.answered)} answered${inSample})`}
+      .
+    </>
+  ) : (
     <>
       Where {quoted(answer)} to {quoted(question.question)} is clearly more or
       less common than in the rest
       {result.answered > 0 &&
-        ` (${formatShare(result.rate)} of ${formatCount(result.answered)} answered)`}
+        ` (${formatShare(result.rate)} of ${formatCount(result.answered)} answered${inSample})`}
       .
     </>
   );
@@ -120,84 +306,74 @@ export default function AskPatterns({
       <Typography variant="body2" color="text.secondary" sx={{ fontSize: 13 }}>
         Nothing stands out{running ? " yet" : ""}: no day, time, user, model,
         turn count, error or other answer has a clearly different share of{" "}
-        {quoted(answer)} after checking {formatCount(result.tested)} groups.
+        {everyLabel ? "any answer" : quoted(answer)} after checking{" "}
+        {formatCount(result.tested)} groups.
       </Typography>
     );
   else
     body = (
-      <Box component="ol" sx={{ m: 0, p: 0, listStyle: "none" }}>
-        {patterns.map((pattern) => (
-          <Stack
-            key={pattern.key}
-            component="li"
-            direction="row"
-            spacing={1.5}
-            alignItems="center"
-            sx={{
-              py: 1,
-              "&:not(:last-of-type)": {
-                borderBottom: "1px solid",
-                borderColor: "divider",
-              },
-            }}
-          >
-            <Iconify
-              icon={DIMENSION_ICON[pattern.dimension] || "mdi:shape-outline"}
-              width={16}
-              sx={{ color: "text.secondary", flexShrink: 0 }}
-            />
-            <Tooltip
-              arrow
-              placement="top-start"
-              describeChild
-              title={`Holds after correcting for ${formatCount(result.counted)} comparisons (${qText(pattern.q)}). Groups need at least ${MIN_ROWS} answered rows and a gap of 10 points.`}
-            >
-              <Typography
-                variant="body2"
+      <>
+        <Box
+          component="ol"
+          aria-label="Strongest patterns"
+          sx={{ m: 0, p: 0, listStyle: "none" }}
+        >
+          {patterns.map((pattern) => (
+            <PatternRow key={pattern.key} {...rowProps(pattern)} />
+          ))}
+        </Box>
+        {more.length > 0 && (
+          <Box sx={{ mt: 0.5 }}>
+            {moreShown > 0 && (
+              <Box
+                component="ol"
+                aria-label="More patterns"
+                start={patterns.length + 1}
                 sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontSize: 13,
-                  fontVariantNumeric: "tabular-nums",
+                  m: 0,
+                  mt: 0.5,
+                  p: 0,
+                  pl: 1.5,
+                  listStyle: "none",
+                  borderLeft: "2px solid",
+                  borderColor: "divider",
                 }}
               >
-                <Box component="span" sx={{ fontWeight: 600 }}>
-                  {quoted(answer)} {pattern.where}
-                </Box>
-                : {pattern.k} of {pattern.n} ({formatShare(pattern.rate)}) vs{" "}
-                {formatShare(pattern.restRate)} elsewhere
-                {pattern.when && (
-                  <Box component="span" sx={{ color: "text.secondary" }}>
-                    , {pattern.when}
-                  </Box>
-                )}
-              </Typography>
-            </Tooltip>
-            <ShareTrack
-              rate={pattern.rate}
-              restRate={pattern.restRate}
-              color={color}
-            />
-            <Button
-              size="small"
-              variant="outlined"
-              color="inherit"
-              onClick={() =>
-                onSelect?.(pattern.ids, `${quoted(answer)} ${pattern.where}`)
-              }
-              sx={{
-                flexShrink: 0,
-                fontSize: 12,
-                py: 0.25,
-                minWidth: 88,
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              Show {formatCount(pattern.n)}
-            </Button>
-          </Stack>
-        ))}
-      </Box>
+                {more.slice(0, moreShown).map((pattern) => (
+                  <PatternRow key={pattern.key} dense {...rowProps(pattern)} />
+                ))}
+              </Box>
+            )}
+            <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+              {moreShown < more.length && (
+                <Button
+                  size="small"
+                  color="inherit"
+                  aria-expanded={moreShown > 0}
+                  onClick={() => setMoreShown((shown) => shown + MORE_PAGE)}
+                  startIcon={<Iconify icon="mdi:chevron-down" width={16} />}
+                  sx={{ fontSize: 12, color: "text.secondary" }}
+                >
+                  {moreShown === 0
+                    ? `Show all ${formatCount(patterns.length + more.length)}`
+                    : `Show ${formatCount(Math.min(MORE_PAGE, more.length - moreShown))} more`}
+                </Button>
+              )}
+              {moreShown > 0 && (
+                <Button
+                  size="small"
+                  color="inherit"
+                  onClick={() => setMoreShown(0)}
+                  startIcon={<Iconify icon="mdi:chevron-up" width={16} />}
+                  sx={{ fontSize: 12, color: "text.secondary" }}
+                >
+                  Top {formatCount(patterns.length)} only
+                </Button>
+              )}
+            </Stack>
+          </Box>
+        )}
+      </>
     );
 
   return (
@@ -206,7 +382,7 @@ export default function AskPatterns({
       label="Patterns"
       caption={caption}
       action={
-        question.labels?.length > 0 && (
+        isYesNo(question) ? (
           <Stack direction="row" spacing={0.5} alignItems="center">
             {question.labels.map((label) => {
               const active = label === answer;
@@ -235,6 +411,32 @@ export default function AskPatterns({
               );
             })}
           </Stack>
+        ) : (
+          <TextField
+            select
+            size="small"
+            label="Answer"
+            value={answer || ALL}
+            onChange={(event) =>
+              onFocus?.({
+                configId: question.configId,
+                answer: event.target.value === ALL ? null : event.target.value,
+              })
+            }
+            sx={{ width: 220 }}
+          >
+            <MenuItem value={ALL}>All answers</MenuItem>
+            {question.labels.map((label) => (
+              <MenuItem key={label} value={label}>
+                <Swatch
+                  color={colorOf(question, label)}
+                  size={9}
+                  sx={{ mr: 1 }}
+                />
+                {label}
+              </MenuItem>
+            ))}
+          </TextField>
         )
       }
     >
@@ -247,10 +449,12 @@ export default function AskPatterns({
           sx={{ m: 0, mt: 0.75 }}
         >
           Each holds after correcting for {formatCount(result.counted)}{" "}
-          comparisons: {formatCount(result.tested)} groups checked, less the
-          ones too small to ever stand out (Fisher&apos;s exact test, q &lt;{" "}
+          comparisons: {formatCount(result.tested)} checked
+          {everyLabel ? ` across ${question.labels.length} answers` : ""}, less
+          the ones too small to ever stand out (Fisher&apos;s exact test, q &lt;{" "}
           {Q_MAX}).
-          {running ? " Updates as answers arrive." : ""}
+          {sample.isSample ? ` ${sampleText(sample, unit)}` : ""}
+          {running ? " Rechecked every 10 seconds while answers arrive." : ""}
         </Typography>
       )}
     </VizCard>
@@ -258,8 +462,9 @@ export default function AskPatterns({
 }
 
 AskPatterns.propTypes = {
-  records: PropTypes.array.isRequired,
-  questions: PropTypes.array.isRequired,
+  summary: PropTypes.object,
+  records: PropTypes.array,
+  questions: PropTypes.array,
   focus: PropTypes.shape({
     configId: PropTypes.string,
     answer: PropTypes.string,
@@ -269,4 +474,5 @@ AskPatterns.propTypes = {
   onOpen: PropTypes.func,
   running: PropTypes.bool,
   unit: PropTypes.oneOf(["traces", "spans", "sessions", "users"]),
+  window: PropTypes.array,
 };

@@ -1395,6 +1395,12 @@ export const endpoints = {
       apiPath("/tracer/insights/runs/{run_id}/ask/", { run_id: runId }),
     instantEvalAnswers: () => apiPath("/tracer/instant-eval/answers/"),
     instantEvalRuns: () => apiPath("/tracer/instant-eval/runs/"),
+    instantEvalEstimate: () => apiPath("/tracer/instant-eval/estimate/"),
+    instantEvalStart: () => apiPath("/tracer/instant-eval/start/"),
+    instantEvalSummary: () => apiPath("/tracer/instant-eval/summary/"),
+    instantEvalRows: () => apiPath("/tracer/instant-eval/rows/"),
+    instantEvalExport: () => apiPath("/tracer/instant-eval/export/"),
+    instantEvalControl: () => apiPath("/tracer/instant-eval/control/"),
     instantEvalUserSessions: () =>
       apiPath("/tracer/instant-eval/user-sessions/"),
     getAgentGraph: () => apiPath("/tracer/trace/agent_graph/"),

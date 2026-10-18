@@ -257,6 +257,120 @@ export async function startAsk({
   };
 }
 
+/**
+ * The server's answer to "how many rows does this view hold, and what would
+ * reading a sample or all of it cost": one count with the grid's own filters.
+ */
+export async function estimateAsk({
+  projectId,
+  unit,
+  filters = [],
+  ids,
+  sampleSize = null,
+  questions = 1,
+  signal,
+}) {
+  const response = await axios.post(
+    endpoints.project.instantEvalEstimate(),
+    {
+      project_id: projectId,
+      unit,
+      filters,
+      ...(ids?.length ? { ids } : {}),
+      sample_size: sampleSize,
+      questions,
+    },
+    { signal },
+  );
+  return result(response);
+}
+
+/** A start the server holds back until the person confirms the credits. */
+export class AskNeedsConfirm extends Error {
+  constructor(detail) {
+    super(detail?.message || "Confirm to start.");
+    this.name = "AskNeedsConfirm";
+    this.rows = detail?.rows_to_read ?? null;
+    this.credits = detail?.credits_estimate ?? null;
+  }
+}
+
+/** A start refused because the organization's runs are all in use. */
+export class AskBusy extends Error {
+  constructor(detail) {
+    super(detail?.message || "Too many Instant eval runs are in progress.");
+    this.name = "AskBusy";
+    this.runs = detail?.runs || [];
+  }
+}
+
+const errorDetail = (error) => {
+  const data = error?.response?.data || {};
+  return typeof data.result === "object" && data.result ? data.result : data;
+};
+
+/** Turn a control or start refusal the page explains into its own error. */
+export function askError(error) {
+  const status = error?.response?.status;
+  if (
+    status === 409 &&
+    errorDetail(error).error_code === "INSTANT_EVAL_CONFIRM"
+  )
+    return new AskNeedsConfirm(errorDetail(error));
+  if (status === 429) return new AskBusy(errorDetail(error));
+  return error;
+}
+
+/**
+ * Ask Jev the questions about a view: save each question as a Jev evaluator
+ * (or reuse the saved one), then let the server resolve the view's rows (a
+ * hash-ordered sample of `sampleSize`, or all of them) or read the rows
+ * handed over by id, and start the run.
+ */
+export async function startAskRun({
+  projectId,
+  unit,
+  questions,
+  existingItems,
+  reads,
+  filters = [],
+  ids,
+  sampleSize = null,
+  confirm = false,
+}) {
+  const runReads = normalizeReads(unit, reads || existingItems?.[0]?.reads);
+  const saved = existingItems
+    ? existingItems
+    : await resolveEvaluators({ projectId, questions, reads: runReads, unit });
+  if (saved.some((item) => !item.configId))
+    throw new Error("The question could not be saved as an evaluator.");
+  let response;
+  try {
+    response = await axios.post(endpoints.project.instantEvalStart(), {
+      project_id: projectId,
+      unit,
+      filters: ids?.length ? [] : filters,
+      ...(ids?.length ? { ids } : {}),
+      sample_size: ids?.length ? null : sampleSize,
+      config_ids: saved.map((item) => item.configId),
+      confirm,
+    });
+  } catch (error) {
+    const known = askError(error);
+    if (known !== error) known.questions = saved;
+    throw known;
+  }
+  const started = result(response);
+  if (!started?.task_id) throw new Error("The run could not be started.");
+  return {
+    taskId: started.task_id,
+    questions: saved,
+    rows: started.rows_requested,
+    population: started.population,
+    isSample: Boolean(started.is_sample),
+  };
+}
+
 const LIVE_TASK_PREFIX = "Instant eval (live)";
 const LIVE_TASK_PAGE_SIZE = 50;
 const LIVE_TASK_MAX_PAGES = 20;
@@ -360,8 +474,19 @@ const HISTORY_LIVE_MS = 5000;
 export const HISTORY_KEY = "instant-eval-history";
 const LIVE_RUN_STATUSES = new Set(["pending", "running"]);
 
+// Runs that ended (or stopped before finishing) aren't polled for, even with
+// rows unanswered.
+const ENDED_RUN_STATUSES = new Set([
+  "completed",
+  "failed",
+  "paused",
+  "cancelled",
+  "stalled",
+]);
+
 export const isLiveRun = (runItem) =>
-  runItem.pending > 0 || LIVE_RUN_STATUSES.has(runItem.status);
+  LIVE_RUN_STATUSES.has(runItem.status) ||
+  (runItem.pending > 0 && !ENDED_RUN_STATUSES.has(runItem.status));
 
 // A question whose evaluator config is gone, rebuilt from what the run
 // counted, so its answers still read.

@@ -1,0 +1,527 @@
+"""Which rows an Instant eval run reads, and what each row is grouped by.
+
+A run is asked about a view: its unit, its filters and its date window. The
+server resolves that population itself, with the same ClickHouse list builders
+as the view's grid, so a run is not limited to the ids a browser can collect.
+
+- ``count_population`` is the grid's own count query.
+- ``pick_rows`` takes the next ``n`` rows of the view in ``cityHash64(row id)``
+  order. That order is a uniform random sample, the same every time, and it
+  extends: the next pick continues after the largest hash already read.
+- ``read_facets`` reads, for those rows, what the Ask page groups by (time,
+  user, model, turns, duration, error, a short excerpt) in a few ClickHouse
+  reads, and ``write_rows`` stores them once in ``tracer_instant_eval_row``.
+
+``resolve_instant_rows`` is the eval-task resolver's hook: the first reconcile
+of a run (and the one after "Read more") picks and stores the rows, and every
+reconcile returns the run's rows in sample order.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import structlog
+from django.db import transaction
+
+logger = structlog.get_logger(__name__)
+
+EXCERPT_CHARS = 280
+# Enough of a span's input to find its first user message.
+_RAW_INPUT_CHARS = 6000
+_FACET_BATCH = 5000
+_WRITE_BATCH = 5000
+SESSIONS_PER_USER = 5
+
+# The eval task row type and the id column each grid's builder emits.
+_BUILDER = {
+    "traces": ("TRACE_LIST", "trace_id"),
+    "spans": ("SPAN_LIST", "id"),
+    "sessions": ("SESSION_LIST", "session_id"),
+}
+
+# Set in the task's filters by the start endpoint: the task reads the rows its
+# run stored, not a filter query of its own.
+RUN_MARKER = "instant_eval_run"
+
+ROW_TYPE = {
+    "traces": "traces",
+    "spans": "spans",
+    "sessions": "sessions",
+    "users": "sessions",
+}
+
+
+class PopulationUnavailable(ValueError):
+    """The view's filters can't be resolved on the server; the caller says so
+    and the page hands over the rows it can see instead."""
+
+
+@dataclass
+class Population:
+    count: int
+    lower_bound: bool
+    date_from: datetime | None
+    date_to: datetime | None
+    filters: list[dict]
+
+
+def _frozen_filters(
+    filters: list[dict], row_type: str
+) -> tuple[list[dict], datetime, datetime]:
+    """The view's filters with its window pinned to absolute times, so the
+    run reads the same rows whenever its resolver runs."""
+    from tracer.selectors.eval_tasks.row_resolver import _task_ui_filters
+    from tracer.services.clickhouse.query_builders.base import BaseQueryBuilder
+
+    try:
+        ui_filters = _task_ui_filters(
+            {"filters": list(filters or [])}, row_type=row_type
+        )
+        start, end = BaseQueryBuilder.parse_time_range(ui_filters)
+    except (TypeError, ValueError) as exc:
+        raise PopulationUnavailable(
+            "These filters can't be read on the server."
+        ) from exc
+    # The builders read naive datetimes as UTC.
+    start, end = (_aware(v) for v in (start, end))
+    pinned = [
+        item
+        for item in ui_filters
+        if not (
+            (item.get("column_id") in ("created_at", "start_time"))
+            and (item.get("filter_config") or {}).get("filter_op") == "between"
+        )
+    ]
+    pinned.append(
+        {
+            "column_id": "created_at",
+            "filter_config": {
+                "filter_type": "datetime",
+                "filter_op": "between",
+                "filter_value": [start.isoformat(), end.isoformat()],
+            },
+        }
+    )
+    return pinned, start, end
+
+
+def _builder(project_id: str, row_type: str, ui_filters: list[dict]):
+    from tracer.services.clickhouse.v2.dispatch import get_v2_class
+
+    query_type, id_col = _BUILDER[row_type]
+    return get_v2_class(query_type)(
+        project_id=str(project_id), filters=ui_filters
+    ), id_col
+
+
+def _ch(sql: str, params: dict) -> list[dict]:
+    from tracer.services.clickhouse.v2.query_service import V2AnalyticsQueryService
+
+    return (
+        V2AnalyticsQueryService()
+        .execute_ch_query(sql, params, timeout_ms=None, settings={})
+        .data
+    )
+
+
+def _user_filters_only_window(filters: list[dict]) -> bool:
+    return all(
+        (item.get("column_id") or item.get("columnId")) in ("created_at", "start_time")
+        for item in filters or []
+    )
+
+
+def count_population(project_id: str, unit: str, filters: list[dict]) -> Population:
+    """How many rows the view holds, from the grid's own count query."""
+    row_type = ROW_TYPE[unit]
+    pinned, start, end = _frozen_filters(filters, row_type)
+    if unit == "users":
+        if not _user_filters_only_window(filters):
+            raise PopulationUnavailable(
+                "A user question over filtered users needs the users handed over."
+            )
+        rows = _ch(
+            "SELECT uniqExact(end_user_id) AS total FROM spans "
+            "WHERE project_id = %(pid)s AND is_deleted = 0 "
+            "AND start_time >= %(start)s AND start_time < %(end)s "
+            "AND end_user_id IS NOT NULL",
+            {"pid": str(project_id), "start": start, "end": end},
+        )
+        total = int(rows[0]["total"]) if rows else 0
+        return Population(total, False, start, end, pinned)
+    try:
+        builder, _ = _builder(project_id, row_type, pinned)
+        # The grids build their page first; that binds the window the count
+        # query reads.
+        builder.build()
+        sql, params = builder.build_count_query()
+    except ValueError as exc:
+        raise PopulationUnavailable(
+            "These filters can't be counted on the server."
+        ) from exc
+    rows = _ch(sql, params)
+    total = int((rows[0].get("total") if rows else 0) or 0)
+    return Population(total, False, start, end, pinned)
+
+
+def pick_rows(
+    project_id: str, unit: str, filters: list[dict], *, n: int, after: int | None
+) -> list[tuple[str, int]]:
+    """The next ``n`` rows of the view in hash order, as (row id, hash)."""
+    if n <= 0:
+        return []
+    row_type = ROW_TYPE[unit]
+    if unit == "users":
+        pinned, start, end = _frozen_filters(filters, row_type)
+        inner = (
+            "SELECT DISTINCT end_user_id AS rid_src FROM spans "
+            "WHERE project_id = %(pid)s AND is_deleted = 0 "
+            "AND start_time >= %(start)s AND start_time < %(end)s "
+            "AND end_user_id IS NOT NULL"
+        )
+        params: dict[str, Any] = {"pid": str(project_id), "start": start, "end": end}
+        id_col = "rid_src"
+    else:
+        builder, id_col = _builder(project_id, row_type, filters)
+        inner, params = builder.build_id_query()
+        params = dict(params)
+    params["ie_n"] = int(n)
+    where = ""
+    if after is not None:
+        params["ie_after"] = int(after)
+        where = "WHERE h > %(ie_after)s"
+    sql = (
+        "SELECT rid, h FROM ("
+        f"SELECT toString({id_col}) AS rid, cityHash64(toString({id_col})) AS h "
+        f"FROM ({inner})) {where} ORDER BY h, rid LIMIT %(ie_n)s"
+    )
+    return [(str(r["rid"]), int(r["h"])) for r in _ch(sql, params) if r.get("rid")]
+
+
+def row_hashes(ids: Iterable[str]) -> dict[str, int]:
+    """cityHash64 of hand-over ids, so they are read in the same order a sample
+    would read them."""
+    ids = [str(i) for i in ids if i]
+    if not ids:
+        return {}
+    rows = _ch(
+        "SELECT x AS rid, cityHash64(x) AS h FROM (SELECT arrayJoin(%(ids)s) AS x)",
+        {"ids": ids},
+    )
+    return {str(r["rid"]): int(r["h"]) for r in rows}
+
+
+def user_sessions(
+    project_id: str, user_ids: list[str], start: datetime | None, end: datetime | None
+) -> list[str]:
+    """Each user's latest sessions in the window, newest first."""
+    if not user_ids:
+        return []
+    out: list[str] = []
+    for chunk in _chunks(user_ids, _FACET_BATCH):
+        where = [
+            "project_id = %(pid)s",
+            "is_deleted = 0",
+            "toString(end_user_id) IN %(uids)s",
+            "trace_session_id IS NOT NULL",
+        ]
+        params: dict[str, Any] = {"pid": str(project_id), "uids": tuple(chunk)}
+        if start is not None:
+            where.append("start_time >= %(start)s")
+            params["start"] = start
+        if end is not None:
+            where.append("start_time < %(end)s")
+            params["end"] = end
+        rows = _ch(
+            "SELECT toString(trace_session_id) AS sid, any(end_user_id) AS uid, "
+            "min(start_time) AS t FROM spans "
+            f"WHERE {' AND '.join(where)} GROUP BY trace_session_id "
+            f"ORDER BY uid, t DESC LIMIT {SESSIONS_PER_USER} BY uid",
+            params,
+        )
+        out.extend(str(r["sid"]) for r in rows)
+    return out
+
+
+# Rows written at once past which the planner is told about them straight
+# away: a run's rows are a new task id its statistics don't know, and an
+# estimate of one row turns the summary's joins into nested loops.
+ANALYZE_AFTER = 1000
+
+
+def analyze(table: str) -> None:
+    from django.db import connection
+
+    with connection.cursor() as cur:
+        cur.execute(f"ANALYZE {table}")
+
+
+def _chunks(items: list, size: int):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+_USER_CONTENT = re.compile(
+    r'"role"\s*:\s*"(?:user|human)"[^{}]*?"content"\s*:\s*"((?:[^"\\]|\\.)*)"', re.S
+)
+
+
+def excerpt_of(raw: str | None) -> str:
+    """The first readable line of a span's input: a chat input's user message,
+    or the text itself."""
+    from ee.agenthub.insights.units import _message_text
+
+    raw = raw or ""
+    text = _message_text(raw)
+    if text is raw and raw.lstrip()[:1] in "[{":
+        # Cut off mid-JSON: find a user message the parser couldn't reach.
+        match = _USER_CONTENT.search(raw)
+        if match:
+            try:
+                text = json.loads(f'"{match.group(1)}"')
+            except ValueError:
+                text = match.group(1)
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= EXCERPT_CHARS else text[: EXCERPT_CHARS - 1] + "…"
+
+
+def _naive_utc(value):
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
+
+
+def _aware(value) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+# One ClickHouse read per batch of rows. Errors count on any span of the row:
+# a failed tool call is a child span.
+_FACET_SQL = {
+    "sessions": (
+        "SELECT toString(trace_session_id) AS rid, min(start_time) AS t, "
+        "anyIf(end_user_id, end_user_id IS NOT NULL) AS uid, "
+        "uniqExactIf(trace_id, parent_span_id = '' OR parent_span_id IS NULL) AS turns, "
+        "dateDiff('millisecond', min(start_time), max(coalesce(end_time, start_time))) AS dur, "
+        "max(status = 'ERROR') AS err, argMinIf(model, start_time, model != '') AS m, "
+        "argMinIf(substring(if(attrs_string['input.value'] != '', attrs_string['input.value'], input), 1, %(raw)s), "
+        "start_time, parent_span_id = '' OR parent_span_id IS NULL) AS raw, '' AS tid, '' AS kind, '' AS name "
+        "FROM spans WHERE project_id = %(pid)s AND is_deleted = 0 "
+        "AND toString(trace_session_id) IN %(ids)s {window} GROUP BY trace_session_id"
+    ),
+    "traces": (
+        "SELECT trace_id AS rid, minIf(start_time, parent_span_id = '' OR parent_span_id IS NULL) AS t, "
+        "anyIf(end_user_id, end_user_id IS NOT NULL) AS uid, toUInt64(0) AS turns, "
+        "maxIf(latency_ms, parent_span_id = '' OR parent_span_id IS NULL) AS dur, "
+        "max(status = 'ERROR') AS err, argMinIf(model, start_time, model != '') AS m, "
+        "argMinIf(substring(if(attrs_string['input.value'] != '', attrs_string['input.value'], input), 1, %(raw)s), "
+        "start_time, parent_span_id = '' OR parent_span_id IS NULL) AS raw, '' AS tid, '' AS kind, '' AS name "
+        "FROM spans WHERE project_id = %(pid)s AND is_deleted = 0 "
+        "AND trace_id IN %(ids)s {window} GROUP BY trace_id"
+    ),
+    "spans": (
+        "SELECT id AS rid, any(start_time) AS t, any(end_user_id) AS uid, toUInt64(0) AS turns, "
+        "any(latency_ms) AS dur, max(status = 'ERROR') AS err, any(model) AS m, "
+        "any(substring(if(attrs_string['input.value'] != '', attrs_string['input.value'], input), 1, %(raw)s)) AS raw, "
+        "any(trace_id) AS tid, any(observation_type) AS kind, any(name) AS name "
+        "FROM spans WHERE project_id = %(pid)s AND is_deleted = 0 "
+        "AND id IN %(ids)s {window} GROUP BY id"
+    ),
+}
+
+
+def read_facets(
+    project_id: str,
+    row_type: str,
+    ids: list[str],
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, dict]:
+    """What the Ask page shows and groups each row by. Rows with no spans in
+    the project are left out, which is also how hand-over ids are checked."""
+    from ee.agenthub.insights.units import _user_labels
+
+    out: dict[str, dict] = {}
+    window = ""
+    params_window: dict[str, Any] = {}
+    if start is not None and end is not None:
+        # Sessions and traces run past the window's edges; a margin keeps
+        # their later turns without scanning the project's whole history.
+        window = "AND start_time >= %(w_start)s AND start_time < %(w_end)s"
+        params_window = {
+            "w_start": _naive_utc(start) - timedelta(days=1),
+            "w_end": _naive_utc(end) + timedelta(days=1),
+        }
+    sql = _FACET_SQL[row_type].format(window=window)
+    for chunk in _chunks([str(i) for i in ids], _FACET_BATCH):
+        rows = _ch(
+            sql,
+            {
+                "pid": str(project_id),
+                "ids": tuple(chunk),
+                "raw": _RAW_INPUT_CHARS,
+                **params_window,
+            },
+        )
+        for row in rows:
+            rid = str(row["rid"])
+            text = excerpt_of(row.get("raw"))
+            if row_type == "spans":
+                kind = str(row.get("kind") or "span").lower()
+                text = (
+                    f"{kind} · {row.get('name') or ''}: {text}"
+                    if text
+                    else f"{kind} · {row.get('name') or ''}"
+                )
+            duration = row.get("dur")
+            out[rid] = {
+                "time": _aware(row.get("t")),
+                "end_user_id": str(row["uid"]) if row.get("uid") else None,
+                "model": str(row.get("m") or "")[:255],
+                "turns": int(row["turns"])
+                if row_type == "sessions" and row.get("turns")
+                else None,
+                "duration_ms": int(duration)
+                if duration is not None and int(duration) >= 0
+                else None,
+                "error": bool(row.get("err")),
+                "excerpt": text,
+                "trace_id": str(row.get("tid") or "") or None,
+            }
+    labels = {}
+    users = list({f["end_user_id"] for f in out.values() if f["end_user_id"]})
+    for chunk in _chunks(users, _FACET_BATCH):
+        labels.update(_user_labels(chunk))
+    for facets in out.values():
+        facets["user_label"] = str(labels.get(facets["end_user_id"] or "", "") or "")[
+            :255
+        ]
+    return out
+
+
+def write_rows(
+    task_id, unit: str, ranked: list[tuple[str, int]], facets: dict[str, dict]
+) -> int:
+    """Store the rows a run reads with their facets, in sample order. A row
+    already stored keeps its place (the unique index ignores it)."""
+    from tracer.models.instant_eval import InstantEvalRow
+
+    row_type = ROW_TYPE[unit]
+    objs = [
+        InstantEvalRow(
+            task_id=task_id,
+            row_id=row_id,
+            unit=row_type,
+            sample_rank=rank,
+            time=f["time"],
+            end_user_id=f["end_user_id"],
+            user_label=f["user_label"],
+            model=f["model"],
+            turns=f["turns"],
+            duration_ms=f["duration_ms"],
+            error=f["error"],
+            excerpt=f["excerpt"],
+            trace_id=f["trace_id"] if row_type == "spans" else None,
+        )
+        for row_id, rank in ranked
+        if (f := facets.get(row_id)) is not None
+    ]
+    for chunk in _chunks(objs, _WRITE_BATCH):
+        InstantEvalRow.objects.bulk_create(chunk, ignore_conflicts=True)
+    if len(objs) >= ANALYZE_AFTER:
+        analyze("tracer_instant_eval_row")
+    return len(objs)
+
+
+def extend_run(run) -> int:
+    """Pick and store rows until the run holds ``rows_requested`` of them (or
+    the view runs out). Returns how many rows were added."""
+    from tracer.models.instant_eval import InstantEvalRow
+
+    task = run.eval_task
+    stored = InstantEvalRow.objects.filter(task_id=task.id)
+    users = run.unit == "users"
+    # A user question counts the users it read; each brings its sessions.
+    done = {
+        str(v)
+        for v in stored.values_list("end_user_id" if users else "row_id", flat=True)
+        if v is not None
+    }
+    wanted = int(run.rows_requested or 0) - len(done)
+    if wanted <= 0:
+        return 0
+    rank_base = stored.count()
+    project_id = str(run.project_id)
+    row_type = ROW_TYPE[run.unit]
+    explicit = _explicit_ids(task)
+    if explicit is not None:
+        hashes = row_hashes(explicit)
+        picked = sorted(hashes.items(), key=lambda x: (x[1], x[0]))
+        picked = [p for p in picked if p[0] not in done][:wanted]
+    else:
+        after = int(run.hash_cursor) if run.hash_cursor else None
+        picked = pick_rows(project_id, run.unit, run.filters, n=wanted, after=after)
+    if not picked:
+        return 0
+    cursor = max(h for _, h in picked)
+    # Hand-overs name rows from any time; a view's rows sit in its window.
+    start, end = (run.date_from, run.date_to) if explicit is None else (None, None)
+    if users:
+        session_ids = user_sessions(project_id, [rid for rid, _ in picked], start, end)
+        hashes = row_hashes(session_ids)
+        ranked_ids = sorted(session_ids, key=lambda s: (hashes.get(s, 0), s))
+        start = end = None
+    else:
+        ranked_ids = [rid for rid, _ in picked]
+    facets = read_facets(project_id, row_type, ranked_ids, start=start, end=end)
+    ranked = [(rid, rank_base + i) for i, rid in enumerate(ranked_ids)]
+    with transaction.atomic():
+        added = write_rows(task.id, run.unit, ranked, facets)
+        type(run).objects.filter(id=run.id).update(hash_cursor=str(cursor))
+    logger.info(
+        "instant_eval_rows_written",
+        task_id=str(task.id),
+        picked=len(picked),
+        added=added,
+    )
+    return added
+
+
+def _explicit_ids(task) -> list[str] | None:
+    """Rows handed over by id (a selection, an Insights category), if any."""
+    raw = (task.filters or {}).get("instant_ids")
+    if not isinstance(raw, list):
+        return None
+    return list(dict.fromkeys(str(v) for v in raw if v not in (None, "")))
+
+
+def resolve_instant_rows(task) -> tuple[str, ...] | None:
+    """The eval-task resolver's hook: a task started by Instant eval reads the
+    rows its run picked, in sample order. None for any other task."""
+    filters = getattr(task, "filters", None)
+    if not isinstance(filters, dict) or not filters.get(RUN_MARKER):
+        return None
+    from tracer.models.instant_eval import InstantEvalRow, InstantEvalRun
+
+    run = (
+        InstantEvalRun.objects.filter(eval_task_id=task.id)
+        .select_related("eval_task")
+        .first()
+    )
+    if run is None:
+        return None
+    extend_run(run)
+    return tuple(
+        InstantEvalRow.objects.filter(task_id=task.id)
+        .order_by("sample_rank", "id")
+        .values_list("row_id", flat=True)
+    )

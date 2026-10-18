@@ -25,6 +25,7 @@ from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_serializers import ApiErrorResponseSerializer
 from tfc.utils.general_methods import GeneralMethods
 from tracer.models.eval_task import EvalTask
+from tracer.models.instant_eval import InstantEvalRun
 from tracer.models.observation_span import EvalLogger
 from tracer.models.project import Project
 
@@ -604,6 +605,12 @@ class InstantEvalRunSerializer(serializers.Serializer):
     pending = serializers.IntegerField()
     # When the last answer landed, once every row has one.
     finished_at = serializers.CharField(allow_null=True, required=False)
+    # Runs started from the Ask page: who started it, what it was expected to
+    # cost, and how big the view it sampled was.
+    created_by = serializers.CharField(allow_null=True, required=False)
+    credits_estimate = serializers.FloatField(allow_null=True, required=False)
+    population = serializers.IntegerField(allow_null=True, required=False)
+    is_sample = serializers.BooleanField(required=False)
 
 
 class InstantEvalRunsResultSerializer(serializers.Serializer):
@@ -622,6 +629,128 @@ def _task_rows(task) -> int:
         if isinstance(filters.get(key), list):
             return len(filters[key])
     return int(task.spans_limit or 0)
+
+
+def _legacy_tally(task_ids: list[str], out: dict[str, list]) -> None:
+    """Runs whose answers are only in the eval logger: count them there."""
+    from django.db import connection
+
+    from tracer.services.instant_eval_summary import LABEL, PENDING
+
+    rid = "COALESCE(l.trace_session_id::text, l.trace_id::text, l.observation_span_id)"
+    with connection.cursor() as cur:
+        cur.execute(
+            f"SELECT l.eval_task_id, count(DISTINCT {rid}), "
+            f"count(DISTINCT {rid}) FILTER (WHERE ({LABEL}) <> '{PENDING}'), max(l.updated_at) "
+            "FROM tracer_eval_logger l WHERE l.eval_task_id = ANY(%(tasks)s) AND l.deleted = false "
+            "GROUP BY l.eval_task_id",
+            {"tasks": task_ids},
+        )
+        for tid, seen, settled, last in cur.fetchall():
+            out[tid] = [int(seen), int(settled), last, {}, 0]
+        cur.execute(
+            f"SELECT l.eval_task_id, l.custom_eval_config_id::text, {LABEL} AS label, count(*) "
+            "FROM tracer_eval_logger l WHERE l.eval_task_id = ANY(%(tasks)s) AND l.deleted = false "
+            "GROUP BY 1, 2, 3",
+            {"tasks": task_ids},
+        )
+        for tid, cfg, label, n in cur.fetchall():
+            if label != PENDING and tid in out:
+                out[tid][3].setdefault(cfg, {})[label] = int(n)
+
+
+def _answer_tally(task_ids: list[str], out: dict[str, list]) -> None:
+    """Runs whose answers are recorded as they land: count the narrow table."""
+    from django.db import connection
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT task_id::text, count(DISTINCT row_id), max(answered_at) "
+            "FROM tracer_instant_eval_answer WHERE task_id = ANY(%(tasks)s::uuid[]) "
+            "GROUP BY task_id",
+            {"tasks": task_ids},
+        )
+        for tid, settled, last in cur.fetchall():
+            out[tid] = [0, int(settled), last, {}, 0]
+        cur.execute(
+            "SELECT task_id::text, config_id::text, label, count(*) "
+            "FROM tracer_instant_eval_answer WHERE task_id = ANY(%(tasks)s::uuid[]) "
+            "GROUP BY 1, 2, 3",
+            {"tasks": task_ids},
+        )
+        for tid, cfg, label, n in cur.fetchall():
+            out.setdefault(tid, [0, 0, None, {}, 0])[3].setdefault(cfg, {})[label] = (
+                int(n)
+            )
+
+
+FINISHED = frozenset({"completed", "failed", "paused"})
+
+
+def asked_order(task, configs: list) -> list:
+    """A run's questions in the order it asked them: as stored when it
+    started, else as they were created."""
+    asked = [str(c) for c in (task.filters or {}).get("instant_config_ids") or []]
+    by_id = {str(c.id): c for c in configs}
+    ordered = [by_id[c] for c in asked if c in by_id]
+    rest = sorted((c for c in configs if c not in ordered), key=lambda c: c.created_at)
+    return ordered + rest
+
+
+def _history_status(task, run, pending: int) -> str:
+    """A run's state for History; a run that ended with rows unanswered
+    stopped before finishing."""
+    if run is not None and run.cancelled_at:
+        return "cancelled"
+    status = str(task.status)
+    if run is not None and pending and status in ("completed", "failed"):
+        return "stalled"
+    return status
+
+
+def _history_tally(page: list[tuple]) -> dict[str, tuple]:
+    """Per task: rows logged, rows with an answer, the last update, the
+    answer counts per question, and the rows its run stored. Counted in SQL
+    (from the narrow answer table where the run records one), and kept for
+    good once a run has finished."""
+    from django.db import connection
+
+    out: dict[str, list] = {}
+    keys: dict[str, str] = {}
+    for task, run in page:
+        if str(task.status) in FINISHED or (run is not None and run.cancelled_at):
+            stamp = task.updated_at.timestamp() if task.updated_at else 0
+            version = run.answers_version if run is not None else -1
+            keys[str(task.id)] = f"ie-history:v1:{task.id}:{version}:{stamp}"
+    cached = cache.get_many(list(keys.values())) if keys else {}
+    for tid, key in keys.items():
+        if key in cached:
+            out[tid] = list(cached[key])
+    todo = [(task, run) for task, run in page if str(task.id) not in out]
+    synced = [str(t.id) for t, run in todo if run is not None and run.answers_synced]
+    legacy = [str(t.id) for t, run in todo if run is None or not run.answers_synced]
+    fresh: dict[str, list] = {}
+    if synced:
+        _answer_tally(synced, fresh)
+    if legacy:
+        _legacy_tally(legacy, fresh)
+    if todo:
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT task_id::text, count(*) FROM tracer_instant_eval_row "
+                "WHERE task_id = ANY(%(tasks)s::uuid[]) GROUP BY task_id",
+                {"tasks": [str(t.id) for t, _ in todo]},
+            )
+            for tid, n in cur.fetchall():
+                fresh.setdefault(tid, [0, 0, None, {}, 0])[4] = int(n)
+    for tid, value in fresh.items():
+        if tid in synced:
+            # Every stored row is logged once the run has picked them.
+            value[0] = value[4]
+        out[tid] = value
+        if tid in keys:
+            cache.set(keys[tid], value, None)
+    return {tid: tuple(v) for tid, v in out.items()}
 
 
 class InstantEvalRunsView(APIView):
@@ -648,8 +777,10 @@ class InstantEvalRunsView(APIView):
         tasks = list(tasks.order_by("-created_at").prefetch_related("evals")[:HISTORY_SCAN])
         runs = []
         for task in tasks:
+            # In the order the run asked them (its page opens on the first).
             metas = [
-                (str(c.id), (c.config or {}).get("instant_eval") or {}) for c in task.evals.all()
+                (str(c.id), (c.config or {}).get("instant_eval") or {})
+                for c in asked_order(task, list(task.evals.all()))
             ]
             metas = [(cid, m) for cid, m in metas if m.get("question")]
             if not metas:
@@ -660,52 +791,50 @@ class InstantEvalRunsView(APIView):
             runs.append((task, unit, metas))
         start = params["page_number"] * params["page_size"]
         page = runs[start : start + params["page_size"]]
-        counts: dict[str, dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))
-        settled: dict[str, set] = defaultdict(set)
-        rows_seen: dict[str, set] = defaultdict(set)
-        logs = EvalLogger.objects.filter(
-            eval_task_id__in=[str(t.id) for t, _, _ in page], deleted=False
-        ).only(
-            "eval_task_id", "custom_eval_config_id", "status", "error", "skipped_reason",
-            "output_str_list", "output_str", "trace_id", "trace_session_id",
-            "observation_span_id", "updated_at",
-        )
-        last_update: dict[str, datetime] = {}
-        for log in logs:
-            row = log.trace_session_id or log.trace_id or log.observation_span_id
-            rows_seen[log.eval_task_id].add(row)
-            if log.updated_at and (
-                log.eval_task_id not in last_update
-                or log.updated_at > last_update[log.eval_task_id]
-            ):
-                last_update[log.eval_task_id] = log.updated_at
-            answer = answer_of(log)
-            if answer is not None:
-                counts[log.eval_task_id][str(log.custom_eval_config_id)][answer] += 1
-                settled[log.eval_task_id].add(row)
+        tids = [str(t.id) for t, _, _ in page]
+        instant_runs = {
+            str(r.eval_task_id): r
+            for r in InstantEvalRun.objects.filter(eval_task_id__in=tids).select_related(
+                "created_by"
+            )
+        }
+        tally = _history_tally([(t, instant_runs.get(str(t.id))) for t, _, _ in page])
         out = []
         for task, unit, metas in page:
             tid = str(task.id)
-            rows = _task_rows(task)
-            # Rows the task named but hasn't logged yet are pending too; a
-            # task that ran on filters only knows the rows it has logged.
-            named = len(_task_ids(task, unit)) or len(rows_seen[tid])
-            pending = max(0, max(named, len(rows_seen[tid])) - len(settled[tid]))
+            seen, settled, last_update, counts, stored = tally.get(
+                tid, (0, 0, None, {}, 0)
+            )
+            run = instant_runs.get(tid)
+            # Rows the task named (or its run picked) but hasn't logged yet are
+            # pending too; a task that ran on filters only knows what it logged.
+            named = len(_task_ids(task, unit)) or stored or seen
+            if run is not None and not stored and task.status in ("pending", "running"):
+                named = run.rows_requested
+            pending = max(0, max(named, seen) - settled)
+            if run is not None and run.cancelled_at:
+                pending = 0
             out.append({
                 "task_id": tid,
                 "name": task.name or "",
                 "created_at": _iso(task.created_at),
-                "status": str(task.status),
+                "status": _history_status(task, run, pending),
                 "run_type": str(task.run_type),
                 "unit": unit,
                 "reads": metas[0][1].get("reads"),
-                "rows": rows,
+                "rows": stored or _task_rows(task),
                 "config_ids": [cid for cid, _ in metas],
                 "questions": [m["question"] for _, m in metas],
-                "counts": {cid: dict(c) for cid, c in counts[tid].items()},
-                "answered": len(settled[tid]),
+                "counts": counts,
+                "answered": settled,
                 "pending": pending,
-                "finished_at": _iso(last_update.get(tid)) if not pending else None,
+                "finished_at": _iso(last_update) if not pending else None,
+                "created_by": (run.created_by.name or run.created_by.email)
+                if run is not None and run.created_by
+                else None,
+                "credits_estimate": run.credits_estimate if run is not None else None,
+                "population": run.population if run is not None else None,
+                "is_sample": bool(run is not None and run.rows_requested < run.population),
             })
         return self._gm.success_response(
             {"runs": out, "has_more": start + params["page_size"] < len(runs)}

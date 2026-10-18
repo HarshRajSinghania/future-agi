@@ -620,6 +620,14 @@ def resolve_desired_rows(
             sampling_rate=float(sampling_rate),
         )
 
+    # An Instant eval run picked its rows (a hash-ordered sample of a view, or
+    # rows handed over) and stored them with their facets; it reads those.
+    from tracer.services.instant_eval_rows import resolve_instant_rows
+
+    instant = resolve_instant_rows(task)
+    if instant is not None:
+        return ResolvedRowSet(instant, instant, True)
+
     # A strict datetime complement can make the requested interval provably
     # empty (for example ``is_null`` on non-nullable start_time). Preserve the
     # compatibility SQL for non-empty requests, but do zero CH reads when the

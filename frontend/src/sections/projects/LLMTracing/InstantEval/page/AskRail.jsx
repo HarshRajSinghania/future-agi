@@ -16,11 +16,13 @@ import { alpha, keyframes, useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { unitWord } from "src/sections/projects/observePopulation";
 import { isLiveRun, useInstantEvalHistory } from "../useInstantEval";
-import { answerText, summarizeCounts } from "../instantEvalAnswers";
+import { answerText } from "../instantEvalAnswers";
 import { formatAgo } from "../instantEvalUnits";
-import { answerColor, distributionEntries } from "../results/answerColors";
+import { answerColor } from "../results/answerColors";
 import { dayGroup } from "./askFormat";
 import { sourceViewTitle } from "./askLinks";
+import { displayQuestions } from "./useAskRun";
+import { answeredSplit } from "./askFilter";
 
 const ASK_RAIL_WIDTH = 320;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -32,15 +34,17 @@ const pulse = keyframes`
 
 const percent = (share) => `${Math.round(share * 100)}%`;
 
-// The first question's answers as a thin bar with its top share.
+// The first question's answers as a thin bar, with the rows Jev couldn't
+// answer hatched in red at its end.
 function SplitBar({ item, counts }) {
   const theme = useTheme();
-  const summary = summarizeCounts(counts, item);
-  const entries = distributionEntries(summary).filter((e) => e.count > 0);
-  if (!entries.length) return null;
-  const text = entries
-    .map((entry) => `${answerText(entry.answer)} ${entry.count}`)
-    .join(" · ");
+  const { labels, answered, failed } = answeredSplit(item, counts);
+  const total = answered + failed;
+  if (!total) return null;
+  const text = [
+    ...labels.map((entry) => `${answerText(entry.label)} ${entry.count}`),
+    ...(failed ? [`couldn't answer ${failed}`] : []),
+  ].join(" · ");
   return (
     <Box
       role="img"
@@ -54,15 +58,24 @@ function SplitBar({ item, counts }) {
         bgcolor: alpha(theme.palette.text.disabled, 0.15),
       }}
     >
-      {entries.map((entry) => (
+      {labels.map((entry) => (
         <Box
-          key={entry.answer}
+          key={entry.label}
           sx={{
-            width: `${entry.share * 100}%`,
-            bgcolor: answerColor(item, entry.answer, theme),
+            width: `${(entry.count / total) * 100}%`,
+            bgcolor: answerColor(item, entry.label, theme),
           }}
         />
       ))}
+      {failed > 0 && (
+        <Box
+          data-testid="rail-failed"
+          sx={{
+            width: `${(failed / total) * 100}%`,
+            backgroundImage: `repeating-linear-gradient(135deg, ${theme.palette.error.main} 0 2px, transparent 2px 4px)`,
+          }}
+        />
+      )}
     </Box>
   );
 }
@@ -73,14 +86,19 @@ SplitBar.propTypes = {
 };
 
 function topAnswer(item, counts) {
-  const summary = summarizeCounts(counts, item);
-  const top = [...summary.labels].sort((a, b) => b.count - a.count)[0];
-  return top?.count ? `${top.label} ${percent(top.share)}` : "";
+  const top = [...answeredSplit(item, counts).labels].sort(
+    (a, b) => b.count - a.count,
+  )[0];
+  return top?.count ? `${answerText(top.label)} ${percent(top.share)}` : "";
 }
 
 // One past run: its question, view, size, split and age.
 function RunCard({ runItem, selected, onOpen }) {
   const item = runItem.items[0];
+  // As the run's header shows them: without the run's name in front.
+  const [question] = displayQuestions(
+    runItem.items.map((entry) => entry.question),
+  );
   const live = isLiveRun(runItem);
   const rows = runItem.rows;
   const noun = runItem.unit === "users" ? "sessions" : runItem.unit;
@@ -103,7 +121,7 @@ function RunCard({ runItem, selected, onOpen }) {
       role="link"
       tabIndex={0}
       aria-current={selected ? "page" : undefined}
-      aria-label={`Open the run: ${item?.question}`}
+      aria-label={`Open the run: ${question}`}
       onClick={open}
       onKeyDown={(event) => {
         if (event.key === "Enter") open();
@@ -154,7 +172,7 @@ function RunCard({ runItem, selected, onOpen }) {
             minWidth: 0,
           }}
         >
-          {item?.question}
+          {question}
         </Typography>
       </Stack>
       {runItem.items.length > 1 && (

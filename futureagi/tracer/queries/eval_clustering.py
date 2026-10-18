@@ -17,7 +17,8 @@ from typing import List, Optional, Tuple
 
 import structlog
 from django.db import IntegrityError, transaction
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import CharField, Exists, OuterRef, Q
+from django.db.models.functions import Cast
 from django.utils import timezone
 
 from agentic_eval.core.database.ch_vector import ClickHouseVectorDB
@@ -169,6 +170,29 @@ def is_clusterable_eval_failure(entry: EvalLogger) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _instant_eval_task_ids():
+    """The eval tasks Instant eval started, as the text ``eval_task_id``."""
+    from tracer.models.instant_eval import InstantEvalRun
+
+    return InstantEvalRun.objects.annotate(
+        tid=Cast("eval_task_id", output_field=CharField())
+    ).values("tid")
+
+
+def is_instant_eval_task(eval_task_id) -> bool:
+    """Whether an eval task was started by Instant eval, whose answers stay
+    out of Error Feed clustering."""
+    import uuid
+
+    from tracer.models.instant_eval import InstantEvalRun
+
+    try:
+        task_id = uuid.UUID(str(eval_task_id))
+    except (TypeError, ValueError):
+        return False
+    return InstantEvalRun.objects.filter(eval_task_id=task_id).exists()
+
+
 def get_unclustered_eval_results(
     project_id: str, limit: Optional[int] = None
 ) -> List[ClusterableEvalResult]:
@@ -209,6 +233,9 @@ def get_unclustered_eval_results(
             created_at__gte=since,
         )
         .select_related("custom_eval_config", "custom_eval_config__eval_template")
+        # Instant eval answers never cluster, even when a regular eval's
+        # failure starts the drain.
+        .exclude(eval_task_id__in=_instant_eval_task_ids())
         .filter(
             ~Exists(
                 ErrorClusterTraces.objects.filter(
