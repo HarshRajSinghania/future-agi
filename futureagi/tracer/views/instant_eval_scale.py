@@ -445,17 +445,24 @@ def _fits(left: float | None, unit: str, questions: int, population: int) -> int
 
 
 def _amount(credits: float) -> str:
-    """Credits as people read them: whole above 10, else to a tenth."""
+    """Credits as people read them, as the Ask page prints them: whole from
+    10 up, else to a tenth ("0.7")."""
     if credits >= 10:
         return f"{credits:,.0f}"
     return f"{credits:.1f}".rstrip("0").rstrip(".")
+
+
+def _credit_count(credits: float) -> str:
+    """Credits with their noun: "120 credits", "0.7 credits", "1 credit"."""
+    amount = _amount(credits)
+    return f"{amount} credit{'' if amount == '1' else 's'}"
 
 
 def _credit_message(result, credits: float, left: float | None, fits, unit) -> str:
     if result.error_code == "FREE_TIER_LIMIT" and left is not None:
         have = f"you have {_amount(left)}" if left >= 0.05 else "you have none"
         message = (
-            f"This run needs about {_amount(credits)} credits; {have} left this month."
+            f"This run needs about {_credit_count(credits)}; {have} left this month."
         )
         if fits:
             return f"{message} A sample of up to {fits:,} {unit} fits."

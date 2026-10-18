@@ -274,7 +274,26 @@ export default function AskPatterns({
     onSelect,
   });
 
-  const caption = everyLabel ? (
+  // The caption says what the callouts below show; with none to show, it
+  // only gives the share, so it never reads as a finding.
+  const found = !tooFew && patterns.length > 0;
+  const caption = !found ? (
+    everyLabel ? (
+      <>
+        Answers to {quoted(question.question)}
+        {result.answered > 0 &&
+          ` (${formatCount(result.answered)} answered${inSample})`}
+        .
+      </>
+    ) : (
+      <>
+        {quoted(answer)} to {quoted(question.question)}
+        {result.answered > 0 &&
+          `: ${formatShare(result.rate)} of ${formatCount(result.answered)} answered${inSample}`}
+        .
+      </>
+    )
+  ) : everyLabel ? (
     <>
       Where any answer to {quoted(question.question)} is clearly more or less
       common than in the rest

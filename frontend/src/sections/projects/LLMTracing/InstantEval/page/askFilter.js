@@ -167,9 +167,22 @@ export const rateWords = (rate) =>
 export const etaWords = (seconds) =>
   seconds ? `${durationWords(seconds)} left` : "";
 
+/** Credits as people read them: whole from 10 up, else to a tenth ("0.7"). */
+export const creditAmount = (credits) => {
+  const value = Math.max(0, credits || 0);
+  return value >= 10
+    ? Math.round(value).toLocaleString()
+    : String(Math.round(value * 10) / 10);
+};
+
+/** "120 credits", "0.7 credits", "1 credit". */
+export const creditCount = (credits) => {
+  const amount = creditAmount(credits);
+  return `${amount} credit${amount === "1" ? "" : "s"}`;
+};
+
 /** "about 120 credits". */
-export const creditWords = (credits) =>
-  `about ${Math.round(credits || 0).toLocaleString()} credit${Math.round(credits || 0) === 1 ? "" : "s"}`;
+export const creditWords = (credits) => `about ${creditCount(credits)}`;
 
 /** "about 7 min", "about 3 h 20 min". */
 export function durationWords(seconds) {

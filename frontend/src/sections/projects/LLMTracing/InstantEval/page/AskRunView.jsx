@@ -35,6 +35,7 @@ import AskRowsTable from "./AskRowsTable";
 import { runTime, scopeWords, windowLabel } from "./askFormat";
 import {
   answerFilter,
+  creditCount,
   creditWords,
   describeFilter,
   etaWords,
@@ -110,7 +111,7 @@ function StatusLine({ run, unit, creating }) {
   const finished = !live && !creating && run.status !== "loading";
   const credits =
     finished && run.creditsUsed != null
-      ? `${Math.round(run.creditsUsed).toLocaleString()} credits`
+      ? creditCount(run.creditsUsed)
       : run.summary?.credits_estimate
         ? creditWords(run.summary.credits_estimate)
         : null;

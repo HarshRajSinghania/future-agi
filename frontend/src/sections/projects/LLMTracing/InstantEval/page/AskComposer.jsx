@@ -42,7 +42,7 @@ import {
   sampleSizes,
   useAskScope,
 } from "./askPopulation";
-import { creditWords, durationWords } from "./askFilter";
+import { creditAmount, creditWords, durationWords } from "./askFilter";
 import { sourceViewLink, sourceViewTitle } from "./askLinks";
 import { scopeWords } from "./askFormat";
 
@@ -56,83 +56,94 @@ function ChoiceCard({
   title,
   detail,
   note,
+  noteIsReason,
   disabled,
   children,
 }) {
+  // The note sits outside the radio, at full opacity: it can say why the
+  // choice can't run (in full contrast) and hold the way forward (a smaller
+  // sample, billing), which stays usable when the choice is not.
   return (
     <Paper
       variant="outlined"
-      role="radio"
-      aria-checked={selected}
-      aria-disabled={disabled || undefined}
-      tabIndex={disabled ? -1 : 0}
-      onClick={disabled ? undefined : onSelect}
-      onKeyDown={(event) => {
-        if (!disabled && (event.key === "Enter" || event.key === " ")) {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
       sx={{
         flex: 1,
         minWidth: 240,
         p: 1.5,
         borderRadius: 1.5,
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.55 : 1,
         borderColor: selected ? "primary.main" : "divider",
         boxShadow: (theme) =>
           selected ? `inset 0 0 0 1px ${theme.palette.primary.main}` : "none",
-        "&:focus-visible": {
-          outline: "2px solid",
-          outlineColor: "primary.main",
-        },
       }}
     >
-      <Stack direction="row" spacing={1} alignItems="center">
-        <Box
-          aria-hidden
-          sx={{
-            width: 14,
-            height: 14,
-            borderRadius: "50%",
-            border: "2px solid",
-            borderColor: selected ? "primary.main" : "text.disabled",
-            display: "grid",
-            placeItems: "center",
-            flexShrink: 0,
-          }}
-        >
-          {selected && (
-            <Box
-              sx={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                bgcolor: "primary.main",
-              }}
-            />
-          )}
-        </Box>
-        <Typography variant="body2" fontWeight={600} sx={{ flex: 1 }}>
-          {title}
-        </Typography>
-        {children}
-      </Stack>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        component="p"
-        sx={{ mt: 0.5, pl: 3, fontVariantNumeric: "tabular-nums" }}
+      <Box
+        role="radio"
+        aria-checked={selected}
+        aria-disabled={disabled || undefined}
+        tabIndex={disabled ? -1 : 0}
+        onClick={disabled ? undefined : onSelect}
+        onKeyDown={(event) => {
+          if (!disabled && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            onSelect();
+          }
+        }}
+        sx={{
+          borderRadius: 1,
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.55 : 1,
+          "&:focus-visible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: 4,
+          },
+        }}
       >
-        {detail}
-      </Typography>
-      {note && (
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Box
+            aria-hidden
+            sx={{
+              width: 14,
+              height: 14,
+              borderRadius: "50%",
+              border: "2px solid",
+              borderColor: selected ? "primary.main" : "text.disabled",
+              display: "grid",
+              placeItems: "center",
+              flexShrink: 0,
+            }}
+          >
+            {selected && (
+              <Box
+                sx={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  bgcolor: "primary.main",
+                }}
+              />
+            )}
+          </Box>
+          <Typography variant="body2" fontWeight={600} sx={{ flex: 1 }}>
+            {title}
+          </Typography>
+          {children}
+        </Stack>
         <Typography
           variant="caption"
           color="text.secondary"
           component="p"
-          sx={{ pl: 3 }}
+          sx={{ mt: 0.5, pl: 3, fontVariantNumeric: "tabular-nums" }}
+        >
+          {detail}
+        </Typography>
+      </Box>
+      {note && (
+        <Typography
+          variant="caption"
+          color={noteIsReason ? "text.primary" : "text.secondary"}
+          component="p"
+          sx={{ mt: noteIsReason ? 0.5 : 0, pl: 3 }}
         >
           {note}
         </Typography>
@@ -147,6 +158,8 @@ ChoiceCard.propTypes = {
   title: PropTypes.node.isRequired,
   detail: PropTypes.node,
   note: PropTypes.node,
+  // The note says why the choice can't run, not just a hint.
+  noteIsReason: PropTypes.bool,
   disabled: PropTypes.bool,
   children: PropTypes.node,
 };
@@ -164,27 +177,22 @@ const costLine = (cost, unit, estimate) => {
 };
 
 const billingLink = (
-  <Link
-    component={RouterLink}
-    to={paths.dashboard.settings.billing}
-    onClick={(event) => event.stopPropagation()}
-  >
+  <Link component={RouterLink} to={paths.dashboard.settings.billing}>
     Open billing
   </Link>
 );
 
 // "This run needs about 6,000 credits; you have 1,200 left this month.
 // Read a sample of 20,000 instead", or why billing stops every run.
-const creditAmount = (credits) =>
-  credits >= 10
-    ? Math.round(credits).toLocaleString()
-    : String(Math.round(credits * 10) / 10);
 
 function CreditNote({ cost, estimate, unit, onChoose }) {
   if (cost.blocked)
     return (
       <>
-        {estimate.credit_check?.message} {billingLink}
+        {estimate.credit_check?.message}
+        <Box component="span" sx={{ display: "block", mt: 0.25 }}>
+          {billingLink}
+        </Box>
       </>
     );
   const left = cost.creditsLeft || 0;
@@ -192,22 +200,17 @@ function CreditNote({ cost, estimate, unit, onChoose }) {
   return (
     <>
       This run needs {creditWords(cost.credits)}; you have{" "}
-      {left >= 0.05 ? creditAmount(left) : "none"} left this month.{" "}
-      {fits > 0 ? (
-        <Link
-          component="button"
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onChoose(fits);
-          }}
-        >
-          Read a sample of {fits.toLocaleString()} {unitMeta(unit).plural}{" "}
-          instead
-        </Link>
-      ) : (
-        billingLink
-      )}
+      {left >= 0.05 ? creditAmount(left) : "none"} left this month.
+      <Box component="span" sx={{ display: "block", mt: 0.25 }}>
+        {fits > 0 ? (
+          <Link component="button" type="button" onClick={() => onChoose(fits)}>
+            Read a sample of {fits.toLocaleString()} {unitMeta(unit).plural}{" "}
+            instead
+          </Link>
+        ) : (
+          billingLink
+        )}
+      </Box>
     </>
   );
 }
@@ -326,6 +329,7 @@ function ScopeCard({
                 </>
               }
               detail={`${costLine(sampleCost, unit, estimate)}. Picked at random; the same rows each time.`}
+              noteIsReason={Boolean(sampleCost?.creditLimited)}
               note={
                 sampleCost?.creditLimited ? (
                   <CreditNote
@@ -364,6 +368,7 @@ function ScopeCard({
             disabled={!allCost?.allowed}
             title={`${sizes.length ? "All " : "Every one of the "}${count.toLocaleString()}`}
             detail={costLine(allCost, unit, estimate)}
+            noteIsReason={!allCost?.allowed}
             note={
               allCost?.creditLimited ? (
                 <CreditNote

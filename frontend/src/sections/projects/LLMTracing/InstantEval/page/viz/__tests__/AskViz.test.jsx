@@ -391,6 +391,27 @@ describe("AskPatterns", () => {
     expect(screen.getByText(/^Nothing stands out: no day/)).toBeInTheDocument();
   });
 
+  it("states the share, not a finding, when nothing stands out at 12 answers", () => {
+    // 12 answered, 8 "No": the run 97cbf545 on harbor-conversations.
+    const twelve = run.records.slice(0, 12).map((record, i) => ({
+      ...record,
+      facets: {},
+      user_id: "",
+      end_user_id: "",
+      answers: {
+        [RESOLVED]: { answer: i % 3 ? "No" : "Yes", status: "completed" },
+      },
+    }));
+    renderViz(AskPatterns, {
+      records: twelve,
+      questions: [QUESTIONS[0]],
+      focus: { configId: RESOLVED, answer: "No" },
+    });
+    expect(screen.getByText(/^Nothing stands out: no day/)).toBeInTheDocument();
+    expect(screen.queryByText(/clearly more or less common/)).toBeNull();
+    expect(screen.getByText(/: 67% of 12 answered\./)).toBeInTheDocument();
+  });
+
   it("says when every row of a callout fell in one afternoon", () => {
     // Every outage session, and only those, hit an error.
     const outage = new Set(run.outage.ids);

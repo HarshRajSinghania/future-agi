@@ -564,14 +564,14 @@ describe("the Ask page", () => {
       credit_max_sample: 500,
     });
     renderAt(askLink(PROJECT, { unit: "sessions" }));
-    const sample = await screen.findByRole("radio", {
-      name: /A sample of 1,000/,
-    });
-    expect(
-      within(sample).getByText(
-        /This run needs about 60 credits; you have 30 left this month\./,
-      ),
-    ).toBeInTheDocument();
+    await screen.findByRole("radio", { name: /A sample of 1,000/ });
+    const needs =
+      /This run needs about 60 credits; you have 30 left this month\./;
+    expect(screen.getByText(needs)).toBeInTheDocument();
+    // Reading every row needs more still; why is said outside the faded,
+    // disabled choice.
+    const why = screen.getByText(/needs about 6,254 credits; you have 30 left/);
+    expect(why.closest("[aria-disabled='true']")).toBeNull();
     fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
       target: { value: QUESTION },
     });
@@ -580,19 +580,64 @@ describe("the Ask page", () => {
         name: "Ask Jev about a sample of 1,000 sessions",
       }),
     ).toBeDisabled();
-    fireEvent.click(
-      within(sample).getByRole("button", {
-        name: "Read a sample of 500 sessions instead",
-      }),
-    );
+    // The way forward stays usable on the card that can't be chosen.
+    const all = screen.getByRole("radio", { name: /All 104,233/ });
+    expect(all).toHaveAttribute("aria-disabled", "true");
+    const offers = screen.getAllByRole("button", {
+      name: "Read a sample of 500 sessions instead",
+    });
+    expect(offers).toHaveLength(2);
+    for (const offer of offers) {
+      expect(offer).toBeEnabled();
+      expect(offer.closest("[aria-disabled='true']")).toBeNull();
+    }
+    fireEvent.click(offers[0]);
     const fitted = screen.getByRole("radio", { name: /A sample of 500/ });
     expect(fitted).toHaveAttribute("aria-checked", "true");
-    expect(within(fitted).queryByText(/left this month/)).toBeNull();
+    expect(screen.queryByText(needs)).toBeNull();
     expect(
       screen.getByRole("button", {
         name: "Ask Jev about a sample of 500 sessions",
       }),
     ).toBeEnabled();
+  });
+
+  it("links to billing outside the card when no sample fits", async () => {
+    fakes.estimate.mockResolvedValue({
+      ...ESTIMATE,
+      credit_check: {
+        allowed: false,
+        error_code: "FREE_TIER_LIMIT",
+        current_usage: 1000,
+        limit: 1000,
+        credits_left: 0,
+        blocked: false,
+        message:
+          "This run needs about 60 credits; you have none left this month.",
+      },
+      credit_max_sample: 0,
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    const all = await screen.findByRole("radio", { name: /All 104,233/ });
+    expect(all).toHaveAttribute("aria-disabled", "true");
+    const links = screen.getAllByRole("link", { name: "Open billing" });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "/dashboard/settings/billing");
+      expect(link.closest("[aria-disabled='true']")).toBeNull();
+    }
+    expect(
+      screen.getAllByText(/you have none left this month\./).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("prints a run's credits under 1 to a tenth", () => {
+    fakes.askRuns["task-sessions"] = { ...runOf(), creditsUsed: 0.72 };
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(screen.getByText(/· 0\.7 credits/)).toBeInTheDocument();
+    expect(screen.queryByText(/\b1 credits\b/)).toBeNull();
   });
 
   it("says why billing refused a start and links to billing", async () => {

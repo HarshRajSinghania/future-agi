@@ -23,6 +23,8 @@ import {
   sampleSizes,
 } from "../askPopulation";
 import {
+  creditCount,
+  creditWords,
   describeFilter,
   durationWords,
   estimateWords,
@@ -359,6 +361,16 @@ describe("how much of a view to read", () => {
     expect(all).toMatchObject({ rows: 104233, needsConfirm: true });
     expect(all.allowed).toBe(false);
     expect(durationWords(20857)).toBe("about 5 h 48 min");
+  });
+
+  it("prints credits whole from 10 up and to a tenth below", () => {
+    expect(creditCount(0.72)).toBe("0.7 credits");
+    expect(creditCount(1.04)).toBe("1 credit");
+    expect(creditCount(0)).toBe("0 credits");
+    expect(creditCount(9.96)).toBe("10 credits");
+    expect(creditCount(6000)).toBe("6,000 credits");
+    expect(creditWords(0.06)).toBe("about 0.1 credits");
+    expect(creditWords(60)).toBe("about 60 credits");
   });
 
   it("reads the rows handed over by id", () => {
