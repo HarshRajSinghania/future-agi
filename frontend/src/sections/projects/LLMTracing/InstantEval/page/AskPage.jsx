@@ -7,18 +7,20 @@ import React, {
 } from "react";
 import PropTypes from "prop-types";
 import { useParams } from "react-router";
-import { useSearchParams } from "react-router-dom";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Box,
   Button,
+  Link,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
   useMediaQuery,
 } from "@mui/material";
+import { paths } from "src/routes/paths";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
 import { UNITS } from "src/sections/projects/observePopulation";
 import {
@@ -28,6 +30,7 @@ import {
 } from "src/sections/projects/observeHandoff";
 import {
   AskBusy,
+  AskNoCredits,
   HISTORY_KEY,
   startAskRun,
   useInstantEvalHistory,
@@ -309,12 +312,21 @@ export default function AskPage() {
     } catch (error) {
       setPending(null);
       setStartError(
-        error instanceof AskBusy || error?.name === "AskNeedsConfirm"
-          ? error.message
-          : getSafeActionErrorMessage(
-              error,
-              "Jev couldn't start. Check the question and try again.",
-            ),
+        error instanceof AskNoCredits ? (
+          <>
+            {error.message}{" "}
+            <Link component={RouterLink} to={paths.dashboard.settings.billing}>
+              Open billing
+            </Link>
+          </>
+        ) : error instanceof AskBusy || error?.name === "AskNeedsConfirm" ? (
+          error.message
+        ) : (
+          getSafeActionErrorMessage(
+            error,
+            "Jev couldn't start. Check the question and try again.",
+          )
+        ),
       );
     }
   };

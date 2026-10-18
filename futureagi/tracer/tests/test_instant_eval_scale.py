@@ -4,8 +4,10 @@ limits, and the summary, rows and export endpoints aggregating in SQL."""
 import csv
 import hashlib
 import io
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from django.test import override_settings
@@ -973,45 +975,189 @@ def test_model_by_day_groups_and_selects_rows(
     )
 
 
-@pytest.mark.django_db
-def test_a_plan_quota_limits_the_estimate_and_refuses_the_start(
-    auth_client, observe_project, yes_no, fake_view, started, monkeypatch
-):
-    monkeypatch.setattr(
-        instant_eval_scale,
-        "jev_quota",
-        lambda org: {
-            "per_minute": 50,
-            "per_hour": 300,
-            "per_day": 1000,
-            "used_day": 990,
-        },
-    )
-    estimate = auth_client.post(
+def _credit_cap(monkeypatch, left=None, code=None, raises=None):
+    """Billing's credit check: refuse more than ``left`` credits
+    (FREE_TIER_LIMIT, 100 used), refuse every run with ``code``, or raise."""
+    calls = []
+
+    def check_usage(org_id, event_type, amount=0):
+        calls.append((event_type, round(amount, 2)))
+        if raises:
+            raise raises
+        if code:
+            return SimpleNamespace(
+                allowed=False, error_code=code, reason="", current_usage=0, limit=0
+            )
+        if left is not None and amount > left:
+            return SimpleNamespace(
+                allowed=False,
+                error_code="FREE_TIER_LIMIT",
+                reason="Free tier limit reached",
+                current_usage=100.0,
+                limit=100.0 + left,
+            )
+        return SimpleNamespace(allowed=True, error_code="", reason="")
+
+    monkeypatch.setattr("ee.usage.services.metering.check_usage", check_usage)
+    return calls
+
+
+def _estimate(auth_client, project, sample_size=20, questions=1):
+    return auth_client.post(
         ESTIMATE,
         {
-            "project_id": str(observe_project.id),
+            "project_id": str(project.id),
             "unit": "sessions",
             "filters": WINDOW,
-            "sample_size": 20,
-            "questions": 1,
+            "sample_size": sample_size,
+            "questions": questions,
         },
         format="json",
     ).json()["result"]
-    assert estimate["quota_limited"] is True
-    assert estimate["quota_max_rows"] == 10
-    assert "10 more Jev answers" in estimate["quota_message"]
-    # 300 an hour: 20 answers take 4 minutes, not seconds, and the composer
-    # says the plan's pace is why.
-    assert estimate["seconds_estimate"] == 10 + 20 * 60 // 5
-    assert estimate["plan_rate_per_min"] == 5.0
+
+
+@pytest.mark.django_db
+def test_the_credits_left_limit_the_estimate_and_refuse_the_start(
+    auth_client, observe_project, yes_no, fake_view, started, monkeypatch
+):
+    # 0.6 credits left pay for 10 answers.
+    calls = _credit_cap(monkeypatch, left=0.6)
+    estimate = _estimate(auth_client, observe_project)
+    check = estimate["credit_check"]
+    assert check["allowed"] is False
+    assert check["error_code"] == "FREE_TIER_LIMIT"
+    assert check["blocked"] is False
+    assert check["current_usage"] == 100.0
+    assert round(check["credits_left"], 2) == 0.6
+    assert estimate["credit_max_sample"] == 10
+    assert check["message"] == (
+        "This run needs about 1.2 credits; you have 0.6 left this month. "
+        "A sample of up to 10 sessions fits."
+    )
+    by_size = {c["sample_size"]: c for c in estimate["choices"]}
+    assert by_size[None]["credit_limited"] is True
+    assert ("jev_evaluator", 1.2) in calls
+    # The time is the assumed pace only: 20 answers at 300 a minute.
+    assert estimate["seconds_estimate"] == 10 + 4
+
     refused = _start(auth_client, observe_project, [yes_no], sample_size=20)
-    assert refused.status_code == status.HTTP_429_TOO_MANY_REQUESTS
-    assert refused.json()["result"]["error_code"] == "INSTANT_EVAL_QUOTA"
+    assert refused.status_code == status.HTTP_403_FORBIDDEN
+    detail = refused.json()["result"]
+    assert detail["error_code"] == "FREE_TIER_LIMIT"
+    assert detail["sample_size"] == 10
+    assert detail["credits_estimate"] == 1.2
+    assert not InstantEvalRun.objects.filter(project=observe_project).exists()
     assert (
         _start(auth_client, observe_project, [yes_no], sample_size=10).status_code
         == 200
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("code", "http", "words"),
+    [
+        ("BUDGET_PAUSED", status.HTTP_403_FORBIDDEN, "paused by your budget"),
+        ("PAYMENT_REQUIRED", status.HTTP_402_PAYMENT_REQUIRED, "unpaid invoices"),
+    ],
+)
+def test_a_paused_budget_or_unpaid_invoice_stops_every_run(
+    auth_client,
+    observe_project,
+    yes_no,
+    fake_view,
+    started,
+    monkeypatch,
+    code,
+    http,
+    words,
+):
+    _credit_cap(monkeypatch, code=code)
+    estimate = _estimate(auth_client, observe_project)
+    check = estimate["credit_check"]
+    assert (check["allowed"], check["error_code"], check["blocked"]) == (
+        False,
+        code,
+        True,
+    )
+    assert words in check["message"]
+    assert estimate["credit_max_sample"] is None
+    assert not any(c["allowed"] for c in estimate["choices"])
+
+    refused = _start(auth_client, observe_project, [yes_no], sample_size=1)
+    assert refused.status_code == http
+    detail = refused.json()["result"]
+    assert detail["error_code"] == code
+    assert words in detail["message"]
+    assert detail["sample_size"] is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("billing", ["allowed", "missing", "broken"])
+def test_a_run_starts_when_billing_allows_it_or_is_not_set_up(
+    auth_client,
+    observe_project,
+    yes_no,
+    fake_view,
+    started,
+    monkeypatch,
+    billing,
+):
+    if billing == "missing":
+        # No ee here: the import fails.
+        monkeypatch.setitem(sys.modules, "ee.usage.services.metering", None)
+    else:
+        _credit_cap(
+            monkeypatch,
+            raises=RuntimeError("no billing.yaml") if billing == "broken" else None,
+        )
+    check = _estimate(auth_client, observe_project)["credit_check"]
+    assert (check["allowed"], check["credits_left"], check["message"]) == (
+        True,
+        None,
+        None,
+    )
+    assert (
+        _start(auth_client, observe_project, [yes_no], sample_size=20).status_code
+        == 200
+    )
+
+
+@pytest.mark.django_db
+def test_reading_more_and_retrying_check_the_credits_left_too(
+    auth_client, observe_project, answered_run, monkeypatch
+):
+    task, _ = answered_run
+
+    def control(action, **body):
+        return auth_client.post(
+            CONTROL,
+            {
+                "project_id": str(observe_project.id),
+                "eval_task_id": str(task.id),
+                "action": action,
+                **body,
+            },
+            format="json",
+        )
+
+    # Nothing left: neither five more rows of two questions nor the one
+    # failed answer fits.
+    calls = _credit_cap(monkeypatch, left=0.0)
+    more = control("read_more", more=5)
+    assert more.status_code == status.HTTP_403_FORBIDDEN
+    assert more.json()["result"]["error_code"] == "FREE_TIER_LIMIT"
+    retry = control("retry_failed")
+    assert retry.status_code == status.HTTP_403_FORBIDDEN
+    assert ("jev_evaluator", 0.6) in calls and ("jev_evaluator", 0.06) in calls
+    run = InstantEvalRun.objects.get(eval_task_id=task.id)
+    assert run.rows_requested == 12
+    assert EvalLogger.objects.filter(
+        eval_task_id=str(task.id), status=EvalEntryStatus.ERRORED
+    ).exists()
+
+    _credit_cap(monkeypatch, left=10.0)
+    assert control("retry_failed").status_code == status.HTTP_200_OK
 
 
 @pytest.mark.django_db

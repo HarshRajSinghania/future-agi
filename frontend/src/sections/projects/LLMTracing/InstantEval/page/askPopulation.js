@@ -41,30 +41,53 @@ export const defaultChoice = (estimate) =>
  */
 export function choiceCost(estimate, size, questions = 1) {
   if (!estimate) return null;
-  const choice =
-    (estimate.choices || []).find((item) => item.sample_size === size) ||
-    (estimate.choices || []).find((item) => item.sample_size == null);
+  const choices = estimate.choices || [];
+  const all = choices.find((item) => item.sample_size == null);
+  let choice = choices.find((item) => item.sample_size === size) || all;
   if (!choice) return null;
+  const perUnit = estimate.sessions_per_user || 1;
+  if (size != null && choice === all && all.rows_to_read) {
+    // A size the server didn't cost (the largest sample the credits
+    // fit): scaled from reading every row.
+    const rows = Math.min(size, estimate.population) * perUnit;
+    choice = {
+      rows_to_read: rows,
+      seconds_estimate:
+        10 +
+        Math.round(((all.seconds_estimate - 10) * rows) / all.rows_to_read),
+    };
+  }
   const rows = choice.rows_to_read;
   const q = Math.max(1, questions);
-  // The answers the plan has left: the estimate's row allowance times the
-  // questions it was asked for.
-  const answersLeft =
-    estimate.quota_max_rows == null
-      ? null
-      : estimate.quota_max_rows * Math.max(1, estimate.questions || 1);
-  const quotaLimited = answersLeft != null && rows * q > answersLeft;
+  const credits = rows * q * CREDITS_PER_ANSWER;
+  // The credits left this month (null: no cap this view can reach), and
+  // whether billing stops every run (a paused budget, an unpaid invoice).
+  const check = estimate.credit_check || {};
+  const creditsLeft = check.credits_left ?? null;
+  const blocked = Boolean(check.blocked);
+  const creditLimited =
+    blocked || (creditsLeft != null && credits > creditsLeft + 1e-9);
   return {
     size,
     rows,
-    credits: rows * q * CREDITS_PER_ANSWER,
+    credits,
     // The server's estimate is for one question; each adds its reads.
     seconds: 10 + Math.max(0, choice.seconds_estimate - 10) * q,
     needsConfirm: rows > estimate.confirm_rows,
-    // More Jev answers than the plan has left today or this month.
-    quotaLimited,
-    fitsRows: answersLeft == null ? null : Math.floor(answersLeft / q),
-    allowed: rows > 0 && rows <= estimate.max_rows && !quotaLimited,
+    creditLimited,
+    creditsLeft,
+    blocked,
+    // The largest sample the credits left pay for, in the view's unit.
+    fitsSize:
+      creditsLeft == null || blocked
+        ? null
+        : Math.min(
+            estimate.population,
+            Math.floor(
+              (creditsLeft + 1e-9) / (q * CREDITS_PER_ANSWER * perUnit),
+            ),
+          ),
+    allowed: rows > 0 && rows <= estimate.max_rows && !creditLimited,
   };
 }
 

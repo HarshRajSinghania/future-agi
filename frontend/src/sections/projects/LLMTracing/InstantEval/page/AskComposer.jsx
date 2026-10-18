@@ -16,6 +16,7 @@ import {
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 import Iconify from "src/components/iconify";
+import { paths } from "src/routes/paths";
 import QuestionEditor from "../QuestionEditor";
 import {
   MAX_QUESTIONS,
@@ -157,21 +158,66 @@ const costLine = (cost, unit, estimate) => {
   const perUser = estimate?.sessions_per_user
     ? ` (${estimate.sessions_per_user} per user)`
     : "";
-  // Set when the plan's rate, not Jev, decides how long a run takes.
-  const planRate = estimate?.plan_rate_per_min;
-  const pace = planRate
-    ? ` (your plan answers ${Math.round(planRate).toLocaleString()} a minute)`
-    : "";
   return `Reads ${upTo}${cost.rows.toLocaleString()} ${noun}${perUser} · ${creditWords(
     cost.credits,
-  )} · ${durationWords(cost.seconds)}${pace}`;
+  )} · ${durationWords(cost.seconds)}`;
 };
 
-// "Your plan has 300 Jev answers left; up to 150 sessions fit."
-const quotaNote = (cost, unit) =>
-  cost.fitsRows
-    ? `More Jev answers than your plan has left; up to ${cost.fitsRows.toLocaleString()} ${unitMeta(unit).plural} fit.`
-    : "Your plan has no Jev answers left for now.";
+const billingLink = (
+  <Link
+    component={RouterLink}
+    to={paths.dashboard.settings.billing}
+    onClick={(event) => event.stopPropagation()}
+  >
+    Open billing
+  </Link>
+);
+
+// "This run needs about 6,000 credits; you have 1,200 left this month.
+// Read a sample of 20,000 instead", or why billing stops every run.
+const creditAmount = (credits) =>
+  credits >= 10
+    ? Math.round(credits).toLocaleString()
+    : String(Math.round(credits * 10) / 10);
+
+function CreditNote({ cost, estimate, unit, onChoose }) {
+  if (cost.blocked)
+    return (
+      <>
+        {estimate.credit_check?.message} {billingLink}
+      </>
+    );
+  const left = cost.creditsLeft || 0;
+  const fits = cost.fitsSize || 0;
+  return (
+    <>
+      This run needs {creditWords(cost.credits)}; you have{" "}
+      {left >= 0.05 ? creditAmount(left) : "none"} left this month.{" "}
+      {fits > 0 ? (
+        <Link
+          component="button"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onChoose(fits);
+          }}
+        >
+          Read a sample of {fits.toLocaleString()} {unitMeta(unit).plural}{" "}
+          instead
+        </Link>
+      ) : (
+        billingLink
+      )}
+    </>
+  );
+}
+
+CreditNote.propTypes = {
+  cost: PropTypes.object.isRequired,
+  estimate: PropTypes.object.isRequired,
+  unit: PropTypes.string.isRequired,
+  onChoose: PropTypes.func.isRequired,
+};
 
 function ScopeCard({
   projectId,
@@ -186,7 +232,13 @@ function ScopeCard({
   const words = scopeWords(seed?.label);
   const { estimate } = scope;
   const count = estimate?.population ?? 0;
-  const sizes = sampleSizes(estimate);
+  // The fixed sizes, plus the largest sample the credits left pay for.
+  const fits = choiceCost(estimate, null, questions)?.fitsSize;
+  const sizes = [...sampleSizes(estimate)];
+  if (fits > 0 && fits < count && !sizes.includes(fits)) {
+    sizes.push(fits);
+    sizes.sort((a, b) => a - b);
+  }
   const sampled = choice !== ALL && sizes.length > 0;
   const sampleSize = sampled ? choice : null;
   const shownSize = sampleSize ?? defaultChoice(estimate) ?? sizes[0];
@@ -275,7 +327,14 @@ function ScopeCard({
               }
               detail={`${costLine(sampleCost, unit, estimate)}. Picked at random; the same rows each time.`}
               note={
-                sampleCost?.quotaLimited ? quotaNote(sampleCost, unit) : null
+                sampleCost?.creditLimited ? (
+                  <CreditNote
+                    cost={sampleCost}
+                    estimate={estimate}
+                    unit={unit}
+                    onChoose={onChoose}
+                  />
+                ) : null
               }
             >
               <TextField
@@ -306,13 +365,18 @@ function ScopeCard({
             title={`${sizes.length ? "All " : "Every one of the "}${count.toLocaleString()}`}
             detail={costLine(allCost, unit, estimate)}
             note={
-              allCost?.quotaLimited
-                ? quotaNote(allCost, unit)
-                : !allCost?.allowed
-                  ? `Over the ${estimate.max_rows.toLocaleString()}-row limit for one run. Read a sample, or narrow the view.`
-                  : allCost.needsConfirm
-                    ? "You confirm the credits before it starts."
-                    : null
+              allCost?.creditLimited ? (
+                <CreditNote
+                  cost={allCost}
+                  estimate={estimate}
+                  unit={unit}
+                  onChoose={onChoose}
+                />
+              ) : !allCost?.allowed ? (
+                `Over the ${estimate.max_rows.toLocaleString()}-row limit for one run. Read a sample, or narrow the view.`
+              ) : allCost.needsConfirm ? (
+                "You confirm the credits before it starts."
+              ) : null
             }
           />
         </Stack>
@@ -681,6 +745,6 @@ AskComposer.propTypes = {
   unit: PropTypes.oneOf(["traces", "spans", "sessions", "users"]).isRequired,
   seed: PropTypes.object,
   starting: PropTypes.bool,
-  error: PropTypes.string,
+  error: PropTypes.node,
   onAsk: PropTypes.func.isRequired,
 };

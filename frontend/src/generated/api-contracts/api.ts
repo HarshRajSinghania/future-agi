@@ -73047,8 +73047,13 @@ export type tracerInstantEvalControlCreateResponse400 = {
   status: 400;
 };
 
+export type tracerInstantEvalControlCreateResponse402 = {
+  data: InstantEvalLimitErrorApi;
+  status: 402;
+};
+
 export type tracerInstantEvalControlCreateResponse403 = {
-  data: ApiErrorResponseApi;
+  data: InstantEvalLimitErrorApi;
   status: 403;
 };
 
@@ -73086,7 +73091,7 @@ export type tracerInstantEvalControlCreateResponseDefault = {
   data: ManagementAPIErrorResponseApi;
   status: Exclude<
     HTTPStatusCodes,
-    200 | 400 | 403 | 404 | 409 | 422 | 429 | 500 | 503
+    200 | 400 | 402 | 403 | 404 | 409 | 422 | 429 | 500 | 503
   >;
 };
 
@@ -73096,6 +73101,7 @@ export type tracerInstantEvalControlCreateResponseSuccess =
   };
 export type tracerInstantEvalControlCreateResponseError = (
   | tracerInstantEvalControlCreateResponse400
+  | tracerInstantEvalControlCreateResponse402
   | tracerInstantEvalControlCreateResponse403
   | tracerInstantEvalControlCreateResponse404
   | tracerInstantEvalControlCreateResponse409
@@ -73506,8 +73512,13 @@ export type tracerInstantEvalStartCreateResponse400 = {
   status: 400;
 };
 
+export type tracerInstantEvalStartCreateResponse402 = {
+  data: InstantEvalLimitErrorApi;
+  status: 402;
+};
+
 export type tracerInstantEvalStartCreateResponse403 = {
-  data: ApiErrorResponseApi;
+  data: InstantEvalLimitErrorApi;
   status: 403;
 };
 
@@ -73545,7 +73556,7 @@ export type tracerInstantEvalStartCreateResponseDefault = {
   data: ManagementAPIErrorResponseApi;
   status: Exclude<
     HTTPStatusCodes,
-    200 | 400 | 403 | 404 | 409 | 422 | 429 | 500 | 503
+    200 | 400 | 402 | 403 | 404 | 409 | 422 | 429 | 500 | 503
   >;
 };
 
@@ -73555,6 +73566,7 @@ export type tracerInstantEvalStartCreateResponseSuccess =
   };
 export type tracerInstantEvalStartCreateResponseError = (
   | tracerInstantEvalStartCreateResponse400
+  | tracerInstantEvalStartCreateResponse402
   | tracerInstantEvalStartCreateResponse403
   | tracerInstantEvalStartCreateResponse404
   | tracerInstantEvalStartCreateResponse409

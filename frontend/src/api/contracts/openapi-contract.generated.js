@@ -35286,8 +35286,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
           400: {
             $ref: "#/definitions/ApiErrorResponse",
           },
+          402: {
+            $ref: "#/definitions/InstantEvalLimitError",
+          },
           403: {
-            $ref: "#/definitions/ApiErrorResponse",
+            $ref: "#/definitions/InstantEvalLimitError",
           },
           404: {
             $ref: "#/definitions/ApiErrorResponse",
@@ -35820,8 +35823,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
           400: {
             $ref: "#/definitions/ApiErrorResponse",
           },
+          402: {
+            $ref: "#/definitions/InstantEvalLimitError",
+          },
           403: {
-            $ref: "#/definitions/ApiErrorResponse",
+            $ref: "#/definitions/InstantEvalLimitError",
           },
           404: {
             $ref: "#/definitions/ApiErrorResponse",
@@ -96243,10 +96249,8 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "default_sample_size",
         "sessions_per_user",
         "choices",
-        "quota_limited",
-        "quota_message",
-        "quota_max_rows",
-        "plan_rate_per_min",
+        "credit_check",
+        "credit_max_sample",
       ],
       type: "object",
       properties: {
@@ -96302,24 +96306,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
             $ref: "#/definitions/InstantEvalChoice",
           },
         },
-        quota_limited: {
-          title: "Quota limited",
-          type: "boolean",
+        credit_check: {
+          $ref: "#/definitions/InstantEvalCreditCheck",
         },
-        quota_message: {
-          title: "Quota message",
-          type: "string",
-          minLength: 1,
-          "x-nullable": true,
-        },
-        quota_max_rows: {
-          title: "Quota max rows",
+        credit_max_sample: {
+          title: "Credit max sample",
           type: "integer",
-          "x-nullable": true,
-        },
-        plan_rate_per_min: {
-          title: "Plan rate per min",
-          type: "number",
           "x-nullable": true,
         },
       },
@@ -96345,6 +96337,16 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+        },
+        credits_left: {
+          title: "Credits left",
+          type: "number",
+          "x-nullable": true,
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          "x-nullable": true,
         },
         runs: {
           type: "array",
@@ -113096,7 +113098,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "seconds_estimate",
         "needs_confirm",
         "allowed",
-        "quota_limited",
+        "credit_limited",
       ],
       type: "object",
       properties: {
@@ -113125,9 +113127,58 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Allowed",
           type: "boolean",
         },
-        quota_limited: {
-          title: "Quota limited",
+        credit_limited: {
+          title: "Credit limited",
           type: "boolean",
+        },
+      },
+    },
+    InstantEvalCreditCheck: {
+      required: [
+        "allowed",
+        "error_code",
+        "current_usage",
+        "limit",
+        "credits_left",
+        "blocked",
+        "message",
+      ],
+      type: "object",
+      properties: {
+        allowed: {
+          title: "Allowed",
+          type: "boolean",
+        },
+        error_code: {
+          title: "Error code",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        current_usage: {
+          title: "Current usage",
+          type: "number",
+          "x-nullable": true,
+        },
+        limit: {
+          title: "Limit",
+          type: "number",
+          "x-nullable": true,
+        },
+        credits_left: {
+          title: "Credits left",
+          type: "number",
+          "x-nullable": true,
+        },
+        blocked: {
+          title: "Blocked",
+          type: "boolean",
+        },
+        message: {
+          title: "Message",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
         },
       },
     },

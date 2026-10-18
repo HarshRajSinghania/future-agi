@@ -123,6 +123,9 @@ class InstantEvalLimitDetailSerializer(serializers.Serializer):
     # A run waiting for its confirm: what it would read and cost.
     rows_to_read = serializers.IntegerField(required=False)
     credits_estimate = serializers.FloatField(required=False)
+    # Refused for credits: what is left, and the largest sample that fits.
+    credits_left = serializers.FloatField(required=False, allow_null=True)
+    sample_size = serializers.IntegerField(required=False, allow_null=True)
     # The organization's runs in flight, when it is at its limit.
     runs = InstantEvalBusyRunSerializer(many=True, required=False)
 
@@ -139,6 +142,8 @@ class InstantEvalLimitErrorSerializer(serializers.Serializer):
 
 LIMIT_ERRORS = {
     **ERRORS,
+    402: InstantEvalLimitErrorSerializer,
+    403: InstantEvalLimitErrorSerializer,
     409: InstantEvalLimitErrorSerializer,
     422: ApiErrorResponseSerializer,
     429: InstantEvalLimitErrorSerializer,
@@ -175,8 +180,22 @@ class InstantEvalChoiceSerializer(serializers.Serializer):
     seconds_estimate = serializers.IntegerField()
     needs_confirm = serializers.BooleanField()
     allowed = serializers.BooleanField()
-    # More Jev answers than the plan has left today or this month.
-    quota_limited = serializers.BooleanField()
+    # More credits than the organization has left, or billing stops runs.
+    credit_limited = serializers.BooleanField()
+
+
+class InstantEvalCreditCheckSerializer(serializers.Serializer):
+    # Whether the chosen size (at the questions asked) can start.
+    allowed = serializers.BooleanField()
+    # FREE_TIER_LIMIT, BUDGET_PAUSED, PAYMENT_REQUIRED, ... when not allowed.
+    error_code = serializers.CharField(allow_null=True)
+    current_usage = serializers.FloatField(allow_null=True)
+    limit = serializers.FloatField(allow_null=True)
+    # Credits left this month, or None when no cap this view can reach.
+    credits_left = serializers.FloatField(allow_null=True)
+    # A paused budget or an unpaid invoice: no run can start.
+    blocked = serializers.BooleanField()
+    message = serializers.CharField(allow_null=True)
 
 
 class InstantEvalEstimateSerializer(serializers.Serializer):
@@ -193,13 +212,10 @@ class InstantEvalEstimateSerializer(serializers.Serializer):
     # Sessions read per user, for a user question.
     sessions_per_user = serializers.IntegerField(allow_null=True)
     choices = InstantEvalChoiceSerializer(many=True)
-    # The chosen size needs more Jev answers than the plan has left: why,
-    # and the most rows that fit.
-    quota_limited = serializers.BooleanField()
-    quota_message = serializers.CharField(allow_null=True)
-    quota_max_rows = serializers.IntegerField(allow_null=True)
-    # Answers a minute the plan allows, when that (not Jev) sets the pace.
-    plan_rate_per_min = serializers.FloatField(allow_null=True)
+    # The organization's credit cap against the chosen size, and the
+    # largest sample (in the view's unit) its credits left pay for.
+    credit_check = InstantEvalCreditCheckSerializer()
+    credit_max_sample = serializers.IntegerField(allow_null=True)
 
 
 class InstantEvalEstimateResponseSerializer(serializers.Serializer):
@@ -370,60 +386,106 @@ def _credits(rows: int, questions: int) -> float:
     return round(rows * questions * CREDITS_PER_ANSWER, 2)
 
 
-def jev_quota(org) -> dict | None:
-    """The organization's Jev call quota and what it has used:
-    {per_minute, per_hour, per_day, per_month, used_hour, used_day,
-    used_month}, any of which may be None, or None when its plan sets no
-    limit. Jev's owners are adding the real lookup; until then no limit is
-    known."""
+# Billing's event for a Jev answer; its cap is the organization's credits.
+CREDIT_EVENT = "jev_evaluator"
+# Credit refusals that no smaller run gets past.
+CREDIT_MESSAGES = {
+    "BUDGET_PAUSED": (
+        "Jev runs are paused by your budget limit. Raise or remove it in "
+        "billing to run this."
+    ),
+    "PAYMENT_REQUIRED": (
+        "Your subscription has unpaid invoices. Update your payment method "
+        "in billing to run this."
+    ),
+}
+
+
+def check_credits(org, credits: float):
+    """The organization's credit cap against a run costing ``credits``:
+    None when it may run (or this deployment has no billing), else billing's
+    CheckResult. Read-only."""
+    if org is None or credits <= 0:
+        return None
+    try:
+        from ee.usage.services.metering import check_usage
+    except ImportError:
+        return None
+    try:
+        result = check_usage(str(org.id), CREDIT_EVENT, amount=credits)
+    except Exception:
+        # No billing config (or its Redis) here: don't block the run.
+        logger.warning("instant_eval_credit_check_unavailable", exc_info=True)
+        return None
+    return None if result.allowed else result
+
+
+def _credits_left(*results) -> float | None:
+    """Credits left this month, from whichever refusal reported the cap."""
+    for result in results:
+        if result is not None and result.error_code == "FREE_TIER_LIMIT":
+            return max(0.0, float(result.limit or 0) - float(result.current_usage or 0))
     return None
 
 
-def _per_minute(quota: dict | None) -> float:
-    """Answers a minute: what 32 Jev calls in flight drain, or less when the
-    plan's rate allows less."""
-    rate = answers_per_minute()
-    if quota:
-        if quota.get("per_minute"):
-            rate = min(rate, float(quota["per_minute"]))
-        if quota.get("per_hour"):
-            rate = min(rate, float(quota["per_hour"]) / 60)
-    return max(rate, 1e-6)
-
-
-def _answers_left(quota: dict | None) -> int | None:
-    """Jev answers the plan still allows today and this month (the smaller),
-    or None without a limit."""
-    if not quota:
-        return None
-    left = [
-        int(quota[limit]) - int(quota.get(used) or 0)
-        for limit, used in (("per_day", "used_day"), ("per_month", "used_month"))
-        if quota.get(limit) is not None
-    ]
-    return max(0, min(left)) if left else None
-
-
-def _plan_rate(quota: dict | None) -> float | None:
-    """The plan's answers a minute when they are fewer than Jev drains."""
-    rate = _per_minute(quota)
-    return round(rate, 1) if quota and rate < answers_per_minute() else None
-
-
-def _quota_message(left: int, needed: int, fits: int, noun: str) -> str:
-    if not fits:
-        return (
-            f"Your plan has no Jev answers left for now ({needed:,} needed). "
-            "Try again when it resets, or upgrade the plan."
-        )
-    return (
-        f"Your plan allows {left:,} more Jev answers for now, and this needs "
-        f"{needed:,}. Read a sample of up to {fits:,} {noun} instead."
+def _blocked(*results) -> bool:
+    """Billing stops every run: a paused budget, an unpaid invoice."""
+    return any(
+        result is not None and result.error_code not in ("", "FREE_TIER_LIMIT")
+        for result in results
     )
 
 
-def _seconds(rows: int, questions: int, quota: dict | None = None) -> int:
-    return int(math.ceil(10 + rows * questions / _per_minute(quota) * 60))
+def _fits(left: float | None, unit: str, questions: int, population: int) -> int | None:
+    """The largest sample, in the view's unit, that ``left`` credits pay for."""
+    if left is None:
+        return None
+    per_unit = _rows_for(unit, 1) * max(1, questions) * CREDITS_PER_ANSWER
+    return min(population, int((left + 1e-9) // per_unit))
+
+
+def _amount(credits: float) -> str:
+    """Credits as people read them: whole above 10, else to a tenth."""
+    if credits >= 10:
+        return f"{credits:,.0f}"
+    return f"{credits:.1f}".rstrip("0").rstrip(".")
+
+
+def _credit_message(result, credits: float, left: float | None, fits, unit) -> str:
+    if result.error_code == "FREE_TIER_LIMIT" and left is not None:
+        have = f"you have {_amount(left)}" if left >= 0.05 else "you have none"
+        message = (
+            f"This run needs about {_amount(credits)} credits; {have} left this month."
+        )
+        if fits:
+            return f"{message} A sample of up to {fits:,} {unit} fits."
+        return f"{message} Upgrade your plan in billing to run it."
+    return CREDIT_MESSAGES.get(result.error_code) or (
+        result.reason or "Your plan doesn't allow this run right now."
+    )
+
+
+def _credit_refusal(gm, refused, credits, unit, questions, population):
+    """Billing refused a run costing ``credits``: why, and the largest
+    sample of ``population`` that fits what is left."""
+    left = _credits_left(refused)
+    fits = None if _blocked(refused) else _fits(left, unit, questions, population)
+    return gm.custom_error_response(
+        402 if refused.error_code == "PAYMENT_REQUIRED" else 403,
+        {
+            "message": _credit_message(refused, credits, left, fits, unit),
+            "error_code": refused.error_code or "INSTANT_EVAL_CREDITS",
+            "credits_estimate": credits,
+            "credits_left": left,
+            "sample_size": fits or None,
+            "rows_to_read": _rows_for(unit, fits) if fits else 0,
+        },
+        code="instant_eval_credits",
+    )
+
+
+def _seconds(rows: int, questions: int) -> int:
+    return int(math.ceil(10 + rows * questions / answers_per_minute() * 60))
 
 
 def _rows_for(unit: str, users_or_rows: int) -> int:
@@ -432,20 +494,25 @@ def _rows_for(unit: str, users_or_rows: int) -> int:
 
 
 def _choice(
-    unit: str, population: int, size: int | None, questions: int, quota=None
+    unit: str,
+    population: int,
+    size: int | None,
+    questions: int,
+    left: float | None = None,
+    blocked: bool = False,
 ) -> dict:
     count = population if size is None else min(size, population)
     rows = _rows_for(unit, count)
-    left = _answers_left(quota)
+    credits = _credits(rows, questions)
+    limited = blocked or (left is not None and credits > left + 1e-9)
     return {
         "sample_size": size,
         "rows_to_read": rows,
-        "credits_estimate": _credits(rows, questions),
-        "seconds_estimate": _seconds(rows, questions, quota),
+        "credits_estimate": credits,
+        "seconds_estimate": _seconds(rows, questions),
         "needs_confirm": rows > confirm_rows(),
-        "allowed": 0 < rows <= max_rows()
-        and (left is None or rows * questions <= left),
-        "quota_limited": left is not None and rows * questions > left,
+        "allowed": 0 < rows <= max_rows() and not limited,
+        "credit_limited": limited,
     }
 
 
@@ -581,20 +648,37 @@ class InstantEvalEstimateView(APIView):
             )
         questions = data.get("questions") or 1
         size = data.get("sample_size")
-        quota = jev_quota(_org(request))
+        org = _org(request)
+        chosen_rows = _rows_for(unit, count if size is None else min(size, count))
+        chosen_credits = _credits(chosen_rows, questions)
+        # The chosen run, and the most the composer can ask (every row, every
+        # question): a refusal of either reports the cap, so each choice and
+        # any number of questions can be judged from it.
+        refused = check_credits(org, chosen_credits)
+        ceiling = check_credits(org, _credits(_rows_for(unit, count), MAX_QUESTIONS))
+        left = _credits_left(refused, ceiling)
+        blocked = _blocked(refused, ceiling)
+        fits = None if blocked else _fits(left, unit, questions, count)
         default = DEFAULT_SAMPLE if count > DEFAULT_SAMPLE and not ids else None
         sizes = [s for s in SAMPLE_SIZES if s < count] if not ids else []
-        choices = [_choice(unit, count, s, questions, quota) for s in sizes] + [
-            _choice(unit, count, None, questions, quota)
+        choices = [_choice(unit, count, s, questions, left, blocked) for s in sizes] + [
+            _choice(unit, count, None, questions, left, blocked)
         ]
-        chosen = _choice(unit, count, size, questions, quota)
-        left = _answers_left(quota)
-        fits = None if left is None else left // max(1, questions)
-        message = (
-            _quota_message(left, chosen["rows_to_read"] * questions, fits, unit)
-            if chosen["quota_limited"]
-            else None
-        )
+        chosen = _choice(unit, count, size, questions, left, blocked)
+        reported = refused or ceiling
+        credit_check = {
+            "allowed": refused is None,
+            "error_code": refused.error_code if refused else None,
+            "current_usage": getattr(reported, "current_usage", None),
+            "limit": getattr(reported, "limit", None),
+            "credits_left": left,
+            "blocked": blocked,
+            "message": (
+                _credit_message(refused, chosen_credits, left, fits, unit)
+                if refused
+                else None
+            ),
+        }
         return self._gm.success_response(
             {
                 "population": count,
@@ -611,10 +695,8 @@ class InstantEvalEstimateView(APIView):
                 if unit == "users"
                 else None,
                 "choices": choices,
-                "quota_limited": chosen["quota_limited"],
-                "quota_message": message,
-                "quota_max_rows": fits,
-                "plan_rate_per_min": _plan_rate(quota),
+                "credit_check": credit_check,
+                "credit_max_sample": fits,
             }
         )
 
@@ -679,18 +761,9 @@ class InstantEvalStartView(APIView):
                 code="instant_eval_too_large",
             )
         credits = _credits(rows, questions)
-        left = _answers_left(jev_quota(org))
-        if left is not None and rows * questions > left:
-            fits = left // max(1, questions)
-            return self._gm.custom_error_response(
-                429,
-                {
-                    "message": _quota_message(left, rows * questions, fits, unit),
-                    "error_code": "INSTANT_EVAL_QUOTA",
-                    "rows_to_read": fits,
-                },
-                code="instant_eval_quota",
-            )
+        refused = check_credits(org, credits)
+        if refused is not None:
+            return _credit_refusal(self._gm, refused, credits, unit, questions, count)
         if rows > confirm_rows() and not data.get("confirm"):
             return self._gm.custom_error_response(
                 409,
@@ -910,7 +983,7 @@ def _run_time(run, progress: dict, running: bool) -> dict:
     end_ms = time.time() * 1000 if running else (progress["last_ms"] or 0)
     wall = max(0, (end_ms - run.created_at.timestamp() * 1000) / 1000)
     active = min(wall, progress["active_minutes"] * 60)
-    return {"active_s": int(active), "idle_s": int(max(0, wall - active))}
+    return {"active_s": round(active), "idle_s": round(max(0, wall - active))}
 
 
 def _in_flight(task) -> int:
@@ -1404,6 +1477,13 @@ class InstantEvalControlView(APIView):
             )
         if busy := self._busy(request, task):
             return busy
+        if run is not None:
+            left = _unanswered_rows(run)
+            credits = _credits(left, run.questions)
+            if refused := check_credits(_org(request), credits):
+                return _credit_refusal(
+                    self._gm, refused, credits, run.unit, run.questions, left
+                )
         with transaction.atomic():
             if run is not None:
                 InstantEvalRun.objects.filter(id=run.id).update(
@@ -1447,6 +1527,11 @@ class InstantEvalControlView(APIView):
         running = task.status in ACTIVE
         if not running and (busy := self._busy(request, task)):
             return busy
+        if run is not None:
+            # Each failed entry is one answer to read again.
+            credits = _credits(failed.count(), 1)
+            if refused := check_credits(_org(request), credits):
+                return _credit_refusal(self._gm, refused, credits, run.unit, 1, 0)
         from tracer.services.instant_eval_answers import forget_answers
 
         with transaction.atomic():
@@ -1500,6 +1585,10 @@ class InstantEvalControlView(APIView):
                 code="instant_eval_too_large",
             )
         credits = _credits(_rows_for(run.unit, added), run.questions)
+        if refused := check_credits(_org(request), credits):
+            return _credit_refusal(
+                self._gm, refused, credits, run.unit, run.questions, added
+            )
         if _rows_for(run.unit, added) > confirm_rows() and not data.get("confirm"):
             return self._gm.custom_error_response(
                 409,

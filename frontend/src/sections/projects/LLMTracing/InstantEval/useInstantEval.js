@@ -304,6 +304,19 @@ export class AskBusy extends Error {
   }
 }
 
+/**
+ * A start refused by billing: not enough credits left this month, a paused
+ * budget or an unpaid invoice. `sampleSize` is the largest sample that fits.
+ */
+export class AskNoCredits extends Error {
+  constructor(detail) {
+    super(detail?.message || "Your plan has no credits left for this run.");
+    this.name = "AskNoCredits";
+    this.code = detail?.error_code || null;
+    this.sampleSize = detail?.sample_size ?? null;
+  }
+}
+
 const errorDetail = (error) => {
   const data = error?.response?.data || {};
   return typeof data.result === "object" && data.result ? data.result : data;
@@ -312,12 +325,12 @@ const errorDetail = (error) => {
 /** Turn a control or start refusal the page explains into its own error. */
 export function askError(error) {
   const status = error?.response?.status;
-  if (
-    status === 409 &&
-    errorDetail(error).error_code === "INSTANT_EVAL_CONFIRM"
-  )
-    return new AskNeedsConfirm(errorDetail(error));
-  if (status === 429) return new AskBusy(errorDetail(error));
+  const detail = errorDetail(error);
+  if (status === 409 && detail.error_code === "INSTANT_EVAL_CONFIRM")
+    return new AskNeedsConfirm(detail);
+  if ((status === 402 || status === 403) && detail.credits_estimate != null)
+    return new AskNoCredits(detail);
+  if (status === 429) return new AskBusy(detail);
   return error;
 }
 

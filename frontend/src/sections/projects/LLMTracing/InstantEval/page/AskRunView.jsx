@@ -21,12 +21,13 @@ import { keyframes } from "@mui/material/styles";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import Iconify from "src/components/iconify";
 import TraceDetailDrawerV2 from "src/components/traceDetail/TraceDetailDrawerV2";
+import { paths } from "src/routes/paths";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
 import { insightsReportLink } from "src/sections/projects/observeHandoff";
 import { ANSWER_TYPES, readOption } from "../instantEvalPayloads";
 import { answerText, quoted } from "../instantEvalAnswers";
 import { formatWhen, unitMeta } from "../instantEvalUnits";
-import { AskBusy, askError } from "../useInstantEval";
+import { AskBusy, AskNoCredits, askError } from "../useInstantEval";
 import KeepAnswering from "../results/KeepAnswering";
 import { AskCrossTab, AskHeatmap, AskPatterns, AskTimeline } from "./viz";
 import AskChartBoundary from "./AskChartBoundary";
@@ -667,6 +668,16 @@ export default function AskRunView({
           rows: known.rows,
           credits: known.credits,
         });
+      else if (known instanceof AskNoCredits)
+        // Resume, retry and read more are refused past the credit cap.
+        setActionError(
+          <>
+            {known.message}{" "}
+            <Link component={RouterLink} to={paths.dashboard.settings.billing}>
+              Open billing
+            </Link>
+          </>,
+        );
       else
         setActionError(
           known instanceof AskBusy

@@ -26313,6 +26313,8 @@ export interface InstantEvalLimitDetailApi {
   error_code: string;
   rows_to_read?: number;
   credits_estimate?: number;
+  credits_left?: number;
+  sample_size?: number;
   runs?: InstantEvalBusyRunApi[];
 }
 
@@ -26395,7 +26397,19 @@ export interface InstantEvalChoiceApi {
   seconds_estimate: number;
   needs_confirm: boolean;
   allowed: boolean;
-  quota_limited: boolean;
+  credit_limited: boolean;
+}
+
+export interface InstantEvalCreditCheckApi {
+  allowed: boolean;
+  /** @minLength 1 */
+  error_code: string;
+  current_usage: number;
+  limit: number;
+  credits_left: number;
+  blocked: boolean;
+  /** @minLength 1 */
+  message: string;
 }
 
 export interface InstantEvalEstimateApi {
@@ -26411,11 +26425,8 @@ export interface InstantEvalEstimateApi {
   default_sample_size: number;
   sessions_per_user: number;
   choices: InstantEvalChoiceApi[];
-  quota_limited: boolean;
-  /** @minLength 1 */
-  quota_message: string;
-  quota_max_rows: number;
-  plan_rate_per_min: number;
+  credit_check: InstantEvalCreditCheckApi;
+  credit_max_sample: number;
 }
 
 export interface InstantEvalEstimateResponseApi {

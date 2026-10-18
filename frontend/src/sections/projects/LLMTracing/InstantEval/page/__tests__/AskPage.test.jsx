@@ -548,6 +548,82 @@ describe("the Ask page", () => {
     expect(where().params.new).toBe("1");
   });
 
+  it("offers the largest sample the credits left this month pay for", async () => {
+    fakes.estimate.mockResolvedValue({
+      ...ESTIMATE,
+      credit_check: {
+        allowed: false,
+        error_code: "FREE_TIER_LIMIT",
+        current_usage: 970,
+        limit: 1000,
+        credits_left: 30,
+        blocked: false,
+        message:
+          "This run needs about 60 credits; you have 30 left this month.",
+      },
+      credit_max_sample: 500,
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    const sample = await screen.findByRole("radio", {
+      name: /A sample of 1,000/,
+    });
+    expect(
+      within(sample).getByText(
+        /This run needs about 60 credits; you have 30 left this month\./,
+      ),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
+      target: { value: QUESTION },
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Ask Jev about a sample of 1,000 sessions",
+      }),
+    ).toBeDisabled();
+    fireEvent.click(
+      within(sample).getByRole("button", {
+        name: "Read a sample of 500 sessions instead",
+      }),
+    );
+    const fitted = screen.getByRole("radio", { name: /A sample of 500/ });
+    expect(fitted).toHaveAttribute("aria-checked", "true");
+    expect(within(fitted).queryByText(/left this month/)).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Ask Jev about a sample of 500 sessions",
+      }),
+    ).toBeEnabled();
+  });
+
+  it("says why billing refused a start and links to billing", async () => {
+    const { AskNoCredits } = await import("../../useInstantEval");
+    fakes.estimate.mockResolvedValue(smallEstimate(3));
+    fakes.startAskRun.mockRejectedValue(
+      new AskNoCredits({
+        message:
+          "Your subscription has unpaid invoices. Update your payment method in billing to run this.",
+        error_code: "PAYMENT_REQUIRED",
+        credits_estimate: 0.18,
+      }),
+    );
+    renderAt(askLink(PROJECT, { unit: "sessions", population: POPULATION }));
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Question 1" }),
+      { target: { value: QUESTION } },
+    );
+    await screen.findByText(/3 sessions handed over/);
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
+      );
+    });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/unpaid invoices/);
+    expect(
+      within(alert).getByRole("link", { name: "Open billing" }),
+    ).toHaveAttribute("href", "/dashboard/settings/billing");
+  });
+
   it("opens a past run from History on its own view's tab", () => {
     fakes.runs = [
       historyItem("task-traces", "traces", "Did the user get a refund?"),
@@ -675,6 +751,51 @@ describe("the Ask page", () => {
       fireEvent.click(screen.getByRole("button", { name: "Read 1,000 more" }));
     });
     expect(fakes.control).toHaveBeenCalledWith("read_more", { more: 1000 });
+  });
+
+  it("explains a read-more refused at the credit cap, with a billing link", async () => {
+    const sample = {
+      population: 104233,
+      population_is_lower_bound: false,
+      requested: 1000,
+      read: 1000,
+      is_sample: true,
+      can_extend: true,
+      next_size: 1000,
+    };
+    fakes.askRuns["task-sessions"] = runOf({
+      total: 1000,
+      answered: 1000,
+      sample,
+      records: null,
+    });
+    const message =
+      "This run needs about 60 credits; you have 12 left this month. A sample of up to 200 sessions fits.";
+    fakes.control.mockRejectedValueOnce({
+      response: {
+        status: 403,
+        data: {
+          result: {
+            message,
+            error_code: "FREE_TIER_LIMIT",
+            credits_estimate: 60,
+            credits_left: 12,
+            sample_size: 200,
+          },
+        },
+      },
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Read 1,000 more" }));
+    });
+    expect(screen.getByText(message, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open billing" })).toHaveAttribute(
+      "href",
+      "/dashboard/settings/billing",
+    );
   });
 
   it("says how far the rows Jev couldn't answer could move a sample's estimate", async () => {

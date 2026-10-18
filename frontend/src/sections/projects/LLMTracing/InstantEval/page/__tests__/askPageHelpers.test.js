@@ -318,19 +318,41 @@ describe("how much of a view to read", () => {
       credits: 120,
       seconds: 410,
       needsConfirm: false,
-      quotaLimited: false,
-      fitsRows: null,
+      creditLimited: false,
+      creditsLeft: null,
+      blocked: false,
+      fitsSize: null,
       allowed: true,
     });
-    // A plan with 1,500 Jev answers left fits 750 rows of two questions.
-    const limited = choiceCost(
-      { ...estimate, questions: 1, quota_max_rows: 1500 },
-      1000,
-      2,
-    );
-    expect(limited).toMatchObject({
-      quotaLimited: true,
-      fitsRows: 750,
+    // 90 credits left pay for 750 rows of two questions.
+    const capped = {
+      ...estimate,
+      credit_check: { allowed: false, credits_left: 90, blocked: false },
+    };
+    expect(choiceCost(capped, 1000, 2)).toMatchObject({
+      creditLimited: true,
+      fitsSize: 750,
+      allowed: false,
+    });
+    expect(choiceCost(capped, 500, 2)).toMatchObject({
+      creditLimited: false,
+      allowed: true,
+    });
+    // A size the server didn't cost is scaled from reading every row.
+    expect(choiceCost(capped, 750, 2)).toMatchObject({
+      rows: 750,
+      credits: 90,
+      creditLimited: false,
+      allowed: true,
+    });
+    // A paused budget or an unpaid invoice stops every size.
+    const blocked = {
+      ...estimate,
+      credit_check: { allowed: false, credits_left: null, blocked: true },
+    };
+    expect(choiceCost(blocked, 500, 1)).toMatchObject({
+      creditLimited: true,
+      fitsSize: null,
       allowed: false,
     });
     const all = choiceCost(estimate, null, 1);
