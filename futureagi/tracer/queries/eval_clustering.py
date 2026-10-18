@@ -42,6 +42,8 @@ COSINE_THRESHOLD = 0.45
 # Only cluster recent eval failures — old results aren't actionable and
 # bound the per-run work unit.
 _CLUSTER_WINDOW_DAYS = 60
+# Rows read per page while collecting a batch of unclustered failures.
+_FETCH_PAGE = 2000
 
 # Clustering is scoped to eval-TASK results — rows carrying an ``eval_task_id``.
 # The (now-retired) eval-task cron was the sole clustering trigger, but the old
@@ -237,27 +239,45 @@ def get_unclustered_eval_results(
     )
 
     results: List[ClusterableEvalResult] = []
-    # .iterator() so a huge backlog isn't all loaded into memory just to
-    # stop early once `limit` unclustered rows have been collected.
-    for ev in evals.iterator(chunk_size=2000):
-        if not is_clusterable_eval_failure(ev):
-            continue
-        results.append(
-            ClusterableEvalResult(
-                eval_logger_id=str(ev.id),
-                project_id=project_id,
-                eval_name=ev.custom_eval_config.name,
-                eval_config_id=str(ev.custom_eval_config_id),
-                explanation=ev.eval_explanation,
-                target_type=ev.target_type,
-                trace_id=str(ev.trace_id) if ev.trace_id else None,
-                session_id=(
-                    str(ev.trace_session_id) if ev.trace_session_id else None
-                ),
-                score=_eval_result_score(ev),
+    # Page through the backlog by (created_at, id) with a LIMIT in SQL, so
+    # stopping at ``limit`` reads only the pages it needs. ``.iterator()``
+    # can't promise that: with DISABLE_SERVER_SIDE_CURSORS (pgbouncer) it
+    # fetches the whole result before yielding a row, which on a project with
+    # a big backlog (an Instant eval run's "No" answers) held every failing
+    # eval of the window in memory on each drain batch.
+    after = None
+    while True:
+        page_q = evals.order_by("created_at", "id")
+        if after is not None:
+            page_q = page_q.filter(
+                Q(created_at__gt=after[0]) | Q(created_at=after[0], id__gt=after[1])
             )
-        )
-        if limit is not None and len(results) >= limit:
+        page = list(page_q[:_FETCH_PAGE])
+        if not page:
+            break
+        after = (page[-1].created_at, page[-1].id)
+        for ev in page:
+            if not is_clusterable_eval_failure(ev):
+                continue
+            results.append(
+                ClusterableEvalResult(
+                    eval_logger_id=str(ev.id),
+                    project_id=project_id,
+                    eval_name=ev.custom_eval_config.name,
+                    eval_config_id=str(ev.custom_eval_config_id),
+                    explanation=ev.eval_explanation,
+                    target_type=ev.target_type,
+                    trace_id=str(ev.trace_id) if ev.trace_id else None,
+                    session_id=(
+                        str(ev.trace_session_id) if ev.trace_session_id else None
+                    ),
+                    score=_eval_result_score(ev),
+                )
+            )
+            if limit is not None and len(results) >= limit:
+                break
+        full = limit is not None and len(results) >= limit
+        if full or len(page) < _FETCH_PAGE:
             break
 
     return results
