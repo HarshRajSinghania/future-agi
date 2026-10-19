@@ -231,17 +231,21 @@ def test_an_async_run_records_the_jev_message(user, workspace, jev_template):
 
 
 @pytest.mark.parametrize(
-    "model,warns", [("jev-latest", False), ("jev-1.13.0", False), ("gpt-5", True)]
+    "model,expected,warns",
+    [
+        ("jev-latest", "jev_evaluator", False),
+        ("jev-1.13.0", "jev_evaluator", False),
+        ("gpt-5", "turing_large_evaluator", True),
+    ],
 )
-def test_only_unknown_non_jev_models_warn_on_the_legacy_call_type(model, warns):
+def test_jev_has_its_own_legacy_call_type(model, expected, warns):
     from sdk.utils import helpers
-    from tfc.constants.api_calls import APICallTypeChoices
 
     # Patch this module's logger rather than reconfiguring structlog, which is
     # global and would leak into whatever test runs next.
     with patch.object(helpers, "logger") as logger:
         api_call_type = helpers._get_api_call_type(model)
-    assert api_call_type == APICallTypeChoices.TURING_LARGE_EVALUATOR.value
+    assert api_call_type == expected
     warned = any(
         call.args[:1] == ("unknown_model_for_api_call_type",)
         for call in logger.warning.call_args_list

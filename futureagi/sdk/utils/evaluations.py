@@ -46,7 +46,7 @@ def _log_and_deduct_cost_for_standalone_eval(
         "error_localizer": False,
     }
 
-    api_call_type = _get_api_call_type(model)
+    api_call_type = _get_api_call_type(model, template=eval_template)
 
     try:
         from ee.usage.services.metering import check_usage

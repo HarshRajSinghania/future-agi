@@ -121,6 +121,9 @@ def test_a_jev_run_bills_once_with_the_metering_event(
     assert post.call_count == 1
     send.assert_called_once()
     log = APICallLog.objects.get(source="tracer", source_id=config.id)
+    # Logged as a Jev run, not Turing Large, even when only the template names
+    # the model, so the legacy per-call rate limit never applies.
+    assert log.api_call_type.name == "jev_evaluator"
     billing = BillingConfig.get()
     # No up-front Turing Large charge: only the Jev event, after the run.
     [event] = events

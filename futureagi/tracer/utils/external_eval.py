@@ -51,7 +51,9 @@ def _log_and_deduct_cost_for_external_eval(
     log_config = config.config if config.config else {}
     log_config["is_futureagi_eval"] = is_futureagi_eval
 
-    api_call_type = _get_api_call_type(config.model)
+    api_call_type = _get_api_call_type(
+        config.model, template=config.eval_template, runtime_config=config.config
+    )
 
     # Pre-check: enforce free tier limits
     try:

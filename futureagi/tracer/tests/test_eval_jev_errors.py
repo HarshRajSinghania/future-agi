@@ -114,3 +114,41 @@ def test_a_failed_jev_run_records_its_message(
     assert eval_log.error_message == f"Error during evaluation: {KEY_INVALID}"
     assert eval_log.output_metadata["error"] == KEY_INVALID
     assert "CANARY" not in str(eval_log.eval_explanation)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("run", [_run_span, _run_trace, _run_session])
+def test_a_jev_template_is_logged_as_a_jev_run(
+    run,
+    monkeypatch,
+    organization,
+    workspace,
+    project,
+    trace,
+    observation_span,
+    trace_session,
+    eval_template,
+    custom_eval_config,
+    stub_cost_log,
+    rejected_key,
+):
+    """The config names no model and the saved template runs Jev: the legacy
+    log, and so the per-call rate limit, use jev_evaluator, not Turing Large."""
+    eval_template.config = {**eval_template.config, "model": "jev-latest"}
+    eval_template.save(update_fields=["config"])
+    seen = []
+
+    def _record(**kwargs):
+        seen.append(kwargs["api_call_type"])
+        return stub_cost_log(**kwargs)
+
+    monkeypatch.setattr(
+        "tracer.utils.eval.log_and_deduct_cost_for_api_request", _record
+    )
+    run(
+        observation_span=observation_span,
+        custom_eval_config=custom_eval_config,
+        trace=trace,
+        trace_session=trace_session,
+    )
+    assert seen == ["jev_evaluator"]

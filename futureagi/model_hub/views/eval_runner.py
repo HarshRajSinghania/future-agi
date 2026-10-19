@@ -1492,7 +1492,13 @@ class EvaluationRunner:
             if self.user_eval_metric
             else ModelChoices.TURING_LARGE.value
         )
-        api_call_type = _get_api_call_type(model)
+        api_call_type = _get_api_call_type(
+            model,
+            template=eval_template,
+            runtime_config=(
+                self.user_eval_metric.config if self.user_eval_metric else None
+            ),
+        )
 
         is_futureagi_eval = self.futureagi_eval
 

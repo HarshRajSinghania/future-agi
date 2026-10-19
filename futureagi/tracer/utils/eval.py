@@ -1094,7 +1094,11 @@ def _run_evaluation(
             source_config.update({"feedback_id": str(feedback_id)})
         _stamp_eval_version(source_config, eval_model)
 
-        api_call_type = _get_api_call_type(custom_eval_config.model)
+        api_call_type = _get_api_call_type(
+            custom_eval_config.model,
+            template=eval_model,
+            runtime_config=custom_eval_config.config,
+        )
 
         workspace = observation_span.project.workspace
         if workspace is None:
@@ -1835,7 +1839,11 @@ def _execute_evaluation(
         source_config["feedback_id"] = str(feedback_id)
     _stamp_eval_version(source_config, eval_model)
 
-    api_call_type = _get_api_call_type(custom_eval_config.model)
+    api_call_type = _get_api_call_type(
+        custom_eval_config.model,
+        template=eval_model,
+        runtime_config=custom_eval_config.config,
+    )
 
     api_call_log_row = None
     if log_and_deduct_cost_for_api_request is not None:
@@ -3887,7 +3895,11 @@ def _execute_evaluation_for_trace(
         source_config["feedback_id"] = str(feedback_id)
     _stamp_eval_version(source_config, eval_template)
 
-    api_call_type = _get_api_call_type(custom_eval_config.model)
+    api_call_type = _get_api_call_type(
+        custom_eval_config.model,
+        template=eval_template,
+        runtime_config=custom_eval_config.config,
+    )
     api_call_log_row = None
     if log_and_deduct_cost_for_api_request is not None:
         api_call_log_row = log_and_deduct_cost_for_api_request(
@@ -4140,7 +4152,11 @@ def _execute_evaluation_for_session(
         source_config["feedback_id"] = str(feedback_id)
     _stamp_eval_version(source_config, eval_template)
 
-    api_call_type = _get_api_call_type(custom_eval_config.model)
+    api_call_type = _get_api_call_type(
+        custom_eval_config.model,
+        template=eval_template,
+        runtime_config=custom_eval_config.config,
+    )
     api_call_log_row = None
     if log_and_deduct_cost_for_api_request is not None:
         api_call_log_row = log_and_deduct_cost_for_api_request(

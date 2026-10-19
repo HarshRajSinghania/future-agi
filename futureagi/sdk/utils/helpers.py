@@ -13,8 +13,24 @@ model_to_api_call_type = {
 }
 
 
-def _get_api_call_type(model: str):
+def _get_api_call_type(model: str, template=None, runtime_config=None):
+    """The legacy APICallType a run is logged and rate-limited under.
+
+    Pass the eval template (and the run's config) when the caller's model may
+    be empty, so a saved Jev template is still logged as a Jev run.
+    """
+    from tfc.ee_gates import is_jev_model
+
     try:
+        if template is not None:
+            from model_hub.utils.jev_templates import binding_model
+
+            if is_jev_model(
+                binding_model(template, model=model, runtime_config=runtime_config)
+            ):
+                return APICallTypeChoices.JEV_EVALUATOR.value
+        if is_jev_model(model):
+            return APICallTypeChoices.JEV_EVALUATOR.value
         if not model:
             return APICallTypeChoices.TURING_LARGE_EVALUATOR.value
 
@@ -26,12 +42,7 @@ def _get_api_call_type(model: str):
                 # Non-Turing/Protect models (e.g. "gpt-5", "gemini-...") are
                 # legitimate user input but not part of ModelChoices. This is
                 # expected, not an error: fall back to the default api call type.
-                # Jev models take this row on purpose (there is no Jev
-                # APICallType), so they don't warn on every run.
-                from tfc.ee_gates import is_jev_model
-
-                if not is_jev_model(model):
-                    logger.warning("unknown_model_for_api_call_type", model=model)
+                logger.warning("unknown_model_for_api_call_type", model=model)
                 return APICallTypeChoices.TURING_LARGE_EVALUATOR.value
 
         return model_to_api_call_type.get(
@@ -45,8 +56,9 @@ def _get_api_call_type(model: str):
 def _get_billing_event_type(api_call_type: str, *models, evaluator=None) -> str:
     """Event type for the billing UsageEvent of an eval run.
 
-    Jev runs bill as jev_evaluator. api_call_type still drives the legacy
-    APICallType/Pricing rows, which have no Jev entry, so callers keep it there.
+    Jev runs bill as jev_evaluator. A caller that logged the run before it
+    knew the model ran Jev passes the legacy type it used; the models and the
+    evaluator that actually ran decide.
     """
     from tfc.ee_gates import is_jev_model
 
