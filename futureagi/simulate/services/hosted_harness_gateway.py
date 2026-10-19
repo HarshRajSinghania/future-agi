@@ -1961,7 +1961,7 @@ class HostedHarnessGateway:
         from simulate.services.harness_capacity import configured_capacity
 
         try:
-            capacity = configured_capacity(payload)
+            capacity = configured_capacity(scope_dispatch_to_rerun(payload))
         except ValueError as exc:
             raise HostedHarnessError(
                 "sandbox_capacity_unavailable",
