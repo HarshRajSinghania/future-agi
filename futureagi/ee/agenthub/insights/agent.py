@@ -22,7 +22,7 @@ import httpx
 import structlog
 
 from ee.agenthub.insights.facets import lens_for, normalise
-from ee.agenthub.insights.llm import InsightModelError, Spend
+from ee.agenthub.insights.llm import InsightModelError, Spend, call_cost
 
 logger = structlog.get_logger(__name__)
 
@@ -78,7 +78,20 @@ def _post(path: str, payload: dict, spend: Spend | None = None) -> dict:
     body = response.json()
     usage = body.get("usage") or {}
     if spend is not None:
-        spend.add(float(usage.get("cost_usd") or 0.0))
+        prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion_tokens = int(
+            usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        )
+        spend.add(
+            call_cost(
+                usage.get("model") or "",
+                float(usage.get("cost_usd") or 0.0),
+                prompt_tokens,
+                completion_tokens,
+            ),
+            prompt_tokens,
+            completion_tokens,
+        )
     return body
 
 

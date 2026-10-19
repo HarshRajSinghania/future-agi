@@ -205,7 +205,8 @@ class TestModelCalls:
 
         def fake_complete(messages, model, max_tokens, temperature):
             budgets.append(max_tokens)
-            return ('{"summary": "cut' if len(budgets) == 1 else '{"ok": true}'), 0.0
+            reply = '{"summary": "cut' if len(budgets) == 1 else '{"ok": true}'
+            return reply, 0.0, 0, 0
 
         monkeypatch.setattr(llm, "_complete", fake_complete)
         monkeypatch.setattr(llm.time, "sleep", lambda *_: None)

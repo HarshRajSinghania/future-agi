@@ -18,7 +18,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from ee.agenthub.insights import agent as insight_agent
-from ee.agenthub.insights import clustering, report
+from ee.agenthub.insights import billing, clustering, report
 from ee.agenthub.insights.facets import clean_attributes, extract, included, lens_for
 from ee.agenthub.insights.llm import FAST, THINKING, InsightModelError, Spend, model_for
 from ee.agenthub.insights.stats import compare_runs, measure
@@ -52,6 +52,19 @@ def sample_evenly(population: list[dict], size: int) -> list[dict]:
     if size <= 1:
         return ordered[-1:] if size == 1 else []
     return [ordered[round(i * (len(ordered) - 1) / (size - 1))] for i in range(size)]
+
+
+def _log_spend(run_id, stage: str, spend: Spend) -> None:
+    """What a stage's model calls cost, for calibrating billing's estimates."""
+    logger.info(
+        "insight_stage_spend",
+        run_id=str(run_id),
+        stage=stage,
+        calls=spend.calls,
+        cost_usd=round(spend.cost_usd, 6),
+        prompt_tokens=spend.prompt_tokens,
+        completion_tokens=spend.completion_tokens,
+    )
 
 
 def set_progress(run, stage: str, done: int | None = None, total: int | None = None, **extra):
@@ -231,6 +244,7 @@ def extract_batch(run_id: str, unit_pks: list[int]) -> dict:
         locked.progress = progress
         locked.cost_usd = (locked.cost_usd or 0) + spend.cost_usd
         locked.save(update_fields=["progress", "cost_usd", "updated_at"])
+    _log_spend(run_id, "read", spend)
     return {"done": len(finished), "failed": sum(1 for u in finished if u.status == "failed")}
 
 
@@ -385,6 +399,7 @@ def organise(run_id: str) -> dict:
     run.cost_usd = (run.cost_usd or 0) + spend.cost_usd
     run.analysed_count = len(units)
     run.save(update_fields=["result", "cost_usd", "analysed_count", "updated_at"])
+    _log_spend(run_id, "organise", spend)
     return {"categories": len(tops), "subcategories": len(subs)}
 
 
@@ -486,6 +501,9 @@ def finish(run_id: str) -> dict:
     run.status = "completed"
     run.finished_at = timezone.now()
     run.save(update_fields=["result", "cost_usd", "status", "finished_at", "updated_at"])
+    _log_spend(run_id, "write", spend)
+    # Charged once the report is written; a failed report isn't charged.
+    billing.charge_run(run)
     set_progress(run, "done")
     config = run.config
     if run.taxonomy_mode == "discover" and not (config.taxonomy or {}).get("subs"):

@@ -69,10 +69,11 @@ def preview(
     instructions: str,
     attributes: list[dict],
     unit_ids: list[str],
+    spend: Spend | None = None,
 ) -> list[dict]:
     loaded = load_units(unit, project_id, unit_ids[:3])
     attributes = clean_attributes(attributes)
-    spend = Spend()
+    spend = spend if spend is not None else Spend()
     if insight_agent.enabled():
         context = insight_agent.run_context(
             {"lens": lens_key, "question": question, "agent_description": agent_description,

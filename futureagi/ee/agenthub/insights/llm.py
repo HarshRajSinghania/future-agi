@@ -59,12 +59,40 @@ class Spend:
 
     cost_usd: float = 0.0
     calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def add(self, cost: float) -> None:
+    def add(self, cost: float, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
         with self._lock:
             self.cost_usd += cost or 0.0
             self.calls += 1
+            self.prompt_tokens += prompt_tokens or 0
+            self.completion_tokens += completion_tokens or 0
+
+
+def call_cost(model: str, gateway_cost: float, prompt_tokens: int, completion_tokens: int) -> float:
+    """What one model call cost: the gateway's figure, else the model's token
+    price. The gateway prices only the models in its catalogue, not the Turing
+    aliases, so a zero falls back to the platform's price list, as Falcon AI's
+    billing does."""
+    if gateway_cost and gateway_cost > 0:
+        return float(gateway_cost)
+    if not model or not (prompt_tokens or completion_tokens):
+        return 0.0
+    try:
+        from agentic_eval.core_evals.fi_utils.token_count_helper import (
+            calculate_total_cost,
+        )
+
+        priced = calculate_total_cost(
+            model,
+            {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+        )
+        return float(priced["total_cost"])
+    except Exception:
+        logger.warning("insight_call_unpriced", model=model, exc_info=True)
+        return 0.0
 
 
 def parse_json(raw: str):
@@ -103,7 +131,7 @@ def _complete(messages: list[dict], model: str, max_tokens: int, temperature: fl
             raise InsightModelError(
                 "The analysis model is unavailable right now.", unavailable=True
             )
-        return content, 0.0
+        return content, 0.0, 0, 0
     result = call_llm_raw(
         client,
         model=model,
@@ -116,7 +144,11 @@ def _complete(messages: list[dict], model: str, max_tokens: int, temperature: fl
         content = result.response.choices[0].message.content
     except (AttributeError, IndexError):
         content = ""
-    return content or "", result.cost_usd
+    usage = getattr(result.response, "usage", None)
+    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    cost = call_cost(model, result.cost_usd, prompt_tokens, completion_tokens)
+    return content or "", cost, prompt_tokens, completion_tokens
 
 
 def chat_json(
@@ -140,9 +172,12 @@ def chat_json(
     budget = max_tokens
     for attempt in range(attempts):
         try:
-            content, cost = _complete(messages, model, budget, temperature)
+            content, cost, prompt_tokens, completion_tokens = _complete(
+                messages, model, budget, temperature
+            )
+            # A reply that isn't JSON was still paid for.
             if spend is not None:
-                spend.add(cost)
+                spend.add(cost, prompt_tokens, completion_tokens)
             return parse_json(content)
         except InsightModelError as exc:
             last_error = exc
