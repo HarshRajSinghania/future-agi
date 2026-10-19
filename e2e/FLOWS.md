@@ -852,6 +852,122 @@
 - UI POST and stored task retain the custom predicate
 - completed task has exactly the matching span in PG and CH, with mock verdict and usage
 
+### EVAL-E2E-006 — Jev models are listed but locked on a self-hosted stack without a licence
+
+**Goal:** See that Jev evaluator models exist but cannot be chosen or saved on an unlicensed self-hosted install  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:196`  
+**Tags:** —
+
+**User steps:**
+
+1. open the evaluator create page on the LLM-As-A-Judge tab
+2. open the model picker and read the Jev group
+3. hover a locked Jev row
+4. try to create a Jev evaluator through the create API
+
+**Backend state verified:**
+
+- the capabilities API denies jev_models, as it does turing_models, for the actor org
+- the provider-status API lists TypeSafe with no key
+- create-v2 with jev-latest is refused 402 ENTITLEMENT_DENIED for feature jev and no template row with that name exists
+
+**Browser observations:**
+
+- the picker lists exactly Jev 1.13 (pinned) then Jev latest, below FutureAGI Models
+- both Jev rows are disabled, prompt for a TypeSafe API key and explain "Not included in your plan"
+
+### EVAL-E2E-007 — choosing a Jev model without a TypeSafe key opens the keys drawer on TypeSafe
+
+**Goal:** Choose a Jev evaluator model before saving a TypeSafe key and land in the keys drawer on TypeSafe  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:269`  
+**Tags:** —
+
+**User steps:**
+
+1. allow jev_models in the browser capability read only
+2. open the evaluator create page on the LLM-As-A-Judge tab and open the model picker
+3. choose Jev latest
+4. type into the TypeSafe API key field without adding it
+
+**Backend state verified:**
+
+- the provider-status API reports no TypeSafe key before and after, and the drawer sent no API-key write
+
+**Browser observations:**
+
+- both Jev rows are enabled and prompt for a TypeSafe API key
+- choosing Jev latest closes the picker and opens the keys drawer with TypeSafe as its first provider
+- the drawer takes input (Add enables) and the evaluator model stays unselected
+
+### EVAL-E2E-008 — a Jev pass/fail evaluator keeps its model, output type and criteria after reload
+
+**Goal:** Author a Jev pass/fail evaluator in the UI and find its model, output type and criteria intact after reload  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:342`  
+**Tags:** —
+
+**User steps:**
+
+1. allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate
+2. author an LLM-As-A-Judge evaluator and choose Jev latest
+3. keep Pass/fail and describe a pass and a fail
+4. save the evaluation
+5. reload its detail page
+
+**Backend state verified:**
+
+- PG keeps the validated noul mapping with both criteria, Pass/Fail output, org/workspace scope and an identical V1 snapshot; model holds the stand-in id
+
+**Browser observations:**
+
+- the publish request carries jev-latest, pass_fail and both criteria
+- after reload the pill reads Jev latest, Pass/fail is selected and both criteria are filled
+
+### EVAL-E2E-009 — a Jev choices evaluator keeps its authored label order and scores after reload
+
+**Goal:** Author a Jev choices evaluator whose labels are not shortest-first and find their order and scores intact after reload  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:399`  
+**Tags:** —
+
+**User steps:**
+
+1. allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate
+2. author an LLM-As-A-Judge evaluator and choose Jev latest
+3. choose Choices and enter Resolved (Pass), Escalated (Neutral), No (Fail), describing Escalated
+4. save the evaluation
+5. reload its detail page
+
+**Backend state verified:**
+
+- PG choice_scores holds the three scores with jsonb keys shortest-first, while choices and the validated mapping keep Resolved, Escalated, No with the Escalated description; V1 snapshot identical
+
+**Browser observations:**
+
+- the publish request carries jev-latest, deterministic and the labels in authored order
+- after reload the rows read Resolved, Escalated, No as Pass, Neutral, Fail and the description is kept
+
+### EVAL-E2E-010 — a Jev scoring evaluator keeps its four ordered levels after reload
+
+**Goal:** Author a Jev scoring evaluator with four ordered rubric levels and find them intact after reload  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:480`  
+**Tags:** —
+
+**User steps:**
+
+1. allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate
+2. author an LLM-As-A-Judge evaluator and choose Jev latest
+3. choose Scoring and add four ordered levels
+4. save the evaluation
+5. reload its detail page
+
+**Backend state verified:**
+
+- PG keeps the validated score mapping with the four levels in order, no choice scores and an identical V1 snapshot
+
+**Browser observations:**
+
+- the publish request carries jev-latest, percentage and the four levels
+- after reload Scoring is selected and the four levels read back in order
+
 ## gateway
 
 ### GW-E2E-001 — gateway traffic is filtered by the application that sent it
