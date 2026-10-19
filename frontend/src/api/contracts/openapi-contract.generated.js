@@ -97534,6 +97534,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "credit_check",
         "credit_max_sample",
         "window",
+        "sample_error",
       ],
       type: "object",
       properties: {
@@ -97600,6 +97601,9 @@ export const OPENAPI_CONTRACT = Object.freeze({
         window: {
           title: "Window",
           type: "object",
+        },
+        sample_error: {
+          $ref: "#/definitions/InstantEvalSampleError",
         },
       },
     },
@@ -114584,6 +114588,27 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "x-nullable": true,
         },
       },
+    },
+    InstantEvalSampleError: {
+      required: ["error_code", "message", "sample_size"],
+      type: "object",
+      properties: {
+        error_code: {
+          title: "Error code",
+          type: "string",
+          minLength: 1,
+        },
+        message: {
+          title: "Message",
+          type: "string",
+          minLength: 1,
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+        },
+      },
+      "x-nullable": true,
     },
     InstantEvalBusyRun: {
       required: [

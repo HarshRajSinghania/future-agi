@@ -26925,6 +26925,14 @@ export interface InstantEvalCreditCheckApi {
   message: string;
 }
 
+export interface InstantEvalSampleErrorApi {
+  /** @minLength 1 */
+  error_code: string;
+  /** @minLength 1 */
+  message: string;
+  sample_size: number;
+}
+
 export type InstantEvalEstimateApiWindow = { [key: string]: unknown };
 
 export interface InstantEvalEstimateApi {
@@ -26943,6 +26951,7 @@ export interface InstantEvalEstimateApi {
   credit_check: InstantEvalCreditCheckApi;
   credit_max_sample: number;
   window: InstantEvalEstimateApiWindow;
+  sample_error: InstantEvalSampleErrorApi;
 }
 
 export interface InstantEvalEstimateResponseApi {

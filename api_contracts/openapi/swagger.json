@@ -149354,6 +149354,31 @@
                 }
             }
         },
+        "InstantEvalSampleError": {
+            "required": [
+                "error_code",
+                "message",
+                "sample_size"
+            ],
+            "type": "object",
+            "properties": {
+                "error_code": {
+                    "title": "Error code",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "message": {
+                    "title": "Message",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer"
+                }
+            },
+            "x-nullable": true
+        },
         "InstantEvalEstimate": {
             "required": [
                 "population",
@@ -149370,7 +149395,8 @@
                 "choices",
                 "credit_check",
                 "credit_max_sample",
-                "window"
+                "window",
+                "sample_error"
             ],
             "type": "object",
             "properties": {
@@ -149437,6 +149463,9 @@
                 "window": {
                     "title": "Window",
                     "type": "object"
+                },
+                "sample_error": {
+                    "$ref": "#/definitions/InstantEvalSampleError"
                 }
             }
         },

@@ -57235,6 +57235,11 @@ export const TracerInstantEvalEstimateCreateResponse = zod.object({
     }),
     credit_max_sample: zod.number(),
     window: zod.object({}).passthrough(),
+    sample_error: zod.object({
+      error_code: zod.string().min(1),
+      message: zod.string().min(1),
+      sample_size: zod.number(),
+    }),
   }),
 });
 
