@@ -4,7 +4,6 @@ import {
   Alert,
   Box,
   Button,
-  Chip,
   CircularProgress,
   IconButton,
   LinearProgress,
@@ -19,17 +18,20 @@ import {
 } from "@mui/material";
 import { useQueryClient } from "@tanstack/react-query";
 import Iconify from "src/components/iconify";
+import { UNITS, unitWord } from "src/sections/projects/observePopulation";
+import ScopeFilterBar from "src/sections/projects/ScopeFilterBar";
 import {
-  MAX_POPULATION,
-  UNITS,
-  unitWord,
-} from "src/sections/projects/observePopulation";
+  CUSTOM,
+  defaultScope,
+  scopeForUnit,
+  scopeFromSeed,
+} from "src/sections/projects/observeScope";
 import {
-  collectForScope,
   draftConfig,
   previewConfig,
   rememberPopulation,
   startRun,
+  useExampleRows,
   useHasSessions,
   usePopulationCount,
 } from "./insightsApi";
@@ -48,25 +50,19 @@ import {
   unitTitle,
 } from "./insightsLenses";
 import {
-  DATE_PRESETS,
   DEFAULT_SAMPLE_SIZE,
   SAMPLE_SIZES,
   buildConfig,
   buildRunPayload,
-  buildScope,
   cleanAttributes,
-  describeFilter,
+  countedScope,
   effectiveSample,
   fixedScope,
-  formatWindow,
-  presetOption,
-  presetWindow,
+  reanchorScope,
   sampleSentence,
-  scopeLabel,
-  splitFilters,
   spreadPick,
+  storedScope,
   toPopulation,
-  withCollectedNote,
 } from "./insightsScope";
 import NewReportTune from "./NewReportTune";
 import PreviewExamples from "./PreviewExamples";
@@ -82,15 +78,14 @@ function initialDraft(seed, initialLens) {
       ? initialLens
       : "usage";
   const lens = lensFor(lensKey);
-  const { window, rest } = splitFilters(seed?.filters || []);
+  const unit = UNITS[seed?.unit] ? seed.unit : lens.unit || "sessions";
   return {
     lens: lensKey,
     question: seed?.question || lens.question,
-    unit: UNITS[seed?.unit] ? seed.unit : lens.unit || "sessions",
-    preset: window ? null : "7d",
-    window: window || presetWindow("7d"),
-    customWindow: window,
-    filters: rest,
+    unit,
+    // The view's date and filters, else the past week.
+    scope: seed ? scopeFromSeed(seed, unit) : defaultScope(unit),
+    scopeNotice: null,
     sampleSize: DEFAULT_SAMPLE_SIZE,
     name: "",
     agentDescription: "",
@@ -111,6 +106,14 @@ const normalizeAttributes = (attributes = []) =>
       description: (a.description || "").slice(0, 300),
       filter_by: a.type === "boolean" && Boolean(a.filter_by),
     }));
+
+// Another unit keeps the date; filters it can't read are dropped, and the
+// form says so.
+function withUnit(draft, unit) {
+  if (unit === draft.unit) return draft;
+  const moved = scopeForUnit(draft.scope, unit);
+  return { ...draft, unit, scope: moved.scope, scopeNotice: moved.notice };
+}
 
 function autoName(draft, scopeText) {
   const lens = lensFor(draft.lens);
@@ -303,7 +306,7 @@ export default function NewReport({
   useEffect(() => {
     if (touched.unit || fixed || hasSessions.data !== false) return;
     setDraft((current) =>
-      current.unit === "sessions" ? { ...current, unit: "traces" } : current,
+      current.unit === "sessions" ? withUnit(current, "traces") : current,
     );
   }, [hasSessions.data, touched.unit, fixed]);
 
@@ -326,32 +329,42 @@ export default function NewReport({
     const previous = lensFor(draft.lens);
     const patch = { lens: key };
     if (!touched.question) patch.question = next.question;
+    let unit = null;
     if (!touched.unit && !fixed) {
-      if (next.unit) patch.unit = next.unit;
-      else if (previous.unit) patch.unit = defaultUnit;
+      if (next.unit) unit = next.unit;
+      else if (previous.unit) unit = defaultUnit;
     }
-    update(patch);
+    setDraft((current) => {
+      const patched = { ...current, ...patch };
+      return unit ? withUnit(patched, unit) : patched;
+    });
   };
 
   // ── Which data ──────────────────────────────────────────────────────────
-  const scopeFilters = useMemo(
-    () =>
-      buildScope({
-        preset: draft.preset,
-        window: draft.window,
-        filters: draft.filters,
-      }).filters,
-    [draft.preset, draft.window, draft.filters],
-  );
-  const debouncedFilters = useDebouncedValue(scopeFilters, 350);
+  // Counted on the server the way the run reads it: no cap in the browser.
+  // The draft and preview read a few of the newest rows.
+  const countScope = useMemo(() => countedScope(draft.scope), [draft.scope]);
+  const settledScope = useDebouncedValue(countScope, 350);
   const count = usePopulationCount({
     unit: draft.unit,
     projectId,
-    filters: debouncedFilters,
+    scope: settledScope,
     enabled: !fixed,
   });
+  const serverExamples = count.data?.sampleIds;
+  const examples = useExampleRows({
+    unit: draft.unit,
+    projectId,
+    filters: settledScope.filters,
+    enabled: !fixed && Boolean(count.data) && !serverExamples,
+  });
+  // A new scope is being counted; a Users count still climbing ("N+") is
+  // read again on its own and needn't hold anything up.
   const counting =
-    !fixed && (count.isFetching || debouncedFilters !== scopeFilters);
+    !fixed &&
+    (count.isLoading || count.isPlaceholderData || settledScope !== countScope);
+  const stillCounting =
+    !fixed && draft.unit === "users" && Boolean(count.data?.totalIsLowerBound);
   const population = fixed
     ? {
         total: fixedPopulation.length,
@@ -362,7 +375,9 @@ export default function NewReport({
       ? {
           total: count.data.total,
           isLowerBound: count.data.totalIsLowerBound,
-          items: count.data.items,
+          items: serverExamples
+            ? serverExamples.map((id) => ({ id }))
+            : examples.data?.items || [],
         }
       : null;
   const items = population?.items || [];
@@ -370,19 +385,8 @@ export default function NewReport({
   const currentScopeText = fixed
     ? seed?.label ||
       `${formatCount(fixedPopulation.length)} ${unitWord(draft.unit, fixedPopulation.length)}`
-    : scopeLabel({
-        preset: draft.preset,
-        window: draft.window,
-        filters: draft.filters,
-      });
+    : draft.scope.label;
   const namePlaceholder = autoName(draft, currentScopeText);
-
-  const selectWindow = (value) => {
-    if (value === "custom" && draft.customWindow)
-      update({ preset: null, window: draft.customWindow });
-    else if (presetOption(value))
-      update({ preset: value, window: presetWindow(value) });
-  };
 
   // ── Draft with AI and preview ───────────────────────────────────────────
   const drafting = useCancellable("The draft could not be written.");
@@ -465,7 +469,7 @@ export default function NewReport({
         : "";
 
   const runReport = () =>
-    starting.run(async (signal) => {
+    starting.run(async () => {
       let scope;
       let rows;
       if (fixed) {
@@ -474,30 +478,17 @@ export default function NewReport({
             `${formatCount(fixedPopulation.length)} ${unitWord(draft.unit, fixedPopulation.length)}${seed?.source ? ` from ${seed.source}` : ""}`,
         );
         rows = fixedPopulation;
+        if (!rows.length) {
+          const error = new Error(
+            `There are no ${UNITS[draft.unit].plural} in this scope.`,
+          );
+          error.statusCode = 400;
+          throw error;
+        }
       } else {
-        // Re-anchor a relative window to the moment the run starts.
-        const window = draft.preset ? presetWindow(draft.preset) : draft.window;
-        scope = buildScope({
-          preset: draft.preset,
-          window,
-          filters: draft.filters,
-        });
-        setStartPhase(`Collecting ${UNITS[draft.unit].plural}…`);
-        const collected = await collectForScope({
-          unit: draft.unit,
-          projectId,
-          scope,
-          signal,
-        });
-        rows = collected.items;
-        scope = withCollectedNote(scope, collected);
-      }
-      if (!rows.length) {
-        const error = new Error(
-          `There are no ${UNITS[draft.unit].plural} in this scope.`,
-        );
-        error.statusCode = 400;
-        throw error;
+        // A preset's window moves to the moment the run starts; the server
+        // reads the rows the filters match.
+        scope = storedScope(reanchorScope(draft.scope));
       }
       setStartPhase("Starting the report…");
       const created = await startRun(
@@ -519,7 +510,6 @@ export default function NewReport({
     total,
     isLowerBound: population?.isLowerBound,
     sampleSize: draft.sampleSize,
-    collectLimit: fixed ? undefined : MAX_POPULATION,
   });
   const estimate = Number.isFinite(total)
     ? estimateMinutes(effectiveSample(total, draft.sampleSize))
@@ -602,7 +592,7 @@ export default function NewReport({
                   value={draft.unit}
                   onChange={(_, value) => {
                     if (!value) return;
-                    update({ unit: value });
+                    setDraft((current) => withUnit(current, value));
                     setTouched((current) => ({ ...current, unit: true }));
                   }}
                   aria-label="What each item is"
@@ -650,80 +640,27 @@ export default function NewReport({
               </Typography>
             </Paper>
           ) : (
-            <>
-              <Stack
-                direction="row"
-                spacing={2}
-                alignItems="center"
-                flexWrap="wrap"
-                useFlexGap
+            <Box>
+              <ScopeFilterBar
+                projectId={projectId}
+                unit={draft.unit}
+                scope={draft.scope}
+                onChange={(scope) => update({ scope, scopeNotice: null })}
+                disabled={busy}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="p"
+                role={draft.scopeNotice ? "status" : undefined}
+                sx={{ mt: 0.75 }}
               >
-                <ToggleButtonGroup
-                  exclusive
-                  size="small"
-                  value={draft.preset || "custom"}
-                  onChange={(_, value) => value && selectWindow(value)}
-                  aria-label="Time window"
-                  disabled={busy}
-                >
-                  {DATE_PRESETS.map((option) => (
-                    <ToggleButton
-                      key={option.value}
-                      value={option.value}
-                      sx={{ px: 1.75 }}
-                    >
-                      {option.label}
-                    </ToggleButton>
-                  ))}
-                  {draft.customWindow && (
-                    <ToggleButton value="custom" sx={{ px: 1.75 }}>
-                      {formatWindow(draft.customWindow)}
-                    </ToggleButton>
-                  )}
-                </ToggleButtonGroup>
-                {draft.preset && (
-                  <Typography variant="caption" color="text.secondary">
-                    Runs again re-anchor this window to the time they start.
-                  </Typography>
-                )}
-              </Stack>
-              {draft.filters.length > 0 && (
-                <Box>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", mb: 0.75 }}
-                  >
-                    Filters{seed?.label ? ` from ${seed.label}` : ""}
-                  </Typography>
-                  <Stack
-                    direction="row"
-                    spacing={0.75}
-                    useFlexGap
-                    flexWrap="wrap"
-                  >
-                    {draft.filters.map((filter, index) => (
-                      <Chip
-                        key={`${filter.column_id}-${index}`}
-                        size="small"
-                        label={describeFilter(filter)}
-                        onDelete={
-                          busy
-                            ? undefined
-                            : () =>
-                                update({
-                                  filters: draft.filters.filter(
-                                    (_, i) => i !== index,
-                                  ),
-                                })
-                        }
-                        sx={{ maxWidth: 420 }}
-                      />
-                    ))}
-                  </Stack>
-                </Box>
-              )}
-            </>
+                {draft.scopeNotice ||
+                  (draft.scope.dateOption !== CUSTOM
+                    ? "Runs again re-anchor this window to the time they start."
+                    : "Runs again read this same range.")}
+              </Typography>
+            </Box>
           )}
 
           <Stack
@@ -743,8 +680,8 @@ export default function NewReport({
                 </Stack>
               ) : count.isError && !fixed ? (
                 <Typography variant="body2" color="text.secondary">
-                  Couldn&apos;t count this scope. The report still collects it
-                  when it runs.
+                  Couldn&apos;t count this scope. The report still reads it when
+                  it runs.
                 </Typography>
               ) : population ? (
                 <Stack direction="row" spacing={1} alignItems="center">
@@ -761,7 +698,13 @@ export default function NewReport({
                     {unitWord(draft.unit, total)}{" "}
                     {fixed ? "handed over" : "match"}
                   </Typography>
-                  {counting && <CircularProgress size={12} thickness={5} />}
+                  {(counting || stillCounting) && (
+                    <CircularProgress
+                      size={12}
+                      thickness={5}
+                      aria-label={`Counting the ${UNITS[draft.unit].plural}`}
+                    />
+                  )}
                 </Stack>
               ) : null}
             </Box>
@@ -971,11 +914,6 @@ export default function NewReport({
               <BusyLine
                 label={startPhase || "Starting…"}
                 startedAt={starting.state.startedAt}
-                onCancel={
-                  startPhase.startsWith("Collecting")
-                    ? starting.cancel
-                    : undefined
-                }
               />
             ) : starting.state.status === "error" ? (
               <Typography variant="body2" color="error.main">

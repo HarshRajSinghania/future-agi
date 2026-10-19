@@ -34,6 +34,7 @@ from tracer.views.insights import (
     InsightConfigDetailView,
     InsightConfigListView,
     InsightDraftView,
+    InsightEstimateView,
     InsightPreviewView,
     InsightRunAskView,
     InsightRunCreateView,
@@ -244,6 +245,7 @@ urlpatterns = [
     ),
     path("insights/draft/", InsightDraftView.as_view(), name="insight-draft"),
     path("insights/preview/", InsightPreviewView.as_view(), name="insight-preview"),
+    path("insights/estimate/", InsightEstimateView.as_view(), name="insight-estimate"),
     path("insights/runs/", InsightRunCreateView.as_view(), name="insight-runs"),
     path(
         "insights/runs/<uuid:run_id>/",

@@ -32,7 +32,7 @@ import KeepAnswering from "../results/KeepAnswering";
 import { AskCrossTab, AskHeatmap, AskPatterns, AskTimeline } from "./viz";
 import AskChartBoundary from "./AskChartBoundary";
 import AskRowsTable from "./AskRowsTable";
-import { runTime, scopeWords, windowLabel } from "./askFormat";
+import { runScopeWords, runTime } from "./askFormat";
 import {
   answerFilter,
   creditCount,
@@ -598,7 +598,7 @@ export default function AskRunView({
   const reads = question?.reads || run.reads;
   const metaLine = [
     sourceViewTitle(unit),
-    scopeWords(scope?.label) || windowLabel(run.window),
+    runScopeWords(scope?.label || summary?.scope?.label, run.window),
     run.total
       ? `${run.total.toLocaleString()} ${run.total === 1 ? meta.noun : meta.plural}`
       : null,

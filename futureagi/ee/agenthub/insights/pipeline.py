@@ -67,8 +67,20 @@ def set_progress(run, stage: str, done: int | None = None, total: int | None = N
     run.save(update_fields=["progress", "stage", "updated_at"])
 
 
-def create_run(*, config, scope: dict, population: list[dict], sample_size: int, user):
-    """Create a run with its sampled units; the workflow does the rest."""
+def create_run(
+    *,
+    config,
+    scope: dict,
+    population: list[dict],
+    sample_size: int,
+    user,
+    population_size: int | None = None,
+):
+    """Create a run with its sampled units; the workflow does the rest.
+
+    ``population`` is every row handed over, or a sample the server already
+    drew from the scope; then ``population_size`` is how many the scope held.
+    The run reads each unit inside ``scope["window"]``."""
     InsightRun, InsightUnit = _models()
     seen, unique = set(), []
     for entry in population:
@@ -96,7 +108,7 @@ def create_run(*, config, scope: dict, population: list[dict], sample_size: int,
                 "instructions": config.instructions,
                 "attributes": clean_attributes(config.attributes),
             },
-            population_size=len(unique),
+            population_size=len(unique) if population_size is None else population_size,
             sample_size=len(sampled),
             taxonomy_mode="classify" if taxonomy.get("subs") else "discover",
             models_used={"fast": model_for(FAST), "thinking": model_for(THINKING)},

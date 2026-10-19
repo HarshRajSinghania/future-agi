@@ -33,8 +33,9 @@ import SelectAllBanner from "../LLMTracing/SelectAllBanner";
 import { getSelectionCountState } from "../LLMTracing/listTotalMetadata";
 import { singleProjectIdFromFilters } from "../LLMTracing/GraphSection/graphFilterUtils";
 import { toBackendFilters } from "../LLMTracing/common";
-import { scopeLabel } from "../LLMTracing/InstantEval/instantEvalUnits";
 import { askLink, insightsReportLink } from "../observeHandoff";
+import { SESSION_FILTER_FIELDS } from "../observeFilterConfig";
+import { viewSeed } from "../observeScope";
 
 // Lazy-load graph
 const PrimaryGraph = lazy(
@@ -93,43 +94,9 @@ const getLiveSessionGridApi = (gridRef) => {
   return isGridApiLive(api) ? api : null;
 };
 
-// ---------------------------------------------------------------------------
-// Base session filter fields (always available)
-// ---------------------------------------------------------------------------
-const BASE_SESSION_FILTER_FIELDS = [
-  { id: "session_id", name: "Session ID", category: "system", type: "string" },
-  {
-    id: "first_message",
-    name: "First Message",
-    category: "system",
-    type: "string",
-  },
-  {
-    id: "last_message",
-    name: "Last Message",
-    category: "system",
-    type: "string",
-  },
-  { id: "user_id", name: "User ID", category: "system", type: "string" },
-  { id: "duration", name: "Duration", category: "system", type: "number" },
-  { id: "total_cost", name: "Total Cost", category: "system", type: "number" },
-  {
-    id: "total_tokens",
-    name: "Total Tokens",
-    category: "system",
-    type: "number",
-  },
-  {
-    id: "total_traces_count",
-    name: "Total Traces",
-    category: "system",
-    type: "number",
-  },
-];
-
 // Build filter fields dynamically from session columns + base fields
 const buildSessionFilterFields = (sessionColumns) => {
-  const baseIds = new Set(BASE_SESSION_FILTER_FIELDS.map((f) => f.id));
+  const baseIds = new Set(SESSION_FILTER_FIELDS.map((f) => f.id));
   const extra = (sessionColumns || [])
     .filter((col) => !baseIds.has(col.id) && col.name)
     .map((col) => {
@@ -146,7 +113,7 @@ const buildSessionFilterFields = (sessionColumns) => {
         type: col.dataType === "number" ? "number" : "string",
       };
     });
-  return [...BASE_SESSION_FILTER_FIELDS, ...extra];
+  return [...SESSION_FILTER_FIELDS, ...extra];
 };
 
 // Default filter and date range
@@ -262,8 +229,8 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
   const sessionFilterFields = useMemo(
     () =>
       projectFilterField
-        ? [...BASE_SESSION_FILTER_FIELDS, projectFilterField]
-        : BASE_SESSION_FILTER_FIELDS,
+        ? [...SESSION_FILTER_FIELDS, projectFilterField]
+        : SESSION_FILTER_FIELDS,
     [projectFilterField],
   );
   const filterChipLabelMap = useMemo(() => {
@@ -305,32 +272,23 @@ const SessionsView = ({ mode = "project", userIdForUserMode = null }) => {
   // --- Instant eval / Insights ---
   // Both ask about exactly the sessions the grid shows (Session-grid sends
   // toBackendFilters(finalFilters), date window included).
-  const sessionViewScope = useMemo(
-    () => ({
-      filters: toBackendFilters(finalFilters),
-      label: getDateLabel(dateFilter),
-    }),
+  // Both open with the view's date preset and filters, editable there.
+  const sessionViewSeed = useMemo(
+    () =>
+      viewSeed({
+        unit: "sessions",
+        filters: toBackendFilters(finalFilters),
+        dateFilter,
+      }),
     [finalFilters, dateFilter],
   );
   // Evaluate → Ask a question: the Ask page, about the sessions in view.
   const openAsk = useCallback(() => {
-    navigate(
-      askLink(observeId, {
-        unit: "sessions",
-        filters: sessionViewScope.filters,
-        label: scopeLabel(sessionViewScope),
-      }),
-    );
-  }, [observeId, sessionViewScope, navigate]);
+    navigate(askLink(observeId, sessionViewSeed));
+  }, [observeId, sessionViewSeed, navigate]);
   const openInsights = useCallback(() => {
-    navigate(
-      insightsReportLink(observeId, {
-        unit: "sessions",
-        filters: sessionViewScope.filters,
-        label: scopeLabel(sessionViewScope),
-      }),
-    );
-  }, [observeId, sessionViewScope, navigate]);
+    navigate(insightsReportLink(observeId, sessionViewSeed));
+  }, [observeId, sessionViewSeed, navigate]);
 
   // --- Column visibility ---
   const [updateObj, setUpdateObj] = useState(initialVisibility);

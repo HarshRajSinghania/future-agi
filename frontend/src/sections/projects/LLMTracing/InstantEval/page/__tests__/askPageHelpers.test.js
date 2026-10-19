@@ -37,7 +37,8 @@ import {
   unansweredBounds,
   UNANSWERED_BOUND_SHARE,
 } from "../askFilter";
-import { lastWeekScope } from "../askScope";
+import { rerunScope, seedScope } from "../askScope";
+import { presetWindow, windowItem } from "src/sections/projects/observeScope";
 
 const C1 = "config-1";
 const C2 = "config-2";
@@ -493,14 +494,76 @@ describe("the page's words", () => {
 });
 
 describe("a new question's scope", () => {
+  const NOW = new Date("2026-10-15T12:34:56Z");
+
   it("starts from the past week when nothing was handed over", () => {
-    const scope = lastWeekScope("sessions", new Date("2026-10-15T12:34:56Z"));
-    expect(scope.label).toBe("Past 7 days");
-    const [start, end] = scope.filters[0].filter_config.filter_value;
-    expect(new Date(end) - new Date(start)).toBeGreaterThanOrEqual(
-      7 * 24 * 3600 * 1000,
+    const scope = seedScope(null, "sessions", NOW);
+    expect(scope).toMatchObject({
+      unit: "sessions",
+      dateOption: "7D",
+      filters: [],
+      label: "Past 7D",
+    });
+    expect(scope.window).toEqual(presetWindow("7D", NOW));
+    expect(new Date(scope.window[0]).getMinutes()).toBe(0);
+  });
+
+  it("asks about a selection by id, labelled", () => {
+    const scope = seedScope(
+      { unit: "sessions", population: [{ id: "s1" }, { id: "s2" }] },
+      "sessions",
+      NOW,
     );
-    expect(new Date(start).getMinutes()).toBe(0);
+    expect(scope.ids).toEqual(["s1", "s2"]);
+    expect(scope.label).toBe("2 selected sessions");
+  });
+});
+
+describe("a run's scope asked again", () => {
+  const NOW = new Date("2026-10-22T08:00:00Z");
+  const STATUS = {
+    column_id: "status",
+    filter_config: { filter_op: "equals" },
+  };
+  const OLD = ["2026-10-01T00:00:00.000Z", "2026-10-08T00:00:00.000Z"];
+
+  it("moves a preset's window to now", () => {
+    expect(
+      rerunScope(
+        { filters: [windowItem(OLD), STATUS], date_preset: "30D" },
+        {},
+        NOW,
+      ),
+    ).toEqual({
+      filters: [STATUS, windowItem(presetWindow("30D", NOW))],
+      window: presetWindow("30D", NOW),
+      datePreset: "30D",
+      label: "Past 30D · 1 filter",
+    });
+  });
+
+  it("keeps a custom range, an older run's window and rows by id", () => {
+    const filters = [STATUS, windowItem(OLD)];
+    expect(
+      rerunScope(
+        { filters, date_preset: "Custom", label: "Custom range · 1 filter" },
+        {},
+        NOW,
+      ),
+    ).toEqual({
+      filters,
+      window: OLD,
+      datePreset: "Custom",
+      label: "Custom range · 1 filter",
+    });
+    expect(rerunScope({ filters }, { label: "Past 7D" }, NOW)).toMatchObject({
+      filters,
+      datePreset: undefined,
+      label: "Past 7D",
+    });
+    expect(
+      rerunScope({ filters, ids: ["u1"], label: "1 selected user" }, {}, NOW),
+    ).toMatchObject({ filters, label: "1 selected user" });
   });
 });
 

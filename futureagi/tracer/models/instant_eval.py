@@ -44,6 +44,13 @@ class InstantEvalRun(models.Model):
     filters = models.JSONField(default=list, blank=True)
     date_from = models.DateTimeField(null=True, blank=True)
     date_to = models.DateTimeField(null=True, blank=True)
+    # The view's date option (an Observe preset key, or "Custom") and how its
+    # scope read ("Past 7D · 2 filters"). The page re-anchors a preset to now
+    # when the question is asked again; the server only keeps them.
+    date_preset = models.CharField(max_length=16, null=True, blank=True)
+    label = models.CharField(max_length=300, null=True, blank=True)
+    # The Users view's search text, which narrows a user question like a filter.
+    search = models.CharField(max_length=200, blank=True, default="")
     population = models.IntegerField(default=0)
     population_is_lower_bound = models.BooleanField(default=False)
     # None reads the whole view.

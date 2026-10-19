@@ -28,6 +28,16 @@ export function scopeWords(label) {
   );
 }
 
+// What a run read, for its header: its scope label in words, with a custom
+// range's dates ("Oct 9 – Oct 16 · 1 filter"), or the run's window alone.
+export function runScopeWords(label, window) {
+  const dates = windowLabel(window);
+  if (!label) return dates;
+  return dates && label.startsWith("Custom range")
+    ? label.replace("Custom range", dates)
+    : scopeWords(label);
+}
+
 // "21 s", "4 min 5 s"; past ten minutes the seconds stop mattering:
 // "35 min", "2 h 5 min".
 export function formatElapsed(ms) {

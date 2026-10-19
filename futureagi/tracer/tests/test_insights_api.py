@@ -66,7 +66,8 @@ def test_a_new_report_saves_its_config_and_samples_the_population(
     run = InsightRun.objects.get(id=result["run_id"])
     config = InsightConfig.objects.get(id=result["config_id"])
     assert config.unit == "sessions" and config.lens == "failures"
-    assert config.scope["preset"] == "7d"
+    # Insights' earlier "7d" is stored as Observe's "7D".
+    assert config.scope["preset"] == "7D"
     assert run.population_size == 30
     assert run.sample_size == 10
     assert InsightUnit.objects.filter(run=run).count() == 10

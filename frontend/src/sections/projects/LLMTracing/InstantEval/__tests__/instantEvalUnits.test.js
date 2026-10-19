@@ -15,7 +15,6 @@ import {
   limitOptionLabel,
   normalizeReads,
   populationCount,
-  scopeLabel,
   sessionIdsFromUserSessions,
   splitScopeFilters,
   userSessionsRequest,
@@ -157,15 +156,6 @@ describe("reads", () => {
 });
 
 describe("scope", () => {
-  it("labels the scope with its date label and other filters", () => {
-    expect(
-      scopeLabel({ label: "Past 7D", filters: [DATE_ITEM, STATUS_ITEM] }),
-    ).toBe("Past 7D · 1 filter");
-    expect(scopeLabel({ label: "Past 7D", filters: [DATE_ITEM] })).toBe(
-      "Past 7D",
-    );
-  });
-
   it("only proves an exact count when the list does", () => {
     expect(populationCount({ items: [{}, {}], total: 2, limit: 200 })).toEqual({
       count: 2,

@@ -46,6 +46,7 @@ import {
 } from "./insightsFormat";
 import { useCancellable } from "./insightsHooks";
 import { unitLink, unitsGridLink } from "./insightsLinks";
+import { askSeed } from "./insightsScope";
 import {
   notableDirection,
   notableText,
@@ -980,11 +981,14 @@ export default function CategoryExplorer({
   const rows = units.data?.units || [];
   const total = units.data?.total || 0;
 
+  // Over the rows the report read: its filters and date (a preset's window
+  // moved to now).
   const measure = () =>
     navigate(
       askLink(report.projectId, {
+        ...askSeed(run.scope, unit),
         unit,
-        label: category.name,
+        source: `the report “${reportName}”`,
         questions: [
           {
             question:

@@ -2,10 +2,7 @@ import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import axios, { endpoints, readQuery } from "src/utils/axios";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
-import {
-  MAX_POPULATION,
-  collectPopulation,
-} from "src/sections/projects/observePopulation";
+import { collectPopulation } from "src/sections/projects/observePopulation";
 import { isRunActive } from "./insightsLenses";
 import { isFixedScope } from "./insightsScope";
 
@@ -18,13 +15,19 @@ export const insightsKeys = {
   config: (configId) => ["insights", "config", configId],
   run: (runId) => ["insights", "run", runId],
   units: (runId, params) => ["insights", "units", runId, params],
-  population: (unit, projectId, filters, limit) => [
+  population: (unit, projectId, scope) => [
     "insights",
     "population",
     unit,
     projectId,
+    JSON.stringify(scope || {}),
+  ],
+  examples: (unit, projectId, filters) => [
+    "insights",
+    "examples",
+    unit,
+    projectId,
     JSON.stringify(filters || []),
-    limit,
   ],
 };
 
@@ -245,26 +248,61 @@ export async function askRun(runId, body, signal) {
 }
 
 /**
- * How many units a scope holds, plus the first page of them (ids for the
- * draft and preview). Counting reads one page; a run collects up to
- * MAX_POPULATION.
+ * How many units a scope ({filters, search?}) holds, counted on the server
+ * the way a run reads them, and a few of them the server picked for the
+ * draft and preview: {total, totalIsLowerBound, sampleIds}.
  */
-export const COUNT_LIMIT = 500;
+export const fetchScopeCount = async ({ projectId, unit, scope }, signal) => {
+  const data = result(
+    await axios.post(
+      endpoints.project.insightsEstimate(),
+      { project_id: projectId, unit, scope },
+      { signal },
+    ),
+  );
+  return {
+    total: data?.population ?? 0,
+    totalIsLowerBound: Boolean(data?.population_is_lower_bound),
+    sampleIds: Array.isArray(data?.sample_ids)
+      ? data.sample_ids.map(String)
+      : null,
+  };
+};
 
-export function usePopulationCount({
-  unit,
-  projectId,
-  filters,
-  enabled = true,
-}) {
+// A Users count that checks each user is counted a few seconds at a time:
+// until it is exact it is read again this often, and shows as "N+".
+const COUNTING_POLL_MS = 2000;
+
+export function usePopulationCount({ unit, projectId, scope, enabled = true }) {
   return useQuery({
-    queryKey: insightsKeys.population(unit, projectId, filters, COUNT_LIMIT),
+    queryKey: insightsKeys.population(unit, projectId, scope),
+    queryFn: ({ signal }) =>
+      fetchScopeCount({ projectId, unit, scope }, signal),
+    enabled: Boolean(unit && projectId) && enabled,
+    staleTime: 60_000,
+    placeholderData: (previousData) => previousData,
+    refetchInterval: (query) =>
+      unit === "users" && query.state.data?.totalIsLowerBound
+        ? COUNTING_POLL_MS
+        : false,
+    retry: false,
+    meta: { errorHandled: true },
+  });
+}
+
+// Rows the draft and preview read when the server picks none: the newest
+// page of the scope's list.
+export const EXAMPLES_LIMIT = 100;
+
+export function useExampleRows({ unit, projectId, filters, enabled = true }) {
+  return useQuery({
+    queryKey: insightsKeys.examples(unit, projectId, filters),
     queryFn: ({ signal }) =>
       collectPopulation({
         unit,
         projectId,
         filters,
-        limit: COUNT_LIMIT,
+        limit: EXAMPLES_LIMIT,
         signal,
       }),
     enabled: Boolean(unit && projectId) && enabled,
@@ -295,15 +333,6 @@ export function useHasSessions(projectId, enabled) {
     meta: { errorHandled: true },
   });
 }
-
-export const collectForScope = ({ unit, projectId, scope, signal }) =>
-  collectPopulation({
-    unit,
-    projectId,
-    filters: scope?.filters || [],
-    limit: MAX_POPULATION,
-    signal,
-  });
 
 // A handed-over population (fixed scope) cannot be collected again from
 // filters, so its rows are kept for this browser session under the report's

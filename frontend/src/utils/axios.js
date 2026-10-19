@@ -1386,6 +1386,7 @@ export const endpoints = {
       apiPath("/tracer/insights/configs/{config_id}/", { config_id: configId }),
     insightsDraft: () => apiPath("/tracer/insights/draft/"),
     insightsPreview: () => apiPath("/tracer/insights/preview/"),
+    insightsEstimate: () => apiPath("/tracer/insights/estimate/"),
     insightsRuns: () => apiPath("/tracer/insights/runs/"),
     insightsRun: (runId) =>
       apiPath("/tracer/insights/runs/{run_id}/", { run_id: runId }),

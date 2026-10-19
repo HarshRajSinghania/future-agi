@@ -29,6 +29,10 @@ import {
   readHandoff,
 } from "src/sections/projects/observeHandoff";
 import {
+  scopeForUnit,
+  scopeFromSeed,
+} from "src/sections/projects/observeScope";
+import {
   AskBusy,
   AskNoCredits,
   HISTORY_KEY,
@@ -41,7 +45,7 @@ import AskComposer from "./AskComposer";
 import AskRail from "./AskRail";
 import AskRunView from "./AskRunView";
 import { useAskRun } from "./useAskRun";
-import { lastWeekScope } from "./askScope";
+import { rerunScope, seedScope } from "./askScope";
 import {
   ASK_RUN_PARAM,
   ASK_UNIT_PARAM,
@@ -169,9 +173,20 @@ export default function AskPage() {
     : UNITS[handedOff?.unit]
       ? handedOff.unit
       : "sessions";
-  // A new question without rows handed over starts from the past week.
-  const lastWeek = useMemo(() => lastWeekScope(unit), [unit]);
-  const seed = handedOff || lastWeek;
+  // What a new question reads: the hand-over's date and filters (or its
+  // rows), else the past week. Edits made here live in state, not the URL,
+  // since every move replaces the page's params.
+  const scopeKey = seedKey || "own";
+  const seededScope = useMemo(
+    () => seedScope(handedOff, unit),
+    [handedOff, unit],
+  );
+  const [edited, setEdited] = useState(null); // {key, scope, notice}
+  const editedHere =
+    edited?.key === scopeKey && edited.scope.unit === unit ? edited : null;
+  const scope = editedHere?.scope || seededScope;
+  const editScope = (next, notice = null) =>
+    setEdited({ key: scopeKey, scope: next, notice });
 
   // Runs started on this page, by task id: the rows handed over and the
   // scope, so the timeline has every square from the start.
@@ -258,16 +273,31 @@ export default function AskPage() {
     setStartError(null);
     go({ [ASK_NEW_PARAM]: "1", [ASK_UNIT_PARAM]: nextUnit });
   };
+  // A fresh question from the rail or the welcome: the past week again.
+  const startOver = (nextUnit = unit) => {
+    setEdited(null);
+    newQuestion(nextUnit);
+  };
+  // Another unit keeps the date; filters it can't read are dropped, and the
+  // page says so.
+  const switchUnit = (nextUnit) => {
+    if (nextUnit === unit) return;
+    const moved = scopeForUnit(scope, nextUnit);
+    editScope(moved.scope, moved.notice);
+    newQuestion(nextUnit);
+  };
 
   const launchRun = async ({
     questions,
     existingItems,
     reads,
     filters,
+    search,
     ids,
     sampleSize,
     confirm,
     window,
+    datePreset,
     label,
   }) => {
     const startedAt = new Date().toISOString();
@@ -294,9 +324,12 @@ export default function AskPage() {
         existingItems,
         reads,
         filters,
+        search,
         ids,
         sampleSize,
         confirm,
+        datePreset,
+        label,
       });
       setLaunches((current) => ({
         ...current,
@@ -331,20 +364,27 @@ export default function AskPage() {
     }
   };
 
-  // The same questions over the same rows: the view's filters and sample
-  // (the same hash-ordered rows), or the same rows handed over.
+  // The same questions over the same filters and sample (the same
+  // hash-ordered rows), a date preset re-anchored to now, or the same rows
+  // handed over.
   const runAgain = async (run) => {
-    const scope = run.summary?.scope || {};
+    const asked = run.summary?.scope || {};
+    const again = rerunScope(asked, {
+      label: launches[runId]?.label,
+      window: run.window,
+    });
     setRerunning(true);
     try {
       await launchRun({
         existingItems: run.questions,
-        filters: scope.filters || [],
-        ids: scope.ids || undefined,
-        sampleSize: scope.sample_size ?? null,
+        filters: again.filters,
+        search: asked.search || undefined,
+        ids: asked.ids || undefined,
+        sampleSize: asked.sample_size ?? null,
         confirm: true,
-        window: run.window,
-        label: launches[runId]?.label,
+        window: again.window,
+        datePreset: again.datePreset,
+        label: again.label,
       });
     } finally {
       setRerunning(false);
@@ -375,7 +415,7 @@ export default function AskPage() {
           exclusive
           size="small"
           value={unit}
-          onChange={(_, next) => next && newQuestion(next)}
+          onChange={(_, next) => next && switchUnit(next)}
           aria-label="What to ask about"
           sx={{ mb: 2.5 }}
         >
@@ -387,13 +427,21 @@ export default function AskPage() {
         </ToggleButtonGroup>
       )}
       <AskComposer
-        key={`${seedKey || "own"}-${unit}`}
+        key={`${scopeKey}-${unit}`}
         projectId={observeId}
         unit={unit}
-        seed={seed}
+        seed={handedOff}
+        scope={scope}
+        onScopeChange={(next) => editScope(next)}
+        scopeNotice={editedHere?.notice}
+        onUseView={
+          scope.ids && handedOff?.filters?.length
+            ? () => editScope(scopeFromSeed(handedOff, unit))
+            : undefined
+        }
         starting={Boolean(pending)}
         error={startError}
-        onAsk={(ask) => launchRun({ ...ask, label: seed?.label })}
+        onAsk={launchRun}
       />
     </Box>
   );
@@ -426,7 +474,7 @@ export default function AskPage() {
       />
     );
   } else if (!latest.isLoading && !latest.runs.length) {
-    content = <Welcome onNew={newQuestion} />;
+    content = <Welcome onNew={startOver} />;
   } else {
     content = null;
   }
@@ -439,7 +487,7 @@ export default function AskPage() {
         selectedId={isNew ? null : runId}
         collapsed={collapsed}
         onToggle={toggleRail}
-        onNew={() => newQuestion()}
+        onNew={() => startOver()}
         onOpen={(runItem) =>
           go({
             [ASK_RUN_PARAM]: runItem.taskId,

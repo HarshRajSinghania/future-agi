@@ -1,9 +1,14 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useDebounce } from "src/hooks/use-debounce";
 import {
   MAX_POPULATION,
   collectPopulation,
 } from "src/sections/projects/observePopulation";
+import {
+  datePresetOf,
+  scopeApiFilters,
+} from "src/sections/projects/observeScope";
 import { estimateAsk } from "../useInstantEval";
 
 // What a new question is about, as the server counts it: the view's rows
@@ -13,6 +18,12 @@ import { estimateAsk } from "../useInstantEval";
 // Ids a hand-over may name; past this a view hands over its filters instead.
 export const MAX_HANDOVER = 5000;
 const CREDITS_PER_ANSWER = 0.06;
+// Edits to the date or filters settle this long before the count is asked
+// for again, so picking several values reads once.
+export const SCOPE_SETTLE_MS = 300;
+// A Users count that checks each user is counted a few seconds at a time:
+// until it is exact, it is read again this often and shown as "N+".
+export const COUNTING_POLL_MS = 2000;
 
 /** The rows handed over by id, if any. */
 export function handedIds(seed) {
@@ -34,6 +45,18 @@ export const sampleSizes = (estimate) =>
 /** The default choice: a sample of 1,000 above 1,000 rows, else every row. */
 export const defaultChoice = (estimate) =>
   estimate?.default_sample_size ? estimate.default_sample_size : null;
+
+/** The fixed sizes, plus the largest sample the credits left pay for. */
+export function offeredSizes(estimate, questions = 1) {
+  const count = estimate?.population ?? 0;
+  const fits = choiceCost(estimate, null, questions)?.fitsSize;
+  const sizes = [...sampleSizes(estimate)];
+  if (fits > 0 && fits < count && !sizes.includes(fits)) {
+    sizes.push(fits);
+    sizes.sort((a, b) => a - b);
+  }
+  return sizes;
+}
 
 /**
  * One choice's cost for `questions` questions: rows read, credits, time,
@@ -93,18 +116,40 @@ export function choiceCost(estimate, size, questions = 1) {
 
 /**
  * The scope of a new question: the server's count and estimate for the
- * view (or the hand-over). When the server can't read the view's filters,
- * the page collects the newest rows itself and hands them over.
+ * scope's rows (its filters and date window), or for exactly the rows handed
+ * over. Edits settle before the count is read again, and the last count stays
+ * on screen while the next one is read. When the server can't read the
+ * filters, the page collects the newest rows itself and hands them over.
  */
-export function useAskScope({ projectId, unit, seed }) {
-  const handed = useMemo(() => handedIds(seed), [seed]);
-  const filters = useMemo(() => seed?.filters || [], [seed]);
+export function useAskScope({ projectId, unit, scope }) {
+  const handed = useMemo(
+    () => (scope?.ids?.length ? scope.ids.map(String) : null),
+    [scope?.ids],
+  );
+  // Users handed over are read inside the view's window, so its filters ride
+  // along with their ids; other rows named by id need none.
+  const users = unit === "users";
+  // What a start sends too, so the count is for exactly that request.
+  const read = useMemo(
+    () => ({
+      filters: handed && !users ? [] : scopeApiFilters(scope),
+      search: users && !handed ? scope?.search || undefined : undefined,
+      datePreset: handed ? undefined : datePresetOf(scope?.dateOption),
+      label: scope?.label || undefined,
+    }),
+    [handed, users, scope],
+  );
+  const readKey = JSON.stringify(read);
+  const settledKey = useDebounce(readKey, SCOPE_SETTLE_MS);
+  const settled = useMemo(() => JSON.parse(settledKey), [settledKey]);
+  const { filters, search, datePreset, label } = settled;
   const query = useQuery({
     queryKey: [
       "ask-estimate",
       projectId,
       unit,
-      handed ? handed.length : JSON.stringify(filters),
+      handed ? handed.length : "",
+      settledKey,
     ],
     enabled: Boolean(projectId),
     queryFn: async ({ signal }) => {
@@ -112,8 +157,11 @@ export function useAskScope({ projectId, unit, seed }) {
         const estimate = await estimateAsk({
           projectId,
           unit,
-          filters: handed ? [] : filters,
+          filters,
           ids: handed ? handed.slice(0, MAX_HANDOVER) : undefined,
+          search,
+          datePreset,
+          label,
           signal,
         });
         return { estimate, fallbackIds: null };
@@ -136,19 +184,33 @@ export function useAskScope({ projectId, unit, seed }) {
         };
       }
     },
+    placeholderData: keepPreviousData,
     staleTime: 60_000,
+    refetchInterval: (current) =>
+      users && current.state.data?.estimate?.population_is_lower_bound
+        ? COUNTING_POLL_MS
+        : false,
     retry: 1,
     meta: { errorHandled: true },
   });
   const ids = handed ? handed.slice(0, MAX_HANDOVER) : query.data?.fallbackIds;
+  // The shown count is for the settled filters, which a start then sends.
+  const updating = settledKey !== readKey || query.isPlaceholderData;
+  const estimate = query.data?.estimate || null;
   return {
-    estimate: query.data?.estimate || null,
+    estimate,
     ids: ids || null,
     handedOver: Boolean(handed),
     tooMany: Boolean(handed && handed.length > MAX_HANDOVER),
     fallback: Boolean(query.data?.fallbackIds),
+    // Still counting users: a start needn't wait, it counts them all.
+    counting: users && Boolean(estimate?.population_is_lower_bound),
     filters,
+    search,
+    datePreset,
+    label,
     isLoading: query.isLoading,
+    isUpdating: updating,
     isError: query.isError,
     refetch: query.refetch,
   };

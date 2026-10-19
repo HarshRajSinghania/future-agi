@@ -13,22 +13,37 @@ import {
 } from "@mui/material";
 import { useQueryClient } from "@tanstack/react-query";
 import Iconify from "src/components/iconify";
+import ScopeFilterBar from "src/sections/projects/ScopeFilterBar";
 import { insightsKeys, patchConfig } from "./insightsApi";
 import { formatCount } from "./insightsFormat";
 import { useCancellable } from "./insightsHooks";
 import { LENSES, attributeError, unitTitle } from "./insightsLenses";
-import { SAMPLE_SIZES, cleanAttributes } from "./insightsScope";
+import {
+  SAMPLE_SIZES,
+  cleanAttributes,
+  editableScope,
+  isFixedScope,
+  lastScope,
+  scopeDateLabel,
+  storedScope,
+} from "./insightsScope";
 import { AttributesEditor } from "./NewReportTune";
 
-const fromConfig = (config) => ({
-  name: config.name || "",
-  question: config.question || "",
-  lens: config.lens || "usage",
-  agentDescription: config.agent_description || "",
-  instructions: config.instructions || "",
-  attributes: (config.attributes || []).map((a) => ({ ...a })),
-  sampleSize: config.sample_size || 300,
-});
+const fromConfig = (config) => {
+  const saved = lastScope(config);
+  return {
+    name: config.name || "",
+    question: config.question || "",
+    lens: config.lens || "usage",
+    agentDescription: config.agent_description || "",
+    instructions: config.instructions || "",
+    attributes: (config.attributes || []).map((a) => ({ ...a })),
+    sampleSize: config.sample_size || 300,
+    // Rows handed over stay as they are; a date and filters can change.
+    scope: isFixedScope(saved) ? null : editableScope(saved, config.unit),
+    scopeChanged: false,
+  };
+};
 
 const toBody = (draft) => ({
   name: draft.name.trim().slice(0, 255),
@@ -38,6 +53,9 @@ const toBody = (draft) => ({
   instructions: draft.instructions.trim().slice(0, 1000),
   attributes: cleanAttributes(draft.attributes),
   sample_size: draft.sampleSize,
+  ...(draft.scope && draft.scopeChanged
+    ? { scope: storedScope(draft.scope) }
+    : {}),
 });
 
 // Fields the server kept as sent. An older server saves only the name.
@@ -62,6 +80,7 @@ function unsaved(sent, saved) {
 /** The report's settings in a side drawer: edit them for the next run. */
 export default function EditDrawer({
   open,
+  projectId,
   config,
   scopeLabel,
   onClose,
@@ -210,15 +229,41 @@ export default function EditDrawer({
                 sx={{ flex: 1 }}
                 helperText="Fixed for a report"
               />
-              <TextField
-                size="small"
-                label="Scope"
-                value={scopeLabel || "All"}
-                disabled
-                sx={{ flex: 1 }}
-                helperText="Chosen each time it runs"
-              />
+              {!draft.scope && (
+                <TextField
+                  size="small"
+                  label="Scope"
+                  value={scopeLabel || "All"}
+                  disabled
+                  sx={{ flex: 1 }}
+                  helperText="The rows handed over"
+                />
+              )}
             </Stack>
+            {draft.scope && (
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
+                  Which data
+                </Typography>
+                <ScopeFilterBar
+                  projectId={projectId}
+                  unit={config.unit}
+                  scope={draft.scope}
+                  onChange={(scope) => update({ scope, scopeChanged: true })}
+                  disabled={busy}
+                  dateLabel={scopeDateLabel(draft.scope)}
+                />
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  component="p"
+                  sx={{ mt: 0.75 }}
+                >
+                  The next run reads these; a preset window moves to the time it
+                  runs.
+                </Typography>
+              </Box>
+            )}
             <TextField
               size="small"
               label="What the agent does"
@@ -322,6 +367,7 @@ export default function EditDrawer({
 
 EditDrawer.propTypes = {
   open: PropTypes.bool.isRequired,
+  projectId: PropTypes.string,
   config: PropTypes.object.isRequired,
   scopeLabel: PropTypes.string,
   onClose: PropTypes.func.isRequired,

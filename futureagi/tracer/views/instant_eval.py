@@ -611,6 +611,11 @@ class InstantEvalRunSerializer(serializers.Serializer):
     credits_estimate = serializers.FloatField(allow_null=True, required=False)
     population = serializers.IntegerField(allow_null=True, required=False)
     is_sample = serializers.BooleanField(required=False)
+    # What the run was asked about: the view's date option, how its scope
+    # read, and the window it read ({"from", "to"}).
+    date_preset = serializers.CharField(allow_null=True, required=False)
+    label = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    window = serializers.JSONField(allow_null=True, required=False)
 
 
 class InstantEvalRunsResultSerializer(serializers.Serializer):
@@ -835,6 +840,11 @@ class InstantEvalRunsView(APIView):
                 "credits_estimate": run.credits_estimate if run is not None else None,
                 "population": run.population if run is not None else None,
                 "is_sample": bool(run is not None and run.rows_requested < run.population),
+                "date_preset": run.date_preset if run is not None else None,
+                "label": run.label if run is not None else None,
+                "window": {"from": _iso(run.date_from), "to": _iso(run.date_to)}
+                if run is not None and run.date_from
+                else None,
             })
         return self._gm.success_response(
             {"runs": out, "has_more": start + params["page_size"] < len(runs)}

@@ -146,7 +146,7 @@ import axios, { endpoints } from "src/utils/axios";
 import { PROJECT_SOURCE } from "src/utils/constants";
 import { OBSERVE_LIST_REFRESH_EVENT } from "../observeEvents";
 import { askLink, insightsReportLink } from "../observeHandoff";
-import { scopeLabel } from "./InstantEval/instantEvalUnits";
+import { viewSeed } from "../observeScope";
 import { useLLMTracingFilters } from "./useLLMTracingFilters";
 import { isTraceListProjectReady } from "./projectSourceMode";
 import { canonicalObserveViewMode } from "./viewMode";
@@ -2909,66 +2909,62 @@ const LLMTracingView = ({ mode = "project", userIdForUserMode = null }) => {
   ]);
 
   // Instant eval and Insights ask about exactly the traces the grid shows: its
-  // date window, filters, chips and toggles, as its list request sends them.
-  const traceViewScope = useMemo(
-    () => ({
-      filters: toBackendFilters([
-        ...primaryCombinedFilters,
-        ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
-        ...(extraFilters || []),
-        ...(metricFilters || []),
-      ]),
-      label: dateLabel,
-    }),
+  // date window, filters, chips and toggles, as its list request sends them,
+  // and open with the tab's date preset.
+  const traceViewSeed = useMemo(
+    () =>
+      viewSeed({
+        unit: "traces",
+        filters: toBackendFilters([
+          ...primaryCombinedFilters,
+          ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
+          ...(extraFilters || []),
+          ...(metricFilters || []),
+        ]),
+        dateFilter: primaryTraceDateFilter,
+      }),
     [
       primaryCombinedFilters,
       hasEvalFilter,
       extraFilters,
       metricFilters,
-      dateLabel,
+      primaryTraceDateFilter,
     ],
   );
   // The Spans tab asks about exactly the spans its grid shows (SpanGrid sends
   // the same list, its date window included).
-  const spanViewScope = useMemo(
-    () => ({
-      filters: toBackendFilters([
-        ...primarySpanValidatedFilters,
-        ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
-        ...(extraFilters || []),
-        ...(metricFilters || []),
-      ]),
-      label: dateLabel,
-    }),
+  const spanViewSeed = useMemo(
+    () =>
+      viewSeed({
+        unit: "spans",
+        filters: toBackendFilters([
+          ...primarySpanValidatedFilters,
+          ...(hasEvalFilter ? [FILTER_FOR_HAS_EVAL] : []),
+          ...(extraFilters || []),
+          ...(metricFilters || []),
+        ]),
+        dateFilter: primarySpanDateFilter,
+      }),
     [
       primarySpanValidatedFilters,
       hasEvalFilter,
       extraFilters,
       metricFilters,
-      dateLabel,
+      primarySpanDateFilter,
     ],
   );
   // Evaluate → Ask a question: the Ask page, about the rows this tab shows.
   const openAsk = useCallback(() => {
-    const spans = selectedTab === "spans";
-    const scope = spans ? spanViewScope : traceViewScope;
     navigate(
-      askLink(observeId, {
-        unit: spans ? "spans" : "traces",
-        filters: scope.filters,
-        label: scopeLabel(scope),
-      }),
+      askLink(
+        observeId,
+        selectedTab === "spans" ? spanViewSeed : traceViewSeed,
+      ),
     );
-  }, [selectedTab, spanViewScope, traceViewScope, observeId, navigate]);
+  }, [selectedTab, spanViewSeed, traceViewSeed, observeId, navigate]);
   const openInsights = useCallback(() => {
-    navigate(
-      insightsReportLink(observeId, {
-        unit: "traces",
-        filters: traceViewScope.filters,
-        label: scopeLabel(traceViewScope),
-      }),
-    );
-  }, [observeId, traceViewScope, navigate]);
+    navigate(insightsReportLink(observeId, traceViewSeed));
+  }, [observeId, traceViewSeed, navigate]);
 
   const handleResetView = useCallback(() => {
     setViewMode(DEFAULT_DISPLAY_CONFIG.viewMode);

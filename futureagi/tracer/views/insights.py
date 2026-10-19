@@ -10,6 +10,11 @@ POST   /tracer/analyse/preview/                 what the extractor reads from 3 
 POST   /tracer/analyse/runs/                    start a run (new or saved report)
 GET    /tracer/analyse/runs/<id>/               run status and results
 GET    /tracer/analyse/runs/<id>/units/         analysed units, by category
+POST   /tracer/insights/estimate/               how many units a scope holds
+
+A run reads a sample of a scope: the rows of a Traces, Sessions or Users view
+(its filters and window), which the server resolves itself like Instant eval
+does, or rows handed over by id (a selection).
 """
 
 from datetime import timedelta
@@ -34,6 +39,12 @@ from tracer.models.insights import (
     InsightUnitType,
 )
 from tracer.models.project import Project
+from tracer.serializers.filters import SessionFilterListField
+from tracer.services import instant_eval_rows as rows_service
+from tracer.services import instant_eval_users as users_service
+from tracer.services.user_filter_capabilities import (
+    validate_users_filter_capabilities,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -51,6 +62,9 @@ RUNS_PER_HOUR = 30
 ACTIVE_RUN_WINDOW = timedelta(hours=2)
 DRAFTS_PER_HOUR = 60
 MAX_POPULATION = 20000
+DEFAULT_SAMPLE = 300
+# Units an estimate names from the start of a run's sample.
+ESTIMATE_SAMPLE_IDS = 20
 UNITS_PAGE = 50
 MAX_CONTENT_UNITS = 20
 ASKS_PER_HOUR = 120
@@ -81,14 +95,42 @@ class InsightPopulationItemSerializer(serializers.Serializer):
     user_id = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
+# Observe's date options, and two of Insights' own: "24h" (the past 24 hours,
+# from before Insights used Observe's options) and "fixed" (rows handed over by
+# id, which can't be collected again from filters).
+SCOPE_PRESETS = frozenset(
+    {"Today", "Yesterday", "7D", "30D", "3M", "6M", "12M", "Custom", "24h", "fixed"}
+)
+FIXED_PRESET = "fixed"
+# Insights' earlier options, in Observe's terms.
+LEGACY_PRESETS = {"7d": "7D", "30d": "30D"}
+
+
+def normalize_scope(scope) -> dict:
+    """A scope with its preset in Observe's terms."""
+    scope = dict(scope or {})
+    preset = scope.get("preset")
+    if preset in LEGACY_PRESETS:
+        scope["preset"] = LEGACY_PRESETS[preset]
+    return scope
+
+
 class InsightScopeSerializer(serializers.Serializer):
     filters = serializers.ListField(child=serializers.JSONField(), required=False)
     label = serializers.CharField(max_length=300, required=False, allow_blank=True)
-    # A relative window ("24h", "7d", "30d") is re-anchored to now on rerun.
+    # A preset window is re-anchored to now on rerun; a custom one stays.
     preset = serializers.CharField(max_length=16, required=False, allow_blank=True)
     window = serializers.ListField(
         child=serializers.CharField(max_length=64), required=False, max_length=2
     )
+    # The Users view's search text, for a report on users.
+    search = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+    def validate_preset(self, value):
+        value = LEGACY_PRESETS.get(value, value)
+        if value and value not in SCOPE_PRESETS:
+            raise serializers.ValidationError(f"“{value}” isn't a date option.")
+        return value
 
 
 class InsightRunCreateSerializer(serializers.Serializer):
@@ -96,15 +138,30 @@ class InsightRunCreateSerializer(serializers.Serializer):
     config_id = serializers.UUIDField(required=False)
     config = InsightConfigInputSerializer(required=False)
     scope = InsightScopeSerializer(required=False)
+    # Rows handed over by id (a selection). Without them the server reads a
+    # sample of the scope's filters and window.
     population = InsightPopulationItemSerializer(
-        many=True, min_length=1, max_length=MAX_POPULATION
+        many=True, min_length=1, max_length=MAX_POPULATION, required=False
     )
     sample_size = serializers.IntegerField(min_value=10, max_value=1000, required=False)
 
     def validate(self, attrs):
         if not attrs.get("config_id") and not attrs.get("config"):
             raise serializers.ValidationError("Provide config_id or config.")
+        if not attrs.get("population"):
+            if (attrs.get("scope") or {}).get("preset") == FIXED_PRESET:
+                raise serializers.ValidationError(
+                    "This report reads rows handed over to it. Hand them over "
+                    "again, or choose a date range to run it on."
+                )
         return attrs
+
+
+class InsightEstimateRequestSerializer(serializers.Serializer):
+    project_id = serializers.UUIDField()
+    unit = serializers.ChoiceField(choices=InsightUnitType.choices)
+    scope = InsightScopeSerializer()
+    sample_size = serializers.IntegerField(min_value=10, max_value=1000, required=False)
 
 
 class InsightDraftSerializer(serializers.Serializer):
@@ -290,6 +347,23 @@ class InsightDraftResponseSerializer(serializers.Serializer):
     result = InsightDraftResultSerializer()
 
 
+class InsightEstimateResultSerializer(serializers.Serializer):
+    population = serializers.IntegerField()
+    population_is_lower_bound = serializers.BooleanField()
+    # The units a run reads: the sample size, or every unit when fewer.
+    sample_size = serializers.IntegerField()
+    # The absolute window the scope reads: {"from", "to"}.
+    window = serializers.JSONField()
+    # The first units a run reads, in its sample's order (up to 20), for
+    # drafting and previewing the report.
+    sample_ids = serializers.ListField(child=serializers.CharField())
+
+
+class InsightEstimateResponseSerializer(serializers.Serializer):
+    status = serializers.BooleanField(default=True)
+    result = InsightEstimateResultSerializer()
+
+
 class InsightPreviewResultSerializer(serializers.Serializer):
     units = serializers.ListField(child=serializers.JSONField())
 
@@ -352,7 +426,7 @@ def _run_summary(run) -> dict:
         "analysed_count": run.analysed_count,
         "taxonomy_mode": run.taxonomy_mode,
         "distribution": _distribution(run),
-        "scope": run.scope or {},
+        "scope": normalize_scope(run.scope),
     }
 
 
@@ -368,7 +442,7 @@ def _config_item(config, *, with_runs=False) -> dict:
         "instructions": config.instructions,
         "attributes": config.attributes or [],
         "sample_size": config.sample_size,
-        "scope": config.scope or {},
+        "scope": normalize_scope(config.scope),
         "has_taxonomy": bool((config.taxonomy or {}).get("subs")),
         "taxonomy": config.taxonomy or {},
         "created_at": config.created_at,
@@ -417,6 +491,81 @@ def _pipeline():
     except ImportError:
         return None
     return draft, pipeline, InsightModelError
+
+
+def _is_date_item(item) -> bool:
+    config = item.get("filter_config") or {}
+    return item.get("column_id") in ("created_at", "start_time") and config.get(
+        "filter_type"
+    ) in ("datetime", "date")
+
+
+def _scope_filters(scope: dict) -> list[dict]:
+    """The scope's filters, its window among them as their created_at item.
+    A scope without a window can't be read on the server."""
+    filters = [dict(item) for item in scope.get("filters") or [] if item]
+    window = scope.get("window") or []
+    if not any(_is_date_item(item) for item in filters):
+        if len(window) != 2:
+            raise serializers.ValidationError("Choose a date range for the report.")
+        filters.append(
+            {
+                "column_id": "created_at",
+                "filter_config": {
+                    "filter_type": "datetime",
+                    "filter_op": "between",
+                    "filter_value": list(window),
+                },
+            }
+        )
+    return SessionFilterListField().run_validation(filters)
+
+
+def _scope_population(request, project, unit: str, scope: dict, *, finish=False):
+    """The units a scope holds, resolved on the server like Instant eval
+    resolves a view: the same lists' queries, so the counts agree."""
+    from tracer.services.filter_principal_context import (
+        bind_request_my_annotations_principal,
+    )
+
+    filters = _scope_filters(scope)
+    search = (scope.get("search") or "").strip()
+    if unit == "users":
+        validate_users_filter_capabilities(filters)
+    elif search:
+        raise serializers.ValidationError("Search text only narrows a report on users.")
+    filters = bind_request_my_annotations_principal(request, filters)
+    return users_service.count_view(
+        str(project.id), unit, filters, search=search, finish=finish
+    )
+
+
+def _population_error(gm, exc):
+    """The response for a scope the server couldn't resolve, or None."""
+    if isinstance(exc, serializers.ValidationError):
+        detail = exc.detail[0] if isinstance(exc.detail, list) else exc.detail
+        return gm.bad_request(str(detail))
+    if isinstance(exc, users_service.UsersCountIncomplete):
+        # What was counted is kept: asking again carries on from there.
+        return gm.custom_error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE, str(exc), code="users_still_counting"
+        )
+    if isinstance(exc, rows_service.PopulationUnavailable):
+        return gm.custom_error_response(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc), code="population_unavailable"
+        )
+    logger.exception("insight_population_failed")
+    return gm.custom_error_response(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "The scope can't be read right now. Please retry.",
+    )
+
+
+def _window(population) -> dict:
+    return {
+        "from": population.date_from.isoformat() if population.date_from else None,
+        "to": population.date_to.isoformat() if population.date_to else None,
+    }
 
 
 def _unavailable(gm):
@@ -606,6 +755,55 @@ class InsightPreviewView(APIView):
         return self._gm.success_response({"units": units})
 
 
+class InsightEstimateView(APIView):
+    permission_classes = [IsAuthenticated]
+    _gm = GeneralMethods()
+
+    @validated_request(
+        request_serializer=InsightEstimateRequestSerializer,
+        responses={
+            200: InsightEstimateResponseSerializer,
+            422: ApiErrorResponseSerializer,
+            **ERROR_RESPONSES,
+        },
+    )
+    def post(self, request):
+        """How many units a scope holds, and how many a report on it reads."""
+        data = request.validated_data
+        project = _project(request, data["project_id"])
+        if project is None:
+            return self._gm.not_found("Project not found")
+        scope = normalize_scope(data["scope"])
+        unit = data["unit"]
+        try:
+            population = _scope_population(request, project, unit, scope)
+            # A users count still under way holds at least the 20 the pick
+            # walks to, and the pick stops there.
+            first = users_service.pick_view(
+                str(project.id),
+                unit,
+                population.filters,
+                n=ESTIMATE_SAMPLE_IDS
+                if population.lower_bound
+                else min(ESTIMATE_SAMPLE_IDS, population.count),
+                after=None,
+                search=(scope.get("search") or "").strip(),
+                budget_s=users_service.estimate_budget_s(),
+            )
+        except Exception as exc:
+            return _population_error(self._gm, exc)
+        size = data.get("sample_size") or DEFAULT_SAMPLE
+        return self._gm.success_response(
+            {
+                "population": population.count,
+                "population_is_lower_bound": population.lower_bound,
+                "sample_size": min(size, population.count),
+                "window": _window(population),
+                "sample_ids": [rid for rid, _ in first],
+            }
+        )
+
+
 class InsightRunCreateView(APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
@@ -615,7 +813,8 @@ class InsightRunCreateView(APIView):
         responses={200: InsightRunCreatedResponseSerializer, **ERROR_RESPONSES},
     )
     def post(self, request):
-        """Start a report run over a sampled population; creates the report when new."""
+        """Start a report run over a sample of its scope (or the rows handed
+        over); creates the report when new."""
         modules = _pipeline()
         if modules is None:
             return _unavailable(self._gm)
@@ -628,7 +827,8 @@ class InsightRunCreateView(APIView):
         denied = _gate(self._gm, org)
         if denied:
             return denied
-        scope = data.get("scope") or {}
+        scope = normalize_scope(data.get("scope"))
+        config = None
         if data.get("config_id"):
             config = InsightConfig.objects.filter(
                 id=data["config_id"], project=project, deleted=False
@@ -651,15 +851,51 @@ class InsightRunCreateView(APIView):
                 return self._gm.success_response(
                     {"run_id": active.id, "config_id": config.id}
                 )
-            if not _spend("run", org.id, RUNS_PER_HOUR):
-                return _rate_limited(self._gm)
+            unit = config.unit
+            size = data.get("sample_size") or config.sample_size
+        else:
+            spec = data["config"]
+            unit = spec["unit"]
+            size = spec.get("sample_size") or data.get("sample_size") or DEFAULT_SAMPLE
+        population = data.get("population")
+        resolved = None
+        if not population:
+            # The scope's own rows: every unit of it counted, and a sample of
+            # them read in hash order (a uniform sample, the same every time).
+            try:
+                resolved = _scope_population(request, project, unit, scope, finish=True)
+                picked = users_service.pick_view(
+                    str(project.id),
+                    unit,
+                    resolved.filters,
+                    n=min(int(data.get("sample_size") or size), resolved.count),
+                    after=None,
+                    search=(scope.get("search") or "").strip(),
+                    budget_s=users_service.run_budget_s(),
+                )
+            except Exception as exc:
+                return _population_error(self._gm, exc)
+            if not picked and resolved.count:
+                return self._gm.custom_error_response(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    f"The {unit} to analyse couldn't be read in time. Please retry.",
+                )
+            if not picked:
+                return self._gm.bad_request(
+                    f"There are no {unit} in this scope to analyse."
+                )
+            population = [{"id": rid} for rid, _ in picked]
+            scope["window"] = [
+                resolved.date_from.isoformat(),
+                resolved.date_to.isoformat(),
+            ]
+        if not _spend("run", org.id, RUNS_PER_HOUR):
+            return _rate_limited(self._gm)
+        if config is not None:
             if scope:
                 config.scope = scope
                 config.save(update_fields=["scope", "updated_at"])
         else:
-            if not _spend("run", org.id, RUNS_PER_HOUR):
-                return _rate_limited(self._gm)
-            spec = data["config"]
             config = InsightConfig.objects.create(
                 project=project,
                 organization=org,
@@ -673,14 +909,15 @@ class InsightRunCreateView(APIView):
                 instructions=spec.get("instructions") or "",
                 attributes=list(spec.get("attributes") or []),
                 scope=scope,
-                sample_size=spec.get("sample_size") or data.get("sample_size") or 300,
+                sample_size=size,
             )
         run = pipeline.create_run(
             config=config,
             scope=scope,
-            population=data["population"],
+            population=population,
             sample_size=data.get("sample_size") or config.sample_size,
             user=request.user,
+            population_size=resolved.count if resolved is not None else None,
         )
         _start(run)
         return self._gm.success_response({"run_id": run.id, "config_id": config.id})
@@ -712,7 +949,7 @@ class InsightRunDetailView(APIView):
                 "stage": run.stage,
                 "progress": run.progress or {},
                 "unit": run.unit,
-                "scope": run.scope or {},
+                "scope": normalize_scope(run.scope),
                 "settings": run.settings or {},
                 "population_size": run.population_size,
                 "sample_size": run.sample_size,

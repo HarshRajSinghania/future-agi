@@ -23,6 +23,7 @@ import omegaRunFixture from "./fixtures/run_sessions_failures_omega.json";
 const mocks = vi.hoisted(() => ({
   readQuery: vi.fn(),
   post: vi.fn(),
+  patch: vi.fn(),
   collect: vi.fn(),
   enriched: false,
   omega: false,
@@ -34,7 +35,7 @@ vi.mock("src/utils/axios", () => ({
   default: {
     get: vi.fn(),
     post: (...args) => mocks.post(...args),
-    patch: vi.fn(),
+    patch: (...args) => mocks.patch(...args),
     delete: vi.fn(),
   },
   readQuery: (...args) => mocks.readQuery(...args),
@@ -48,8 +49,39 @@ vi.mock("src/utils/axios", () => ({
       insightsRun: (id) => `/tracer/insights/runs/${id}/`,
       insightsRunUnits: (id) => `/tracer/insights/runs/${id}/units/`,
       insightsRunAsk: (id) => `/tracer/insights/runs/${id}/ask/`,
+      insightsEstimate: () => "/tracer/insights/estimate/",
     },
   },
+}));
+// The views' filter panel: here it applies a cost filter, as a pick in it
+// would.
+vi.mock("src/sections/projects/LLMTracing/TraceFilterPanel", () => ({
+  // eslint-disable-next-line react/prop-types
+  default: ({ onApply, onClose, currentFilters }) => (
+    <div>
+      <button
+        type="button"
+        onClick={() =>
+          onApply([
+            ...(currentFilters || []),
+            {
+              field: "total_cost",
+              fieldCategory: "system",
+              fieldType: "number",
+              apiColType: "SYSTEM_METRIC",
+              operator: "greater_than",
+              value: "2",
+            },
+          ])
+        }
+      >
+        Pick cost over 2
+      </button>
+      <button type="button" onClick={onClose}>
+        Close panel
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("src/sections/projects/observePopulation", async (importOriginal) => ({
@@ -58,6 +90,11 @@ vi.mock("src/sections/projects/observePopulation", async (importOriginal) => ({
 }));
 
 import InsightsView from "../InsightsView";
+import {
+  presetWindow,
+  viewSeed,
+  windowItem,
+} from "src/sections/projects/observeScope";
 
 const PROJECT = "1b9823aa-866c-400e-b60e-d99ae498d72a";
 const sessionsConfig = configsFixture.result.configs[1];
@@ -174,7 +211,20 @@ beforeEach(() => {
       truncated: false,
     }),
   );
+  // The server counts a scope; a run is created with its config.
+  mocks.post.mockImplementation((url) =>
+    url === "/tracer/insights/estimate/"
+      ? ok({
+          population: 108,
+          population_is_lower_bound: false,
+          sample_size: 108,
+        })
+      : ok({ run_id: RUN_ID, config_id: CONFIG_ID }),
+  );
 });
+
+const postsTo = (url) =>
+  mocks.post.mock.calls.filter(([called]) => called === url);
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -580,10 +630,7 @@ describe("InsightsView", () => {
     }
   });
 
-  it("guides a new report and starts it with the collected population", async () => {
-    mocks.post.mockResolvedValue({
-      data: { status: true, result: { run_id: RUN_ID, config_id: CONFIG_ID } },
-    });
+  it("guides a new report and starts it on the scope the server reads", async () => {
     renderAt("?new=1&lens=failures");
     expect(
       await screen.findByRole("radio", { name: /Failures/ }),
@@ -594,21 +641,34 @@ describe("InsightsView", () => {
     expect(
       (await screen.findAllByText(/Analysing all 108 sessions/)).length,
     ).toBeGreaterThan(0);
+    // Counted on the server with the scope's window.
+    const [[, counted]] = postsTo("/tracer/insights/estimate/");
+    expect(counted).toEqual({
+      project_id: PROJECT,
+      unit: "sessions",
+      scope: { filters: [windowItem(presetWindow("7D"))] },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Run report" }));
-    await waitFor(() => expect(mocks.post).toHaveBeenCalled());
-    const [url, body] = mocks.post.mock.calls[0];
-    expect(url).toBe("/tracer/insights/runs/");
+    await waitFor(() =>
+      expect(postsTo("/tracer/insights/runs/")).toHaveLength(1),
+    );
+    const [[, body]] = postsTo("/tracer/insights/runs/");
     expect(body.config).toMatchObject({
       unit: "sessions",
       lens: "failures",
       question: "Where is the agent failing?",
       sample_size: 300,
     });
-    expect(body.scope.preset).toBe("7d");
-    expect(body.scope.window).toHaveLength(2);
-    expect(body.population).toHaveLength(108);
-    expect(mocks.collect).toHaveBeenCalledWith(
-      expect.objectContaining({ unit: "sessions", limit: 2000 }),
+    expect(body.scope).toEqual({
+      filters: [windowItem(presetWindow("7D"))],
+      label: "Past 7D",
+      preset: "7D",
+      window: presetWindow("7D"),
+    });
+    // The server reads the rows: none collected in the browser, no cap.
+    expect(body).not.toHaveProperty("population");
+    expect(mocks.collect).not.toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 2000 }),
     );
     await waitFor(() =>
       expect(screen.getByTestId("location").textContent).toBe(
@@ -618,9 +678,6 @@ describe("InsightsView", () => {
   });
 
   it("runs a handed-over population as a fixed scope", async () => {
-    mocks.post.mockResolvedValue({
-      data: { status: true, result: { run_id: RUN_ID, config_id: CONFIG_ID } },
-    });
     const key = "seedkey1";
     sessionStorage.setItem(
       `observe-handoff:${key}`,
@@ -638,8 +695,11 @@ describe("InsightsView", () => {
     ).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("12 sessions")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Run report" }));
-    await waitFor(() => expect(mocks.post).toHaveBeenCalled());
-    const body = mocks.post.mock.calls[0][1];
+    await waitFor(() =>
+      expect(postsTo("/tracer/insights/runs/")).toHaveLength(1),
+    );
+    expect(postsTo("/tracer/insights/estimate/")).toHaveLength(0);
+    const [[, body]] = postsTo("/tracer/insights/runs/");
     expect(body.scope).toEqual({
       label: "“No” answers · Was it resolved?",
       preset: "fixed",
@@ -647,6 +707,214 @@ describe("InsightsView", () => {
     expect(body.population).toHaveLength(12);
     expect(mocks.collect).not.toHaveBeenCalledWith(
       expect.objectContaining({ limit: 2000 }),
+    );
+  });
+
+  it("opens a Users hand-over on the view's date, filters and search", async () => {
+    // Users checked one by one are counted a few seconds at a time.
+    const counts = [
+      { population: 4209, population_is_lower_bound: true },
+      { population: 12450, population_is_lower_bound: false },
+    ];
+    mocks.post.mockImplementation((url) =>
+      url === "/tracer/insights/estimate/"
+        ? ok({
+            ...(counts.shift() || counts.at(-1) || {}),
+            sample_ids: ["u1", "u2", "u3"],
+          })
+        : ok({ run_id: RUN_ID, config_id: CONFIG_ID }),
+    );
+    const COST = {
+      column_id: "total_cost",
+      filter_config: {
+        filter_type: "number",
+        filter_op: "greater_than",
+        filter_value: 1,
+        col_type: "SYSTEM_METRIC",
+      },
+    };
+    const key = "seedusers";
+    sessionStorage.setItem(
+      `observe-handoff:${key}`,
+      JSON.stringify(
+        viewSeed({
+          unit: "users",
+          filters: [windowItem(presetWindow("30D")), COST],
+          dateFilter: { dateOption: "30D" },
+          search: "ada",
+        }),
+      ),
+    );
+    renderAt(`?new=1&seed=${key}`);
+    expect(
+      await screen.findByRole("button", { name: "Past 30D" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Total Cost ($)")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search users" })).toHaveValue(
+      "ada",
+    );
+    // More than a browser read could collect: the server counts them all,
+    // climbing until it is exact.
+    expect(await screen.findByText("4,209+")).toBeInTheDocument();
+    expect(
+      await screen.findByText("12,450", {}, { timeout: 4000 }),
+    ).toBeInTheDocument();
+    // The draft and preview read the server's picks, not a list page.
+    expect(mocks.collect).not.toHaveBeenCalledWith(
+      expect.objectContaining({ unit: "users" }),
+    );
+    const window = presetWindow("30D");
+    expect(postsTo("/tracer/insights/estimate/").at(-1)[1]).toEqual({
+      project_id: PROJECT,
+      unit: "users",
+      scope: { filters: [COST, windowItem(window)], search: "ada" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Run report" }));
+    await waitFor(() =>
+      expect(postsTo("/tracer/insights/runs/")).toHaveLength(1),
+    );
+    const [[, body]] = postsTo("/tracer/insights/runs/");
+    expect(body.config.unit).toBe("users");
+    expect(body.scope).toEqual({
+      filters: [COST, windowItem(window)],
+      label: "Past 30D · 1 filter · “ada”",
+      preset: "30D",
+      window,
+      search: "ada",
+    });
+    expect(body).not.toHaveProperty("population");
+  });
+
+  it("edits a saved report's date and filters for its next run", async () => {
+    mocks.patch.mockImplementation((url, body) =>
+      ok({ ...sessionsConfig, ...body }),
+    );
+    renderAt(`?report=${CONFIG_ID}`);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const drawer = await screen.findByRole("presentation");
+    // A report saved with "All" reads all time until a date is chosen.
+    fireEvent.click(within(drawer).getByRole("button", { name: "All time" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Past 30D" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pick cost over 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalled());
+    const [url, body] = mocks.patch.mock.calls[0];
+    expect(url).toBe(`/tracer/insights/configs/${CONFIG_ID}/`);
+    expect(body.scope).toMatchObject({
+      label: "Past 30D · 1 filter",
+      preset: "30D",
+      window: presetWindow("30D"),
+    });
+    expect(body.scope.filters).toEqual([
+      expect.objectContaining({ column_id: "total_cost" }),
+      windowItem(presetWindow("30D")),
+    ]);
+  });
+
+  it("runs a saved preset report again over a window ending now", async () => {
+    const OLD = ["2026-09-01T00:00:00.000Z", "2026-09-08T00:00:00.000Z"];
+    const saved = {
+      ...configDetail,
+      scope: {
+        filters: [windowItem(OLD)],
+        label: "Past 7D",
+        preset: "7D",
+        window: OLD,
+      },
+    };
+    mocks.readQuery.mockImplementation((url) => {
+      if (url === "/tracer/insights/configs/")
+        return ok({
+          ...configsFixture.result,
+          configs: configsFixture.result.configs.map((config) =>
+            config.id === CONFIG_ID
+              ? { ...config, scope: saved.scope }
+              : config,
+          ),
+        });
+      if (url === `/tracer/insights/configs/${CONFIG_ID}/`) return ok(saved);
+      if (url === `/tracer/insights/runs/${RUN_ID}/`)
+        return ok(runFixture.result);
+      if (url === `/tracer/insights/runs/${RUN_ID}/units/`)
+        return ok({ units: [], total: 0 });
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    renderAt(`?report=${CONFIG_ID}`);
+    fireEvent.click(await screen.findByRole("button", { name: "Run now" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("button", { name: "Past 7D" }),
+    ).toBeInTheDocument();
+    const week = presetWindow("7D");
+    await waitFor(() =>
+      expect(postsTo("/tracer/insights/estimate/").at(-1)?.[1].scope).toEqual({
+        filters: [windowItem(week)],
+      }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Run again" }));
+    await waitFor(() =>
+      expect(postsTo("/tracer/insights/runs/")).toHaveLength(1),
+    );
+    const [[, body]] = postsTo("/tracer/insights/runs/");
+    expect(body).toMatchObject({
+      config_id: CONFIG_ID,
+      scope: { preset: "7D", window: week, filters: [windowItem(week)] },
+    });
+    expect(body).not.toHaveProperty("population");
+  });
+
+  it("measures a category over the rows the report read", async () => {
+    mocks.enriched = true;
+    sessionStorage.clear();
+    const OLD = ["2026-09-01T00:00:00.000Z", "2026-09-08T00:00:00.000Z"];
+    const STATUS = {
+      column_id: "status",
+      filter_config: {
+        filter_type: "text",
+        filter_op: "equals",
+        filter_value: "ERROR",
+      },
+    };
+    const base = mocks.readQuery.getMockImplementation();
+    mocks.readQuery.mockImplementation((url, options) =>
+      url === `/tracer/insights/runs/${RUN_ID}/`
+        ? ok({
+            ...enrichedRunFixture.result,
+            scope: {
+              filters: [STATUS, windowItem(OLD)],
+              label: "Past 7D · 1 filter",
+              preset: "7D",
+              window: OLD,
+            },
+          })
+        : base(url, options),
+    );
+    renderAt(`?report=${CONFIG_ID}`);
+    const table = await screen.findByRole("table");
+    fireEvent.click(
+      within(table).getByText("Unresponsive Support and No Escalation"),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Measure with Jev" }),
+    );
+    const key = Object.keys(sessionStorage).find((k) =>
+      k.startsWith("observe-handoff:"),
+    );
+    const seed = JSON.parse(sessionStorage.getItem(key));
+    const week = presetWindow("7D");
+    expect(seed).toMatchObject({
+      unit: "sessions",
+      filters: [STATUS, windowItem(week)],
+      dateOption: "7D",
+      window: week,
+      label: "Past 7D · 1 filter",
+      source: "the report “sessions/failures test”",
+    });
+    expect(seed.questions[0].question).toMatch(
+      /^Is this an example of “Unresponsive Support and No Escalation”\?/,
     );
   });
 });

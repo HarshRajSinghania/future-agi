@@ -56,6 +56,10 @@ from tracer.models.observation_span import EvalEntryStatus, EvalLogger
 from tracer.serializers.filters import SessionFilterListField
 from tracer.services import instant_eval_rows as rows_service
 from tracer.services import instant_eval_summary as summary_service
+from tracer.services import instant_eval_users as users_service
+from tracer.services.user_filter_capabilities import (
+    validate_users_filter_capabilities,
+)
 from tracer.views.instant_eval import (
     INSTANT_TASK_PREFIX,
     MAX_ANSWER_ROWS,
@@ -69,6 +73,8 @@ from tracer.views.instant_eval import (
 logger = structlog.get_logger(__name__)
 
 UNITS = ["traces", "spans", "sessions", "users"]
+# The Observe date options a view's window comes from.
+DATE_PRESETS = ["Today", "Yesterday", "7D", "30D", "3M", "6M", "12M", "Custom"]
 CREDITS_PER_ANSWER = 0.06
 SAMPLE_SIZES = (500, 1000, 2000, 5000)
 DEFAULT_SAMPLE = 1000
@@ -165,6 +171,28 @@ class InstantEvalScopeSerializer(serializers.Serializer):
     )
     # None (or absent) reads every row of the view.
     sample_size = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    # The view's date option and how its scope reads ("Past 7D · 2 filters"),
+    # kept with the run so it can be asked again: the page re-anchors a
+    # preset's window to now, and a custom window stays.
+    date_preset = serializers.ChoiceField(
+        choices=DATE_PRESETS, required=False, allow_null=True
+    )
+    label = serializers.CharField(
+        max_length=300, required=False, allow_blank=True, allow_null=True
+    )
+    # The Users view's search text: a user question reads only the users it
+    # finds.
+    search = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs["unit"] != "users" and (attrs.get("search") or "").strip():
+            raise serializers.ValidationError(
+                {"search": "Search text only narrows a question about users."}
+            )
+        if attrs["unit"] == "users":
+            validate_users_filter_capabilities(attrs.get("filters") or [])
+        return attrs
 
 
 class InstantEvalEstimateRequestSerializer(InstantEvalScopeSerializer):
@@ -216,6 +244,8 @@ class InstantEvalEstimateSerializer(serializers.Serializer):
     # largest sample (in the view's unit) its credits left pay for.
     credit_check = InstantEvalCreditCheckSerializer()
     credit_max_sample = serializers.IntegerField(allow_null=True)
+    # The absolute window the run reads: {"from", "to"}.
+    window = serializers.JSONField()
 
 
 class InstantEvalEstimateResponseSerializer(serializers.Serializer):
@@ -237,6 +267,8 @@ class InstantEvalStartSerializer(serializers.Serializer):
     rows_requested = serializers.IntegerField()
     is_sample = serializers.BooleanField()
     credits_estimate = serializers.FloatField()
+    date_preset = serializers.CharField(allow_null=True)
+    label = serializers.CharField(allow_null=True, allow_blank=True)
 
 
 class InstantEvalStartResponseSerializer(serializers.Serializer):
@@ -602,24 +634,39 @@ def _start_workflow_on_commit(task, *, replace: bool) -> None:
 
 
 def _resolve_scope(
-    request, data
-) -> tuple[int, bool, rows_service.Population | None, list[str] | None]:
-    """The view's population: the handed-over ids, or the grid's own count."""
+    request, data, *, finish: bool = False
+) -> tuple[rows_service.Population, list[str] | None]:
+    """The view's population: the handed-over ids, or the grid's own count.
+    Users handed over keep the view's window: their sessions are read in it."""
     from tracer.services.filter_principal_context import (
         bind_request_my_annotations_principal,
     )
 
+    unit = data["unit"]
     ids = data.get("ids")
     if ids:
         ids = list(dict.fromkeys(str(i) for i in ids if i))
-        return len(ids), False, None, ids
+        pinned, start, end = [], None, None
+        if unit == "users":
+            pinned, start, end = rows_service._frozen_filters(
+                list(data.get("filters") or []), rows_service.ROW_TYPE[unit]
+            )
+        return rows_service.Population(len(ids), False, start, end, pinned), ids
     filters = bind_request_my_annotations_principal(
         request, list(data.get("filters") or [])
     )
-    population = rows_service.count_population(
-        str(data["project_id"]), data["unit"], filters
+    population = users_service.count_view(
+        str(data["project_id"]),
+        unit,
+        filters,
+        search=data.get("search"),
+        finish=finish,
     )
-    return population.count, population.lower_bound, population, None
+    return population, None
+
+
+def _window(population: rows_service.Population) -> dict:
+    return {"from": _iso(population.date_from), "to": _iso(population.date_to)}
 
 
 # ─── Estimate ────────────────────────────────────────────────────────────────
@@ -643,7 +690,7 @@ class InstantEvalEstimateView(APIView):
             return self._gm.not_found("Project not found")
         unit = data["unit"]
         try:
-            count, lower, _, ids = _resolve_scope(request, data)
+            population, ids = _resolve_scope(request, data)
         except rows_service.PopulationUnavailable as exc:
             return self._gm.custom_error_response(
                 422, str(exc), code="population_unavailable"
@@ -653,6 +700,7 @@ class InstantEvalEstimateView(APIView):
             return self._gm.custom_error_response(
                 503, "The view can't be counted right now. Please retry."
             )
+        count, lower = population.count, population.lower_bound
         questions = data.get("questions") or 1
         size = data.get("sample_size")
         org = _org(request)
@@ -704,6 +752,7 @@ class InstantEvalEstimateView(APIView):
                 "choices": choices,
                 "credit_check": credit_check,
                 "credit_max_sample": fits,
+                "window": _window(population),
             }
         )
 
@@ -742,7 +791,13 @@ class InstantEvalStartView(APIView):
         if len(active) >= max_active():
             return _busy_response(self._gm, active)
         try:
-            count, lower, population, ids = _resolve_scope(request, data)
+            # Every user the view lists is counted before a run starts.
+            population, ids = _resolve_scope(request, data, finish=True)
+        except users_service.UsersCountIncomplete as exc:
+            # What was counted is kept: starting again carries on from there.
+            return self._gm.custom_error_response(
+                503, str(exc), code="users_still_counting"
+            )
         except rows_service.PopulationUnavailable as exc:
             return self._gm.custom_error_response(
                 422, str(exc), code="population_unavailable"
@@ -752,6 +807,7 @@ class InstantEvalStartView(APIView):
             return self._gm.custom_error_response(
                 503, "The view can't be read right now. Please retry."
             )
+        count, lower = population.count, population.lower_bound
         size = None if ids else data.get("sample_size")
         requested = count if size is None else min(size, count)
         questions = len(wanted)
@@ -805,16 +861,19 @@ class InstantEvalStartView(APIView):
                 last_run=timezone.now(),
             )
             task.evals.set(ordered)
-            InstantEvalRun.objects.create(
+            run = InstantEvalRun.objects.create(
                 eval_task=task,
                 project=project,
                 organization=org,
                 created_by=request.user if request.user.is_authenticated else None,
                 unit=unit,
                 row_type=rows_service.ROW_TYPE[unit],
-                filters=population.filters if population else [],
-                date_from=population.date_from if population else None,
-                date_to=population.date_to if population else None,
+                filters=population.filters,
+                date_from=population.date_from,
+                date_to=population.date_to,
+                date_preset=data.get("date_preset"),
+                label=(data.get("label") or "").strip() or None,
+                search=(data.get("search") or "").strip(),
                 population=count,
                 population_is_lower_bound=lower,
                 sample_size=size,
@@ -833,6 +892,8 @@ class InstantEvalStartView(APIView):
                 "rows_requested": requested,
                 "is_sample": requested < count,
                 "credits_estimate": credits,
+                "date_preset": run.date_preset,
+                "label": run.label,
             }
         )
 
@@ -1076,7 +1137,7 @@ def _summary_key(task, run, status: str, view) -> str:
         f"{task.id}:{status}:{run.answers_version}:{view.unit}:"
         f"{','.join(view.config_ids)}:{view.tz.key}"
     )
-    return "ie-summary:v6:" + hashlib.sha1(raw.encode()).hexdigest()
+    return "ie-summary:v7:" + hashlib.sha1(raw.encode()).hexdigest()
 
 
 def _summary_payload(task, run, view, questions) -> dict:
@@ -1161,6 +1222,9 @@ def _summary_payload(task, run, view, questions) -> dict:
         # What the run was asked about, so it can be asked again.
         "scope": {
             "filters": run.filters or [],
+            "date_preset": run.date_preset,
+            "label": run.label,
+            "search": run.search or None,
             "sample_size": run.sample_size,
             "ids": (task.filters or {}).get("instant_ids")
             or _task_ids(task, view.unit)

@@ -1,4 +1,5 @@
 import { UNITS, unitWord } from "src/sections/projects/observePopulation";
+import { splitWindow } from "src/sections/projects/observeScope";
 import {
   ANSWER_TYPES,
   MAX_QUESTIONS,
@@ -39,22 +40,12 @@ const taskName = (items) =>
 
 // The grid's scope filters carry the date window as a created_at "between"
 // item; eval tasks take it as a sibling date_range instead.
-const isWindowItem = (item) =>
-  item?.column_id === "created_at" &&
-  item?.filter_config?.filter_op === "between" &&
-  Array.isArray(item?.filter_config?.filter_value);
-
 export const filtersWindow = (filters = []) =>
-  (filters || []).find(isWindowItem)?.filter_config?.filter_value;
+  splitWindow(filters).window || undefined;
 
 export function splitScopeFilters(scopeFilters = []) {
-  let dateRange;
-  const filters = [];
-  scopeFilters.forEach((item) => {
-    if (isWindowItem(item)) dateRange = item.filter_config.filter_value;
-    else if (item) filters.push(item);
-  });
-  return { dateRange, filters };
+  const { window, filters } = splitWindow(scopeFilters);
+  return { dateRange: window || undefined, filters };
 }
 
 // The eval task row type and the filter key that names its rows. A user
@@ -114,16 +105,6 @@ export const sessionIdsFromUserSessions = (result) => [
       .filter(Boolean),
   ),
 ];
-
-const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
-
-// "Past 7D · 2 filters": the date label plus every filter that is not the
-// window itself.
-export function scopeLabel({ label, filters = [] }) {
-  const count = filters.filter((item) => item && !isWindowItem(item)).length;
-  const base = label || "This view";
-  return count ? `${base} · ${plural(count, "filter")}` : base;
-}
 
 export const formatCount = (count, lowerBound) =>
   `${Number(count || 0).toLocaleString()}${lowerBound ? "+" : ""}`;

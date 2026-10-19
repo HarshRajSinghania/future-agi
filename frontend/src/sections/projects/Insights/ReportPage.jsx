@@ -721,6 +721,7 @@ export default function ReportPage({
       {editing && (
         <EditDrawer
           open={editing}
+          projectId={projectId}
           config={config}
           scopeLabel={run?.scope?.label || latest?.scope?.label}
           onClose={() => setEditing(false)}

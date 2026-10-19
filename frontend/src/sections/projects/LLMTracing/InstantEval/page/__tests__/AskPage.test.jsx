@@ -1,7 +1,14 @@
 /* eslint-disable react/prop-types */
 import React from "react";
 import PropTypes from "prop-types";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
@@ -21,6 +28,35 @@ const fakes = vi.hoisted(() => ({
 }));
 
 vi.mock("src/components/iconify", () => ({ default: () => null }));
+// The views' filter panel: here it applies a Status filter, as a pick in it
+// would.
+vi.mock("src/sections/projects/LLMTracing/TraceFilterPanel", () => ({
+  default: ({ onApply, onClose, currentFilters }) => (
+    <div>
+      <button
+        type="button"
+        onClick={() =>
+          onApply([
+            ...(currentFilters || []),
+            {
+              field: "status",
+              fieldCategory: "system",
+              fieldType: "string",
+              apiColType: "SYSTEM_METRIC",
+              operator: "equals",
+              value: "ERROR",
+            },
+          ])
+        }
+      >
+        Pick status ERROR
+      </button>
+      <button type="button" onClick={onClose}>
+        Close panel
+      </button>
+    </div>
+  ),
+}));
 vi.mock("src/components/traceDetail/TraceDetailDrawerV2", () => ({
   default: () => null,
 }));
@@ -138,6 +174,11 @@ vi.mock("../viz", async (importOriginal) => ({
 }));
 
 import AskPage from "../AskPage";
+import {
+  presetWindow,
+  viewSeed,
+  windowItem,
+} from "src/sections/projects/observeScope";
 
 const PROJECT = "p1";
 const CONFIG = "config-1";
@@ -387,11 +428,21 @@ describe("the Ask page", () => {
         filter_config: {
           filter_type: "datetime",
           filter_op: "between",
-          filter_value: ["2026-10-08T00:00:00Z", "2026-10-15T00:00:00Z"],
+          filter_value: [
+            "2026-10-08T00:00:00.000Z",
+            "2026-10-15T00:00:00.000Z",
+          ],
         },
       },
     ];
-    renderAt(askLink(PROJECT, { unit: "sessions", label: "Past 7D", filters }));
+    renderAt(
+      askLink(PROJECT, {
+        unit: "sessions",
+        label: "Custom range",
+        dateOption: "Custom",
+        filters,
+      }),
+    );
     expect(where().params).toMatchObject({ new: "1", tab: "sessions" });
     expect(
       await screen.findByText(/104,233 sessions in the Sessions view/),
@@ -523,7 +574,7 @@ describe("the Ask page", () => {
       }),
     );
     expect(
-      await screen.findByText(/3 sessions handed over from Past 7 days/),
+      await screen.findByText(/3 selected sessions from Past 7 days/),
     ).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
       target: { value: QUESTION },
@@ -552,7 +603,7 @@ describe("the Ask page", () => {
       await screen.findByRole("textbox", { name: "Question 1" }),
       { target: { value: QUESTION } },
     );
-    await screen.findByText(/3 sessions handed over/);
+    await screen.findByText(/3 selected sessions/);
     await act(async () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
@@ -673,7 +724,7 @@ describe("the Ask page", () => {
       await screen.findByRole("textbox", { name: "Question 1" }),
       { target: { value: QUESTION } },
     );
-    await screen.findByText(/3 sessions handed over/);
+    await screen.findByText(/3 selected sessions/);
     await act(async () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
@@ -984,5 +1035,289 @@ describe("a run that stopped before finishing", () => {
       fireEvent.click(screen.getByRole("button", { name: "Resume" }));
     });
     expect(fakes.control).toHaveBeenCalledWith("resume", {});
+  });
+});
+
+describe("a new question's date and filters", () => {
+  const STATUS = {
+    column_id: "status",
+    filter_config: {
+      filter_type: "text",
+      filter_op: "equals",
+      filter_value: "ERROR",
+      col_type: "SYSTEM_METRIC",
+    },
+  };
+  const viewOf = (unit, filters, dateOption = "7D") =>
+    viewSeed({
+      unit,
+      filters: [windowItem(presetWindow(dateOption)), ...filters],
+      dateFilter: { dateOption },
+    });
+
+  it("edits the view's date and filters in place, recounts and starts with them", async () => {
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-4",
+      questions: QUESTIONS,
+    });
+    renderAt(askLink(PROJECT, viewOf("sessions", [STATUS])));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    // Counted as a start would send it: the filters, preset and label.
+    expect(fakes.estimate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        unit: "sessions",
+        filters: [STATUS, windowItem(presetWindow("7D"))],
+        datePreset: "7D",
+        label: "Past 7D · 1 filter",
+      }),
+    );
+    // The view's own date and filters, editable here.
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.queryByText(/Change them in/)).toBeNull();
+    expect(
+      screen.getByText(
+        "Counted with the date range and filters above, started from the Sessions view.",
+      ),
+    ).toBeInTheDocument();
+
+    fakes.estimate.mockResolvedValue(smallEstimate(40));
+    fireEvent.click(screen.getByRole("button", { name: "Past 7D" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Past 30D" }));
+    expect(
+      await screen.findByText(/40 sessions in the Sessions view/),
+    ).toBeInTheDocument();
+    const month = [STATUS, windowItem(presetWindow("30D"))];
+    expect(fakes.estimate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ filters: month }),
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
+      target: { value: QUESTION },
+    });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Ask Jev about 40 sessions" }),
+      );
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: month,
+        datePreset: "30D",
+        label: "Past 30D · 1 filter",
+        sampleSize: null,
+      }),
+    );
+    // The run says what it read.
+    expect(screen.getByText(/Past 30 days · 1 filter/)).toBeInTheDocument();
+  });
+
+  it("counts users a few seconds at a time, and lets a start go ahead", async () => {
+    const counts = [
+      { ...smallEstimate(209), population_is_lower_bound: true },
+      smallEstimate(371),
+    ];
+    fakes.estimate.mockImplementation(async () =>
+      counts.length > 1 ? counts.shift() : counts[0],
+    );
+    renderAt(
+      askLink(PROJECT, {
+        ...viewOf("users", [STATUS]),
+        search: "acme",
+        label: undefined,
+      }),
+    );
+    expect(
+      await screen.findByText(/209\+ users in the Users view/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Still counting the users/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search users" })).toHaveValue(
+      "acme",
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
+      target: { value: QUESTION },
+    });
+    expect(
+      screen.getByRole("button", { name: "Ask Jev about 209 sessions" }),
+    ).toBeEnabled();
+    expect(
+      await screen.findByText(
+        /371 users in the Users view/,
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeInTheDocument();
+    expect(fakes.estimate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        unit: "users",
+        search: "acme",
+        datePreset: "7D",
+        label: "Past 7D · 1 filter · “acme”",
+      }),
+    );
+  });
+
+  it("keeps the date on another unit and says which filters went", async () => {
+    renderAt(`/dashboard/observe/${PROJECT}/ask?new=1&unit=traces&tab=traces`);
+    await screen.findByText(/104,233 traces in the Traces view/);
+    expect(
+      screen.getByText("Counted with the date range and filters above."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Past 7D" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Past 30D" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pick status ERROR" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+    expect(screen.getByText("Status")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
+    expect(where().params).toMatchObject({ unit: "sessions" });
+    expect(
+      await screen.findByText(
+        "1 filter doesn't apply to sessions, so it was removed. The date range stays.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Past 30D" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Status")).toBeNull();
+    await waitFor(() =>
+      expect(fakes.estimate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          unit: "sessions",
+          filters: [windowItem(presetWindow("30D"))],
+        }),
+      ),
+    );
+  });
+
+  it("remembers the sample size picked after a turn to every row", async () => {
+    fakes.estimate.mockResolvedValue({
+      ...ESTIMATE,
+      population: 20000,
+      choices: [
+        ...ESTIMATE.choices.slice(0, 4),
+        {
+          sample_size: null,
+          rows_to_read: 20000,
+          seconds_estimate: 4010,
+          needs_confirm: true,
+          allowed: true,
+        },
+      ],
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    const select = await screen.findByRole("combobox", { name: /Sample size/ });
+    fireEvent.mouseDown(select);
+    fireEvent.click(
+      await screen.findByRole("option", { name: "2,000 sessions" }),
+    );
+    expect(
+      screen.getByRole("radio", { name: /A sample of 2,000/ }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: /All 20,000/ }));
+    const sample = screen.getByRole("radio", { name: /A sample of 2,000/ });
+    expect(sample).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(sample);
+    expect(
+      screen.getByRole("radio", { name: /A sample of 2,000/ }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("asks about a selection as it is, or the view's filters instead", async () => {
+    fakes.estimate.mockResolvedValue(smallEstimate(3));
+    renderAt(
+      askLink(PROJECT, {
+        ...viewOf("sessions", [STATUS]),
+        population: POPULATION,
+      }),
+    );
+    await screen.findByText(/3 selected sessions from Past 7 days · 1 filter/);
+    expect(screen.queryByRole("button", { name: "Filter" })).toBeNull();
+    fakes.estimate.mockResolvedValue(ESTIMATE);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Use the view's filters instead" }),
+    );
+    expect(
+      await screen.findByText(/104,233 sessions in the Sessions view/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filter" })).toBeInTheDocument();
+  });
+});
+
+describe("running a question again", () => {
+  const STATUS = {
+    column_id: "status",
+    filter_config: {
+      filter_type: "text",
+      filter_op: "equals",
+      filter_value: "ERROR",
+    },
+  };
+  const OLD = ["2026-09-01T00:00:00.000Z", "2026-09-08T00:00:00.000Z"];
+  const runAsked = (scope) => ({
+    ...doneRun,
+    summary: {
+      ...doneRun.summary,
+      scope: {
+        filters: [STATUS, windowItem(OLD)],
+        sample_size: 1000,
+        ids: null,
+        ...scope,
+      },
+    },
+  });
+  const runAgain = async () => {
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Run again" }));
+    });
+  };
+
+  beforeEach(() => {
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-5",
+      questions: QUESTIONS,
+    });
+  });
+
+  it("moves a preset's window to now", async () => {
+    fakes.askRuns["task-sessions"] = runAsked({
+      date_preset: "7D",
+      label: "Past 7D · 1 filter",
+    });
+    await runAgain();
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: [STATUS, windowItem(presetWindow("7D"))],
+        datePreset: "7D",
+        label: "Past 7D · 1 filter",
+        sampleSize: 1000,
+        confirm: true,
+      }),
+    );
+  });
+
+  it("reads a custom range again as it was", async () => {
+    fakes.askRuns["task-sessions"] = runAsked({
+      date_preset: "Custom",
+      label: "Custom range · 1 filter",
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    // The header names a custom range by its dates.
+    expect(screen.getByText(/Oct 13 – Oct 14 · 1 filter/)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Run again" }));
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: [STATUS, windowItem(OLD)],
+        datePreset: "Custom",
+        label: "Custom range · 1 filter",
+      }),
+    );
   });
 });

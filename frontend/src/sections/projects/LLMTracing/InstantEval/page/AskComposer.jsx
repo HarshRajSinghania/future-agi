@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import {
   Alert,
@@ -24,11 +24,11 @@ import {
   readsFor,
   validateInstantEval,
 } from "../instantEvalPayloads";
+import ScopeFilterBar from "src/sections/projects/ScopeFilterBar";
 import {
   defaultReads,
   draftsFromQuestions,
   emptyDraft,
-  filtersWindow,
   formatCount,
   unitMeta,
 } from "../instantEvalUnits";
@@ -39,11 +39,11 @@ import {
   MAX_HANDOVER,
   choiceCost,
   defaultChoice,
-  sampleSizes,
+  offeredSizes,
   useAskScope,
 } from "./askPopulation";
 import { creditAmount, creditWords, durationWords } from "./askFilter";
-import { sourceViewLink, sourceViewTitle } from "./askLinks";
+import { sourceViewTitle } from "./askLinks";
 import { scopeWords } from "./askFormat";
 
 const asDraft = (entry) => draftsFromQuestions([entry])[0];
@@ -228,34 +228,34 @@ CreditNote.propTypes = {
 function ScopeCard({
   projectId,
   unit,
-  seed,
   scope,
+  from,
+  startedFrom,
+  population,
+  onScopeChange,
+  notice,
+  onUseView,
   choice,
+  sizes,
+  shownSize,
   onChoose,
   questions,
 }) {
   const meta = unitMeta(unit);
-  const words = scopeWords(seed?.label);
-  const { estimate } = scope;
+  const fixed = population.handedOver;
+  const words = fixed ? scopeWords(from) : "";
+  const { estimate } = population;
   const count = estimate?.population ?? 0;
-  // The fixed sizes, plus the largest sample the credits left pay for.
-  const fits = choiceCost(estimate, null, questions)?.fitsSize;
-  const sizes = [...sampleSizes(estimate)];
-  if (fits > 0 && fits < count && !sizes.includes(fits)) {
-    sizes.push(fits);
-    sizes.sort((a, b) => a - b);
-  }
   const sampled = choice !== ALL && sizes.length > 0;
-  const sampleSize = sampled ? choice : null;
-  const shownSize = sampleSize ?? defaultChoice(estimate) ?? sizes[0];
   const sampleCost = choiceCost(estimate, shownSize, questions);
   const allCost = choiceCost(estimate, null, questions);
   const noun = count === 1 ? meta.noun : meta.plural;
-  const source = scope.handedOver
-    ? `handed over${words ? ` from ${words}` : ""}`
-    : scope.fallback
-      ? `, the newest in the ${sourceViewTitle(unit)} view`
-      : `in the ${sourceViewTitle(unit)} view${words ? ` · ${words}` : ""}`;
+  const counted = `${formatCount(count, estimate?.population_is_lower_bound)} ${noun}`;
+  const headline = fixed
+    ? `${formatCount(count)} selected ${noun}${words ? ` from ${words}` : ""}`
+    : population.fallback
+      ? `${counted}, the newest in the ${sourceViewTitle(unit)} view`
+      : `${counted} in the ${sourceViewTitle(unit)} view`;
   return (
     <Paper
       variant="outlined"
@@ -268,44 +268,82 @@ function ScopeCard({
           sx={{ color: "text.secondary", mt: 0.25, flexShrink: 0 }}
         />
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          {scope.isLoading ? (
+          {population.isLoading ? (
             <Skeleton variant="text" width={300} />
-          ) : scope.isError ? (
+          ) : population.isError ? (
             <Typography variant="body2" color="error.main">
               The {meta.plural} in that view couldn&apos;t be counted.{" "}
               <Link
                 component="button"
                 type="button"
-                onClick={() => scope.refetch()}
+                onClick={() => population.refetch()}
               >
                 Retry
               </Link>
             </Typography>
           ) : (
-            <Typography
-              variant="body2"
-              sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
-            >
-              {formatCount(count, estimate?.population_is_lower_bound)} {noun}{" "}
-              {source}
-            </Typography>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 600,
+                  fontVariantNumeric: "tabular-nums",
+                  opacity: population.isUpdating ? 0.6 : 1,
+                }}
+              >
+                {headline}
+              </Typography>
+              {(population.isUpdating || population.counting) && (
+                <CircularProgress
+                  size={12}
+                  thickness={5}
+                  aria-label={`Counting the ${meta.plural}`}
+                />
+              )}
+            </Stack>
           )}
           <Typography variant="caption" color="text.secondary" component="p">
-            {scope.tooMany
+            {population.tooMany
               ? `Only the first ${MAX_HANDOVER.toLocaleString()} rows handed over are read.`
-              : scope.fallback
+              : population.fallback
                 ? `The server can't count these filters, so Jev reads the newest ${count.toLocaleString()} the view shows.`
-                : scope.handedOver
-                  ? "Exactly the rows handed over."
-                  : "Counted with the view's own filters and date range."}{" "}
-            <Link
-              component={RouterLink}
-              to={sourceViewLink(projectId, unit)}
-              underline="hover"
-            >
-              Change them in {sourceViewTitle(unit)}
-            </Link>
+                : population.counting
+                  ? `Still counting the ${meta.plural} these filters match; you can start now.`
+                  : fixed
+                    ? "Exactly the rows handed over."
+                    : `Counted with the date range and filters above${
+                        startedFrom ? `, started from ${startedFrom}` : ""
+                      }.`}
+            {fixed && onUseView && (
+              <>
+                {" "}
+                <Link component="button" type="button" onClick={onUseView}>
+                  Use the view&apos;s filters instead
+                </Link>
+              </>
+            )}
           </Typography>
+          {!fixed && (
+            <Box sx={{ mt: 1.25 }}>
+              <ScopeFilterBar
+                projectId={projectId}
+                unit={unit}
+                scope={scope}
+                onChange={onScopeChange}
+              />
+            </Box>
+          )}
+          {notice && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="p"
+              role="status"
+              sx={{ mt: 0.75 }}
+            >
+              {notice}
+            </Typography>
+          )}
         </Box>
       </Stack>
       {estimate && count > 0 && (
@@ -381,7 +419,7 @@ function ScopeCard({
                   onChoose={onChoose}
                 />
               ) : !allCost?.allowed ? (
-                `Over the ${estimate.max_rows.toLocaleString()}-row limit for one run. Read a sample, or narrow the view.`
+                `Over the ${estimate.max_rows.toLocaleString()}-row limit for one run. Read a sample, or narrow the filters.`
               ) : allCost.needsConfirm ? (
                 "You confirm the credits before it starts."
               ) : null
@@ -396,30 +434,44 @@ function ScopeCard({
 ScopeCard.propTypes = {
   projectId: PropTypes.string.isRequired,
   unit: PropTypes.string.isRequired,
-  seed: PropTypes.object,
   scope: PropTypes.object.isRequired,
+  // Where rows handed over came from ("Past 7D").
+  from: PropTypes.string,
+  // Where the date and filters came from ("the Users view").
+  startedFrom: PropTypes.string,
+  population: PropTypes.object.isRequired,
+  onScopeChange: PropTypes.func.isRequired,
+  notice: PropTypes.node,
+  onUseView: PropTypes.func,
   choice: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+  sizes: PropTypes.arrayOf(PropTypes.number).isRequired,
+  shownSize: PropTypes.number,
   onChoose: PropTypes.func.isRequired,
   questions: PropTypes.number.isRequired,
 };
 
 /**
  * A new question, full page: what Jev should answer about the rows of a view
- * (or the rows handed over), what it reads of each, and whether to read a
- * random sample or every row, with what each costs. A run past the confirm
- * size restates its credits before it starts.
+ * (its date and filters, editable here, or the rows handed over), what it
+ * reads of each, and whether to read a random sample or every row, with what
+ * each costs. A run past the confirm size restates its credits before it
+ * starts.
  */
 export default function AskComposer({
   projectId,
   unit,
   seed,
+  scope,
+  onScopeChange,
+  scopeNotice,
+  onUseView,
   starting,
   error,
   onAsk,
 }) {
   const meta = unitMeta(unit);
   const jev = useJevAvailability();
-  const scope = useAskScope({ projectId, unit, seed });
+  const population = useAskScope({ projectId, unit, scope });
   const saved = useInstantEvals(projectId, { unit });
   const [questions, setQuestions] = useState(() =>
     seed?.questions?.length
@@ -429,18 +481,34 @@ export default function AskComposer({
   const [reads, setReads] = useState(() => defaultReads(unit));
   // A sample of 1,000 above 1,000 rows, else every row, until one is picked.
   const [picked, setPicked] = useState(null);
+  // The last sample size picked, offered again after a turn to every row.
+  const [lastSample, setLastSample] = useState(null);
   const [confirming, setConfirming] = useState(false);
   const [touched, setTouched] = useState(false);
   const errors = questions.map((question) =>
     validateInstantEval(question, meta.noun),
   );
   const readChoices = readsFor(unit);
-  const estimate = scope.estimate;
-  const choice = picked ?? defaultChoice(estimate) ?? ALL;
-  const sampleSize = choice === ALL ? null : choice;
+  const estimate = population.estimate;
   const filled = Math.max(1, questions.filter((q) => q.question.trim()).length);
+  const sizes = offeredSizes(estimate, filled);
+  // A pick the scope's new count no longer offers falls back to the default.
+  const choice =
+    picked === ALL || sizes.includes(picked)
+      ? picked
+      : defaultChoice(estimate) ?? ALL;
+  const sampleSize = choice === ALL ? null : choice;
+  const shownSize =
+    sampleSize ??
+    (sizes.includes(lastSample) ? lastSample : null) ??
+    defaultChoice(estimate) ??
+    sizes[0];
   const cost = choiceCost(estimate, sampleSize, filled);
   const count = estimate?.population ?? 0;
+  // A confirm restates one scope's credits; a new date or filter retracts it.
+  useEffect(() => {
+    setConfirming(false);
+  }, [scope]);
 
   const addQuestion = (entry) =>
     setQuestions((prev) => {
@@ -457,20 +525,26 @@ export default function AskComposer({
   const ask = (confirmed = false) => {
     setTouched(true);
     if (errors.some(Boolean) || !count || !cost?.allowed) return;
+    if (population.isUpdating) return;
     if (cost.needsConfirm && !confirmed) {
       setConfirming(true);
       return;
     }
     setConfirming(false);
+    const handedOver = population.handedOver;
     onAsk({
       questions,
       reads,
-      filters: scope.filters,
-      ids: scope.ids,
+      // What the shown count is for: the scope, once settled.
+      filters: population.filters,
+      search: population.search,
+      ids: population.ids,
       sampleSize,
       confirm: confirmed,
-      handedOver: scope.handedOver,
-      window: filtersWindow(seed?.filters) || null,
+      handedOver,
+      window: handedOver ? null : scope.window,
+      datePreset: population.datePreset,
+      label: population.label,
       rows: cost.rows,
     });
   };
@@ -478,7 +552,11 @@ export default function AskComposer({
   const showExamples = !questions.some((question) => question.question.trim());
   const recent = (saved.items || []).slice(0, 6);
   const nothingInView =
-    !scope.isLoading && !scope.isError && Boolean(estimate) && !count;
+    !population.isLoading &&
+    !population.isError &&
+    !population.isUpdating &&
+    Boolean(estimate) &&
+    !count;
 
   return (
     <Stack spacing={3} sx={{ maxWidth: 880 }}>
@@ -519,11 +597,21 @@ export default function AskComposer({
       <ScopeCard
         projectId={projectId}
         unit={unit}
-        seed={seed}
         scope={scope}
+        from={seed?.label}
+        startedFrom={
+          seed ? seed.source || `the ${sourceViewTitle(unit)} view` : undefined
+        }
+        population={population}
+        onScopeChange={onScopeChange}
+        notice={scopeNotice}
+        onUseView={onUseView}
         choice={choice}
+        sizes={sizes}
+        shownSize={shownSize}
         onChoose={(next) => {
           setPicked(next);
+          if (next !== ALL) setLastSample(next);
           setConfirming(false);
         }}
         questions={filled}
@@ -629,8 +717,9 @@ export default function AskComposer({
       {error && <Alert severity="error">{error}</Alert>}
       {nothingInView && (
         <Alert severity="info">
-          There are no {meta.plural} in that view to ask about. Widen its date
-          range or filters in {sourceViewTitle(unit)}.
+          {population.handedOver
+            ? `None of the ${meta.plural} handed over can be read.`
+            : `No ${meta.plural} match this date range and these filters. Widen the date range or remove a filter.`}
         </Alert>
       )}
 
@@ -670,7 +759,8 @@ export default function AskComposer({
             !jev.available ||
             jev.isLoading ||
             starting ||
-            scope.isLoading ||
+            population.isLoading ||
+            population.isUpdating ||
             nothingInView ||
             !cost?.allowed ||
             confirming
@@ -686,7 +776,7 @@ export default function AskComposer({
         >
           {starting
             ? "Starting…"
-            : scope.isLoading
+            : population.isLoading || population.isUpdating
               ? `Counting the ${meta.plural}…`
               : cost
                 ? `Ask Jev about ${sampleSize ? "a sample of " : ""}${cost.rows.toLocaleString()} ${
@@ -752,6 +842,13 @@ AskComposer.propTypes = {
   projectId: PropTypes.string.isRequired,
   unit: PropTypes.oneOf(["traces", "spans", "sessions", "users"]).isRequired,
   seed: PropTypes.object,
+  // What the question reads (see observeScope), and its edits.
+  scope: PropTypes.object.isRequired,
+  onScopeChange: PropTypes.func.isRequired,
+  // Why the scope changed on its own (filters a new unit can't use).
+  scopeNotice: PropTypes.node,
+  // Switch a selection handed over to the view's filters.
+  onUseView: PropTypes.func,
   starting: PropTypes.bool,
   error: PropTypes.node,
   onAsk: PropTypes.func.isRequired,

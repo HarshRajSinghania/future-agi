@@ -20,9 +20,10 @@ import {
 } from "@mui/material";
 import { useQueryClient } from "@tanstack/react-query";
 import { UNITS, unitWord } from "src/sections/projects/observePopulation";
+import ScopeFilterBar from "src/sections/projects/ScopeFilterBar";
+import { defaultScope } from "src/sections/projects/observeScope";
 import {
   insightsKeys,
-  collectForScope,
   patchConfig,
   recallPopulation,
   rememberPopulation,
@@ -37,33 +38,24 @@ import {
 } from "./insightsFormat";
 import { useCancellable, useDebouncedValue } from "./insightsHooks";
 import {
-  DATE_PRESETS,
   DEFAULT_SAMPLE_SIZE,
   SAMPLE_SIZES,
   buildRerunPayload,
-  buildScope,
+  countedScope,
+  editableScope,
   effectiveSample,
-  formatWindow,
   isFixedScope,
-  presetOption,
-  presetWindow,
+  lastScope,
   reanchorScope,
   sampleSentence,
-  splitFilters,
-  withCollectedNote,
+  scopeDateLabel,
+  storedScope,
 } from "./insightsScope";
 
-const NO_FILTERS = [];
-
-const lastScope = (config) =>
-  config?.scope && Object.keys(config.scope).length
-    ? config.scope
-    : config?.latest_run?.scope || {};
-
 /**
- * Run a saved report again: same scope (a relative window moves to now) or
- * another window with the same filters, and optionally forget the saved
- * categories so this run discovers new ones.
+ * Run a saved report again: the last run's date and filters (a preset window
+ * moved to now), changed here if need be, or the same rows handed over; and
+ * optionally forget the saved categories so this run discovers new ones.
  */
 function RerunForm({
   projectId,
@@ -81,73 +73,45 @@ function RerunForm({
     () => (fixed ? recallPopulation(config.id) : null),
     [fixed, config.id],
   );
-  const { window: baseWindow, rest } = useMemo(
-    () => splitFilters(base.filters || []),
-    [base],
+  // Rows handed over can't be read again from filters: other data starts
+  // from the past week.
+  const [scope, setScope] = useState(() =>
+    fixed ? defaultScope(unit) : editableScope(base, unit),
   );
-  const sameAvailable = !fixed || Boolean(remembered);
-  const [choice, setChoice] = useState(sameAvailable ? "same" : "7d");
+  const [choice, setChoice] = useState(remembered ? "same" : "scope");
+  const sameRows = fixed && choice === "same";
   const [sampleSize, setSampleSize] = useState(
     config.sample_size || DEFAULT_SAMPLE_SIZE,
   );
   const [rediscover, setRediscover] = useState(Boolean(initialRediscover));
-  // The window is fixed when the choice is made, so the count is stable.
-  const [anchor] = useState(() => new Date());
 
-  const scope = useMemo(() => {
-    if (choice === "same") return fixed ? base : reanchorScope(base, anchor);
-    return buildScope({
-      preset: choice,
-      window: presetWindow(choice, anchor),
-      filters: rest,
-    });
-  }, [choice, fixed, base, rest, anchor]);
-
-  const filters = useDebouncedValue(scope.filters || NO_FILTERS, 250);
+  const countScope = useMemo(() => countedScope(scope), [scope]);
+  const settledScope = useDebouncedValue(countScope, 250);
   const count = usePopulationCount({
     unit,
     projectId,
-    filters,
-    enabled: !(choice === "same" && fixed),
+    scope: settledScope,
+    enabled: !sameRows,
   });
-  const total =
-    choice === "same" && fixed ? remembered?.length : count.data?.total;
-  const isLowerBound =
-    choice === "same" && fixed ? false : count.data?.totalIsLowerBound;
+  const total = sameRows ? remembered?.length : count.data?.total;
+  const isLowerBound = sameRows ? false : count.data?.totalIsLowerBound;
+  // A Users count still climbing ("N+") shows as it goes.
+  const counting =
+    !sameRows &&
+    (count.isLoading || count.isPlaceholderData || settledScope !== countScope);
 
-  const sameLabel = fixed
-    ? remembered
-      ? `The same ${formatCount(remembered.length)} ${unitWord(unit, remembered.length)} as last run`
-      : `The same ${plural} as last run (not available: they were handed over in another browser session)`
-    : presetOption(base.preset)
-      ? `Same as last run: ${presetOption(base.preset).label}, ending now`
-      : baseWindow
-        ? `Same window as last run: ${formatWindow(baseWindow)}`
-        : `Same as last run: ${base.label || `all ${plural}`}`;
+  const sameLabel = remembered
+    ? `The same ${formatCount(remembered.length)} ${unitWord(unit, remembered.length)} as last run`
+    : `The same ${plural} as last run (not available: they were handed over in another browser session)`;
 
   const starting = useCancellable("The report could not be started.");
   const run = () =>
-    starting.run(async (signal) => {
+    starting.run(async () => {
       if (rediscover) await patchConfig(config.id, { reset_taxonomy: true });
-      let runScope = scope;
-      let population;
-      if (choice === "same" && fixed) {
-        population = remembered;
-      } else {
-        const collected = await collectForScope({
-          unit,
-          projectId,
-          scope: reanchorScope(scope),
-          signal,
-        });
-        runScope = withCollectedNote(reanchorScope(scope), collected);
-        population = collected.items;
-      }
-      if (!population?.length) {
-        const error = new Error(`There are no ${plural} in this scope.`);
-        error.statusCode = 400;
-        throw error;
-      }
+      // The server reads the rows a scope of filters matches, its preset
+      // window moved to the moment the run starts.
+      const runScope = sameRows ? base : storedScope(reanchorScope(scope));
+      const population = sameRows ? remembered : undefined;
       const created = await startRun(
         buildRerunPayload({
           projectId,
@@ -157,7 +121,7 @@ function RerunForm({
           sampleSize,
         }),
       );
-      if (isFixedScope(runScope)) rememberPopulation(config.id, population);
+      if (sameRows) rememberPopulation(config.id, population);
       queryClient.invalidateQueries({
         queryKey: insightsKeys.config(config.id),
       });
@@ -180,36 +144,55 @@ function RerunForm({
       <DialogContent>
         <Stack spacing={2.5}>
           <Box>
-            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+            <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
               Which data
             </Typography>
-            <RadioGroup
-              value={choice}
-              onChange={(event) => setChoice(event.target.value)}
-            >
-              <FormControlLabel
-                value="same"
-                disabled={!sameAvailable || busy}
-                control={<Radio size="small" />}
-                label={<Typography variant="body2">{sameLabel}</Typography>}
-              />
-              {DATE_PRESETS.map((option) => (
+            {fixed && (
+              <RadioGroup
+                value={sameRows ? "same" : "scope"}
+                onChange={(event) => setChoice(event.target.value)}
+              >
                 <FormControlLabel
-                  key={option.value}
-                  value={option.value}
+                  value="same"
+                  disabled={!remembered || busy}
+                  control={<Radio size="small" />}
+                  label={<Typography variant="body2">{sameLabel}</Typography>}
+                />
+                <FormControlLabel
+                  value="scope"
                   disabled={busy}
                   control={<Radio size="small" />}
                   label={
                     <Typography variant="body2">
-                      {option.label}
-                      {rest.length
-                        ? ` · the last run's ${rest.length} filter${rest.length === 1 ? "" : "s"}`
-                        : ""}
+                      Other {plural}, by date and filters
                     </Typography>
                   }
                 />
-              ))}
-            </RadioGroup>
+              </RadioGroup>
+            )}
+            {!sameRows && (
+              <Box sx={{ mt: fixed ? 1 : 0 }}>
+                <ScopeFilterBar
+                  projectId={projectId}
+                  unit={unit}
+                  scope={scope}
+                  onChange={setScope}
+                  disabled={busy}
+                  dateLabel={scopeDateLabel(scope)}
+                />
+                {!fixed && (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    component="p"
+                    sx={{ mt: 0.75 }}
+                  >
+                    The last run&apos;s date and filters; a preset window ends
+                    now.
+                  </Typography>
+                )}
+              </Box>
+            )}
           </Box>
           <Stack direction="row" spacing={2} alignItems="center">
             <TextField
@@ -228,7 +211,7 @@ function RerunForm({
               ))}
             </TextField>
             <Typography variant="body2" color="text.secondary">
-              {count.isFetching && !(choice === "same" && fixed) ? (
+              {counting ? (
                 <Stack
                   component="span"
                   direction="row"

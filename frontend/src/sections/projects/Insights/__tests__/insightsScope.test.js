@@ -8,21 +8,30 @@ vi.mock("src/utils/axios", () => ({
 
 import {
   FIXED_PRESET,
+  LEGACY_DAY,
+  askSeed,
   buildRerunPayload,
   buildRunPayload,
-  buildScope,
+  countedScope,
   describeFilter,
+  editableScope,
   fixedScope,
   isFixedScope,
-  presetWindow,
+  lastScope,
   reanchorScope,
   sampleSentence,
-  scopeLabel,
-  splitFilters,
+  savedDateOption,
+  scopeDateLabel,
   spreadPick,
+  storedScope,
   toPopulation,
-  withCollectedNote,
 } from "../insightsScope";
+import {
+  defaultScope,
+  presetWindow,
+  windowItem,
+  withFilters,
+} from "src/sections/projects/observeScope";
 
 const STATUS = {
   column_id: "status",
@@ -33,84 +42,106 @@ const STATUS = {
   },
 };
 const NOW = new Date("2026-10-15T12:00:00Z");
+const RANGE = ["2026-10-01T00:00:00.000Z", "2026-10-02T00:00:00.000Z"];
 
 describe("scopes", () => {
-  it("builds a preset scope with its window as a created_at filter", () => {
-    const window = presetWindow("24h", NOW);
-    const scope = buildScope({ preset: "24h", window, filters: [STATUS] });
-    expect(scope.preset).toBe("24h");
-    expect(scope.window).toEqual([
+  it("stores a preset scope with its window as a created_at filter", () => {
+    const scope = withFilters(defaultScope("sessions", NOW), [STATUS]);
+    const window = presetWindow("7D", NOW);
+    expect(storedScope(scope)).toEqual({
+      filters: [STATUS, windowItem(window)],
+      label: "Past 7D · 1 filter",
+      preset: "7D",
+      window,
+    });
+    expect(countedScope({ ...scope, search: "ada" })).toEqual({
+      filters: [STATUS, windowItem(window)],
+      search: "ada",
+    });
+  });
+
+  it("reads a saved scope back for the bar, its preset moved to now", () => {
+    const later = new Date("2026-10-20T08:00:00Z");
+    const saved = storedScope(
+      withFilters(defaultScope("sessions", NOW), [STATUS]),
+    );
+    expect(editableScope(saved, "sessions", later)).toEqual({
+      unit: "sessions",
+      filters: [STATUS],
+      dateOption: "7D",
+      window: presetWindow("7D", later),
+      label: "Past 7D · 1 filter",
+    });
+    const custom = editableScope(
+      { filters: [windowItem(RANGE)], preset: "Custom" },
+      "traces",
+      later,
+    );
+    expect(custom).toMatchObject({ dateOption: "Custom", window: RANGE });
+    expect(reanchorScope(custom, later)).toBe(custom);
+  });
+
+  it("maps the presets of reports saved before Observe's", () => {
+    expect(savedDateOption({ preset: "7d" })).toBe("7D");
+    expect(savedDateOption({ preset: "30d" })).toBe("30D");
+    expect(savedDateOption({ preset: "24h" })).toBe(LEGACY_DAY);
+    // A window without a preset is a custom range; no window reads all time.
+    expect(savedDateOption({ filters: [windowItem(RANGE)] })).toBe("Custom");
+    expect(savedDateOption({ label: "All" })).toBeNull();
+
+    const week = editableScope(
+      { preset: "7d", filters: [STATUS, windowItem(RANGE)] },
+      "traces",
+      NOW,
+    );
+    expect(week).toMatchObject({
+      dateOption: "7D",
+      window: presetWindow("7D", NOW),
+      label: "Past 7D · 1 filter",
+    });
+    // "24h" has no Observe match: still the 24 hours ending now.
+    const day = editableScope({ preset: "24h" }, "traces", NOW);
+    expect(day.window).toEqual([
       "2026-10-14T12:00:00.000Z",
       "2026-10-15T12:00:00.000Z",
     ]);
-    expect(scope.filters).toEqual([
-      STATUS,
-      {
-        column_id: "created_at",
-        filter_config: {
-          filter_type: "datetime",
-          filter_op: "between",
-          filter_value: scope.window,
-        },
-      },
-    ]);
-    expect(scope.label).toBe("Past 24 hours · 1 filter");
+    expect(scopeDateLabel(day)).toBe("Past 24h");
+    const all = editableScope({ label: "All" }, "traces", NOW);
+    expect(all.label).toBe("All time");
+    expect(scopeDateLabel(all)).toBe("All time");
   });
 
-  it("splits a view's date filter from its other filters", () => {
-    const scope = buildScope({
-      window: ["2026-10-01T00:00:00Z", "2026-10-08T00:00:00Z"],
-      filters: [STATUS],
+  it("hands the Ask page a report's scope, never a legacy preset", () => {
+    const later = new Date("2026-10-20T08:00:00Z");
+    const saved = {
+      ...storedScope(withFilters(defaultScope("users", NOW), [STATUS])),
+      search: "acme",
+    };
+    expect(askSeed(saved, "users", later)).toEqual({
+      unit: "users",
+      filters: [STATUS, windowItem(presetWindow("7D", later))],
+      dateOption: "7D",
+      window: presetWindow("7D", later),
+      search: "acme",
+      label: "Past 7D · 1 filter · “acme”",
     });
-    expect(scope.preset).toBeUndefined();
-    const { window, rest } = splitFilters(scope.filters);
-    expect(window).toEqual([
-      "2026-10-01T00:00:00.000Z",
-      "2026-10-08T00:00:00.000Z",
-    ]);
-    expect(rest).toEqual([STATUS]);
+    // Instant eval keeps Observe presets only: a rolling day is a range.
+    expect(askSeed({ preset: "24h" }, "traces", NOW)).toMatchObject({
+      dateOption: "Custom",
+      window: ["2026-10-14T12:00:00.000Z", "2026-10-15T12:00:00.000Z"],
+      label: "Custom range",
+    });
+    expect(askSeed(fixedScope("12 sessions"), "sessions", NOW)).toBeNull();
+    expect(askSeed({ label: "All" }, "sessions", NOW)).toBeNull();
   });
 
-  it("re-anchors a relative window to now and leaves fixed windows alone", () => {
-    const old = buildScope({
-      preset: "7d",
-      window: presetWindow("7d", new Date("2026-09-01T00:00:00Z")),
-      filters: [STATUS],
-    });
-    const moved = reanchorScope(old, NOW);
-    expect(moved.window).toEqual([
-      "2026-10-08T12:00:00.000Z",
-      "2026-10-15T12:00:00.000Z",
-    ]);
-    expect(splitFilters(moved.filters).rest).toEqual([STATUS]);
-
-    const custom = buildScope({
-      window: ["2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z"],
-    });
-    expect(reanchorScope(custom, NOW)).toBe(custom);
+  it("keeps a handed-over set fixed", () => {
     const fixed = fixedScope("46 sessions from Instant eval");
-    expect(reanchorScope(fixed, NOW)).toBe(fixed);
     expect(isFixedScope(fixed)).toBe(true);
     expect(fixed.preset).toBe(FIXED_PRESET);
-  });
-
-  it("labels an unwindowed scope as all time", () => {
-    expect(scopeLabel({ filters: [] })).toBe("All time");
-  });
-
-  it("notes when a run collected only the newest rows", () => {
-    const scope = buildScope({
-      preset: "30d",
-      window: presetWindow("30d", NOW),
-    });
-    const noted = withCollectedNote(scope, {
-      items: new Array(2000).fill({ id: "x" }),
-      total: 12345,
-      totalIsLowerBound: false,
-      truncated: true,
-    });
-    expect(noted.label).toBe("Past 30 days · newest 2,000 of 12,345");
-    expect(withCollectedNote(scope, { truncated: false })).toBe(scope);
+    expect(lastScope({ scope: {}, latest_run: { scope: fixed } })).toEqual(
+      fixed,
+    );
   });
 
   it("describes filters in words", () => {
@@ -159,15 +190,18 @@ describe("payloads", () => {
     ]);
   });
 
-  it("builds a new-report request", () => {
-    const scope = buildScope({ preset: "7d", window: presetWindow("7d", NOW) });
-    const body = buildRunPayload({
-      projectId: "p1",
-      draft,
-      scope,
-      population: [{ id: "s1" }, { id: "s2" }],
-    });
-    expect(body).toEqual({
+  it("builds a new-report request the server reads the rows of", () => {
+    const scope = storedScope(defaultScope("sessions", NOW));
+    const body = buildRunPayload({ projectId: "p1", draft, scope });
+    expect(body).not.toHaveProperty("population");
+    expect(
+      buildRunPayload({
+        projectId: "p1",
+        draft,
+        scope,
+        population: [{ id: "s1" }, { id: "s2" }],
+      }),
+    ).toEqual({
       project_id: "p1",
       config: {
         name: "Failures",
@@ -219,17 +253,10 @@ describe("sampleSentence", () => {
     ).toBe("Analysing all 108 sessions");
   });
 
-  it("says how large the sample is and where it comes from", () => {
+  it("says how large the sample is", () => {
     expect(
-      sampleSentence({
-        unit: "traces",
-        total: 12345,
-        sampleSize: 300,
-        collectLimit: 2000,
-      }),
-    ).toBe(
-      "Analysing an even sample of 300 of 12,345 traces, drawn from the newest 2,000",
-    );
+      sampleSentence({ unit: "traces", total: 12345, sampleSize: 300 }),
+    ).toBe("Analysing an even sample of 300 of 12,345 traces");
     expect(
       sampleSentence({
         unit: "users",

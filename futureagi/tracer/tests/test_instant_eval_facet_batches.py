@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from tracer.services import instant_eval_rows as rows
+from tracer.services import instant_eval_users
 from tracer.tests.test_session_trace_ids_prefilter import _client
 
 W0 = datetime(2025, 3, 1, tzinfo=UTC)
@@ -203,7 +204,7 @@ def test_traces_and_spans_read_a_slice_at_a_time_match(world, monkeypatch, row_t
 def test_a_users_sessions_read_in_the_window_match_all_of_time(world, monkeypatch):
     """A user question's sessions were read over all of time; they are now
     read in the run's window and a day either side, a slice at a time."""
-    sids = rows.user_sessions(world["project"], world["users"], W0, W1)
+    sids = instant_eval_users.user_sessions(world["project"], world["users"], W0, W1)
     assert len(sids) > 1000
     expected = _whole_window(world["project"], "sessions", sids, None, None)
     _bounded(monkeypatch, 1000)

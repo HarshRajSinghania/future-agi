@@ -266,6 +266,9 @@ export async function estimateAsk({
   unit,
   filters = [],
   ids,
+  search,
+  datePreset,
+  label,
   sampleSize = null,
   questions = 1,
   signal,
@@ -277,6 +280,9 @@ export async function estimateAsk({
       unit,
       filters,
       ...(ids?.length ? { ids } : {}),
+      ...(search ? { search } : {}),
+      ...(datePreset ? { date_preset: datePreset } : {}),
+      ...(label ? { label: String(label).slice(0, 300) } : {}),
       sample_size: sampleSize,
       questions,
     },
@@ -338,7 +344,9 @@ export function askError(error) {
  * Ask Jev the questions about a view: save each question as a Jev evaluator
  * (or reuse the saved one), then let the server resolve the view's rows (a
  * hash-ordered sample of `sampleSize`, or all of them) or read the rows
- * handed over by id, and start the run.
+ * handed over by id, and start the run. The view's date option and label
+ * are kept with the run, so it can be asked again over a window moved to
+ * now.
  */
 export async function startAskRun({
   projectId,
@@ -348,8 +356,11 @@ export async function startAskRun({
   reads,
   filters = [],
   ids,
+  search,
   sampleSize = null,
   confirm = false,
+  datePreset,
+  label,
 }) {
   const runReads = normalizeReads(unit, reads || existingItems?.[0]?.reads);
   const saved = existingItems
@@ -362,11 +373,15 @@ export async function startAskRun({
     response = await axios.post(endpoints.project.instantEvalStart(), {
       project_id: projectId,
       unit,
-      filters: ids?.length ? [] : filters,
+      // Users handed over by id are read inside the view's window.
+      filters: ids?.length && unit !== "users" ? [] : filters,
       ...(ids?.length ? { ids } : {}),
+      ...(search && !ids?.length ? { search } : {}),
       sample_size: ids?.length ? null : sampleSize,
       config_ids: saved.map((item) => item.configId),
       confirm,
+      ...(datePreset ? { date_preset: datePreset } : {}),
+      ...(label ? { label: String(label).slice(0, 300) } : {}),
     });
   } catch (error) {
     const known = askError(error);

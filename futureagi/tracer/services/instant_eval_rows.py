@@ -136,31 +136,17 @@ def _ch(sql: str, params: dict) -> list[dict]:
     )
 
 
-def _user_filters_only_window(filters: list[dict]) -> bool:
-    return all(
-        (item.get("column_id") or item.get("columnId")) in ("created_at", "start_time")
-        for item in filters or []
-    )
+def count_population(
+    project_id: str, unit: str, filters: list[dict], *, search: str | None = None
+) -> Population:
+    """How many rows the view holds, from the grid's own count query (for
+    users, the Users list's: ``instant_eval_users``, with its search text)."""
+    if unit == "users":
+        from tracer.services.instant_eval_users import count_users
 
-
-def count_population(project_id: str, unit: str, filters: list[dict]) -> Population:
-    """How many rows the view holds, from the grid's own count query."""
+        return count_users(project_id, filters, search=search)
     row_type = ROW_TYPE[unit]
     pinned, start, end = _frozen_filters(filters, row_type)
-    if unit == "users":
-        if not _user_filters_only_window(filters):
-            raise PopulationUnavailable(
-                "A user question over filtered users needs the users handed over."
-            )
-        rows = _ch(
-            "SELECT uniqExact(end_user_id) AS total FROM spans "
-            "WHERE project_id = %(pid)s AND is_deleted = 0 "
-            "AND start_time >= %(start)s AND start_time < %(end)s "
-            "AND end_user_id IS NOT NULL",
-            {"pid": str(project_id), "start": start, "end": end},
-        )
-        total = int(rows[0]["total"]) if rows else 0
-        return Population(total, False, start, end, pinned)
     try:
         builder, _ = _builder(project_id, row_type, pinned)
         # The grids build their page first; that binds the window the count
@@ -185,30 +171,25 @@ def pick_rows(
     after: int | None,
     extents: dict[str, Extent | None] | None = None,
     window: tuple[datetime | None, datetime | None] = (None, None),
+    search: str | None = None,
 ) -> list[tuple[str, int]]:
     """The next ``n`` rows of the view in hash order, as (row id, hash).
 
     Given ``extents``, the same statement also fills it with each row's
     ``Extent`` in the facet window of the run's ``window``, or None for a row
     with no spans there: what ``read_facets`` batches and bounds its reads
-    by. The rows are picked again inside it, rather than bound as ids."""
+    by. The rows are picked again inside it, rather than bound as ids. Users
+    are the Users list's (``instant_eval_users``), with its search text."""
     if n <= 0:
         return []
-    row_type = ROW_TYPE[unit]
     if unit == "users":
-        pinned, start, end = _frozen_filters(filters, row_type)
-        inner = (
-            "SELECT DISTINCT end_user_id AS rid_src FROM spans "
-            "WHERE project_id = %(pid)s AND is_deleted = 0 "
-            "AND start_time >= %(start)s AND start_time < %(end)s "
-            "AND end_user_id IS NOT NULL"
-        )
-        params: dict[str, Any] = {"pid": str(project_id), "start": start, "end": end}
-        id_col = "rid_src"
-    else:
-        builder, id_col = _builder(project_id, row_type, filters)
-        inner, params = builder.build_id_query()
-        params = dict(params)
+        from tracer.services.instant_eval_users import pick_users
+
+        return pick_users(project_id, filters, n=n, after=after, search=search)
+    row_type = ROW_TYPE[unit]
+    builder, id_col = _builder(project_id, row_type, filters)
+    inner, params = builder.build_id_query()
+    params = dict(params)
     params["ie_n"] = int(n)
     where = ""
     if after is not None:
@@ -219,7 +200,7 @@ def pick_rows(
         f"SELECT toString({id_col}) AS rid, cityHash64(toString({id_col})) AS h "
         f"FROM ({inner})) {where} ORDER BY h, rid LIMIT %(ie_n)s"
     )
-    if extents is None or unit == "users":
+    if extents is None:
         return [(str(r["rid"]), int(r["h"])) for r in _ch(sql, params) if r.get("rid")]
     span_window, window_params = _facet_window(*window, prefix="ie_")
     params.update(window_params, ie_pid=str(project_id))
@@ -257,38 +238,6 @@ def row_hashes(ids: Iterable[str]) -> dict[str, int]:
         {"ids": ids},
     )
     return {str(r["rid"]): int(r["h"]) for r in rows}
-
-
-def user_sessions(
-    project_id: str, user_ids: list[str], start: datetime | None, end: datetime | None
-) -> list[str]:
-    """Each user's latest sessions in the window, newest first."""
-    if not user_ids:
-        return []
-    out: list[str] = []
-    for chunk in _chunks(user_ids, _FACET_BATCH):
-        where = [
-            "project_id = %(pid)s",
-            "is_deleted = 0",
-            "toString(end_user_id) IN %(uids)s",
-            "trace_session_id IS NOT NULL",
-        ]
-        params: dict[str, Any] = {"pid": str(project_id), "uids": tuple(chunk)}
-        if start is not None:
-            where.append("start_time >= %(start)s")
-            params["start"] = start
-        if end is not None:
-            where.append("start_time < %(end)s")
-            params["end"] = end
-        rows = _ch(
-            "SELECT toString(trace_session_id) AS sid, any(end_user_id) AS uid, "
-            "min(start_time) AS t FROM spans "
-            f"WHERE {' AND '.join(where)} GROUP BY trace_session_id "
-            f"ORDER BY uid, t DESC LIMIT {SESSIONS_PER_USER} BY uid",
-            params,
-        )
-        out.extend(str(r["sid"]) for r in rows)
-    return out
 
 
 # Rows written at once past which the planner is told about them straight
@@ -582,6 +531,7 @@ def extend_run(run) -> int:
     """Pick and store rows until the run holds ``rows_requested`` of them (or
     the view runs out). Returns how many rows were added."""
     from tracer.models.instant_eval import InstantEvalRow
+    from tracer.services import instant_eval_users
 
     task = run.eval_task
     stored = InstantEvalRow.objects.filter(task_id=task.id)
@@ -599,8 +549,14 @@ def extend_run(run) -> int:
     project_id = str(run.project_id)
     row_type = ROW_TYPE[run.unit]
     explicit = _explicit_ids(task)
-    # Hand-overs name rows from any time; a view's rows sit in its window.
-    start, end = (run.date_from, run.date_to) if explicit is None else (None, None)
+    # Hand-overs name rows from any time; a view's rows sit in its window. A
+    # user's sessions are read inside the run's window either way: one started
+    # before runs kept it reads the 30 days before it started, as the lists do.
+    start, end = (
+        (run.date_from, run.date_to) if explicit is None or users else (None, None)
+    )
+    if users and (start is None or end is None):
+        start, end = run.created_at - timedelta(days=30), run.created_at
     # Past one facet read, when each picked row's spans start: each read
     # then covers a slice of time.
     extents: dict[str, Extent | None] = {}
@@ -618,6 +574,7 @@ def extend_run(run) -> int:
             after=after,
             extents=extents if wanted > _FACET_BATCH else None,
             window=(start, end),
+            search=run.search,
         )
     if not picked:
         return 0
@@ -625,7 +582,9 @@ def extend_run(run) -> int:
     if users:
         # A user's sessions are read like a session question's: in the run's
         # window and a day either side.
-        session_ids = user_sessions(project_id, [rid for rid, _ in picked], start, end)
+        session_ids = instant_eval_users.user_sessions(
+            project_id, [rid for rid, _ in picked], start, end
+        )
         hashes = row_hashes(session_ids)
         ranked_ids = sorted(session_ids, key=lambda s: (hashes.get(s, 0), s))
     else:

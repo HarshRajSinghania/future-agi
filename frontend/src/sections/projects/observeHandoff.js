@@ -40,8 +40,10 @@ export function readHandoff(key) {
  *
  * seed: {
  *   unit: "traces" | "sessions" | "users",
- *   filters?: backend filters of the source view,
- *   label?: human scope label ("Past 7 days · 2 filters"),
+ *   filters?: backend filters of the source view, its created_at window included,
+ *   dateOption?: the view's date preset ("7D", "Today", …) or "Custom",
+ *   window?: [isoStart, isoEnd], the window those filters carry,
+ *   label?: human scope label ("Past 7D · 2 filters"),
  *   population?: [{id, time, user_id}]  // exact rows, e.g. every "No" answer
  *   question?: string                    // a starting question for the report
  *   source?: string                      // "Instant eval: <question>"
@@ -68,10 +70,13 @@ export const UNIT_TAB = {
  *
  * ask: {
  *   unit: "traces" | "spans" | "sessions" | "users",
- *   filters?: backend filters of the source view,
+ *   filters?: backend filters of the source view, its created_at window included,
+ *   dateOption?: the view's date preset ("7D", "Today", …) or "Custom",
+ *   window?: [isoStart, isoEnd], the window those filters carry,
  *   label?: human scope label ("Past 7D · 2 filters"),
  *   population?: [{id, time, user_id}],   // exact rows, when already known
  *   ids?: string[],                       // only these rows
+ *   source?: string,                      // where the scope came from, when not a view
  *   questions?: [{question, answerType: "yes_no" | "category", categories?, definitions?}],
  * }
  */
