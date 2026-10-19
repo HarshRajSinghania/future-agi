@@ -50717,48 +50717,6 @@
             },
             "parameters": []
         },
-        "/simulate/api/harness-compositions/": {
-            "post": {
-                "operationId": "simulate_api_harness-compositions_create",
-                "description": "Compose a release suite with an agent through a canonical binding, no adaptation.",
-                "parameters": [
-                    {
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/HarnessReleaseAgentRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/HarnessCompositionCreateResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiTextErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "simulate"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": []
-        },
         "/simulate/api/harness-environments/": {
             "get": {
                 "operationId": "simulate_api_harness-environments_list",
@@ -124253,20 +124211,6 @@
                 }
             }
         },
-        "HarnessCompositionCreateResponse": {
-            "required": [
-                "id"
-            ],
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "description": "The composition, an environment id.",
-                    "type": "string",
-                    "format": "uuid"
-                }
-            }
-        },
         "HarnessEnvironment": {
             "required": [
                 "id",
@@ -125483,6 +125427,25 @@
                 }
             }
         },
+        "HarnessCompositionRule": {
+            "description": "The environment's agent_policy rules no scenario in this suite grades.",
+            "required": [
+                "id",
+                "text"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "text": {
+                    "title": "Text",
+                    "type": "string"
+                }
+            }
+        },
         "HarnessCompositionScenario": {
             "required": [
                 "key",
@@ -125519,6 +125482,7 @@
                 "name",
                 "parent_digest",
                 "policy_profile",
+                "unscored_agent_rules",
                 "scenarios"
             ],
             "type": "object",
@@ -125542,6 +125506,13 @@
                 "policy_profile": {
                     "title": "Policy profile",
                     "type": "object"
+                },
+                "unscored_agent_rules": {
+                    "description": "The environment's agent_policy rules no scenario in this suite grades.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/HarnessCompositionRule"
+                    }
                 },
                 "scenarios": {
                     "type": "array",

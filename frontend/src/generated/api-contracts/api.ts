@@ -583,7 +583,6 @@ import type {
   GroupingOutboxResponseApi,
   HarnessAcceptedResponseApi,
   HarnessArtifactUploadResponseApi,
-  HarnessCompositionCreateResponseApi,
   HarnessConversationAdjustmentApi,
   HarnessConversationAdjustmentResponseApi,
   HarnessConversationEventAckApi,
@@ -58682,58 +58681,6 @@ export const simulateApiHarnessAdaptationsCreate = async (
 ): Promise<simulateApiHarnessAdaptationsCreateResponse> => {
   return apiMutator<simulateApiHarnessAdaptationsCreateResponse>(
     getSimulateApiHarnessAdaptationsCreateUrl(),
-    {
-      ...options,
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      body: JSON.stringify(harnessReleaseAgentRequestApi),
-    },
-  );
-};
-
-export type simulateApiHarnessCompositionsCreateResponse201 = {
-  data: HarnessCompositionCreateResponseApi;
-  status: 201;
-};
-
-export type simulateApiHarnessCompositionsCreateResponse404 = {
-  data: ApiTextErrorResponseApi;
-  status: 404;
-};
-
-export type simulateApiHarnessCompositionsCreateResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 201 | 404>;
-};
-
-export type simulateApiHarnessCompositionsCreateResponseSuccess =
-  simulateApiHarnessCompositionsCreateResponse201 & {
-    headers: Headers;
-  };
-export type simulateApiHarnessCompositionsCreateResponseError = (
-  | simulateApiHarnessCompositionsCreateResponse404
-  | simulateApiHarnessCompositionsCreateResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type simulateApiHarnessCompositionsCreateResponse =
-  | simulateApiHarnessCompositionsCreateResponseSuccess
-  | simulateApiHarnessCompositionsCreateResponseError;
-
-export const getSimulateApiHarnessCompositionsCreateUrl = () => {
-  return `/simulate/api/harness-compositions/`;
-};
-
-/**
- * Compose a release suite with an agent through a canonical binding, no adaptation.
- */
-export const simulateApiHarnessCompositionsCreate = async (
-  harnessReleaseAgentRequestApi: HarnessReleaseAgentRequestApi,
-  options?: RequestInit,
-): Promise<simulateApiHarnessCompositionsCreateResponse> => {
-  return apiMutator<simulateApiHarnessCompositionsCreateResponse>(
-    getSimulateApiHarnessCompositionsCreateUrl(),
     {
       ...options,
       method: "POST",

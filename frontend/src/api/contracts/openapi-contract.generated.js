@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1074,
+  endpointCount: 1073,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -28136,28 +28136,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         responses: {
           202: {
             $ref: "#/definitions/HarnessJobRead",
-          },
-          404: {
-            $ref: "#/definitions/ApiTextErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/simulate/api/harness-compositions/": {
-      post: {
-        operationId: "simulate_api_harness-compositions_create",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: {
-          $ref: "#/definitions/HarnessReleaseAgentRequest",
-        },
-        queryParameters: {},
-        responses: {
-          201: {
-            $ref: "#/definitions/HarnessCompositionCreateResponse",
           },
           404: {
             $ref: "#/definitions/ApiTextErrorResponse",
@@ -62870,18 +62848,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         duplicate: {
           title: "Duplicate",
           type: "boolean",
-        },
-      },
-    },
-    HarnessCompositionCreateResponse: {
-      required: ["id"],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          description: "The composition, an environment id.",
-          type: "string",
-          format: "uuid",
         },
       },
     },
@@ -111116,6 +111082,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "name",
         "parent_digest",
         "policy_profile",
+        "unscored_agent_rules",
         "scenarios",
       ],
       type: "object",
@@ -111139,6 +111106,14 @@ export const OPENAPI_CONTRACT = Object.freeze({
         policy_profile: {
           title: "Policy profile",
           type: "object",
+        },
+        unscored_agent_rules: {
+          description:
+            "The environment's agent_policy rules no scenario in this suite grades.",
+          type: "array",
+          items: {
+            $ref: "#/definitions/HarnessCompositionRule",
+          },
         },
         scenarios: {
           type: "array",
@@ -118981,6 +118956,23 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         status: {
           title: "Status",
+          type: "string",
+        },
+      },
+    },
+    HarnessCompositionRule: {
+      description:
+        "The environment's agent_policy rules no scenario in this suite grades.",
+      required: ["id", "text"],
+      type: "object",
+      properties: {
+        id: {
+          title: "Id",
+          type: "string",
+          minLength: 1,
+        },
+        text: {
+          title: "Text",
           type: "string",
         },
       },

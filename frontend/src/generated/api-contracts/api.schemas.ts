@@ -17461,11 +17461,6 @@ export interface HarnessJobReadApi {
   usage_limit?: HarnessJobReadApiUsageLimit;
 }
 
-export interface HarnessCompositionCreateResponseApi {
-  /** The composition, an environment id. */
-  id: string;
-}
-
 export type HarnessEnvironmentApiAgentType =
   (typeof HarnessEnvironmentApiAgentType)[keyof typeof HarnessEnvironmentApiAgentType];
 
@@ -17881,6 +17876,15 @@ export interface HarnessCompositionReleaseApi {
   name: string;
 }
 
+/**
+ * The environment's agent_policy rules no scenario in this suite grades.
+ */
+export interface HarnessCompositionRuleApi {
+  /** @minLength 1 */
+  id: string;
+  text: string;
+}
+
 export type HarnessCompositionScenarioApiOrigin =
   (typeof HarnessCompositionScenarioApiOrigin)[keyof typeof HarnessCompositionScenarioApiOrigin];
 
@@ -17910,6 +17914,8 @@ export interface HarnessCompositionSuiteApi {
   /** @minLength 1 */
   parent_digest: string;
   policy_profile: HarnessCompositionSuiteApiPolicyProfile;
+  /** The environment's agent_policy rules no scenario in this suite grades. */
+  unscored_agent_rules: HarnessCompositionRuleApi[];
   scenarios: HarnessCompositionScenarioApi[];
 }
 
