@@ -39,8 +39,12 @@ import {
   MAX_HANDOVER,
   choiceCost,
   defaultChoice,
+  maxSampleSize,
   offeredSizes,
+  parseSampleSize,
+  sampleSizeProblem,
   useAskScope,
+  withSampleChoice,
 } from "./askPopulation";
 import { creditAmount, creditWords, durationWords } from "./askFilter";
 import { sourceViewTitle } from "./askLinks";
@@ -49,6 +53,8 @@ import { scopeWords } from "./askFormat";
 const asDraft = (entry) => draftsFromQuestions([entry])[0];
 
 const ALL = "all";
+// A sample size typed in rather than picked from the menu.
+const CUSTOM = "custom";
 
 function ChoiceCard({
   selected,
@@ -127,7 +133,12 @@ function ChoiceCard({
               />
             )}
           </Box>
-          <Typography variant="body2" fontWeight={600} sx={{ flex: 1 }}>
+          <Typography
+            variant="body2"
+            component="div"
+            fontWeight={600}
+            sx={{ flex: 1 }}
+          >
             {title}
           </Typography>
           {children}
@@ -225,6 +236,83 @@ CreditNote.propTypes = {
   onChoose: PropTypes.func.isRequired,
 };
 
+// "A sample of [1500] sessions": a sample size typed in, costed as it settles.
+function SampleSizeBox({ custom, plural }) {
+  return (
+    <Stack component="span" direction="row" spacing={0.75} alignItems="center">
+      <span>A sample of</span>
+      <TextField
+        size="small"
+        variant="standard"
+        type="number"
+        autoFocus={custom.focus}
+        value={custom.text}
+        onChange={(event) => custom.onText(event.target.value)}
+        error={Boolean(custom.problem)}
+        inputProps={{
+          min: 1,
+          max: custom.max || undefined,
+          step: 1,
+          inputMode: "numeric",
+          "aria-label": "Custom sample size",
+        }}
+        sx={{
+          width: 96,
+          "& .MuiInput-input": {
+            py: 0,
+            fontSize: 14,
+            fontWeight: 600,
+            fontVariantNumeric: "tabular-nums",
+          },
+        }}
+      />
+      <span>{plural}</span>
+      {custom.updating && !custom.problem && (
+        <CircularProgress
+          size={12}
+          thickness={5}
+          aria-label="Costing this sample"
+        />
+      )}
+    </Stack>
+  );
+}
+
+SampleSizeBox.propTypes = {
+  custom: PropTypes.object.isRequired,
+  plural: PropTypes.string.isRequired,
+};
+
+// Why a typed size can't run, and the largest that can, one click away.
+function SizeProblem({ problem, onUse }) {
+  return (
+    <>
+      {problem.message}
+      {problem.max > 0 && (
+        <>
+          {" "}
+          <Link
+            component="button"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onUse(String(problem.max));
+            }}
+          >
+            Use {problem.max.toLocaleString()}
+          </Link>
+        </>
+      )}
+    </>
+  );
+}
+
+SizeProblem.propTypes = {
+  problem: PropTypes.shape({ message: PropTypes.string, max: PropTypes.number })
+    .isRequired,
+  onUse: PropTypes.func.isRequired,
+};
+
 function ScopeCard({
   projectId,
   unit,
@@ -238,6 +326,8 @@ function ScopeCard({
   choice,
   sizes,
   shownSize,
+  custom,
+  sizeNotice,
   onChoose,
   questions,
 }) {
@@ -246,8 +336,15 @@ function ScopeCard({
   const words = fixed ? scopeWords(from) : "";
   const { estimate } = population;
   const count = estimate?.population ?? 0;
-  const sampled = choice !== ALL && sizes.length > 0;
-  const sampleCost = choiceCost(estimate, shownSize, questions);
+  const sampled =
+    choice !== ALL && !custom.coversAll && (sizes.length > 0 || custom.small);
+  // The sample card shows a typed size while it is chosen, or was last.
+  const typed = custom.shown;
+  const sampleCost = typed
+    ? custom.problem
+      ? null
+      : choiceCost(custom.estimate, custom.size, questions)
+    : choiceCost(estimate, shownSize, questions);
   const allCost = choiceCost(estimate, null, questions);
   const noun = count === 1 ? meta.noun : meta.plural;
   const counted = `${formatCount(count, estimate?.population_is_lower_bound)} ${noun}`;
@@ -357,22 +454,34 @@ function ScopeCard({
           {sizes.length > 0 && (
             <ChoiceCard
               selected={sampled}
-              onSelect={() => onChoose(shownSize)}
+              onSelect={() => onChoose(typed ? CUSTOM : shownSize)}
               title={
-                <>
-                  A sample of{" "}
-                  <Box
-                    component="span"
-                    sx={{ fontVariantNumeric: "tabular-nums" }}
-                  >
-                    {shownSize.toLocaleString()}
-                  </Box>
-                </>
+                typed ? (
+                  <SampleSizeBox custom={custom} plural={meta.plural} />
+                ) : (
+                  <>
+                    A sample of{" "}
+                    <Box
+                      component="span"
+                      sx={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {shownSize.toLocaleString()}
+                    </Box>
+                  </>
+                )
               }
-              detail={`${costLine(sampleCost, unit, estimate)}. Picked at random; the same rows each time.`}
-              noteIsReason={Boolean(sampleCost?.creditLimited)}
+              detail={
+                sampleCost
+                  ? `${costLine(sampleCost, unit, typed ? custom.estimate : estimate)}. Picked at random; the same rows each time.`
+                  : null
+              }
+              noteIsReason={Boolean(
+                (typed && custom.problem) || sampleCost?.creditLimited,
+              )}
               note={
-                sampleCost?.creditLimited ? (
+                typed && custom.problem ? (
+                  <SizeProblem problem={custom.problem} onUse={custom.onText} />
+                ) : sampleCost?.creditLimited ? (
                   <CreditNote
                     cost={sampleCost}
                     estimate={estimate}
@@ -386,9 +495,15 @@ function ScopeCard({
                 select
                 size="small"
                 variant="standard"
-                value={shownSize}
+                value={typed ? CUSTOM : shownSize}
                 onClick={(event) => event.stopPropagation()}
-                onChange={(event) => onChoose(Number(event.target.value))}
+                onChange={(event) =>
+                  onChoose(
+                    event.target.value === CUSTOM
+                      ? CUSTOM
+                      : Number(event.target.value),
+                  )
+                }
                 SelectProps={{
                   renderValue: () => "Change",
                   inputProps: { "aria-label": "Sample size" },
@@ -400,6 +515,7 @@ function ScopeCard({
                     {size.toLocaleString()} {meta.plural}
                   </MenuItem>
                 ))}
+                <MenuItem value={CUSTOM}>Custom…</MenuItem>
               </TextField>
             </ChoiceCard>
           )}
@@ -427,6 +543,67 @@ function ScopeCard({
           />
         </Stack>
       )}
+      {estimate && count > 1 && custom.small && (
+        <Box sx={{ mt: 1.25, pl: 0.5 }}>
+          {custom.shown ? (
+            <>
+              <Stack
+                direction="row"
+                spacing={1.5}
+                alignItems="center"
+                flexWrap="wrap"
+                useFlexGap
+              >
+                <Typography variant="body2" component="div" fontWeight={600}>
+                  <SampleSizeBox custom={custom} plural={meta.plural} />
+                </Typography>
+                <Link
+                  component="button"
+                  type="button"
+                  variant="caption"
+                  onClick={custom.onClose}
+                >
+                  Read every one instead
+                </Link>
+              </Stack>
+              <Typography
+                variant="caption"
+                color={custom.problem ? "text.primary" : "text.secondary"}
+                component="p"
+                sx={{ mt: 0.5, fontVariantNumeric: "tabular-nums" }}
+              >
+                {custom.problem ? (
+                  <SizeProblem problem={custom.problem} onUse={custom.onText} />
+                ) : custom.coversAll ? (
+                  `That is every one of the ${count.toLocaleString()}, so Jev reads every one.`
+                ) : sampleCost ? (
+                  `${costLine(sampleCost, unit, custom.estimate)}. Picked at random; the same rows each time.`
+                ) : null}
+              </Typography>
+            </>
+          ) : (
+            <Link
+              component="button"
+              type="button"
+              variant="caption"
+              onClick={custom.onOpen}
+            >
+              Read a sample instead
+            </Link>
+          )}
+        </Box>
+      )}
+      {sizeNotice && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="p"
+          role="status"
+          sx={{ mt: 1 }}
+        >
+          {sizeNotice}
+        </Typography>
+      )}
     </Paper>
   );
 }
@@ -446,6 +623,11 @@ ScopeCard.propTypes = {
   choice: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
   sizes: PropTypes.arrayOf(PropTypes.number).isRequired,
   shownSize: PropTypes.number,
+  // A typed sample size: {shown, small, coversAll, text, size, problem,
+  // estimate, updating, max, focus, onText, onOpen, onClose}.
+  custom: PropTypes.object.isRequired,
+  // Why the sample size changed on its own (the view shrank below it).
+  sizeNotice: PropTypes.string,
   onChoose: PropTypes.func.isRequired,
   questions: PropTypes.number.isRequired,
 };
@@ -471,7 +653,17 @@ export default function AskComposer({
 }) {
   const meta = unitMeta(unit);
   const jev = useJevAvailability();
-  const population = useAskScope({ projectId, unit, scope });
+  // A sample size typed in, read before the scope's estimate is known so
+  // the server can cost it too.
+  const [customText, setCustomText] = useState("");
+  const [picked, setPicked] = useState(null);
+  const typedSize = picked === CUSTOM ? parseSampleSize(customText) : null;
+  const population = useAskScope({
+    projectId,
+    unit,
+    scope,
+    sampleSize: Number.isNaN(typedSize) ? null : typedSize,
+  });
   const saved = useInstantEvals(projectId, { unit });
   const [questions, setQuestions] = useState(() =>
     seed?.questions?.length
@@ -480,9 +672,11 @@ export default function AskComposer({
   );
   const [reads, setReads] = useState(() => defaultReads(unit));
   // A sample of 1,000 above 1,000 rows, else every row, until one is picked.
-  const [picked, setPicked] = useState(null);
-  // The last sample size picked, offered again after a turn to every row.
+  // The last sample size picked (or CUSTOM), offered again after a turn to
+  // every row.
   const [lastSample, setLastSample] = useState(null);
+  // Focus the size box when Custom… is picked, not when it reappears.
+  const [focusCustom, setFocusCustom] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [touched, setTouched] = useState(false);
   const errors = questions.map((question) =>
@@ -492,19 +686,136 @@ export default function AskComposer({
   const estimate = population.estimate;
   const filled = Math.max(1, questions.filter((q) => q.question.trim()).length);
   const sizes = offeredSizes(estimate, filled);
+  const sampling = sizes.length > 0;
+  const count = estimate?.population ?? 0;
+  // A view too small for the fixed sizes reads every row, with a sample of
+  // any size a click away.
+  const small =
+    Boolean(estimate) &&
+    !population.handedOver &&
+    !population.fallback &&
+    !sampling &&
+    count > 1;
+  const [smallOpen, setSmallOpen] = useState(false);
+  const typing = sampling || (small && smallOpen);
   // A pick the scope's new count no longer offers falls back to the default.
   const choice =
-    picked === ALL || sizes.includes(picked)
+    (picked === CUSTOM && typing) || picked === ALL || sizes.includes(picked)
       ? picked
       : defaultChoice(estimate) ?? ALL;
-  const sampleSize = choice === ALL ? null : choice;
+  const typedShown = sampling
+    ? choice === CUSTOM || (choice === ALL && lastSample === CUSTOM)
+    : small && smallOpen;
+  const customSize = parseSampleSize(customText);
+  // On a small view a sample as big as the view is simply every row.
+  const coversAll =
+    small &&
+    choice === CUSTOM &&
+    Number.isInteger(customSize) &&
+    customSize >= count &&
+    !estimate?.population_is_lower_bound;
+  // The server has the last word on a size it costed (the view may have
+  // changed since it was counted).
+  const serverProblem =
+    population.sample.size === customSize
+      ? population.sample.estimate?.sample_error
+      : null;
+  const customProblem =
+    typedShown && !coversAll
+      ? sampleSizeProblem(customSize, estimate, meta) ||
+        (serverProblem
+          ? { message: serverProblem.message, max: serverProblem.sample_size }
+          : null)
+      : null;
+  // The fixed sizes' estimate, with a typed size costed by the server.
+  const customEstimate = withSampleChoice(estimate, population.sample);
+  const custom = {
+    shown: typedShown,
+    small,
+    coversAll,
+    text: customText,
+    size: customSize,
+    problem: customProblem,
+    estimate: customEstimate,
+    updating: population.sample.updating,
+    max: maxSampleSize(estimate),
+    focus: focusCustom,
+    onText: (text) => {
+      setCustomText(text);
+      setPicked(CUSTOM);
+      setLastSample(CUSTOM);
+      setSizeNotice(null);
+      setConfirming(false);
+    },
+    onOpen: () => {
+      setSmallOpen(true);
+      if (!customText)
+        setCustomText(String(Math.max(1, Math.min(50, count - 1))));
+      setPicked(CUSTOM);
+      setLastSample(CUSTOM);
+      setFocusCustom(true);
+      setSizeNotice(null);
+      setConfirming(false);
+    },
+    onClose: () => {
+      setSmallOpen(false);
+      setPicked(ALL);
+      setConfirming(false);
+    },
+  };
+  // A size picked for a bigger view is never sent once the view holds fewer
+  // rows: the choice turns to every row (or the largest size that fits).
+  const exactCount =
+    estimate && !estimate.population_is_lower_bound
+      ? estimate.population
+      : null;
+  const [seenCount, setSeenCount] = useState(null);
+  const [sizeNotice, setSizeNotice] = useState(null);
+  if (exactCount != null && exactCount !== seenCount) {
+    setSeenCount(exactCount);
+    const typedKept = picked === CUSTOM || lastSample === CUSTOM;
+    const kept = typedKept
+      ? customSize
+      : typeof picked === "number"
+        ? picked
+        : null;
+    if (kept > exactCount) {
+      const fallback =
+        choiceCost(estimate, null, filled)?.allowed || !sizes.length
+          ? ALL
+          : Math.max(...sizes);
+      setPicked(fallback);
+      setLastSample(fallback === ALL ? null : fallback);
+      setSizeNotice(
+        `This view now holds ${exactCount.toLocaleString()} ${
+          exactCount === 1 ? meta.noun : meta.plural
+        }, fewer than the sample of ${kept.toLocaleString()}, so ${
+          fallback === ALL
+            ? "Jev reads every one."
+            : `Jev reads a sample of ${fallback.toLocaleString()}.`
+        }`,
+      );
+    }
+  }
+  const sampleSize =
+    choice === ALL || coversAll
+      ? null
+      : choice === CUSTOM
+        ? customSize
+        : choice;
   const shownSize =
-    sampleSize ??
+    (choice === CUSTOM ? null : sampleSize) ??
     (sizes.includes(lastSample) ? lastSample : null) ??
     defaultChoice(estimate) ??
     sizes[0];
-  const cost = choiceCost(estimate, sampleSize, filled);
-  const count = estimate?.population ?? 0;
+  const cost =
+    choice === CUSTOM && !coversAll
+      ? customProblem
+        ? null
+        : choiceCost(customEstimate, customSize, filled)
+      : choiceCost(estimate, sampleSize, filled);
+  // A typed size is started once the server has costed it.
+  const costing = choice === CUSTOM && !coversAll && population.sample.updating;
   // A confirm restates one scope's credits; a new date or filter retracts it.
   useEffect(() => {
     setConfirming(false);
@@ -525,7 +836,7 @@ export default function AskComposer({
   const ask = (confirmed = false) => {
     setTouched(true);
     if (errors.some(Boolean) || !count || !cost?.allowed) return;
-    if (population.isUpdating) return;
+    if (population.isUpdating || costing) return;
     if (cost.needsConfirm && !confirmed) {
       setConfirming(true);
       return;
@@ -609,9 +920,16 @@ export default function AskComposer({
         choice={choice}
         sizes={sizes}
         shownSize={shownSize}
+        custom={custom}
+        sizeNotice={sizeNotice}
         onChoose={(next) => {
+          setSizeNotice(null);
           setPicked(next);
           if (next !== ALL) setLastSample(next);
+          // Custom… starts from the size shown, ready to edit.
+          if (next === CUSTOM && !customText)
+            setCustomText(String(shownSize ?? 1));
+          setFocusCustom(next === CUSTOM);
           setConfirming(false);
         }}
         questions={filled}
@@ -761,6 +1079,7 @@ export default function AskComposer({
             starting ||
             population.isLoading ||
             population.isUpdating ||
+            costing ||
             nothingInView ||
             !cost?.allowed ||
             confirming

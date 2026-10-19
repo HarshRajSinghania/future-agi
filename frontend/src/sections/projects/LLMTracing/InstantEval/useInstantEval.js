@@ -323,6 +323,22 @@ export class AskNoCredits extends Error {
   }
 }
 
+/**
+ * A start refused because its sample is larger than the view, or than one
+ * run reads. `sampleSize` is the largest that can run.
+ */
+export class AskSampleTooLarge extends Error {
+  constructor(detail) {
+    super(
+      detail?.message ||
+        detail?.detail ||
+        "That sample is larger than this view allows.",
+    );
+    this.name = "AskSampleTooLarge";
+    this.sampleSize = detail?.sample_size ?? null;
+  }
+}
+
 const errorDetail = (error) => {
   const data = error?.response?.data || {};
   return typeof data.result === "object" && data.result ? data.result : data;
@@ -336,6 +352,12 @@ export function askError(error) {
     return new AskNeedsConfirm(detail);
   if ((status === 402 || status === 403) && detail.credits_estimate != null)
     return new AskNoCredits(detail);
+  if (
+    status === 400 &&
+    (detail.code === "instant_eval_sample_too_large" ||
+      detail.error_code === "INSTANT_EVAL_SAMPLE_TOO_LARGE")
+  )
+    return new AskSampleTooLarge(detail);
   if (status === 429) return new AskBusy(detail);
   return error;
 }

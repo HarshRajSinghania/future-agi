@@ -35,6 +35,7 @@ import {
 import {
   AskBusy,
   AskNoCredits,
+  AskSampleTooLarge,
   HISTORY_KEY,
   startAskRun,
   useInstantEvalHistory,
@@ -352,7 +353,9 @@ export default function AskPage() {
               Open billing
             </Link>
           </>
-        ) : error instanceof AskBusy || error?.name === "AskNeedsConfirm" ? (
+        ) : error instanceof AskBusy ||
+          error instanceof AskSampleTooLarge ||
+          error?.name === "AskNeedsConfirm" ? (
           error.message
         ) : (
           getSafeActionErrorMessage(

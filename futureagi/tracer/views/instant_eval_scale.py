@@ -169,8 +169,14 @@ class InstantEvalScopeSerializer(serializers.Serializer):
         required=False,
         max_length=MAX_HANDOVER_IDS,
     )
-    # None (or absent) reads every row of the view.
-    sample_size = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    # None (or absent) reads every row of the view. Up to the view's rows, and
+    # the rows one run reads (``sample_error`` and the start's 400 say so).
+    sample_size = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+        error_messages={"min_value": "Choose a sample of at least 1."},
+    )
     # The view's date option and how its scope reads ("Past 7D · 2 filters"),
     # kept with the run so it can be asked again: the page re-anchors a
     # preset's window to now, and a custom window stays.
@@ -226,6 +232,14 @@ class InstantEvalCreditCheckSerializer(serializers.Serializer):
     message = serializers.CharField(allow_null=True)
 
 
+class InstantEvalSampleErrorSerializer(serializers.Serializer):
+    # INSTANT_EVAL_SAMPLE_TOO_LARGE.
+    error_code = serializers.CharField()
+    message = serializers.CharField()
+    # The largest sample, in the view's unit, that can run.
+    sample_size = serializers.IntegerField()
+
+
 class InstantEvalEstimateSerializer(serializers.Serializer):
     population = serializers.IntegerField()
     population_is_lower_bound = serializers.BooleanField()
@@ -246,6 +260,9 @@ class InstantEvalEstimateSerializer(serializers.Serializer):
     credit_max_sample = serializers.IntegerField(allow_null=True)
     # The absolute window the run reads: {"from", "to"}.
     window = serializers.JSONField()
+    # Why the chosen sample size can't run (more than the view holds, or than
+    # one run reads), or None. Starting it is refused with the same message.
+    sample_error = InstantEvalSampleErrorSerializer(allow_null=True)
 
 
 class InstantEvalEstimateResponseSerializer(serializers.Serializer):
@@ -562,6 +579,44 @@ def _choice(
     }
 
 
+SAMPLE_TOO_LARGE = "INSTANT_EVAL_SAMPLE_TOO_LARGE"
+
+
+def _noun(unit: str, n: int) -> str:
+    return unit[:-1] if n == 1 else unit
+
+
+def _sample_error(
+    unit: str, size: int | None, population: int, lower_bound: bool = False
+) -> dict | None:
+    """Why a chosen sample can't run, with the largest that can: more rows
+    than one run reads, or (when that isn't the limit) more than the view
+    holds. A user question's sample is in users and its rows are their
+    sessions; a view still being counted is held to the rows alone."""
+    if size is None or population <= 0:
+        return None
+    per_unit = _rows_for(unit, 1)
+    cap = max_rows() // per_unit
+    if lower_bound or population > cap:
+        if size <= cap:
+            return None
+        largest = cap
+        per = f" ({cap:,} users at {per_unit} sessions each)" if unit == "users" else ""
+        message = (
+            f"One run reads at most {max_rows():,} rows{per}; choose up to {cap:,}."
+        )
+    else:
+        if size <= population:
+            return None
+        largest = population
+        verb = "is" if population == 1 else "are"
+        message = (
+            f"There {verb} only {population:,} {_noun(unit, population)} in this "
+            f"view; choose up to {population:,}."
+        )
+    return {"error_code": SAMPLE_TOO_LARGE, "message": message, "sample_size": largest}
+
+
 def _person(user) -> dict | None:
     if user is None:
         return None
@@ -760,6 +815,9 @@ class InstantEvalEstimateView(APIView):
                 "credit_check": credit_check,
                 "credit_max_sample": fits,
                 "window": _window(population),
+                "sample_error": None
+                if ids
+                else _sample_error(unit, size, count, lower),
             }
         )
 
@@ -822,6 +880,10 @@ class InstantEvalStartView(APIView):
         if requested <= 0:
             return self._gm.bad_request(
                 f"There are no {unit} in this view to ask about."
+            )
+        if refused := _sample_error(unit, size, count):
+            return self._gm.custom_error_response(
+                400, refused["message"], code=SAMPLE_TOO_LARGE.lower()
             )
         if rows > max_rows():
             return self._gm.custom_error_response(
@@ -1197,7 +1259,12 @@ def _summary_payload(task, run, view, questions) -> dict:
     read = data["total"]
     is_sample = requested < population
     remaining = max(0, population - requested)
-    next_size = min(remaining, run.sample_size or DEFAULT_SAMPLE) if is_sample else 0
+    # "Read N more" reads the sample's own size again (a custom size too),
+    # up to what the view has left and the rows one run reads.
+    under_cap = max(0, max_rows() // _rows_for(view.unit, 1) - requested)
+    next_size = (
+        min(remaining, run.sample_size or DEFAULT_SAMPLE, under_cap) if is_sample else 0
+    )
     return {
         "status": status,
         "unit": view.unit,
@@ -1219,7 +1286,7 @@ def _summary_payload(task, run, view, questions) -> dict:
             "requested": requested,
             "read": read,
             "is_sample": is_sample,
-            "can_extend": is_sample and not running and status != "cancelled",
+            "can_extend": bool(next_size) and not running and status != "cancelled",
             "next_size": next_size,
         },
         "window": {
@@ -1685,7 +1752,8 @@ class InstantEvalControlView(APIView):
         with transaction.atomic():
             InstantEvalRun.objects.filter(id=run.id).update(
                 rows_requested=target,
-                sample_size=None if target >= run.population else target,
+                # The sample's size stays the size of each "Read more".
+                sample_size=None if target >= run.population else run.sample_size,
                 credits_estimate=run.credits_estimate + credits,
                 cancelled_at=None,
                 answers_version=F("answers_version") + 1,

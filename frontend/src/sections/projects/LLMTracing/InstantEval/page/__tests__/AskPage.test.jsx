@@ -1321,3 +1321,357 @@ describe("running a question again", () => {
     );
   });
 });
+
+describe("a sample size typed in", () => {
+  // The server costs any size as it costs the fixed ones.
+  const costed =
+    (estimate) =>
+    async ({ sampleSize }) =>
+      sampleSize
+        ? {
+            ...estimate,
+            rows_to_read: Math.min(sampleSize, estimate.population),
+            // Slower than reading every row would suggest, to tell them apart.
+            seconds_estimate: 10 + sampleSize,
+            needs_confirm: sampleSize > estimate.confirm_rows,
+          }
+        : estimate;
+  const sizesAsked = () =>
+    fakes.estimate.mock.calls
+      .map(([args]) => args.sampleSize)
+      .filter((size) => size != null);
+  const pickCustom = async () => {
+    const select = await screen.findByRole("combobox", { name: /Sample size/ });
+    fireEvent.mouseDown(select);
+    fireEvent.click(await screen.findByRole("option", { name: "Custom…" }));
+    return screen.getByRole("spinbutton", { name: "Custom sample size" });
+  };
+  const ask = () =>
+    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
+      target: { value: QUESTION },
+    });
+
+  it("costs a typed size on the server and starts with it", async () => {
+    fakes.estimate.mockImplementation(costed(ESTIMATE));
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-6",
+      questions: QUESTIONS,
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    const box = await pickCustom();
+    // It starts from the size that was shown.
+    expect(box).toHaveValue(1000);
+    fireEvent.change(box, { target: { value: "1500" } });
+    const card = screen.getByRole("radio", { name: /A sample of/ });
+    expect(card).toHaveAttribute("aria-checked", "true");
+    // Costed by the server once the typing settles.
+    expect(
+      await within(card).findByText(
+        /Reads 1,500 sessions · about 90 credits · about 25 min/,
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeInTheDocument();
+    expect(sizesAsked()).toEqual([1500]);
+    ask();
+    const start = await screen.findByRole("button", {
+      name: "Ask Jev about a sample of 1,500 sessions",
+    });
+    await waitFor(() => expect(start).toBeEnabled(), { timeout: 4000 });
+    await act(async () => {
+      fireEvent.click(start);
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({ sampleSize: 1500, confirm: false }),
+    );
+  });
+
+  it("says plainly why a size can't be read", async () => {
+    const big = { ...ESTIMATE, population: 150000 };
+    fakes.estimate.mockImplementation(costed(big));
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/150,000 sessions in the Sessions view/);
+    const box = await pickCustom();
+    ask();
+    for (const [typed, why] of [
+      ["0", "Choose a sample of at least 1."],
+      ["120000", "One run reads at most 100,000 rows; choose up to 100,000."],
+    ]) {
+      fireEvent.change(box, { target: { value: typed } });
+      expect(screen.getByText(why)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Ask Jev" })).toBeDisabled();
+    }
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    // None of them is costed.
+    expect(sizesAsked()).toEqual([]);
+    // The largest that can run is one click away.
+    fireEvent.click(screen.getByRole("button", { name: "Use 100,000" }));
+    expect(box).toHaveValue(100000);
+  });
+
+  it("offers the most a smaller view holds", async () => {
+    const small = { ...ESTIMATE, population: 3744 };
+    fakes.estimate.mockImplementation(costed(small));
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/3,744 sessions in the Sessions view/);
+    const box = await pickCustom();
+    fireEvent.change(box, { target: { value: "9000" } });
+    expect(
+      screen.getByText(
+        "There are only 3,744 sessions in this view; choose up to 3,744.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use 3,744" }));
+    expect(box).toHaveValue(3744);
+  });
+
+  it("says inline why a start was refused for its size", async () => {
+    const { AskSampleTooLarge } = await import("../../useInstantEval");
+    fakes.estimate.mockImplementation(costed(ESTIMATE));
+    fakes.startAskRun.mockRejectedValue(
+      new AskSampleTooLarge({
+        message:
+          "There are only 1,400 sessions in this view; choose up to 1,400.",
+        sample_size: 1400,
+      }),
+    );
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    fireEvent.change(await pickCustom(), { target: { value: "1500" } });
+    ask();
+    const start = await screen.findByRole("button", {
+      name: "Ask Jev about a sample of 1,500 sessions",
+    });
+    await waitFor(() => expect(start).toBeEnabled(), { timeout: 4000 });
+    await act(async () => {
+      fireEvent.click(start);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "There are only 1,400 sessions in this view; choose up to 1,400.",
+    );
+  });
+
+  it("turns a size the view no longer holds into every row, and says so", async () => {
+    fakes.estimate.mockImplementation(costed(ESTIMATE));
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    fireEvent.change(await pickCustom(), { target: { value: "1500" } });
+    // The view shrinks below the sample: a filter, a shorter date.
+    fakes.estimate.mockImplementation(costed(smallEstimate(400)));
+    fireEvent.click(screen.getByRole("button", { name: "Past 7D" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Today" }));
+    expect(
+      await screen.findByText(
+        "This view now holds 400 sessions, fewer than the sample of 1,500, so Jev reads every one.",
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: /Every one of the 400/ }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("shows the server's reason when it refuses a size it costed", async () => {
+    fakes.estimate.mockImplementation(async ({ sampleSize }) =>
+      sampleSize
+        ? {
+            ...ESTIMATE,
+            population: 1200,
+            sample_error: {
+              error_code: "INSTANT_EVAL_SAMPLE_TOO_LARGE",
+              message:
+                "There are only 1,200 sessions in this view; choose up to 1,200.",
+              sample_size: 1200,
+            },
+          }
+        : ESTIMATE,
+    );
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    fireEvent.change(await pickCustom(), { target: { value: "1500" } });
+    expect(
+      await screen.findByText(
+        "There are only 1,200 sessions in this view; choose up to 1,200.",
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeInTheDocument();
+    ask();
+    expect(screen.getByRole("button", { name: "Ask Jev" })).toBeDisabled();
+  });
+
+  it("waits for the typing to settle before costing it", async () => {
+    fakes.estimate.mockImplementation(costed(ESTIMATE));
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    const box = await pickCustom();
+    for (const typed of ["1", "12", "120", "1200"])
+      fireEvent.change(box, { target: { value: typed } });
+    await waitFor(() => expect(sizesAsked()).toEqual([1200]), {
+      timeout: 4000,
+    });
+  });
+
+  it("costs a typed size from every row when the server can't", async () => {
+    fakes.estimate.mockImplementation(async ({ sampleSize }) => {
+      if (sampleSize) throw new Error("unavailable");
+      return ESTIMATE;
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    fireEvent.change(await pickCustom(), { target: { value: "1500" } });
+    ask();
+    const start = await screen.findByRole("button", {
+      name: "Ask Jev about a sample of 1,500 sessions",
+    });
+    await waitFor(() => expect(start).toBeEnabled(), { timeout: 4000 });
+    expect(
+      within(screen.getByRole("radio", { name: /A sample of/ })).getByText(
+        /Reads 1,500 sessions/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("restates the credits for a typed size past the confirm limit", async () => {
+    fakes.estimate.mockImplementation(costed(ESTIMATE));
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-7",
+      questions: QUESTIONS,
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    await screen.findByText(/104,233 sessions in the Sessions view/);
+    fireEvent.change(await pickCustom(), { target: { value: "6000" } });
+    ask();
+    const start = await screen.findByRole("button", {
+      name: "Ask Jev about a sample of 6,000 sessions",
+    });
+    await waitFor(() => expect(start).toBeEnabled(), { timeout: 4000 });
+    fireEvent.click(start);
+    expect(fakes.startAskRun).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/Read 6,000 sessions\? That is about 360 credits/),
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({ sampleSize: 6000, confirm: true }),
+    );
+  });
+
+  it("remembers a typed size after a turn to every row", async () => {
+    const view = {
+      ...ESTIMATE,
+      population: 20000,
+      choices: [
+        ...ESTIMATE.choices.slice(0, 4),
+        {
+          sample_size: null,
+          rows_to_read: 20000,
+          seconds_estimate: 4010,
+          needs_confirm: true,
+          allowed: true,
+        },
+      ],
+    };
+    fakes.estimate.mockImplementation(costed(view));
+    renderAt(askLink(PROJECT, { unit: "sessions" }));
+    fireEvent.change(await pickCustom(), { target: { value: "1500" } });
+    fireEvent.click(screen.getByRole("radio", { name: /All 20,000/ }));
+    const sample = screen.getByRole("radio", { name: /A sample of/ });
+    expect(sample).toHaveAttribute("aria-checked", "false");
+    expect(
+      screen.getByRole("spinbutton", { name: "Custom sample size" }),
+    ).toHaveValue(1500);
+    fireEvent.click(sample);
+    expect(sample).toHaveAttribute("aria-checked", "true");
+    expect(
+      await within(sample).findByText(/Reads 1,500 sessions/),
+    ).toBeInTheDocument();
+  });
+
+  describe("on a view too small for the fixed sizes", () => {
+    it("reads every row by default, or a sample typed in", async () => {
+      fakes.estimate.mockImplementation(costed(smallEstimate(108)));
+      fakes.startAskRun.mockResolvedValue({
+        taskId: "task-8",
+        questions: QUESTIONS,
+      });
+      renderAt(askLink(PROJECT, { unit: "sessions" }));
+      const all = await screen.findByRole("radio", {
+        name: /Every one of the 108/,
+      });
+      expect(all).toHaveAttribute("aria-checked", "true");
+      expect(
+        screen.queryByRole("combobox", { name: /Sample size/ }),
+      ).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Read a sample instead" }),
+      );
+      const box = screen.getByRole("spinbutton", {
+        name: "Custom sample size",
+      });
+      fireEvent.change(box, { target: { value: "20" } });
+      expect(all).toHaveAttribute("aria-checked", "false");
+      expect(
+        await screen.findByText(
+          /Reads 20 sessions · about 1\.2 credits · about 30 s/,
+          {},
+          { timeout: 4000 },
+        ),
+      ).toBeInTheDocument();
+      expect(sizesAsked()).toEqual([20]);
+      ask();
+      const start = await screen.findByRole("button", {
+        name: "Ask Jev about a sample of 20 sessions",
+      });
+      await waitFor(() => expect(start).toBeEnabled(), { timeout: 4000 });
+      await act(async () => {
+        fireEvent.click(start);
+      });
+      expect(fakes.startAskRun).toHaveBeenCalledWith(
+        expect.objectContaining({ sampleSize: 20, confirm: false }),
+      );
+    });
+
+    it("reads every row for a sample as big as the view", async () => {
+      fakes.estimate.mockImplementation(costed(smallEstimate(108)));
+      fakes.startAskRun.mockResolvedValue({
+        taskId: "task-9",
+        questions: QUESTIONS,
+      });
+      renderAt(askLink(PROJECT, { unit: "sessions" }));
+      await screen.findByRole("radio", { name: /Every one of the 108/ });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Read a sample instead" }),
+      );
+      const box = screen.getByRole("spinbutton", {
+        name: "Custom sample size",
+      });
+      for (const typed of ["108", "500"]) {
+        fireEvent.change(box, { target: { value: typed } });
+        expect(
+          screen.getByText(
+            "That is every one of the 108, so Jev reads every one.",
+          ),
+        ).toBeInTheDocument();
+        expect(
+          screen.getByRole("radio", { name: /Every one of the 108/ }),
+        ).toHaveAttribute("aria-checked", "true");
+      }
+      ask();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Ask Jev about 108 sessions" }),
+        );
+      });
+      expect(fakes.startAskRun).toHaveBeenCalledWith(
+        expect.objectContaining({ sampleSize: null }),
+      );
+    });
+  });
+});

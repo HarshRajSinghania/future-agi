@@ -46,6 +46,57 @@ export const sampleSizes = (estimate) =>
 export const defaultChoice = (estimate) =>
   estimate?.default_sample_size ? estimate.default_sample_size : null;
 
+/**
+ * The largest sample one run can read of a view: its rows, within the run's
+ * row limit (a user is read as several sessions).
+ */
+export function maxSampleSize(estimate) {
+  if (!estimate) return 0;
+  const perUnit = estimate.sessions_per_user || 1;
+  const limit = Number.isFinite(estimate.max_rows)
+    ? Math.floor(estimate.max_rows / perUnit)
+    : Infinity;
+  return Math.min(estimate.population ?? 0, limit);
+}
+
+/** A typed sample size as a whole number, or NaN. */
+export const parseSampleSize = (text) =>
+  /^\s*\d+\s*$/.test(String(text ?? "")) ? Number(text) : NaN;
+
+/**
+ * Why a typed sample size can't run, as the server says it, with the largest
+ * that can: {message, max}, or null. Past a run's row limit, or (when that
+ * isn't the limit) past the view's rows; while a Users count is still
+ * climbing, only the row limit applies.
+ */
+export function sampleSizeProblem(size, estimate, { noun, plural }) {
+  if (!Number.isInteger(size) || size < 1)
+    return { message: "Choose a sample of at least 1.", max: null };
+  const population = estimate?.population ?? 0;
+  const perUnit = estimate?.sessions_per_user || 1;
+  const maxRows = estimate?.max_rows ?? Infinity;
+  const cap = Math.floor(maxRows / perUnit);
+  if (estimate?.population_is_lower_bound || population > cap) {
+    if (size <= cap) return null;
+    const per =
+      perUnit > 1
+        ? ` (${cap.toLocaleString()} ${plural} at ${perUnit} sessions each)`
+        : "";
+    return {
+      message: `One run reads at most ${maxRows.toLocaleString()} rows${per}; choose up to ${cap.toLocaleString()}.`,
+      max: cap,
+    };
+  }
+  if (size <= population) return null;
+  const count = population.toLocaleString();
+  return {
+    message: `There ${population === 1 ? "is" : "are"} only ${count} ${
+      population === 1 ? noun : plural
+    } in this view; choose up to ${count}.`,
+    max: population,
+  };
+}
+
 /** The fixed sizes, plus the largest sample the credits left pay for. */
 export function offeredSizes(estimate, questions = 1) {
   const count = estimate?.population ?? 0;
@@ -121,7 +172,7 @@ export function choiceCost(estimate, size, questions = 1) {
  * on screen while the next one is read. When the server can't read the
  * filters, the page collects the newest rows itself and hands them over.
  */
-export function useAskScope({ projectId, unit, scope }) {
+export function useAskScope({ projectId, unit, scope, sampleSize = null }) {
   const handed = useMemo(
     () => (scope?.ids?.length ? scope.ids.map(String) : null),
     [scope?.ids],
@@ -197,6 +248,52 @@ export function useAskScope({ projectId, unit, scope }) {
   // The shown count is for the settled filters, which a start then sends.
   const updating = settledKey !== readKey || query.isPlaceholderData;
   const estimate = query.data?.estimate || null;
+
+  // A size typed in: what reading that many costs, asked of the server like
+  // the fixed sizes once the typing settles.
+  const typedSize =
+    Number.isInteger(sampleSize) &&
+    sampleSize >= 1 &&
+    sampleSize <= maxSampleSize(estimate)
+      ? sampleSize
+      : null;
+  const settledSize = useDebounce(typedSize, SCOPE_SETTLE_MS);
+  const sized = useQuery({
+    queryKey: [
+      "ask-estimate",
+      projectId,
+      unit,
+      "",
+      settledKey,
+      "sample",
+      settledSize,
+    ],
+    enabled:
+      Boolean(projectId && estimate) &&
+      settledSize != null &&
+      !handed &&
+      !query.data?.fallbackIds,
+    queryFn: ({ signal }) =>
+      estimateAsk({
+        projectId,
+        unit,
+        filters,
+        search,
+        datePreset,
+        label,
+        sampleSize: settledSize,
+        signal,
+      }),
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+    retry: 1,
+    meta: { errorHandled: true },
+  });
+  const sizedEstimate =
+    settledSize != null && sized.data && !sized.isPlaceholderData
+      ? sized.data
+      : null;
+
   return {
     estimate,
     ids: ids || null,
@@ -213,5 +310,36 @@ export function useAskScope({ projectId, unit, scope }) {
     isUpdating: updating,
     isError: query.isError,
     refetch: query.refetch,
+    // The typed size's own estimate, once it is for that size. While it is
+    // read (or if it can't be), the size is costed from reading every row.
+    sample: {
+      size: sizedEstimate ? settledSize : null,
+      estimate: sizedEstimate,
+      updating:
+        typedSize != null && (settledSize !== typedSize || sized.isFetching),
+    },
+  };
+}
+
+/**
+ * The view's estimate with a typed size costed as the server costs it: one
+ * choice for that size among the fixed ones.
+ */
+export function withSampleChoice(estimate, sample) {
+  if (!estimate || !sample?.estimate || sample.size == null) return estimate;
+  const choice = {
+    sample_size: sample.size,
+    rows_to_read: sample.estimate.rows_to_read,
+    seconds_estimate: sample.estimate.seconds_estimate,
+    needs_confirm: sample.estimate.needs_confirm,
+  };
+  return {
+    ...estimate,
+    choices: [
+      ...(estimate.choices || []).filter(
+        (item) => item.sample_size !== sample.size,
+      ),
+      choice,
+    ],
   };
 }

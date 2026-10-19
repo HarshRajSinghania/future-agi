@@ -20,7 +20,11 @@ import {
   choiceCost,
   defaultChoice,
   handedIds,
+  maxSampleSize,
+  parseSampleSize,
+  sampleSizeProblem,
   sampleSizes,
+  withSampleChoice,
 } from "../askPopulation";
 import {
   creditCount,
@@ -653,5 +657,89 @@ describe("how long a run took", () => {
     ).toBe("running 41 min");
     // A summary without the split: the wall time since it started.
     expect(runTime({ elapsedMs: 21000, summary: {} }, " in ")).toBe(" in 21 s");
+  });
+});
+
+describe("a sample size typed in", () => {
+  const view = { population: 24473, max_rows: 100000, sessions_per_user: null };
+
+  it("reads only whole numbers", () => {
+    expect(parseSampleSize("1500")).toBe(1500);
+    expect(parseSampleSize(" 42 ")).toBe(42);
+    expect(parseSampleSize("1.5")).toBeNaN();
+    expect(parseSampleSize("")).toBeNaN();
+    expect(parseSampleSize("-3")).toBeNaN();
+  });
+
+  const SESSIONS = { noun: "session", plural: "sessions" };
+  const USERS = { noun: "user", plural: "users" };
+
+  it("is 1 up to the view's rows and the run's limit, as the server says", () => {
+    expect(sampleSizeProblem(1500, view, SESSIONS)).toBeNull();
+    for (const size of [0, NaN])
+      expect(sampleSizeProblem(size, view, SESSIONS)).toEqual({
+        message: "Choose a sample of at least 1.",
+        max: null,
+      });
+    expect(sampleSizeProblem(30000, view, SESSIONS)).toEqual({
+      message:
+        "There are only 24,473 sessions in this view; choose up to 24,473.",
+      max: 24473,
+    });
+    const big = { ...view, population: 250000 };
+    expect(sampleSizeProblem(120000, big, SESSIONS)).toEqual({
+      message: "One run reads at most 100,000 rows; choose up to 100,000.",
+      max: 100000,
+    });
+    expect(maxSampleSize(view)).toBe(24473);
+    expect(maxSampleSize(big)).toBe(100000);
+  });
+
+  it("counts users, each read as their latest sessions", () => {
+    const users = { population: 30000, max_rows: 100000, sessions_per_user: 5 };
+    expect(maxSampleSize(users)).toBe(20000);
+    expect(sampleSizeProblem(20000, users, USERS)).toBeNull();
+    expect(sampleSizeProblem(20001, users, USERS)).toEqual({
+      message:
+        "One run reads at most 100,000 rows (20,000 users at 5 sessions each); choose up to 20,000.",
+      max: 20000,
+    });
+    // A count still climbing is held to the rows alone.
+    const climbing = {
+      ...users,
+      population: 300,
+      population_is_lower_bound: true,
+    };
+    expect(sampleSizeProblem(900, climbing, USERS)).toBeNull();
+    expect(sampleSizeProblem(25000, climbing, USERS)?.max).toBe(20000);
+  });
+
+  it("is costed as the server costs it", () => {
+    const estimate = {
+      population: 24473,
+      max_rows: 100000,
+      confirm_rows: 5000,
+      choices: [
+        { sample_size: 1000, rows_to_read: 1000, seconds_estimate: 210 },
+        { sample_size: null, rows_to_read: 24473, seconds_estimate: 4900 },
+      ],
+    };
+    const costed = withSampleChoice(estimate, {
+      size: 1500,
+      estimate: {
+        rows_to_read: 1500,
+        seconds_estimate: 320,
+        needs_confirm: false,
+      },
+    });
+    expect(choiceCost(costed, 1500)).toMatchObject({
+      rows: 1500,
+      seconds: 320,
+      needsConfirm: false,
+      allowed: true,
+    });
+    // The fixed sizes the menu offers stay as they were.
+    expect(sampleSizes(estimate)).toEqual([1000]);
+    expect(withSampleChoice(estimate, { size: null })).toBe(estimate);
   });
 });

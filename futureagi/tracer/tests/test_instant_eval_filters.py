@@ -12,19 +12,23 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from django.test import override_settings
 from rest_framework import status
 
-from tracer.models.eval_task import EvalTask
+from tracer.models.eval_task import EvalTask, EvalTaskStatus
 from tracer.models.instant_eval import InstantEvalRun
+from tracer.selectors.eval_tasks.row_resolver import resolve_desired_rows
 from tracer.services import instant_eval_rows as rows_service
 from tracer.services import instant_eval_users as users_service
 from tracer.services.clickhouse.read_budget import ReadDeadlineExceeded
 from tracer.tests.test_instant_eval_scale import (
+    CONTROL,
     ESTIMATE,
     SUMMARY,
     WINDOW,
     _hash,
     _start,
+    _summary,
 )
 
 # The scale suite's fixtures: a fake view of 40 sessions, a recorded workflow
@@ -304,6 +308,202 @@ def test_users_handed_over_without_a_window_keep_the_lists_30_days(
     # Their sessions are never read without a window.
     assert run.date_from is not None and run.date_to is not None
     assert run.date_to - run.date_from == timedelta(days=30)
+
+
+# ─── Custom sample sizes ─────────────────────────────────────────────────────
+def _estimate(auth_client, project, unit="sessions", **body):
+    response = auth_client.post(
+        ESTIMATE,
+        {"project_id": str(project.id), "unit": unit, "filters": WINDOW, **body},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    return response.json()["result"]
+
+
+@pytest.mark.django_db
+def test_a_sample_larger_than_the_view_is_named_and_refused(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    too_many = _estimate(auth_client, observe_project, sample_size=41)
+    assert too_many["sample_error"] == {
+        "error_code": "INSTANT_EVAL_SAMPLE_TOO_LARGE",
+        "message": "There are only 40 sessions in this view; choose up to 40.",
+        "sample_size": 40,
+    }
+    # The estimate still counts the view.
+    assert too_many["population"] == 40
+    assert (
+        _estimate(auth_client, observe_project, sample_size=40)["sample_error"] is None
+    )
+    assert _estimate(auth_client, observe_project)["sample_error"] is None
+
+    refused = _start(auth_client, observe_project, [yes_no], sample_size=41)
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST
+    assert refused.json()["code"] == "instant_eval_sample_too_large"
+    assert refused.json()["message"] == (
+        "There are only 40 sessions in this view; choose up to 40."
+    )
+    assert not InstantEvalRun.objects.exists()
+    every = _start(auth_client, observe_project, [yes_no], sample_size=40)
+    assert every.status_code == status.HTTP_200_OK, every.json()
+    assert every.json()["result"]["is_sample"] is False
+
+
+@pytest.mark.django_db
+@override_settings(INSTANT_EVAL_MAX_ROWS=30)
+def test_a_sample_over_the_rows_one_run_reads_is_named_and_refused(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    message = "One run reads at most 30 rows; choose up to 30."
+    assert _estimate(auth_client, observe_project, sample_size=35)["sample_error"] == {
+        "error_code": "INSTANT_EVAL_SAMPLE_TOO_LARGE",
+        "message": message,
+        "sample_size": 30,
+    }
+    # Past both limits, the rows are what holds it back.
+    assert (
+        _estimate(auth_client, observe_project, sample_size=99)["sample_error"][
+            "message"
+        ]
+        == message
+    )
+    refused = _start(auth_client, observe_project, [yes_no], sample_size=35)
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST
+    assert refused.json()["message"] == message
+    assert (
+        _start(auth_client, observe_project, [yes_no], sample_size=30).status_code
+        == 200
+    )
+
+
+@pytest.mark.django_db
+@override_settings(INSTANT_EVAL_MAX_ROWS=100)
+def test_a_user_sample_is_in_users_and_its_rows_are_their_sessions(
+    auth_client, observe_project, yes_no, users_view, started
+):
+    # 120 users, five sessions each: a run reads at most 20 of them.
+    error = _estimate(auth_client, observe_project, unit="users", sample_size=25)[
+        "sample_error"
+    ]
+    assert error == {
+        "error_code": "INSTANT_EVAL_SAMPLE_TOO_LARGE",
+        "message": "One run reads at most 100 rows (20 users at 5 sessions each); "
+        "choose up to 20.",
+        "sample_size": 20,
+    }
+    assert (
+        _estimate(auth_client, observe_project, unit="users", sample_size=20)[
+            "sample_error"
+        ]
+        is None
+    )
+    refused = _start(
+        auth_client, observe_project, [yes_no], unit="users", sample_size=25
+    )
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST
+    assert refused.json()["message"] == error["message"]
+
+
+@pytest.mark.django_db
+def test_a_user_sample_past_the_users_counted_so_far_waits_for_the_count(
+    auth_client, observe_project, monkeypatch
+):
+    monkeypatch.setattr(
+        users_service,
+        "count_users",
+        lambda *a, **k: rows_service.Population(30, True, WINDOW_FROM, WINDOW_TO, []),
+    )
+    result = _estimate(auth_client, observe_project, unit="users", sample_size=500)
+    assert result["population_is_lower_bound"] is True
+    assert result["sample_error"] is None
+
+
+@pytest.mark.django_db
+def test_a_sample_of_none_is_refused(auth_client, observe_project, fake_view):
+    response = auth_client.post(
+        ESTIMATE,
+        {
+            "project_id": str(observe_project.id),
+            "unit": "sessions",
+            "filters": WINDOW,
+            "sample_size": 0,
+        },
+        format="json",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Choose a sample of at least 1." in response.json()["message"]
+
+
+def _read_more(auth_client, project, task_id, more):
+    EvalTask.objects.filter(id=task_id).update(status=EvalTaskStatus.COMPLETED)
+    response = auth_client.post(
+        CONTROL,
+        {
+            "project_id": str(project.id),
+            "eval_task_id": task_id,
+            "action": "read_more",
+            "more": more,
+        },
+        format="json",
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    task = EvalTask.objects.get(id=task_id)
+    resolve_desired_rows(task)
+    EvalTask.objects.filter(id=task_id).update(status=EvalTaskStatus.COMPLETED)
+    return task
+
+
+def _sample(auth_client, project, task_id):
+    task = EvalTask.objects.get(id=task_id)
+    return _summary(auth_client, project, task)["sample"]
+
+
+@pytest.mark.django_db
+def test_read_more_after_a_custom_sample_reads_the_same_size_again(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    task_id = _start(auth_client, observe_project, [yes_no], sample_size=7).json()[
+        "result"
+    ]["task_id"]
+    resolve_desired_rows(EvalTask.objects.get(id=task_id))
+    EvalTask.objects.filter(id=task_id).update(status=EvalTaskStatus.COMPLETED)
+    sample = _sample(auth_client, observe_project, task_id)
+    assert (sample["requested"], sample["next_size"]) == (7, 7)
+    for requested in (14, 21, 28, 35):
+        _read_more(auth_client, observe_project, task_id, sample["next_size"])
+        sample = _sample(auth_client, observe_project, task_id)
+        assert sample["requested"] == requested
+        # Seven more each time, then the five the view has left.
+        assert sample["next_size"] == (7 if requested < 35 else 5)
+        assert sample["can_extend"] is True
+    _read_more(auth_client, observe_project, task_id, sample["next_size"])
+    sample = _sample(auth_client, observe_project, task_id)
+    assert (sample["requested"], sample["is_sample"], sample["next_size"]) == (
+        40,
+        False,
+        0,
+    )
+    assert sample["can_extend"] is False
+
+
+@pytest.mark.django_db
+@override_settings(INSTANT_EVAL_MAX_ROWS=20)
+def test_read_more_stops_at_the_rows_one_run_reads(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    task_id = _start(auth_client, observe_project, [yes_no], sample_size=7).json()[
+        "result"
+    ]["task_id"]
+    resolve_desired_rows(EvalTask.objects.get(id=task_id))
+    _read_more(auth_client, observe_project, task_id, 7)
+    sample = _sample(auth_client, observe_project, task_id)
+    # Six more reach the twenty rows a run reads.
+    assert (sample["requested"], sample["next_size"]) == (14, 6)
+    _read_more(auth_client, observe_project, task_id, 6)
+    sample = _sample(auth_client, observe_project, task_id)
+    assert (sample["requested"], sample["is_sample"]) == (20, True)
+    assert (sample["next_size"], sample["can_extend"]) == (0, False)
 
 
 # ─── The users population against a stand-in ClickHouse ──────────────────────
