@@ -60,14 +60,14 @@ class FakeView:
             len(self.ids), False, self.start, self.start + timedelta(days=13), filters
         )
 
-    def pick(self, project_id, unit, filters, *, n, after):
+    def pick(self, project_id, unit, filters, *, n, after, **_):
         self.picks.append((n, after))
         ordered = sorted(((i, _hash(i)) for i in self.ids), key=lambda x: (x[1], x[0]))
         if after is not None:
             ordered = [x for x in ordered if x[1] > after]
         return ordered[:n]
 
-    def facets(self, project_id, row_type, ids, *, start=None, end=None):
+    def facets(self, project_id, row_type, ids, *, start=None, end=None, **_):
         out = {}
         for i in ids:
             k = int(uuid.UUID(i))

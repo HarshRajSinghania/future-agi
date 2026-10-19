@@ -11,6 +11,8 @@ as the view's grid, so a run is not limited to the ids a browser can collect.
 - ``read_facets`` reads, for those rows, what the Ask page groups by (time,
   user, model, turns, duration, error, a short excerpt) in a few ClickHouse
   reads, and ``write_rows`` stores them once in ``tracer_instant_eval_row``.
+  It reads the rows in the order their spans start, so each read covers a
+  slice of the window; the pick hands it when each row's spans start.
 
 ``resolve_instant_rows`` is the eval-task resolver's hook: the first reconcile
 of a run (and the one after "Read more") picks and stores the rows, and every
@@ -36,6 +38,10 @@ EXCERPT_CHARS = 280
 _RAW_INPUT_CHARS = 6000
 _FACET_BATCH = 5000
 _WRITE_BATCH = 5000
+# Users per label lookup: it binds their ids three times over, at some 40
+# bytes each, and ClickHouse parses at most 256 KiB of a statement. A lookup
+# past that fails, and comes back with no labels.
+_LABEL_BATCH = 1000
 SESSIONS_PER_USER = 5
 
 # The eval task row type and the id column each grid's builder emits.
@@ -171,9 +177,21 @@ def count_population(project_id: str, unit: str, filters: list[dict]) -> Populat
 
 
 def pick_rows(
-    project_id: str, unit: str, filters: list[dict], *, n: int, after: int | None
+    project_id: str,
+    unit: str,
+    filters: list[dict],
+    *,
+    n: int,
+    after: int | None,
+    extents: dict[str, Extent | None] | None = None,
+    window: tuple[datetime | None, datetime | None] = (None, None),
 ) -> list[tuple[str, int]]:
-    """The next ``n`` rows of the view in hash order, as (row id, hash)."""
+    """The next ``n`` rows of the view in hash order, as (row id, hash).
+
+    Given ``extents``, the same statement also fills it with each row's
+    ``Extent`` in the facet window of the run's ``window``, or None for a row
+    with no spans there: what ``read_facets`` batches and bounds its reads
+    by. The rows are picked again inside it, rather than bound as ids."""
     if n <= 0:
         return []
     row_type = ROW_TYPE[unit]
@@ -201,7 +219,31 @@ def pick_rows(
         f"SELECT toString({id_col}) AS rid, cityHash64(toString({id_col})) AS h "
         f"FROM ({inner})) {where} ORDER BY h, rid LIMIT %(ie_n)s"
     )
-    return [(str(r["rid"]), int(r["h"])) for r in _ch(sql, params) if r.get("rid")]
+    if extents is None or unit == "users":
+        return [(str(r["rid"]), int(r["h"])) for r in _ch(sql, params) if r.get("rid")]
+    span_window, window_params = _facet_window(*window, prefix="ie_")
+    params.update(window_params, ie_pid=str(project_id))
+    spans = _extent_sql(
+        row_type, f"(SELECT rid FROM ({sql}))", span_window, pid="ie_pid"
+    )
+    rows = _ch(
+        "SELECT p.rid AS rid, p.h AS h, e.rid AS spanned, e.t0 AS t0, e.t1 AS t1 "
+        f"FROM ({sql}) AS p LEFT JOIN ({spans}) AS e ON p.rid = e.rid "
+        "ORDER BY h, rid",
+        params,
+    )
+    picked = []
+    for r in rows:
+        if not r.get("rid"):
+            continue
+        rid = str(r["rid"])
+        picked.append((rid, int(r["h"])))
+        extents[rid] = (
+            Extent(_naive_utc(r["t0"]), _naive_utc(r["t1"]))
+            if r.get("spanned")
+            else None
+        )
+    return picked
 
 
 def row_hashes(ids: Iterable[str]) -> dict[str, int]:
@@ -338,6 +380,73 @@ _FACET_SQL = {
 }
 
 
+# The column a row's spans are found by, as each facet read matches it.
+_FACET_KEY = {
+    "sessions": "toString(trace_session_id)",
+    "traces": "trace_id",
+    "spans": "id",
+}
+# A batch reads a minute either side of its rows' spans: bound parameters
+# keep whole seconds.
+_EDGE = timedelta(minutes=1)
+
+
+@dataclass(frozen=True)
+class Extent:
+    """When a row's spans start inside the facet window: the first and the
+    last of them."""
+
+    first: datetime
+    last: datetime
+
+
+def _facet_window(
+    start: datetime | None, end: datetime | None, *, prefix: str = ""
+) -> tuple[str, dict[str, Any]]:
+    """The window a row's spans are read in: the run's window and a day either
+    side, since sessions and traces run past its edges. Unbounded without a
+    run window (hand-overs name rows from any time)."""
+    if start is None or end is None:
+        return "", {}
+    return (
+        f"AND start_time >= %({prefix}w_start)s AND start_time < %({prefix}w_end)s",
+        {
+            f"{prefix}w_start": _naive_utc(start) - timedelta(days=1),
+            f"{prefix}w_end": _naive_utc(end) + timedelta(days=1),
+        },
+    )
+
+
+def _extent_sql(row_type: str, ids: str, window: str, *, pid: str = "pid") -> str:
+    """Each row's first and last span start, over the spans its facets read."""
+    key = _FACET_KEY[row_type]
+    return (
+        f"SELECT {key} AS rid, min(start_time) AS t0, max(start_time) AS t1 "
+        f"FROM spans WHERE project_id = %({pid})s AND is_deleted = 0 "
+        f"AND {key} IN {ids} {window} GROUP BY rid"
+    )
+
+
+def _row_extents(
+    project_id: str,
+    row_type: str,
+    ids: list[str],
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, Extent]:
+    """Each row's ``Extent`` in the facet window, for rows the pick didn't
+    read it for (hand-overs, a user's sessions). One narrow read per batch of
+    rows; a row with no spans in the window is left out."""
+    window, params = _facet_window(start, end)
+    sql = _extent_sql(row_type, "%(ids)s", window)
+    out: dict[str, Extent] = {}
+    for chunk in _chunks(ids, _FACET_BATCH):
+        for row in _ch(sql, {"pid": str(project_id), "ids": tuple(chunk), **params}):
+            out[str(row["rid"])] = Extent(_naive_utc(row["t0"]), _naive_utc(row["t1"]))
+    return out
+
+
 def read_facets(
     project_id: str,
     row_type: str,
@@ -345,24 +454,50 @@ def read_facets(
     *,
     start: datetime | None = None,
     end: datetime | None = None,
+    extents: dict[str, Extent | None] | None = None,
 ) -> dict[str, dict]:
     """What the Ask page shows and groups each row by. Rows with no spans in
-    the project are left out, which is also how hand-over ids are checked."""
+    the project are left out, which is also how hand-over ids are checked.
+
+    More rows than one read takes are read in the order their spans start,
+    and each read covers only its rows' spans (their ``extents``, from the
+    pick, or read here first) rather than the whole window: a sample spread
+    over a month reads each day about once. Every span a row reads starts
+    inside its batch's bounds, so its facets are what a read of the whole
+    window gives."""
     from ee.agenthub.insights.units import _user_labels
 
-    out: dict[str, dict] = {}
-    window = ""
-    params_window: dict[str, Any] = {}
-    if start is not None and end is not None:
-        # Sessions and traces run past the window's edges; a margin keeps
-        # their later turns without scanning the project's whole history.
-        window = "AND start_time >= %(w_start)s AND start_time < %(w_end)s"
-        params_window = {
-            "w_start": _naive_utc(start) - timedelta(days=1),
-            "w_end": _naive_utc(end) + timedelta(days=1),
-        }
+    ids = list(dict.fromkeys(str(i) for i in ids))
+    window, params_window = _facet_window(start, end)
     sql = _FACET_SQL[row_type].format(window=window)
-    for chunk in _chunks([str(i) for i in ids], _FACET_BATCH):
+    batches: list[tuple[list[str], dict[str, Any]]] = [(ids, {})] if ids else []
+    if len(ids) > _FACET_BATCH:
+        known = dict(extents or {})
+        missing = [i for i in ids if i not in known]
+        if missing:
+            known.update(dict.fromkeys(missing))
+            known.update(
+                _row_extents(project_id, row_type, missing, start=start, end=end)
+            )
+        spanned = sorted(
+            (i for i in ids if known.get(i) is not None),
+            key=lambda i: (known[i].first, i),
+        )
+        sql = _FACET_SQL[row_type].format(
+            window=f"{window} AND start_time >= %(b_start)s AND start_time <= %(b_end)s"
+        )
+        batches = [
+            (
+                chunk,
+                {
+                    "b_start": min(known[i].first for i in chunk) - _EDGE,
+                    "b_end": max(known[i].last for i in chunk) + _EDGE,
+                },
+            )
+            for chunk in _chunks(spanned, _FACET_BATCH)
+        ]
+    out: dict[str, dict] = {}
+    for chunk, bounds in batches:
         rows = _ch(
             sql,
             {
@@ -370,6 +505,7 @@ def read_facets(
                 "ids": tuple(chunk),
                 "raw": _RAW_INPUT_CHARS,
                 **params_window,
+                **bounds,
             },
         )
         for row in rows:
@@ -399,7 +535,7 @@ def read_facets(
             }
     labels = {}
     users = list({f["end_user_id"] for f in out.values() if f["end_user_id"]})
-    for chunk in _chunks(users, _FACET_BATCH):
+    for chunk in _chunks(users, _LABEL_BATCH):
         labels.update(_user_labels(chunk))
     for facets in out.values():
         facets["user_label"] = str(labels.get(facets["end_user_id"] or "", "") or "")[
@@ -463,26 +599,40 @@ def extend_run(run) -> int:
     project_id = str(run.project_id)
     row_type = ROW_TYPE[run.unit]
     explicit = _explicit_ids(task)
+    # Hand-overs name rows from any time; a view's rows sit in its window.
+    start, end = (run.date_from, run.date_to) if explicit is None else (None, None)
+    # Past one facet read, when each picked row's spans start: each read
+    # then covers a slice of time.
+    extents: dict[str, Extent | None] = {}
     if explicit is not None:
         hashes = row_hashes(explicit)
         picked = sorted(hashes.items(), key=lambda x: (x[1], x[0]))
         picked = [p for p in picked if p[0] not in done][:wanted]
     else:
         after = int(run.hash_cursor) if run.hash_cursor else None
-        picked = pick_rows(project_id, run.unit, run.filters, n=wanted, after=after)
+        picked = pick_rows(
+            project_id,
+            run.unit,
+            run.filters,
+            n=wanted,
+            after=after,
+            extents=extents if wanted > _FACET_BATCH else None,
+            window=(start, end),
+        )
     if not picked:
         return 0
     cursor = max(h for _, h in picked)
-    # Hand-overs name rows from any time; a view's rows sit in its window.
-    start, end = (run.date_from, run.date_to) if explicit is None else (None, None)
     if users:
+        # A user's sessions are read like a session question's: in the run's
+        # window and a day either side.
         session_ids = user_sessions(project_id, [rid for rid, _ in picked], start, end)
         hashes = row_hashes(session_ids)
         ranked_ids = sorted(session_ids, key=lambda s: (hashes.get(s, 0), s))
-        start = end = None
     else:
         ranked_ids = [rid for rid, _ in picked]
-    facets = read_facets(project_id, row_type, ranked_ids, start=start, end=end)
+    facets = read_facets(
+        project_id, row_type, ranked_ids, start=start, end=end, extents=extents
+    )
     ranked = [(rid, rank_base + i) for i, rid in enumerate(ranked_ids)]
     with transaction.atomic():
         added = write_rows(task.id, run.unit, ranked, facets)
