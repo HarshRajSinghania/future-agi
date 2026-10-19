@@ -100,14 +100,21 @@ function RunCard({ runItem, selected, onOpen }) {
     runItem.items.map((entry) => entry.question),
   );
   const live = isLiveRun(runItem);
+  // A user question counts users, each once; it also says how many of
+  // their sessions it read.
   const rows = runItem.rows;
-  const noun = runItem.unit === "users" ? "sessions" : runItem.unit;
+  const sessions =
+    runItem.unit === "users" && runItem.sessions != null
+      ? `${runItem.sessions.toLocaleString()} sessions read`
+      : null;
   const size =
     rows == null
       ? ""
       : live
         ? `${Math.min(runItem.answered, rows)} of ${rows} answered`
-        : `${rows.toLocaleString()} ${unitWord(noun, rows)}`;
+        : [`${rows.toLocaleString()} ${unitWord(runItem.unit, rows)}`, sessions]
+            .filter(Boolean)
+            .join(" · ");
   const meta = [
     sourceViewTitle(runItem.unit),
     size,

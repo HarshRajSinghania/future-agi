@@ -616,6 +616,8 @@ class InstantEvalRunSerializer(serializers.Serializer):
     date_preset = serializers.CharField(allow_null=True, required=False)
     label = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     window = serializers.JSONField(allow_null=True, required=False)
+    # A user question's sessions read; its rows and counts are its users.
+    sessions = serializers.IntegerField(allow_null=True, required=False)
 
 
 class InstantEvalRunsResultSerializer(serializers.Serializer):
@@ -713,27 +715,46 @@ def _history_status(task, run, pending: int) -> str:
     return status
 
 
+def _user_tally(task, run, config_ids: list[str], value: list) -> None:
+    """A user question counts its users, each once, under their rolled-up
+    answer; the rows its run stored are their sessions."""
+    from tracer.services.instant_eval_summary import RunView, user_answer_counts, zone
+
+    users, settled, counts = user_answer_counts(
+        RunView(
+            task_id=str(task.id),
+            row_type="sessions",
+            unit="users",
+            config_ids=config_ids,
+            tz=zone("UTC"),
+            cancelled=bool(run.cancelled_at),
+        )
+    )
+    value[:] = [users, settled, value[2], counts, users, value[4]]
+
+
 def _history_tally(page: list[tuple]) -> dict[str, tuple]:
     """Per task: rows logged, rows with an answer, the last update, the
-    answer counts per question, and the rows its run stored. Counted in SQL
-    (from the narrow answer table where the run records one), and kept for
-    good once a run has finished."""
+    answer counts per question, the rows its run stored, and for a user
+    question the sessions behind its users (its rows are then its users).
+    Counted in SQL (from the narrow answer table where the run records one),
+    and kept for good once a run has finished."""
     from django.db import connection
 
     out: dict[str, list] = {}
     keys: dict[str, str] = {}
-    for task, run in page:
+    for task, run, _ in page:
         if str(task.status) in FINISHED or (run is not None and run.cancelled_at):
             stamp = task.updated_at.timestamp() if task.updated_at else 0
             version = run.answers_version if run is not None else -1
-            keys[str(task.id)] = f"ie-history:v1:{task.id}:{version}:{stamp}"
+            keys[str(task.id)] = f"ie-history:v2:{task.id}:{version}:{stamp}"
     cached = cache.get_many(list(keys.values())) if keys else {}
     for tid, key in keys.items():
         if key in cached:
             out[tid] = list(cached[key])
-    todo = [(task, run) for task, run in page if str(task.id) not in out]
-    synced = [str(t.id) for t, run in todo if run is not None and run.answers_synced]
-    legacy = [str(t.id) for t, run in todo if run is None or not run.answers_synced]
+    todo = [entry for entry in page if str(entry[0].id) not in out]
+    synced = [str(t.id) for t, run, _ in todo if run is not None and run.answers_synced]
+    legacy = [str(t.id) for t, run, _ in todo if run is None or not run.answers_synced]
     fresh: dict[str, list] = {}
     if synced:
         _answer_tally(synced, fresh)
@@ -744,10 +765,16 @@ def _history_tally(page: list[tuple]) -> dict[str, tuple]:
             cur.execute(
                 "SELECT task_id::text, count(*) FROM tracer_instant_eval_row "
                 "WHERE task_id = ANY(%(tasks)s::uuid[]) GROUP BY task_id",
-                {"tasks": [str(t.id) for t, _ in todo]},
+                {"tasks": [str(t.id) for t, _, _ in todo]},
             )
             for tid, n in cur.fetchall():
                 fresh.setdefault(tid, [0, 0, None, {}, 0])[4] = int(n)
+    for value in fresh.values():
+        value.append(None)
+    for task, run, config_ids in todo:
+        tid = str(task.id)
+        if tid in synced and run.unit == "users" and tid in fresh and config_ids:
+            _user_tally(task, run, config_ids, fresh[tid])
     for tid, value in fresh.items():
         if tid in synced:
             # Every stored row is logged once the run has picked them.
@@ -803,12 +830,14 @@ class InstantEvalRunsView(APIView):
                 "created_by"
             )
         }
-        tally = _history_tally([(t, instant_runs.get(str(t.id))) for t, _, _ in page])
+        tally = _history_tally(
+            [(t, instant_runs.get(str(t.id)), [cid for cid, _ in m]) for t, _, m in page]
+        )
         out = []
         for task, unit, metas in page:
             tid = str(task.id)
-            seen, settled, last_update, counts, stored = tally.get(
-                tid, (0, 0, None, {}, 0)
+            seen, settled, last_update, counts, stored, sessions = tally.get(
+                tid, (0, 0, None, {}, 0, None)
             )
             run = instant_runs.get(tid)
             # Rows the task named (or its run picked) but hasn't logged yet are
@@ -845,6 +874,7 @@ class InstantEvalRunsView(APIView):
                 "window": {"from": _iso(run.date_from), "to": _iso(run.date_to)}
                 if run is not None and run.date_from
                 else None,
+                "sessions": sessions,
             })
         return self._gm.success_response(
             {"runs": out, "has_more": start + params["page_size"] < len(runs)}

@@ -213,13 +213,38 @@ describe("What stands out on the real 100k run: what did the customer come for?"
     nested.forEach((p) => expect(p.within.where).toBe("at weekends"));
   });
 
-  it("ranks an answer being missing below one being more common", () => {
-    const at = (text) => texts.findIndex((t) => t.startsWith(text));
-    const missing = [...result.patterns, ...result.more].findIndex((p) =>
-      p.text.startsWith("“Product advice” when the trace had an error: 0 of"),
+  it("leads with the outage's errors and folds their complement under them", () => {
+    // Product advice is missing from errored traces, so it is more common
+    // in the rest: said that way round, and the same finding as the errors'
+    // order status, seen from the other side.
+    const all = [...result.patterns, ...result.more];
+    const errors = all.find((p) =>
+      p.text.startsWith("“Order status” when the trace had an error:"),
     );
-    expect(missing).toBeGreaterThan(at("“Order status” when the trace had"));
-    expect(missing).toBeGreaterThan(at("“Return or refund” at weekends"));
+    const complement = all.find((p) =>
+      p.text.startsWith("“Product advice” when the trace had no error:"),
+    );
+    expect(complement.text).toMatch(/\(16%\) vs 0% elsewhere$/);
+    expect(
+      all.some((p) =>
+        p.text.startsWith("“Product advice” when the trace had an error"),
+      ),
+    ).toBe(false);
+    // It accounts for many more rows, so it would rank first on its own.
+    const excess = (p) => Math.abs(p.k - p.n * p.restRate);
+    expect(excess(complement)).toBeGreaterThan(excess(errors));
+    expect(result.patterns).toContain(errors);
+    expect(result.patterns).not.toContain(complement);
+    expect(complement.within).toEqual({
+      key: errors.key,
+      label: "Order status",
+      where: "when the trace had an error",
+    });
+    expect(all.indexOf(complement)).toBeGreaterThan(all.indexOf(errors));
+    // Every callout on the no-error side sits under the errors' one.
+    all
+      .filter((p) => p.where === "when the trace had no error")
+      .forEach((p) => expect(p.within?.key).toBe(errors.key));
   });
 });
 

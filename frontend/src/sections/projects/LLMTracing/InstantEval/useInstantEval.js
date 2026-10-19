@@ -534,7 +534,8 @@ function fallbackItem(configId, question, counts = {}) {
  * A past Instant eval run as the runs endpoint returns it. Its questions are
  * matched back to their saved evaluators by config id (labels, definitions,
  * template), which is all its results need to be rebuilt. `rows` is how many
- * rows the task named: sessions, for a user question.
+ * rows the task named: users, for a user question, with `sessions` the
+ * sessions it read of them.
  */
 export function historyRun(run, configsById = {}) {
   const items = (run.config_ids || []).map(
@@ -554,6 +555,7 @@ export function historyRun(run, configsById = {}) {
     unit: run.unit,
     reads: run.reads,
     rows: typeof run.rows === "number" && run.rows > 0 ? run.rows : null,
+    sessions: typeof run.sessions === "number" ? run.sessions : null,
     items,
     counts: run.counts || {},
     answered: run.answered || 0,

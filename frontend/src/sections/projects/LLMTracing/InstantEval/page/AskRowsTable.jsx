@@ -17,7 +17,7 @@ import {
 } from "@mui/material";
 import { keyframes, useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
-import { answerText } from "../instantEvalAnswers";
+import { answerText, isFailure } from "../instantEvalAnswers";
 import { formatWhen, unitMeta } from "../instantEvalUnits";
 import { answerColor } from "../results/answerColors";
 import { answerState } from "./viz";
@@ -35,12 +35,36 @@ const pulse = keyframes`
 
 const percent = (value) => `${Math.round(value * 100)}%`;
 
-function AnswerCell({ record, question }) {
+// A user's answer is the most common one across their sessions: "4 of 5
+// sessions" says how many gave it, of the sessions Jev read; the title
+// lists every answer they got.
+function sessionsBehind(entry, answer) {
+  const counts = entry?.counts;
+  if (!counts || typeof counts !== "object") return null;
+  const n = Object.values(counts).reduce((sum, v) => sum + (v || 0), 0);
+  if (!n) return null;
+  const k = counts[answer] || 0;
+  const all = Object.entries(counts)
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, v]) => `${answerText(label)} ${v}`)
+    .join(" · ");
+  return {
+    text: `${k} of ${n} session${n === 1 ? "" : "s"}`,
+    title: `Sessions read: ${all}`,
+  };
+}
+
+function AnswerCell({ record, question, isUser }) {
   const theme = useTheme();
   const { state, answer, unsure, confidence } = answerState(
     record,
     question.configId,
   );
+  const behind =
+    isUser && state === "answered" && !isFailure(answer)
+      ? sessionsBehind(record.answers?.[question.configId], answer)
+      : null;
   if (state === "waiting" || state === "reading")
     return (
       <Typography
@@ -61,7 +85,12 @@ function AnswerCell({ record, question }) {
       </Typography>
     );
   return (
-    <Stack direction="row" spacing={0.75} alignItems="baseline">
+    <Stack
+      direction="row"
+      spacing={0.75}
+      alignItems="baseline"
+      sx={{ flexWrap: "wrap" }}
+    >
       <Box
         sx={{
           width: 8,
@@ -81,6 +110,20 @@ function AnswerCell({ record, question }) {
       >
         {answerText(answer)}
       </Typography>
+      {behind && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          title={behind.title}
+          sx={{
+            lineHeight: 1.3,
+            whiteSpace: "nowrap",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          · {behind.text}
+        </Typography>
+      )}
       {unsure && (
         <Tooltip title={`Jev was unsure (${percent(confidence)} confident)`}>
           <Box component="span" sx={{ display: "inline-flex" }}>
@@ -100,13 +143,16 @@ function AnswerCell({ record, question }) {
 AnswerCell.propTypes = {
   record: PropTypes.object.isRequired,
   question: PropTypes.object.isRequired,
+  isUser: PropTypes.bool,
 };
 
 /**
  * The rows behind the charts, newest first, a page at a time from the
  * server: when, who, what the row was about, and each answer. The filter
  * chip names what the charts selected; Export writes every selected row.
- * A click opens the row in its view.
+ * A user question lists users, each with the answer their sessions most
+ * often got and how many did; it exports them, or their sessions
+ * (`onExport({ sessions: true })`). A click opens the row in its view.
  */
 export default function AskRowsTable({
   records,
@@ -175,10 +221,23 @@ export default function AskRowsTable({
             size="small"
             color="inherit"
             startIcon={<Iconify icon="mdi:download-outline" width={16} />}
-            onClick={onExport}
+            onClick={() => onExport()}
             disabled={!count}
+            title={isUser ? "A line per user" : undefined}
           >
             Export CSV
+          </Button>
+        )}
+        {onExport && isUser && (
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<Iconify icon="mdi:download-outline" width={16} />}
+            onClick={() => onExport({ sessions: true })}
+            disabled={!count}
+            title="A line per session read, for these users"
+          >
+            Export sessions
           </Button>
         )}
       </Stack>
@@ -272,7 +331,11 @@ export default function AskRowsTable({
                 </TableCell>
                 {answerColumns.map((question, index) => (
                   <TableCell key={question.configId || index}>
-                    <AnswerCell record={record} question={question} />
+                    <AnswerCell
+                      record={record}
+                      question={question}
+                      isUser={isUser}
+                    />
                   </TableCell>
                 ))}
               </TableRow>

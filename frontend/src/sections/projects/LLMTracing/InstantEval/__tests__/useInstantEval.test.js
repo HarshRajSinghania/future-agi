@@ -266,6 +266,8 @@ describe("History", () => {
       unit: "sessions",
       reads: "transcript",
       rows: 6,
+      // Sessions read: a user question's only.
+      sessions: null,
       items: [configsById.c1],
       counts: { c1: { Yes: 4, No: 2 } },
       answered: 6,

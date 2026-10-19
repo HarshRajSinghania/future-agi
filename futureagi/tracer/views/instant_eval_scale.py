@@ -314,6 +314,11 @@ class InstantEvalRowsQuerySerializer(InstantEvalRunQuerySerializer):
     )
 
 
+class InstantEvalExportQuerySerializer(InstantEvalRowsQuerySerializer):
+    # A user question's sessions, a line each, instead of a line per user.
+    sessions = serializers.BooleanField(required=False, default=False)
+
+
 class InstantEvalQuestionSerializer(serializers.Serializer):
     config_id = serializers.CharField()
     question = serializers.CharField(allow_blank=True)
@@ -372,6 +377,8 @@ class InstantEvalSummarySerializer(serializers.Serializer):
     timeline = serializers.JSONField()
     groups = serializers.JSONField()
     cross = serializers.JSONField()
+    # A user question's sessions read, behind its users; null otherwise.
+    sessions_read = serializers.IntegerField(allow_null=True, required=False)
 
 
 class InstantEvalSummaryResponseSerializer(serializers.Serializer):
@@ -1137,7 +1144,7 @@ def _summary_key(task, run, status: str, view) -> str:
         f"{task.id}:{status}:{run.answers_version}:{view.unit}:"
         f"{','.join(view.config_ids)}:{view.tz.key}"
     )
-    return "ie-summary:v7:" + hashlib.sha1(raw.encode()).hexdigest()
+    return "ie-summary:v8:" + hashlib.sha1(raw.encode()).hexdigest()
 
 
 def _summary_payload(task, run, view, questions) -> dict:
@@ -1440,7 +1447,7 @@ class InstantEvalExportView(APIView):
     _gm = GeneralMethods()
 
     @validated_request(
-        query_serializer=InstantEvalRowsQuerySerializer,
+        query_serializer=InstantEvalExportQuerySerializer,
         responses={
             200: openapi.Response(
                 description="Every selected row with its answers, as CSV.",
@@ -1451,7 +1458,9 @@ class InstantEvalExportView(APIView):
     )
     def get(self, request):
         """Every row the filter selects, with each question's answer,
-        confidence and explanation, streamed as CSV."""
+        confidence and explanation, streamed as CSV. A user question writes
+        a line per user (their rolled-up answers and the sessions behind
+        them), or with ``sessions`` a line per session of those users."""
         params = request.validated_query_data
         task, error = _load(request, params, self._gm)
         if error:
@@ -1463,13 +1472,15 @@ class InstantEvalExportView(APIView):
             row_filter = _row_filter(params)
         except summary_service.BadFilter as exc:
             return self._gm.bad_request(str(exc))
+        sessions = bool(params.get("sessions")) and view.by_user
         response = StreamingHttpResponse(
-            summary_service.iter_export(view, row_filter, questions),
+            summary_service.iter_export(view, row_filter, questions, sessions=sessions),
             content_type="text/csv",
         )
+        part = "-sessions" if sessions else "-users" if view.by_user else ""
         response["Content-Type"] = "text/csv; charset=utf-8"
         response["Content-Disposition"] = (
-            f'attachment; filename="instant-eval-{task.id}.csv"'
+            f'attachment; filename="instant-eval-{task.id}{part}.csv"'
         )
         return response
 

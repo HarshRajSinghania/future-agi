@@ -9,6 +9,11 @@ the grouped counts: hours into the viewer's timeline bins, days and weekdays.
 
 ``rows_page`` and ``iter_export`` read the rows themselves, filtered the way
 the charts select them (an answer, a time range, a group).
+
+A user question's rows are each user's latest sessions, every one answered.
+``_user_rollup`` makes one row of each user, with one answer per question,
+and everything a user question counts, lists, filters or exports reads it:
+a user is counted once, under one answer.
 """
 
 from __future__ import annotations
@@ -126,10 +131,8 @@ def _rows(sql: str, params: dict) -> list[tuple]:
         return cur.fetchall()
 
 
-def _count(by_user: bool, cond: str = "", *, user_col: str = "end_user_id") -> str:
-    """A count of rows, or of distinct users for a user question."""
-    filt = f" FILTER (WHERE {cond})" if cond else ""
-    return f"count(DISTINCT {user_col}){filt}" if by_user else f"count(*){filt}"
+def _count(cond: str = "") -> str:
+    return f"count(*) FILTER (WHERE {cond})" if cond else "count(*)"
 
 
 # ─── Time ────────────────────────────────────────────────────────────────────
@@ -225,6 +228,9 @@ def _read_window(
         {"task": view.task_id},
     )[0]
     tmin, tmax, total_rows, users = row
+    if view.by_user:
+        # Every user is one row of a user question: none is busier.
+        return tmin, tmax, int(total_rows or 0), int(users or 0), []
     top = _rows(
         "SELECT end_user_id::text, max(user_label), count(*) AS n "
         "FROM tracer_instant_eval_row WHERE task_id = %(task)s AND end_user_id IS NOT NULL "
@@ -250,6 +256,106 @@ def _span(view: RunView, tmin, tmax) -> tuple[datetime, datetime]:
     return start, end
 
 
+# ─── Users ───────────────────────────────────────────────────────────────────
+# A user's answer to a question is the most common answer among their
+# sessions Jev answered; a tie goes to the tied answer whose latest session
+# started last. Sessions Jev couldn't answer don't vote, and a user with none
+# answered couldn't be answered. A user waits for their answer until every
+# one of their sessions has its own (a cancelled run rolls up what it read).
+
+
+def _user_rollup(view: RunView, *, sessions: str = "") -> str:
+    """The CTEs, ending in ``ur``, that make one row of each user of a user
+    question, named like a row's columns: ``time`` their latest session's
+    start (where the timeline puts them), ``model`` its model, ``turns`` and
+    ``duration_ms`` summed over their sessions, ``error`` when any of them
+    errored, ``sessions`` read, and per question their answer (l0, l1, …),
+    the sessions' mean confidence in it (c0, …) and whether that is unsure
+    (u0, …). ``sessions`` narrows the sessions read (``AND …``)."""
+    k = len(view.config_ids)
+    joins = "\n  ".join(
+        f"LEFT JOIN tracer_instant_eval_answer a{i} ON a{i}.task_id = %(task)s "
+        f"AND a{i}.config_id = %(cfg{i})s::uuid AND a{i}.row_id = r.id"
+        for i in range(k)
+    )
+    answers = "".join(
+        f", COALESCE(a{i}.label, '{PENDING}') AS l{i}, a{i}.confidence AS c{i}"
+        for i in range(k)
+    )
+    votes = "".join(
+        f""",
+ur_v{i} AS (
+  SELECT DISTINCT ON (end_user_id) end_user_id, label, conf FROM (
+    SELECT end_user_id, l{i} AS label, count(*) AS n, max(time) AS t, avg(c{i}) AS conf
+    FROM ur_s WHERE l{i} NOT IN ('{PENDING}', '{ERROR}', '{SKIPPED}')
+    GROUP BY end_user_id, l{i}
+  ) x
+  ORDER BY end_user_id, n DESC, t DESC NULLS LAST, label
+)"""
+        for i in range(k)
+    )
+    waits = "".join(f", bool_or(l{i} = '{PENDING}') AS p{i}" for i in range(k))
+    rolled = []
+    for i in range(k):
+        waiting = "false" if view.cancelled else f"u.p{i}"
+        rolled.append(
+            f"CASE WHEN {waiting} THEN '{PENDING}' WHEN v{i}.label IS NOT NULL "
+            f"THEN v{i}.label WHEN u.p{i} THEN '{PENDING}' ELSE '{ERROR}' END AS l{i}, "
+            f"CASE WHEN NOT {waiting} THEN v{i}.conf END AS c{i}, "
+            f"NOT {waiting} AND COALESCE(v{i}.conf < {UNSURE_BELOW}, false) AS u{i}"
+        )
+    columns = "".join(f",\n         {r}" for r in rolled)
+    vote_joins = "".join(
+        f" LEFT JOIN ur_v{i} v{i} ON v{i}.end_user_id = u.end_user_id" for i in range(k)
+    )
+    return f"""ur_s AS (
+  SELECT r.id, r.end_user_id, r.time, r.model, r.turns, r.duration_ms, r.error,
+         r.user_label{answers}
+  FROM tracer_instant_eval_row r
+  {joins}
+  WHERE r.task_id = %(task)s AND r.end_user_id IS NOT NULL{sessions}
+){votes},
+ur_u AS (
+  SELECT end_user_id, max(time) AS time, max(user_label) AS user_label,
+         (array_agg(model ORDER BY time DESC NULLS LAST, id DESC))[1] AS model,
+         sum(turns) AS turns, sum(duration_ms) AS duration_ms,
+         bool_or(error) AS error, count(*) AS sessions{waits}
+  FROM ur_s GROUP BY end_user_id
+),
+ur AS (
+  SELECT u.end_user_id, u.time, u.user_label, u.model, u.turns, u.duration_ms,
+         u.error, u.sessions{columns}
+  FROM ur_u u{vote_joins}
+)"""
+
+
+def _user_params(view: RunView, params: dict) -> dict:
+    params.update({f"cfg{i}": cfg for i, cfg in enumerate(view.config_ids)})
+    return params
+
+
+def user_answer_counts(view: RunView) -> tuple[int, int, dict]:
+    """A user question's users, those with every answer in (or none to
+    have), and each question's rolled-up counts: what History shows."""
+    k = len(view.config_ids)
+    labels = ", ".join(f"r.l{i}" for i in range(k))
+    users = settled = 0
+    counts: dict[str, dict[str, int]] = {cfg: {} for cfg in view.config_ids}
+    for rec in _rows(
+        f"WITH {_user_rollup(view)} SELECT {labels}, count(*) FROM ur r "
+        f"GROUP BY {labels}",
+        _user_params(view, {"task": view.task_id}),
+    ):
+        answers, n = rec[:k], int(rec[k])
+        users += n
+        if PENDING not in answers:
+            settled += n
+        for cfg, label in zip(view.config_ids, answers, strict=True):
+            if label != PENDING:
+                counts[cfg][label] = counts[cfg].get(label, 0) + n
+    return users, settled, counts
+
+
 _DIMS = ("b", "ukey", "model", "tk", "error")
 _DIM_NAMES = ("time", "user", "model", "turns", "error")
 
@@ -259,64 +365,61 @@ def _statement(view: RunView, bucket: str) -> str:
     question (l0, l1, …) from the narrow answer table, grouped by every
     dimension the charts need.
 
-    A grouping set of dimensions alone gives the rows' progress there. A set
-    of dimensions with every answer column gives the answers' counts, and the
-    questions' cross counts from the set of answers alone; a user question
-    instead counts distinct users per question, one answer at a time."""
+    Every row has exactly one combination of answers, so the counts of an
+    hour, a model, a model's day, the whole run and the questions against
+    each other all add up from (hour, model, answers); users, turns and
+    errors need sets of their own. A user question's rows are its users,
+    rolled up from their sessions (``_user_rollup``)."""
     k = len(view.config_ids)
     labels = [f"l{i}" for i in range(k)]
     pending_any = " OR ".join(f"{label} = '{PENDING}'" for label in labels)
     failed_any = " OR ".join(f"{label} IN ('{ERROR}', '{SKIPPED}')" for label in labels)
-    dim_sets = [*(f"{d}" for d in _DIMS), "model, b"]
-    if view.by_user:
-        label_sets = [f"({d}, {label})" for d in dim_sets for label in labels] + [
-            f"({label})" for label in labels
-        ]
-        label_sets += [
-            f"({a}, {b})" for i, a in enumerate(labels) for b in labels[i + 1 :]
-        ]
-        sets = ", ".join([f"({d})" for d in dim_sets] + ["()"] + label_sets)
-    else:
-        # Every row has exactly one combination of answers, so the counts of
-        # an hour, a model, a model's day, the whole run and the questions
-        # against each other all add up from (hour, model, answers); users,
-        # turns and errors need sets of their own.
-        joined = ", ".join(labels)
-        sets = ", ".join(
-            f"({d}, {joined})" for d in ("b, model", "ukey", "tk", "error")
-        )
-    unsure = ", ".join(_count(view.by_user, f"u{i}") for i in range(k))
+    joined = ", ".join(labels)
+    unsure = ", ".join(_count(f"u{i}") for i in range(k))
     grouping = ", ".join([*_DIMS, *labels])
-    joins = "\n  ".join(
-        f"LEFT JOIN tracer_instant_eval_answer a{i} ON a{i}.task_id = %(task)s "
-        f"AND a{i}.config_id = %(cfg{i})s::uuid AND a{i}.row_id = r.id"
-        for i in range(k)
-    )
-    row_labels = ",\n         ".join(
-        f"COALESCE(a{i}.label, '{PENDING}') AS l{i}, "
-        f"COALESCE(a{i}.confidence < {UNSURE_BELOW} "
-        f"AND a{i}.label NOT IN ('{ERROR}', '{SKIPPED}'), false) AS u{i}"
-        for i in range(k)
-    )
-    return f"""
-WITH w AS (
+    turns = TURN_BUCKET.replace("turns", "r.turns")
+    sets = ", ".join(f"({d}, {joined})" for d in ("b, model", "ukey", "tk", "error"))
+    if view.by_user:
+        # Every row is a user, so the user set is one "No user" entry the
+        # summary leaves out.
+        source = f"""{_user_rollup(view)},
+w AS (
+  SELECT {bucket} AS b, '__none__' AS ukey, r.model, {turns} AS tk, r.error,
+         r.end_user_id, {", ".join(f"r.l{i}, r.u{i}" for i in range(k))}
+  FROM ur r
+)"""
+    else:
+        joins = "\n  ".join(
+            f"LEFT JOIN tracer_instant_eval_answer a{i} ON a{i}.task_id = %(task)s "
+            f"AND a{i}.config_id = %(cfg{i})s::uuid AND a{i}.row_id = r.id"
+            for i in range(k)
+        )
+        row_labels = ",\n         ".join(
+            f"COALESCE(a{i}.label, '{PENDING}') AS l{i}, "
+            f"COALESCE(a{i}.confidence < {UNSURE_BELOW} "
+            f"AND a{i}.label NOT IN ('{ERROR}', '{SKIPPED}'), false) AS u{i}"
+            for i in range(k)
+        )
+        source = f"""w AS (
   SELECT {bucket} AS b,
          CASE WHEN r.end_user_id IS NULL THEN '__none__'
               WHEN r.end_user_id::text = ANY(%(top_users)s) THEN r.end_user_id::text
               ELSE '__other__' END AS ukey,
-         r.model, {TURN_BUCKET.replace("turns", "r.turns")} AS tk, r.error, r.end_user_id,
+         r.model, {turns} AS tk, r.error, r.end_user_id,
          {row_labels}
   FROM tracer_instant_eval_row r
   {joins}
   WHERE r.task_id = %(task)s
-),
+)"""
+    return f"""
+WITH {source},
 ws AS (
   SELECT w.*, CASE WHEN {pending_any} THEN 'p' WHEN {failed_any} THEN 'f' ELSE 'a' END AS st
   FROM w
 )
 SELECT GROUPING({grouping}), {grouping},
-       {_count(view.by_user)}, {_count(view.by_user, "st = 'p'")}, {_count(view.by_user, "st = 'f'")},
-       {_count(view.by_user, "error")}, {unsure}
+       {_count()}, {_count("st = 'p'")}, {_count("st = 'f'")},
+       {_count("error")}, {unsure}
 FROM ws GROUP BY GROUPING SETS ({sets})
 """
 
@@ -475,6 +578,68 @@ def users_by_answer(view: RunView) -> dict:
     return out
 
 
+# A user question's users by how consistently their sessions got an answer:
+# per question and answer, users by sessions answered (n, 3 or more) and
+# sessions with that answer (k), with the run's sessions per answer and its
+# users per n, so the page can say how many users chance alone would put at
+# k of n.
+CONSISTENT_MIN_SESSIONS = 3
+
+_CONSISTENCY = f"""
+WITH s AS (
+  SELECT a.config_id, r.end_user_id,
+         CASE WHEN a.label IN ('{ERROR}', '{SKIPPED}') THEN '{ERROR}' ELSE a.label END AS label
+  FROM tracer_instant_eval_row r JOIN tracer_instant_eval_answer a
+    ON a.task_id = %(task)s AND a.row_id = r.id
+   AND a.config_id = ANY(%(cfg_uuids)s::uuid[])
+  WHERE r.task_id = %(task)s AND r.end_user_id IS NOT NULL
+),
+per AS (SELECT config_id, end_user_id, count(*) AS n FROM s GROUP BY 1, 2),
+lab AS (
+  SELECT config_id, end_user_id, label, count(*) AS k FROM s
+  WHERE label <> '{ERROR}' GROUP BY 1, 2, 3
+)
+SELECT 'tier', lab.config_id::text, lab.label, per.n, lab.k, count(*)
+FROM lab JOIN per USING (config_id, end_user_id) WHERE per.n >= %(min_n)s
+GROUP BY 2, 3, 4, 5
+UNION ALL
+SELECT 'users', config_id::text, NULL, n, NULL, count(*) FROM per GROUP BY 2, 4
+UNION ALL
+SELECT 'sessions', config_id::text, label, NULL, NULL, count(*) FROM s GROUP BY 2, 3
+"""
+
+
+def user_consistency(view: RunView) -> dict:
+    """{config: {sessions: {label: n}, users: {n: users}, tiers: {label:
+    [[n, k, users]]}}} for a user question: ``sessions`` counts its answered
+    sessions per answer (``__error__`` for the ones Jev couldn't answer),
+    ``users`` its users by sessions answered, and ``tiers`` how many users
+    had k of their n sessions get each answer, for n of 3 or more."""
+    out = {cfg: {"sessions": {}, "users": {}, "tiers": {}} for cfg in view.config_ids}
+    recs = _rows(
+        _CONSISTENCY,
+        {
+            "task": view.task_id,
+            "cfg_uuids": view.config_ids,
+            "min_n": CONSISTENT_MIN_SESSIONS,
+        },
+    )
+    for kind, cfg, label, n, k, count in recs:
+        entry = out.get(cfg)
+        if entry is None:
+            continue
+        if kind == "tier":
+            entry["tiers"].setdefault(label, []).append([int(n), int(k), int(count)])
+        elif kind == "users":
+            entry["users"][str(int(n))] = int(count)
+        else:
+            entry["sessions"][label] = int(count)
+    for entry in out.values():
+        for tiers in entry["tiers"].values():
+            tiers.sort(key=lambda t: (-t[0], -t[1]))
+    return out
+
+
 def _sparse_add(target: dict, cfg: str, label: str, n: int) -> None:
     if n:
         bucket = target.setdefault(cfg, {})
@@ -532,7 +697,6 @@ def summary(view: RunView) -> dict:
     cross: dict = {}
     # Per local time bucket: row stats and label counts.
     time_rows: dict[datetime, dict] = {}
-    time_labels: list[tuple[datetime, str, str, int]] = []
     groups: dict[str, dict[str, dict]] = defaultdict(dict)
     user_names = {t[0]: t[1] or t[0] for t in top}
 
@@ -560,26 +724,6 @@ def summary(view: RunView) -> dict:
                 f"{model or 'Unknown model'} · {_day_label(_b)}",
             )
         return None
-
-    def add_labels(dim, values, answer_of, n):
-        """Count n rows under each question's answer, for one dimension value."""
-        for i, label in answer_of:
-            if label == PENDING:
-                continue
-            cfg = cfgs[i]
-            if dim == "all":
-                counts.setdefault(cfg, {})
-                counts[cfg][label] = counts[cfg].get(label, 0) + n
-            elif dim == "time":
-                time_labels.append((values[0], cfg, label, n))
-            elif key := group_key(dim, values):
-                shown = ERROR if label in FAILED_LABELS else label
-                _sparse_add(
-                    groups[dim].setdefault(key[0], _entry(*key))["counts"],
-                    cfg,
-                    shown,
-                    n,
-                )
 
     meta = (int(pace[0] or 0), int(pace[1] or 0), pace[2], pace[3])
     billed = int(pace[4] or 0)
@@ -639,8 +783,9 @@ def summary(view: RunView) -> dict:
         return found
 
     def decode_rows() -> None:
-        """Rows of a run whose unit is the row itself: every count adds up
-        from the four grouping sets."""
+        """Every count adds up from the grouping sets: (hour, model, answers)
+        for the run, its hours, models and models' days, and one set per
+        other dimension."""
         nonlocal totals
         combos: dict[tuple, int] = defaultdict(int)
         for rec in result:
@@ -675,7 +820,10 @@ def summary(view: RunView) -> dict:
                         by_label = unsure.setdefault(cfgs[i], {})
                         by_label[label] = by_label.get(label, 0) + unsure_n
             elif len(present) == 1:
-                if (entry := entry_of(_DIM_NAMES[present[0]], values)) is not None:
+                dim = _DIM_NAMES[present[0]]
+                if view.by_user and dim == "user":
+                    continue
+                if (entry := entry_of(dim, values)) is not None:
                     add_rows(entry, answers, n, errors)
         stats = {"n": 0, "pending": 0, "failed": 0, "errors": 0, "counts": {}}
         for answers, n in combos.items():
@@ -711,73 +859,7 @@ def summary(view: RunView) -> dict:
             "failed": stats["failed"],
         }
 
-    if not view.by_user:
-        decode_rows()
-        result = []
-    for rec in result:
-        mask = rec[0]
-        values = rec[1 : 1 + nd]
-        answers = rec[1 + nd : 1 + nd + k]
-        n, pending, failed, errors = (int(v or 0) for v in rec[1 + nd + k : 5 + nd + k])
-        unsure_n = [int(v or 0) for v in rec[5 + nd + k : 5 + nd + 2 * k]]
-        dim_bits, label_bits = mask >> k, mask & ((1 << k) - 1)
-        missing = [i for i in range(nd) if dim_bits & (1 << (nd - 1 - i))]
-        present = [i for i in range(k) if not label_bits & (1 << (k - 1 - i))]
-        dims_present = [i for i in range(nd) if i not in missing]
-        if len(dims_present) == 2:
-            dim = "model_day"
-        else:
-            dim = _DIM_NAMES[dims_present[0]] if dims_present else "all"
-        if not present:
-            # One dimension alone: the rows' progress there.
-            if dim == "all":
-                totals = {"n": n, "pending": pending, "failed": failed}
-            elif dim == "time":
-                time_rows[values[0]] = {
-                    "n": n,
-                    "pending": pending,
-                    "failed": failed,
-                    "errors": errors,
-                }
-            elif key := group_key(dim, values):
-                # A model's day gathers that day's hours.
-                entry = groups[dim].setdefault(key[0], _entry(*key))
-                entry["n"] += n
-                entry["errors"] += errors
-                entry["failed"] += failed
-                entry["pending"] += pending
-            continue
-        if not view.by_user and len(present) == k or view.by_user and len(present) == 1:
-            add_labels(dim, values, [(i, answers[i]) for i in present], n)
-            if dim == "all":
-                for i in present:
-                    label = answers[i]
-                    if unsure_n[i] and label not in FAILED_LABELS and label != PENDING:
-                        unsure.setdefault(cfgs[i], {})
-                        unsure[cfgs[i]][label] = (
-                            unsure[cfgs[i]].get(label, 0) + unsure_n[i]
-                        )
-        if (
-            dim == "all"
-            and len(present) >= 2
-            and (not view.by_user or len(present) == 2)
-        ):
-            # The questions' answers against each other, answered rows only.
-            for a in present:
-                for b in present:
-                    la, lb = answers[a], answers[b]
-                    if (
-                        a == b
-                        or la in (PENDING, ERROR, SKIPPED)
-                        or lb in (PENDING, ERROR, SKIPPED)
-                    ):
-                        continue
-                    by = (
-                        cross.setdefault(cfgs[a], {})
-                        .setdefault(cfgs[b], {})
-                        .setdefault(la, {})
-                    )
-                    by[lb] = by.get(lb, 0) + n
+    decode_rows()
 
     # Time: buckets into timeline bins, local hours, days, 3-hour blocks, weekdays.
     bins: dict[datetime, dict] = {}
@@ -852,12 +934,6 @@ def summary(view: RunView) -> dict:
                 target[key] += stats[key]
             if stats.get("counts"):
                 merge_counts(target["counts"], stats["counts"])
-    for local, cfg, label, n in time_labels:
-        label = ERROR if label in FAILED_LABELS else label
-        b = _bin_start(local, bin_ms, origin)
-        targets = [bins[b]] if b in bins else []
-        for target in [*targets, *entries_at(local)]:
-            _sparse_add(target["counts"], cfg, label, n)
 
     def ordered(dim: str) -> list[dict]:
         entries = list(groups.get(dim, {}).values())
@@ -886,6 +962,8 @@ def summary(view: RunView) -> dict:
         "pending": 0 if view.cancelled else pending,
         "not_read": pending if view.cancelled else 0,
         "rows_stored": total_rows,
+        # A user question's sessions read, behind its users.
+        "sessions_read": total_rows if view.by_user else None,
         "counts": counts,
         "unsure": unsure,
         "timeline": {
@@ -911,8 +989,11 @@ def summary(view: RunView) -> dict:
                 )
             },
             # Each answer's users who most consistently get it (a cohort can
-            # hide among users too small for the busiest fifty).
+            # hide among users too small for the busiest fifty). A user
+            # question's users are one row each: how many got an answer in
+            # k of their n sessions says it instead.
             "user_by_answer": {} if view.by_user else kept_users_by_answer(view),
+            **({"user_consistency": user_consistency(view)} if view.by_user else {}),
         },
         "cross": cross if len(view.config_ids) > 1 else {},
         "_progress": {
@@ -995,10 +1076,56 @@ def _answer_exists(
     )
 
 
+def _rolled(view: RunView, cfg: str | None, cond) -> str:
+    """A condition on a user's rolled-up answers: to one question, or to any.
+    ``cond(i)`` tests question i's columns."""
+    indexes = (
+        [view.config_ids.index(cfg)]
+        if cfg in view.config_ids
+        else []
+        if cfg
+        else range(len(view.config_ids))
+    )
+    tests = [cond(i) for i in indexes]
+    return "(" + " OR ".join(tests) + ")" if tests else "false"
+
+
+def _user_conditions(view: RunView, f: RowFilter, p: _Params) -> list[str]:
+    """What the answer, unsure and text filters ask of a user question's
+    rows, its users (``_user_rollup``): their rolled-up answers."""
+    conds = []
+    for cfg, answer in f.answers:
+        value = p(ERROR if answer == SKIPPED else answer)
+        conds.append(_rolled(view, cfg, lambda i, v=value: f"r.l{i} = {v}"))
+    if f.unsure:
+        conds.append(_rolled(view, f.unsure_config, lambda i: f"r.u{i}"))
+    if f.q:
+        like = p(f"%{f.q}%")
+        conds.append(
+            f"(r.user_label ILIKE {like} OR r.end_user_id::text = {p(f.q)} OR EXISTS ("
+            "SELECT 1 FROM tracer_instant_eval_row s WHERE s.task_id = %(task)s "
+            "AND s.end_user_id = r.end_user_id "
+            f"AND (s.excerpt ILIKE {like} OR s.row_id = {p(f.q)})))"
+        )
+    return conds
+
+
 def _conditions(view: RunView, f: RowFilter, params: dict) -> list[str]:
+    """The filter as conditions on ``r``: a run's rows, or a user question's
+    users (``_user_rollup``), whose columns are named alike."""
     p = _Params(params)
     params.setdefault("cfg_uuids", view.config_ids)
     conds: list[str] = []
+    if view.by_user:
+        conds += _user_conditions(view, f, p)
+        f = RowFilter(
+            time_from=f.time_from,
+            time_to=f.time_to,
+            groups=f.groups,
+            user=f.user,
+            model=f.model,
+            error=f.error,
+        )
     for cfg, answer in f.answers:
         if answer == PENDING:
             if cfg:
@@ -1119,7 +1246,27 @@ def _group_condition(view: RunView, group: str, p: _Params) -> str:
         return f"({TURN_BUCKET.replace('turns', 'r.turns')}) = {p(key)}"
     if dim == "error" and key in ("error", "ok"):
         return "r.error" if key == "error" else "NOT r.error"
+    if dim == "consistent" and view.by_user:
+        return _consistent_condition(group, key, p)
     raise BadFilter(f"Unreadable group: {group}")
+
+
+def _consistent_condition(group: str, key: str, p: _Params) -> str:
+    """``consistent:<config>|<answer>|<k>|<n>``: the users k of whose n
+    answered sessions got that answer to that question."""
+    cfg, _, rest = key.partition("|")
+    rest, _, n = rest.rpartition("|")
+    label, _, k = rest.rpartition("|")
+    if not (_is_uuid(cfg) and label and k.isdigit() and n.isdigit()):
+        raise BadFilter(f"Unreadable group: {group}")
+    return (
+        "r.end_user_id IN (SELECT s.end_user_id FROM tracer_instant_eval_row s "
+        "JOIN tracer_instant_eval_answer a ON a.task_id = %(task)s "
+        f"AND a.row_id = s.id AND a.config_id = {p(cfg)}::uuid "
+        "WHERE s.task_id = %(task)s AND s.end_user_id IS NOT NULL "
+        f"GROUP BY s.end_user_id HAVING count(*) = {p(int(n))} "
+        f"AND count(*) FILTER (WHERE a.label = {p(label)}) = {p(int(k))})"
+    )
 
 
 def _cursor_encode(data: dict) -> str:
@@ -1244,11 +1391,13 @@ def rows_page(
         "cfgs": view.config_ids,
         "tz": view.tz.key,
     }
-    conds = _conditions(view, f, params)
-    where = " AND ".join(["r.task_id = %(task)s", *conds])
     state = _cursor_decode(cursor)
     if view.by_user:
-        return _user_rows_page(view, where, params, state, page_size)
+        return _user_rows_page(
+            view, f, params, state, page_size, sort=sort, sort_config=sort_config
+        )
+    conds = _conditions(view, f, params)
+    where = " AND ".join(["r.task_id = %(task)s", *conds])
     joins = ""
     if sort == "confidence":
         params["s_cfg"] = sort_config or (view.config_ids[0] if view.config_ids else "")
@@ -1305,68 +1454,119 @@ def rows_page(
     return {"rows": rows, "next_cursor": next_cursor, "total": int(total)}
 
 
+def _user_sessions_tally(view: RunView, users: list[str]) -> dict[str, dict]:
+    """{user: {config: {label: sessions}}}: the answers behind each user's
+    rolled-up answer, from the narrow table."""
+    if not users:
+        return {}
+    out: dict[str, dict] = defaultdict(dict)
+    for user, cfg, label, n in _rows(
+        "SELECT r.end_user_id::text, a.config_id::text, a.label, count(*) "
+        "FROM tracer_instant_eval_row r JOIN tracer_instant_eval_answer a "
+        "ON a.task_id = %(task)s AND a.row_id = r.id "
+        "AND a.config_id = ANY(%(cfgs)s::uuid[]) "
+        "WHERE r.task_id = %(task)s AND r.end_user_id = ANY(%(users)s::uuid[]) "
+        "GROUP BY 1, 2, 3",
+        {"task": view.task_id, "cfgs": view.config_ids, "users": users},
+    ):
+        out[user].setdefault(cfg, {})[label] = int(n)
+    return out
+
+
+def _user_answers(view: RunView, rec, tally: dict) -> dict:
+    """One user's answer to each question, from a rollup row (its l0, c0,
+    l1, c1, … at the end) and the sessions behind it."""
+    k = len(view.config_ids)
+    rolled = rec[len(rec) - 2 * k :]
+    out = {}
+    for i, cfg in enumerate(view.config_ids):
+        label, confidence = rolled[2 * i], rolled[2 * i + 1]
+        waiting = label == PENDING
+        out[cfg] = {
+            "answer": None if waiting else label,
+            "explanation": "",
+            "confidence": confidence,
+            # Sessions per answer: the rolled-up answer's own, of them all.
+            "counts": tally.get(cfg, {}),
+            "status": ("pending" if view.cancelled else "running")
+            if waiting
+            else "completed",
+        }
+    return out
+
+
+_USER_COLUMNS = (
+    "r.end_user_id::text, r.user_label, r.time, r.sessions, r.model, r.turns, "
+    "r.duration_ms, r.error"
+)
+
+
 def _user_rows_page(
-    view: RunView, where: str, params: dict, state: dict, page_size: int
+    view: RunView,
+    f: RowFilter,
+    params: dict,
+    state: dict,
+    page_size: int,
+    *,
+    sort: str,
+    sort_config: str | None,
 ) -> dict:
-    """A user question lists users: their sessions' answers rolled up."""
+    """A user question lists users, each with their rolled-up answers and
+    the sessions behind them, filtered by those answers."""
+    _user_params(view, params)
+    where = " AND ".join(_conditions(view, f, params)) or "true"
     offset = int(state.get("o", 0))
+    if sort == "confidence":
+        i = view.config_ids.index(sort_config) if sort_config in view.config_ids else 0
+        order = f"COALESCE(r.c{i}, 2) ASC, r.end_user_id"
+    elif sort == "time":
+        order = "r.time ASC NULLS FIRST, r.end_user_id"
+    else:
+        order = "r.time DESC NULLS LAST, r.end_user_id"
     params.update(lim=page_size + 1, off=offset)
+    rolled = ", ".join(f"r.l{i}, r.c{i}" for i in range(len(view.config_ids)))
     recs = _rows(
-        "SELECT r.end_user_id::text, max(r.user_label), max(r.time), count(*), "
-        "(array_agg(r.excerpt ORDER BY r.time DESC))[1], "
-        "(array_agg(r.model ORDER BY r.time DESC))[1], sum(r.turns), sum(r.duration_ms), bool_or(r.error), "
-        "array_agg(r.row_id) "
-        f"FROM tracer_instant_eval_row r WHERE {where} AND r.end_user_id IS NOT NULL "
-        "GROUP BY r.end_user_id ORDER BY max(r.time) DESC, r.end_user_id LIMIT %(lim)s OFFSET %(off)s",
+        f"WITH {_user_rollup(view)} SELECT {_USER_COLUMNS}, count(*) OVER (), "
+        f"{rolled} FROM ur r WHERE {where} ORDER BY {order} "
+        "LIMIT %(lim)s OFFSET %(off)s",
         params,
     )
+    if recs:
+        total = int(recs[0][8])
+    else:
+        total = (
+            _rows(
+                f"WITH {_user_rollup(view)} SELECT count(*) FROM ur r WHERE {where}",
+                params,
+            )[0][0]
+            if offset
+            else 0
+        )
     more = len(recs) > page_size
     recs = recs[:page_size]
-    session_ids = [sid for rec in recs for sid in rec[9]]
-    answers = answers_for(view, session_ids)
+    users = [rec[0] for rec in recs]
+    tally = _user_sessions_tally(view, users)
+    latest = dict(
+        _rows(
+            "SELECT DISTINCT ON (end_user_id) end_user_id::text, excerpt "
+            "FROM tracer_instant_eval_row "
+            "WHERE task_id = %(task)s AND end_user_id = ANY(%(users)s::uuid[]) "
+            "ORDER BY end_user_id, time DESC NULLS LAST, id DESC",
+            {"task": view.task_id, "users": users},
+        )
+        if users
+        else []
+    )
     rows = []
-    for (
-        uid,
-        label,
-        time,
-        sessions,
-        excerpt,
-        model,
-        turns,
-        duration,
-        error,
-        sids,
-    ) in recs:
-        rolled = {}
-        for cfg in view.config_ids:
-            tally: dict[str, int] = {}
-            in_flight = False
-            for sid in sids:
-                ans = answers.get(sid, {}).get(cfg)
-                if not ans or ans["answer"] is None:
-                    in_flight = True
-                    continue
-                tally[ans["answer"]] = tally.get(ans["answer"], 0) + 1
-            real = sorted(
-                ((n, k) for k, n in tally.items() if not k.startswith("__")),
-                key=lambda x: (-x[0], x[1]),
-            )
-            rolled[cfg] = {
-                "answer": real[0][1] if real else next(iter(tally), None),
-                "explanation": "",
-                "confidence": None,
-                "counts": tally,
-                "status": "running"
-                if in_flight and not view.cancelled
-                else "completed",
-            }
+    for rec in recs:
+        uid, label, time, sessions, model, turns, duration, error = rec[:8]
         rows.append(
             {
                 "id": uid,
                 "time": time.isoformat() if time else None,
                 "user_id": label or "",
                 "end_user_id": uid,
-                "excerpt": excerpt or "",
+                "excerpt": latest.get(uid) or "",
                 "label": label or uid,
                 "trace_id": None,
                 "sessions": int(sessions),
@@ -1376,13 +1576,9 @@ def _user_rows_page(
                     "duration_ms": int(duration) if duration is not None else None,
                     "error": bool(error),
                 },
-                "answers": rolled,
+                "answers": _user_answers(view, rec, tally.get(uid, {})),
             }
         )
-    total = _rows(
-        f"SELECT count(DISTINCT r.end_user_id) FROM tracer_instant_eval_row r WHERE {where}",
-        params,
-    )[0][0]
     return {
         "rows": rows,
         "next_cursor": _cursor_encode({"o": offset + page_size}) if more else None,
@@ -1394,11 +1590,40 @@ def _user_rows_page(
 EXPORT_PAGE = 5000
 
 
-def iter_export(view: RunView, f: RowFilter, questions: list[dict]):
-    """CSV lines for every row the filter selects, read page by page."""
+def _csv_line(values) -> str:
     import csv
     import io
 
+    buf = io.StringIO()
+    csv.writer(buf).writerow(values)
+    return buf.getvalue()
+
+
+def _selected_users(view: RunView, f: RowFilter) -> list[str] | None:
+    """The users of a user question the filter selects, or None for all."""
+    params = _user_params(view, {"task": view.task_id, "tz": view.tz.key})
+    conds = _conditions(view, f, params)
+    if not conds:
+        return None
+    return [
+        uid
+        for (uid,) in _rows(
+            f"WITH {_user_rollup(view)} SELECT r.end_user_id::text FROM ur r "
+            f"WHERE {' AND '.join(conds)}",
+            params,
+        )
+    ]
+
+
+def iter_export(
+    view: RunView, f: RowFilter, questions: list[dict], *, sessions: bool = False
+):
+    """CSV lines for every row the filter selects, read page by page. A user
+    question writes a line per user (``_iter_user_export``), or with
+    ``sessions`` a line per session of the users the filter selects."""
+    if view.by_user and not sessions:
+        yield from _iter_user_export(view, f, questions)
+        return
     names = {q["config_id"]: q["question"] for q in questions}
     header = [
         "id",
@@ -1415,20 +1640,22 @@ def iter_export(view: RunView, f: RowFilter, questions: list[dict]):
         q = names.get(cfg, cfg)
         header += [f"{q} · answer", f"{q} · confidence", f"{q} · explanation"]
 
-    def line(values) -> str:
-        buf = io.StringIO()
-        csv.writer(buf).writerow(values)
-        return buf.getvalue()
-
-    yield line(header)
+    yield _csv_line(header)
     params: dict = {
         "task": view.task_id,
         "task_s": view.task_id,
         "cfgs": view.config_ids,
         "tz": view.tz.key,
     }
-    conds = _conditions(view, f, params)
-    where = " AND ".join(["r.task_id = %(task)s", *conds])
+    if view.by_user:
+        where = "r.task_id = %(task)s"
+        users = _selected_users(view, f)
+        if users is not None:
+            params["users"] = users
+            where += " AND r.end_user_id = ANY(%(users)s::uuid[])"
+    else:
+        conds = _conditions(view, f, params)
+        where = " AND ".join(["r.task_id = %(task)s", *conds])
     last_id = 0
     while True:
         params.update(after=last_id, lim=EXPORT_PAGE)
@@ -1465,6 +1692,94 @@ def iter_export(view: RunView, f: RowFilter, questions: list[dict]):
                     else round(ans["confidence"], 3),
                     ans.get("explanation", ""),
                 ]
-            yield line(values)
+            yield _csv_line(values)
         if len(recs) < EXPORT_PAGE:
             return
+
+
+def _iter_user_export(view: RunView, f: RowFilter, questions: list[dict]):
+    """A line per user the filter selects: their rolled-up answer to each
+    question, its sessions' mean confidence, and the sessions behind it, by
+    answer. Read a page of users at a time, in user id order."""
+    names = {q["config_id"]: q["question"] for q in questions}
+    found: dict[str, set] = defaultdict(set)
+    for cfg, label in _rows(
+        "SELECT DISTINCT config_id::text, label FROM tracer_instant_eval_answer "
+        "WHERE task_id = %(task)s AND config_id = ANY(%(cfgs)s::uuid[])",
+        {"task": view.task_id, "cfgs": view.config_ids},
+    ):
+        if label not in FAILED_LABELS:
+            found[cfg].add(label)
+    labels = {}
+    for cfg in view.config_ids:
+        listed = list(view.labels.get(cfg) or [])
+        labels[cfg] = listed + sorted(found[cfg] - set(listed))
+    header = [
+        "user_id",
+        "end_user_id",
+        "latest_session",
+        "sessions_read",
+        "model",
+        "turns",
+        "duration_ms",
+        "error",
+    ]
+    for cfg in view.config_ids:
+        q = names.get(cfg, cfg)
+        header += [f"{q} · answer", f"{q} · confidence"]
+        header += [f"{q} · {label} sessions" for label in labels[cfg]]
+        header.append(f"{q} · couldn't answer sessions")
+    yield _csv_line(header)
+
+    params = _user_params(
+        view, {"task": view.task_id, "tz": view.tz.key, "lim": EXPORT_PAGE}
+    )
+    where = " AND ".join(_conditions(view, f, params)) or "true"
+    rolled = ", ".join(f"r.l{i}, r.c{i}" for i in range(len(view.config_ids)))
+    rollup = _user_rollup(view, sessions=" AND r.end_user_id = ANY(%(page)s::uuid[])")
+    after = None
+    while True:
+        page = [
+            str(uid)
+            for (uid,) in _rows(
+                "SELECT DISTINCT end_user_id FROM tracer_instant_eval_row "
+                "WHERE task_id = %(task)s AND end_user_id IS NOT NULL"
+                f"{' AND end_user_id > %(after)s::uuid' if after else ''} "
+                "ORDER BY end_user_id LIMIT %(lim)s",
+                {**params, "after": after},
+            )
+        ]
+        if not page:
+            return
+        recs = _rows(
+            f"WITH {rollup} SELECT {_USER_COLUMNS}, {rolled} FROM ur r "
+            f"WHERE {where} ORDER BY r.end_user_id",
+            {**params, "page": page},
+        )
+        tally = _user_sessions_tally(view, [rec[0] for rec in recs])
+        for rec in recs:
+            uid, label, time, sessions, model, turns, duration, error = rec[:8]
+            answers = _user_answers(view, rec, tally.get(uid, {}))
+            values = [
+                label or "",
+                uid,
+                time.isoformat() if time else "",
+                int(sessions),
+                model or "",
+                "" if turns is None else int(turns),
+                "" if duration is None else int(duration),
+                "true" if error else "false",
+            ]
+            for cfg in view.config_ids:
+                ans = answers[cfg]
+                by_label = ans["counts"]
+                values += [
+                    ans["answer"] or "",
+                    "" if ans["confidence"] is None else round(ans["confidence"], 3),
+                    *(by_label.get(label, 0) for label in labels[cfg]),
+                    sum(by_label.get(label, 0) for label in FAILED_LABELS),
+                ]
+            yield _csv_line(values)
+        if len(page) < EXPORT_PAGE:
+            return
+        after = page[-1]

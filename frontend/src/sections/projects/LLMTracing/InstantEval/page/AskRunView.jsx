@@ -602,6 +602,10 @@ export default function AskRunView({
     run.total
       ? `${run.total.toLocaleString()} ${run.total === 1 ? meta.noun : meta.plural}`
       : null,
+    // A user question counts users; it also read their sessions.
+    unit === "users" &&
+      summary?.sessions_read != null &&
+      `${summary.sessions_read.toLocaleString()} sessions read`,
     reads && `Jev reads ${readOption(unit, reads).label.toLowerCase()}`,
   ].filter(Boolean);
 
@@ -798,16 +802,18 @@ export default function AskRunView({
     unit,
   };
 
-  const exportCsv = async () => {
+  // A user question exports its users, or with `sessions` their sessions.
+  const exportCsv = async ({ sessions = false } = {}) => {
     try {
       await downloadRowsCsv({
         projectId,
         taskId: run.taskId,
         tz: run.tz,
         filter,
+        sessions,
         name: `instant-eval-${(question?.question || "answers")
           .slice(0, 40)
-          .replace(/[^\w]+/g, "-")}.csv`,
+          .replace(/[^\w]+/g, "-")}${sessions ? "-sessions" : ""}.csv`,
       });
     } catch (error) {
       setActionError(getSafeActionErrorMessage(error, "The export failed."));

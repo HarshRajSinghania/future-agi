@@ -98,10 +98,23 @@ export async function fetchRowIds({
   return out.slice(0, limit);
 }
 
-/** Download every row a filter selects as CSV. */
-export async function downloadRowsCsv({ projectId, taskId, tz, filter, name }) {
+/**
+ * Download every row a filter selects as CSV: a user question's users, or
+ * with `sessions` their sessions, a line each.
+ */
+export async function downloadRowsCsv({
+  projectId,
+  taskId,
+  tz,
+  filter,
+  name,
+  sessions = false,
+}) {
   const response = await axios.get(endpoints.project.instantEvalExport(), {
-    params: rowsParams({ projectId, taskId, tz, filter }),
+    params: {
+      ...rowsParams({ projectId, taskId, tz, filter }),
+      ...(sessions ? { sessions: true } : {}),
+    },
     responseType: "blob",
   });
   const url = URL.createObjectURL(response.data);

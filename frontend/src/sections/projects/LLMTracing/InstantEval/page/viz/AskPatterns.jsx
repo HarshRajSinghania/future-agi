@@ -13,7 +13,13 @@ import { useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { formatCount, formatShare, isYesNo } from "./askAnswers";
 import { chartQuestions } from "./askSummary";
-import { MIN_ROWS, Q_MAX, findPatterns } from "./askStats";
+import {
+  MIN_CONSISTENT_SESSIONS,
+  MIN_ROWS,
+  Q_MAX,
+  findConsistency,
+  findPatterns,
+} from "./askStats";
 import {
   Swatch,
   VizCard,
@@ -41,6 +47,7 @@ const DIMENSION_ICON = {
   tod: "mdi:clock-time-four-outline",
   user: "mdi:account-outline",
   users: "mdi:account-multiple-outline",
+  consistent: "mdi:account-multiple-check-outline",
   model: "mdi:chip",
   modelsince: "mdi:chip",
   turns: "mdi:message-reply-text-outline",
@@ -167,7 +174,8 @@ function PatternRow({
           {pattern.within && (
             <Box component="span" sx={{ color: "text.secondary" }}>
               {" "}
-              · part of {quoted(pattern.label)} {pattern.within.where}
+              · part of {quoted(pattern.within.label || pattern.label)}{" "}
+              {pattern.within.where}
             </Box>
           )}
         </Typography>
@@ -206,6 +214,87 @@ PatternRow.propTypes = {
   dense: PropTypes.bool,
 };
 
+// A user question's users who kept getting an answer: how many had it in
+// every session read (and in all but one), against what chance would give.
+function ConsistencyRow({ line, color, showSwatch, onSelect }) {
+  return (
+    <Stack
+      component="li"
+      direction="row"
+      spacing={1.5}
+      alignItems="center"
+      data-consistency={line.label}
+      sx={{
+        py: 1,
+        "&:not(:last-of-type)": {
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        },
+      }}
+    >
+      <Iconify
+        icon={DIMENSION_ICON.consistent}
+        width={16}
+        sx={{ color: "text.secondary", flexShrink: 0 }}
+      />
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Tooltip
+          arrow
+          placement="top-start"
+          describeChild
+          title={`More users than chance alone would give (${qText(line.q)}). Users with at least ${MIN_CONSISTENT_SESSIONS} sessions answered count; a tier counts when its share is surely above the run's.`}
+        >
+          <Typography
+            variant="body2"
+            sx={{ fontSize: 13, fontVariantNumeric: "tabular-nums" }}
+          >
+            {showSwatch && (
+              <Swatch
+                color={color}
+                size={9}
+                sx={{ display: "inline-block", mr: 0.75 }}
+              />
+            )}
+            <Box component="span" sx={{ fontWeight: 600 }}>
+              {line.text}
+            </Box>
+          </Typography>
+        </Tooltip>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="p"
+          sx={{ m: 0, fontVariantNumeric: "tabular-nums" }}
+        >
+          {line.chance}
+        </Typography>
+      </Box>
+      <Button
+        size="small"
+        variant="outlined"
+        color="inherit"
+        onClick={() => onSelect?.(line.select.filter, line.select.label)}
+        sx={{
+          flexShrink: 0,
+          fontSize: 12,
+          py: 0.25,
+          minWidth: 88,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        Show {formatCount(line.select.count)}
+      </Button>
+    </Stack>
+  );
+}
+
+ConsistencyRow.propTypes = {
+  line: PropTypes.object.isRequired,
+  color: PropTypes.string,
+  showSwatch: PropTypes.bool,
+  onSelect: PropTypes.func,
+};
+
 /**
  * What stands out: the groups of rows (a day, a stretch of an afternoon, a
  * weekday, the weekend, a time of day, a user, a model, a turn count, errors,
@@ -214,8 +303,11 @@ PatternRow.propTypes = {
  * category question with nothing in focus looks at every label at once.
  * Each callout is counts only, and "Show" selects the group. The top five
  * are shown, at most two of a kind; "Show all" lists every one that passed,
- * with the ones that sit inside a stronger callout saying so. While the run
- * is answering, they are recomputed at most every 10 seconds.
+ * with the ones that sit inside a stronger callout saying so. A user
+ * question first lists the users who kept getting an answer (in every
+ * session read, or all but one) when there are clearly more of them than
+ * chance would give. While the run is answering, they are recomputed at
+ * most every 10 seconds.
  */
 export default function AskPatterns({
   summary: given,
@@ -258,6 +350,17 @@ export default function AskPatterns({
         unit,
       }),
     [counts, questionList, shownFocus, unit],
+  );
+  const consistency = useMemo(
+    () =>
+      unit === "users" && result.question
+        ? findConsistency({
+            summary: counts,
+            question: result.question,
+            answer: result.answer,
+          })
+        : [],
+    [counts, result.question, result.answer, unit],
   );
   const [moreShown, setMoreShown] = useState(0);
   const { question, answer, patterns, more } = result;
@@ -323,8 +426,9 @@ export default function AskPatterns({
   else if (!patterns.length)
     body = (
       <Typography variant="body2" color="text.secondary" sx={{ fontSize: 13 }}>
-        Nothing stands out{running ? " yet" : ""}: no day, time, user, model,
-        turn count, error or other answer has a clearly different share of{" "}
+        {consistency.length ? "Nothing else stands out" : "Nothing stands out"}
+        {running ? " yet" : ""}: no day, time, user, model, turn count, error or
+        other answer has a clearly different share of{" "}
         {everyLabel ? "any answer" : quoted(answer)} after checking{" "}
         {formatCount(result.tested)} groups.
       </Typography>
@@ -459,6 +563,30 @@ export default function AskPatterns({
         )
       }
     >
+      {!tooFew && consistency.length > 0 && (
+        <Box
+          component="ul"
+          aria-label="Users who kept getting an answer"
+          sx={{
+            m: 0,
+            mb: 0.5,
+            p: 0,
+            listStyle: "none",
+            borderBottom: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          {consistency.map((line) => (
+            <ConsistencyRow
+              key={line.key}
+              line={line}
+              color={colorOf(question, line.label)}
+              showSwatch={everyLabel}
+              onSelect={onSelect}
+            />
+          ))}
+        </Box>
+      )}
       {body}
       {!tooFew && patterns.length > 0 && (
         <Typography

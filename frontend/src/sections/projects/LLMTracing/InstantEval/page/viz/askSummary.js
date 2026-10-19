@@ -24,6 +24,12 @@ import { chooseBinMs, clampWindow, dayText } from "./timelineBins";
 // miss, such as a cohort that is rarely helped. When the page
 // has only rows (a run of up to 1,500), summarizeRecords builds the same
 // thing in the browser.
+// A user question's rows are its users, each counted once under the answer
+// most of their sessions got (`sessions_read` says how many sessions it
+// read), placed at their latest session; it has no user groups, and
+// `groups.user_consistency` instead: {config_id: {sessions: {label: n},
+// users: {n: users}, tiers: {label: [[n, k, users]]}}}, how many users had k
+// of their n answered sessions (3 or more) get each answer.
 
 export const SQUARES_MAX = 1500;
 export const MAX_BINS = 120;

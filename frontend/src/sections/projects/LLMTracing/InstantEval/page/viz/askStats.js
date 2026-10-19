@@ -1,5 +1,10 @@
 import { UNITS } from "src/sections/projects/observePopulation";
-import { formatShare, isYesNo, questionLabels } from "./askAnswers";
+import {
+  formatCount,
+  formatShare,
+  isYesNo,
+  questionLabels,
+} from "./askAnswers";
 import {
   MIN_USER_ROWS,
   NONE_KEY,
@@ -15,6 +20,7 @@ import {
   sampleOf,
   summarizeRecords,
   tally,
+  wilsonLower,
 } from "./askSummary";
 import { dayText } from "./timelineBins";
 
@@ -432,21 +438,29 @@ export function buildGroups(summary, questions, question, unit) {
     (entry) => entry.key !== NONE_KEY,
     (entry) => `with ${entry.label || entry.key}`,
   );
+  // A user question's user is one row: their turns are their sessions',
+  // and they errored when any of their sessions did.
+  const byUser = unit === "users";
   facet(
     "turns",
     () => true,
     (entry) =>
-      `in ${unitNoun(unit)} with ${
+      `${byUser ? "for" : "in"} ${unitNoun(unit)} with ${
         TURN_BUCKETS.find((b) => b.key === entry.key)?.text || entry.label
       }`,
   );
   facet(
     "error",
     () => true,
-    (entry) =>
-      entry.key === "error"
+    (entry) => {
+      if (byUser)
+        return entry.key === "error"
+          ? "for users with a trace error"
+          : "for users with no trace error";
+      return entry.key === "error"
         ? "when the trace had an error"
-        : "when the trace had no error",
+        : "when the trace had no error";
+    },
   );
 
   // Each model since each day, against the same model before it: a change
@@ -558,6 +572,11 @@ function errorConcentration(group, cells) {
   const hours = to - from <= 4 ? `, ${hoursText(from, to)}` : "";
   return `all ${total} on ${dayText(day)}${hours}`;
 }
+
+// Partitions in two where one side is the exception (errors, the weekend):
+// what stands out on the other side, for another answer, is the same
+// finding, and folds under the exception's.
+const FOLDED = new Set(["error", "weekpart"]);
 
 // Callouts are grouped into families; at most PER_FAMILY of one are shown.
 const FAMILY = {
@@ -747,6 +766,21 @@ export function findPatterns({
       (!g.baseline || g.baseline.answered >= MIN_ROWS),
   );
 
+  // The rarer side of each such partition split in two.
+  const rarer = new Map();
+  FOLDED.forEach((dimension) => {
+    const sides = groups.filter((g) => g.dimension === dimension);
+    if (
+      sides.length === 2 &&
+      sides[0].answered + sides[1].answered === total &&
+      sides[0].answered !== sides[1].answered
+    )
+      rarer.set(
+        dimension,
+        sides[0].answered < sides[1].answered ? sides[0].key : sides[1].key,
+      );
+  });
+
   const everyUser = Math.max(1, Math.floor((run.n || total) / MIN_USER_ROWS));
   const minP = new Map();
   const minimumOf = (n, hits) => {
@@ -777,8 +811,9 @@ export function findPatterns({
         delta: k / n - (restN ? restK / restN : 0),
       };
     });
-    // A partition split in two is one comparison: keep the smaller side, the
-    // one that says something ("when the trace had an error", "at weekends").
+    // A partition split in two is one comparison: keep the side where the
+    // answer is more common ("Order status when the trace had an error",
+    // "Product advice when it had none"), the smaller one on a tie.
     const partitions = new Map();
     rows.forEach((t) => {
       if (!PARTITIONS.has(t.group.dimension)) return;
@@ -790,7 +825,7 @@ export function findPatterns({
     partitions.forEach((list) => {
       if (list.length === 2 && list[0].n + list[1].n === total) {
         const [a, b] = list;
-        const keepA = a.n < b.n || (a.n === b.n && a.delta >= b.delta);
+        const keepA = a.delta > b.delta || (a.delta === b.delta && a.n <= b.n);
         complements.add(keepA ? b : a);
       }
     });
@@ -995,6 +1030,32 @@ export function findPatterns({
       (a.group.key < b.group.key ? -1 : 1),
   );
 
+  // A callout on the larger side of a partition in two (no error, weekdays)
+  // folds under the strongest callout on its rarer side, whatever its
+  // answer: "Product advice when the trace had no error" is "Order status
+  // when it had one" seen from the other side. The rarer side leads.
+  const lead = new Map();
+  passing.forEach((t) => {
+    const dimension = t.group.dimension;
+    if (rarer.get(dimension) === t.group.key && !lead.has(dimension))
+      lead.set(dimension, t);
+  });
+  const foldUnder = new Map();
+  passing.forEach((t) => {
+    const side = rarer.get(t.group.dimension);
+    const parent = side && side !== t.group.key && lead.get(t.group.dimension);
+    if (parent) foldUnder.set(t, parent);
+  });
+  if (foldUnder.size) {
+    const children = new Map();
+    foldUnder.forEach((parent, t) =>
+      children.set(parent, [...(children.get(parent) || []), t]),
+    );
+    passing = passing
+      .filter((t) => !foldUnder.has(t))
+      .flatMap((t) => [t, ...(children.get(t) || [])]);
+  }
+
   // A callout most of whose rows (70%) lie inside a stronger one's group,
   // with the same answer going the same way, is that callout seen again (a
   // Saturday afternoon inside "at weekends", Oct 13 inside "gpt-4.1-mini
@@ -1007,15 +1068,17 @@ export function findPatterns({
   const familyCount = new Map();
   const rest = [];
   passing.forEach((t) => {
-    const parent = shown
-      .concat(rest.filter((r) => !r.within))
-      .find(
-        (s) =>
-          s.label === t.label &&
-          Math.sign(s.delta) === Math.sign(t.delta) &&
-          sayingTheSame(t, s) &&
-          insideShare(t.group, s.group) >= NESTED,
-      );
+    const parent =
+      foldUnder.get(t) ||
+      shown
+        .concat(rest.filter((r) => !r.within))
+        .find(
+          (s) =>
+            s.label === t.label &&
+            Math.sign(s.delta) === Math.sign(t.delta) &&
+            sayingTheSame(t, s) &&
+            insideShare(t.group, s.group) >= NESTED,
+        );
     if (parent) {
       rest.push({ ...t, within: parent });
       return;
@@ -1047,6 +1110,7 @@ export function findPatterns({
       within: t.within
         ? {
             key: `${t.within.label}|${t.within.group.key}`,
+            label: t.within.label,
             where: t.within.group.where,
           }
         : null,
@@ -1119,6 +1183,137 @@ export function standOutCells(rows, columns, { skip = () => false } = {}) {
     if (q < Q_MAX && t.delta >= MIN_DELTA_TABLE) out.set(t.key, { ...t, q });
   });
   return out;
+}
+
+// A user question reads each user's latest sessions, a few at most: how many
+// users had k of n sessions get an answer shows the ones it keeps finding.
+export const MIN_CONSISTENT_SESSIONS = 3;
+// The most tiers one line names.
+const MAX_TIERS = 3;
+// The most answers a category question lists users for.
+export const MAX_CONSISTENCY = 3;
+
+const binomial = (k, n, p) =>
+  Math.exp(logChoose(n, k) + k * Math.log(p) + (n - k) * Math.log(1 - p));
+
+/** P(X ≥ x) for X ~ Poisson(mean): how surprising x users are. */
+export function poissonTail(x, mean) {
+  if (x <= 0) return 1;
+  if (!(mean > 0)) return 0;
+  const term = (i) => Math.exp(-mean + i * Math.log(mean) - logFactorial(i));
+  if (x <= mean) {
+    // At or below the mean the tail is half or more: 1 − P(X < x).
+    let below = 0;
+    for (let i = 0; i < x; i += 1) below += term(i);
+    return Math.min(1, Math.max(0, 1 - below));
+  }
+  let tail = 0;
+  for (let i = x; ; i += 1) {
+    const t = term(i);
+    tail += t;
+    if (t <= tail * 1e-12) break;
+  }
+  return Math.min(1, tail);
+}
+
+/**
+ * A user question's users who most consistently got an answer, from the
+ * summary's `groups.user_consistency`. For each answer: the tiers of users
+ * k of whose n sessions got it (n of 3 or more) that surely beat the run's
+ * share of it (the lower end of k/n's 95% Wilson interval is above the
+ * sessions' share), at the most sessions read any such tier has, k
+ * falling. Each tier says how many users chance alone would put there at
+ * that share (each session's answer independent of who asked), and an
+ * answer is listed only when its users are clearly more than that: the
+ * Poisson tail of their count, corrected across the answers checked
+ * (Benjamini–Hochberg, q < Q_MAX). Most above chance first.
+ *   [{label, n, share, users, expected, p, q, tiers: [{k, n, users,
+ *     expected}], text, chance, filter, select}]
+ */
+export function findConsistency({ summary, question, answer = null }) {
+  const data = summary?.groups?.user_consistency?.[question?.configId];
+  if (!data) return [];
+  const settled = Object.values(data.sessions || {}).reduce((s, v) => s + v, 0);
+  if (!settled) return [];
+  const labels = answer ? [answer] : questionLabels(question);
+  const lines = [];
+  labels.forEach((label) => {
+    const share = (data.sessions?.[label] || 0) / settled;
+    if (share <= 0 || share >= 1) return;
+    const passing = (data.tiers?.[label] || []).filter(
+      ([n, k, users]) =>
+        n >= MIN_CONSISTENT_SESSIONS && users > 0 && wilsonLower(k, n) > share,
+    );
+    if (!passing.length) return;
+    const most = Math.max(...passing.map(([n]) => n));
+    const tiers = passing
+      .filter(([n]) => n === most)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_TIERS)
+      .map(([n, k, users]) => ({
+        n,
+        k,
+        users,
+        expected: (data.users?.[String(n)] || 0) * binomial(k, n, share),
+      }));
+    const users = tiers.reduce((sum, t) => sum + t.users, 0);
+    const expected = tiers.reduce((sum, t) => sum + t.expected, 0);
+    const [first, ...others] = tiers;
+    const head =
+      first.k === first.n
+        ? `${formatCount(first.users)} ${first.users === 1 ? "user" : "users"} answered “${label}” in every session read (${first.k} of ${first.n})`
+        : `${formatCount(first.users)} ${first.users === 1 ? "user" : "users"} answered “${label}” in ${first.k} of ${first.n} sessions read`;
+    const text = [
+      head,
+      ...others.map((t) => `${formatCount(t.users)} in ${t.k} of ${t.n}`),
+    ].join(" · ");
+    const around = (x) => formatCount(Math.round(x));
+    const chance = `At the run's ${formatShare(share)} of sessions, chance alone would put about ${
+      tiers.length === 1
+        ? around(first.expected)
+        : `${tiers
+            .slice(0, -1)
+            .map((t) => around(t.expected))
+            .join(", ")} and ${around(tiers[tiers.length - 1].expected)}`
+    } there.`;
+    const filter = {
+      group: tiers.map(
+        (t) => `consistent:${question.configId}|${label}|${t.k}|${t.n}`,
+      ),
+    };
+    const of = tiers.map((t) => `${t.k} of ${t.n}`).join(" or ");
+    lines.push({
+      key: `consistent|${label}`,
+      label,
+      n: most,
+      share,
+      users,
+      expected,
+      p: poissonTail(users, expected),
+      tiers,
+      text,
+      chance,
+      filter,
+      select: {
+        filter,
+        count: users,
+        label: `Users who answered “${label}” in ${of} sessions read`,
+      },
+    });
+  });
+  const qs = benjaminiHochberg(
+    lines.map((line) => line.p),
+    labels.length,
+  );
+  return lines
+    .map((line, i) => ({ ...line, q: qs[i] }))
+    .filter((line) => line.q < Q_MAX && line.users > line.expected)
+    .sort(
+      (a, b) =>
+        b.users - b.expected - (a.users - a.expected) ||
+        (a.label < b.label ? -1 : 1),
+    )
+    .slice(0, MAX_CONSISTENCY);
 }
 
 export { WEEKDAYS };
