@@ -1,17 +1,16 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Button, Checkbox, IconButton, InputBase, MenuItem, Select, Stack, Switch, Typography } from "@mui/material";
+import { Box, Button, Checkbox, CircularProgress, IconButton, InputBase, MenuItem, Select, Stack, Switch, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import SideDrawer from "../components/SideDrawer";
 import { agentSourceOf, agentDefinitionOf } from "../_mock/agentRegistry";
-import { currentAgentVersion } from "../_mock/versions";
+import { agentVersions, currentAgentVersion } from "../_mock/versions";
 import { currentEnvSnapshot } from "../_mock/envSnapshot";
 import { DEFAULT_LIMITS, limitRows } from "../_mock/optimizationRuns";
 import { useAgentImprovementFlag } from "../_mock/featureFlags";
-import PreviewBadge from "./PreviewBadge";
 import BuildEnvironmentDialog from "../agents/BuildEnvironmentDialog";
 import { buildPresetFor } from "../agents/agentViewUtils";
 import { budgetsWithin } from "../_mock/improvementStart";
@@ -24,6 +23,8 @@ import {
   FIX_IN_FLIGHT, envsForAgent, fixEstimate, fixPreview, issueFixNav, issueProjectLinkOf, issueScenarioDrafts, productionVersionOf, useIssueFix,
 } from "./issueFix";
 import { creditsForUsd, creditsLabel } from "../_mock/metering";
+import { useSimStore, useConnectedAgents } from "../store";
+import { LiveConsentCard } from "../agents/AgentLiveConsent";
 
 /* The time budgets a fix can take — never more than the agent's own. */
 const MINUTES = [15, 30, 45, 60, 90, 120];
@@ -54,21 +55,96 @@ const rowSx = (on) => ({
  * no agent is linked to connects one, and Start waits for a confirmed issue
  * and the agent's production traces.
  */
+/* Preparing a fix plan takes a moment: the issue's traces are read, the
+   agent and its production version found, where to test it settled, the
+   scenarios written from the traces (RSI PRD: "the issue's conversations,
+   turned into scenarios with an inferred persona and a sub-goal for the
+   failing step") and the agent's limits applied. The fix itself — the
+   candidate changes — is drafted after Start, in the search. Done once per
+   issue in a session: reopening Fix shows the plan at once. */
+const PREPARED = new Set();
+const PREP_STEPS = [
+  { id: "issue", label: "Reading the issue", ms: 700 },
+  { id: "agent", label: "Finding the agent and its version in production", ms: 600 },
+  { id: "env", label: "Finding the agent's environment", ms: 600 },
+  { id: "scenarios", label: "Writing scenarios from the traces", ms: 1100 },
+  { id: "limits", label: "Applying the agent's limits", ms: 500 },
+];
+
 export default function FixSheet({ open, onClose, issue, rootCause = null }) {
   const navigate = useNavigate();
   const improving = useAgentImprovementFlag();
-  const { state, agent, agents, project, gate, start, tracing, evidence, status } = useIssueFix(issue);
-  /* A fix runs in the agent's main environment — never one picked per fix. */
+  const { state, agent, agents, project, gate, start, evidence, status } = useIssueFix(issue);
+  /* A fix runs in the agent's main environment — never one picked per fix.
+     Its other environments can add their must-pass sets (RSI PRD: "Targets
+     come from one environment; the others add their must-pass sets"). */
   const envs = useMemo(() => envsForAgent(agent, state), [agent, state]);
   const main = envs[0] || null;
+  const others = envs.slice(1);
+  const [alsoIn, setAlsoIn] = useState([]);
+  /* Search across the lineage: changes earlier versions made, tried again. */
+  const [acrossLineage, setAcrossLineage] = useState(false);
+  const mustPassIn = (e) => (state.byEnv[e.id]?.scenarios || []).filter((r) => !r.archived && !r.retired && (r.critical || r.regressionMemory)).length;
   const inFlight = !!agent && !!status && FIX_IN_FLIGHT.has(status.key);
   const [connecting, setConnecting] = useState(false);
   const mainState = main ? state.byEnv[main.id] : null;
   const [target, setTarget] = useState("");
   const [textSearch, setTextSearch] = useState(null);
   const [buildOpen, setBuildOpen] = useState(false);
+  /* Live-test consent is asked here, where it's needed — not a dead end on
+     the button. Nothing runs (the baseline, the fix) until it's given, and
+     once given it stays on screen as "Given just now". */
+  const { setAgentValues } = useConnectedAgents();
+  const consentNeeded = gate?.key === "consent";
+  const hardGate = gate && !consentNeeded ? gate : null;
+  const [askedConsent, setAskedConsent] = useState(false);
+  useEffect(() => { if (consentNeeded) setAskedConsent(true); }, [consentNeeded]);
 
-  const drafts = useMemo(() => (main ? issueScenarioDrafts(issue, main, mainState) : []), [issue, main, mainState]);
+  /* ── nowhere to start from yet ──
+     A fix runs in the agent's main environment, and its first step measures
+     today there (RSI PRD: "Measure today … sets the baseline") — so an
+     environment is all it needs; nobody runs it by hand first. With none,
+     Fix hands over to the normal environment flow — the same build dialog
+     and builder the agent page uses — and the environment remembers this
+     issue (returnToIssue) to bring the person back here once it's built.
+     One way to build an environment, never a second one inside Fix. */
+  const { commit } = useSimStore();
+  const needsEnv = !!agent && !inFlight && !main;
+  /* Still building: the fix starts once it's done. */
+  const building = !!agent && !inFlight && main?.buildStatus === "building";
+  /* Everything the fix needs is in place — otherwise the sheet still shows
+     the whole plan, with the missing piece in Environment and its button. */
+  const ready = !!main && !building;
+  /* The plan's scenarios, being written: index of the step in progress. */
+  const prepSteps = PREP_STEPS;
+  const [prep, setPrep] = useState(() => (PREPARED.has(issue?.cluster_id) ? prepSteps.length : 0));
+  const prepared = prep >= prepSteps.length;
+  useEffect(() => {
+    if (!open || !issue?.cluster_id) return undefined;
+    if (PREPARED.has(issue.cluster_id)) { setPrep(prepSteps.length); return undefined; }
+    setPrep(0);
+    const timers = [];
+    let at = 0;
+    prepSteps.forEach((step, i) => {
+      at += step.ms;
+      timers.push(setTimeout(() => {
+        if (i === prepSteps.length - 1) PREPARED.add(issue.cluster_id);
+        setPrep(i + 1);
+      }, at));
+    });
+    return () => timers.forEach(clearTimeout);
+  }, [open, issue?.cluster_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openBuilding = () => {
+    /* Watched from its page; the banner there brings the person back. */
+    if (main.returnToIssue !== issue?.cluster_id) {
+      commit({ type: "patchEnvironment", envId: main.id, patch: { returnToIssue: issue?.cluster_id || null, returnFrom: "opened", returnSince: new Date().toISOString() } });
+    }
+    onClose();
+    navigate(paths.dashboard.simulate.environmentDetail(main.id));
+  };
+
+  /* Built from the issue's traces — shown even before there's an environment. */
+  const drafts = useMemo(() => (issue ? issueScenarioDrafts(issue, main, mainState) : []), [issue, main, mainState]);
   const [picked, setPicked] = useState({});
   const [titles, setTitles] = useState({});
   const [budget, setBudget] = useState(null);
@@ -82,12 +158,15 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
     setTitles({});
     setBudget(null);
     setMinutes(null);
+    setAlsoIn([]);
+    setAcrossLineage(false);
   }, [open, drafts, main]);
   useEffect(() => {
     if (!open) return;
     setTarget("");
     setTextSearch(null);
-  }, [open]);
+    setAskedConsent(consentNeeded);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   /* A voice agent searches in text by default; finalists run as real calls. */
   const inText = main?.surface === "voice" && (textSearch ?? textSearchDefault(main?.surface));
 
@@ -99,8 +178,9 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
   /* Members: one can be targeted; protected ones are never changed. */
   const members = membersOf(agent);
   const targetable = targetableMembers(agent, limits);
-  /* Phase 1 runs in the main environment only — no extra regression runs. */
-  const estimate = fixEstimate({ preview, scenarioCount: chosen.length, regressionCount: 0, surface: main?.surface });
+  /* Each extra environment runs its must-pass set for the finalists. */
+  const regressionCount = others.filter((e) => alsoIn.includes(e.id)).reduce((n, e) => n + mustPassIn(e), 0);
+  const estimate = fixEstimate({ preview, scenarioCount: chosen.length, regressionCount, surface: main?.surface });
   /* Up to the agent's run budget — never more. */
   const budgets = budgetsWithin(limits.budget.dollars);
   const spend = budget ?? budgets[budgets.length - 1];
@@ -113,6 +193,12 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
   /* What's in production: the latest release, else the version the issue's
      traces carry — or, honestly, just the current version. */
   const production = productionVersionOf(agent, state, issue, mainState);
+  /* Earlier versions that changed something — what a lineage search offers again. */
+  const lineageVersions = useMemo(() => {
+    const list = agentVersions(mainState);
+    const at = list.findIndex((v) => v.label === production.label);
+    return (at > 0 ? list.slice(0, at) : []).filter((v) => (v.changes || []).length);
+  }, [mainState, production.label]);
   const model = useMemo(() => {
     if (!agent || !main) return null;
     const def = agentDefinitionOf({ agent, env: main, envState: mainState });
@@ -122,7 +208,8 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
 
   const go = () => {
     const at = start({
-      env: main, drafts: chosen, regressionEnvIds: [main.id], budget: spend, minutes: spendMinutes,
+      env: main, drafts: chosen, regressionEnvIds: [main.id, ...alsoIn], budget: spend, minutes: spendMinutes,
+      lineage: acrossLineage ? lineageVersions : undefined,
       textSearch: inText, targetMember: target || undefined, rootCause,
     });
     onClose();
@@ -130,12 +217,41 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
   };
 
   const meta = [issue?.cluster_id, issue?.trace_count && `${issue.trace_count} traces`, issue?.severity].filter(Boolean).join(" · ");
-  /* "agent v2 × environment v7" — what a regression environment would run. */
+  /* "agent v2 × environment v7" — what a regression environment would run:
+     the version in production, the same one the Agent row names and the
+     fix improves. */
   const pairOf = (e) => {
     const es = state.byEnv[e.id];
     const envLabel = currentEnvSnapshot(e, es)?.label;
-    return `agent ${currentAgentVersion(es)?.label || "—"} × environment ${envLabel || "—"}`;
+    return `agent ${production.label || currentAgentVersion(es)?.label || "—"} × environment ${envLabel || "—"}`;
   };
+
+  const gateNote = hardGate && (
+    <Stack direction="row" spacing={1.25} sx={{ px: 1.5, py: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+      <Iconify icon="solar:lock-keyhole-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0, mt: "1px" }} />
+      <Box flex={1} minWidth={0}>
+        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{hardGate.title}</Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{hardGate.body}</Typography>
+      </Box>
+      {hardGate.action === "connections" && (
+        <Button
+          size="small" variant="outlined"
+          onClick={() => { onClose(); navigate(`${paths.dashboard.agents}/connected/${agent.id}?tab=connections`); }}
+          sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0, alignSelf: "center" }}
+        >
+          Open Connections
+        </Button>
+      )}
+    </Stack>
+  );
+  const consentBlock = agent && (consentNeeded || askedConsent) && (
+    <Box>
+      <Typography sx={label}>Consent for live tests</Typography>
+      <Box sx={{ px: 1.5, py: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+        <LiveConsentCard agent={agent} env={main} onSave={(values) => setAgentValues(agent.key, values)} bare />
+      </Box>
+    </Box>
+  );
 
   if (!improving) return null;
 
@@ -144,10 +260,7 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
       <Stack sx={{ height: "100%" }}>
         <Stack direction="row" alignItems="flex-start" spacing={2} sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
           <Box flex={1} minWidth={0}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography sx={{ typography: "m2", fontWeight: 600 }}>Fix this issue</Typography>
-              <PreviewBadge />
-            </Stack>
+            <Typography sx={{ typography: "m2", fontWeight: 600 }}>Fix this issue</Typography>
             <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>{issue?.error?.name}</Typography>
             <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{meta}</Typography>
           </Box>
@@ -191,91 +304,80 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
           </>
         )}
 
-        {/* ── an agent with nowhere to test it ──
-            A fix runs in the agent's main environment (RSI PRD: "Fix uses it
-            by default"), and the first one built becomes main. Build it from
-            here; the builder brings you back to this issue. */}
-        {agent && !inFlight && !main && (
+        {/* ── the fix: the whole plan, filled in. With no environment yet, or
+            one still building, the plan still shows; Environment says what's
+            missing and the button sets it up (the normal builder, then
+            Continue fixing brings the person back to this sheet). ── */}
+        {/* ── preparing the plan ── */}
+        {agent && !inFlight && !prepared && (
           <>
-            <Box sx={{ flex: 1, p: 2.5 }}>
-              <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`${agent.name} isn't tested in an environment yet`}</Typography>
+            <Box sx={{ flex: 1, overflow: "auto", p: 2.5 }}>
+              <Typography sx={{ typography: "s1", fontWeight: 600 }}>Preparing the fix plan</Typography>
               <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5 }}>
-                A fix is proven in simulation before anything ships, so it runs in the agent&apos;s main environment — the first one you build becomes it. Build one now; when it&apos;s ready, come back and Fix opens here with this issue&apos;s scenarios.
+                {"What the fix needs. The changes are drafted after you start."}
               </Typography>
+              <Box sx={{ mt: 2, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+                {prepSteps.map((step, i) => {
+                  const detail = {
+                    issue: `${issue?.trace_count || 0} traces · ${issue?.users_affected || 0} users`,
+                    agent: `${agent.name} · ${production.label || "production"}`,
+                    env: main
+                      ? `${main.name} · ${ready ? "already built — the fix measures it on today's version first" : "still building"}`
+                      : "None yet — you'll build one before the fix starts",
+                    scenarios: `${drafts.length} situations · callers inferred · failing step marked`,
+                    limits: [constraints.find((c) => c.id === "model")?.value, constraints.find((c) => c.id === "cost")?.value && `cost ${constraints.find((c) => c.id === "cost").value.toLowerCase()}`, `up to ${creditsLabel(spend)}`].filter(Boolean).join(" · "),
+                  }[step.id];
+                  return (
+                    <Stack key={step.id} direction="row" alignItems="flex-start" spacing={1.25} sx={{ px: 1.5, py: 1.1, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+                      <Box sx={{ width: 16, display: "grid", placeItems: "center", flexShrink: 0, mt: "2px" }}>
+                        {i < prep ? (
+                          <Iconify icon="solar:check-circle-linear" width={15} sx={{ color: "text.secondary" }} />
+                        ) : i === prep ? (
+                          <CircularProgress size={12} thickness={5} sx={{ color: "text.disabled" }} />
+                        ) : (
+                          <Box sx={{ width: 10, height: 10, borderRadius: "50%", border: "1px solid", borderColor: "divider" }} />
+                        )}
+                      </Box>
+                      <Box flex={1} minWidth={0}>
+                        <Typography sx={{ typography: "s2", color: i <= prep ? "text.primary" : "text.disabled" }}>{step.label}</Typography>
+                        {i < prep && <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{detail}</Typography>}
+                      </Box>
+                    </Stack>
+                  );
+                })}
+              </Box>
             </Box>
-            <Footer onClose={onClose}>
-              <Button size="small" onClick={() => navigate(`${paths.dashboard.agents}/connected/${agent.id}`)} sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}>
-                Open the agent
-              </Button>
-              <Button variant="contained" color="primary" size="small" onClick={() => setBuildOpen(true)} sx={{ typography: "s2", fontWeight: 700 }}>
-                Build environment
-              </Button>
-            </Footer>
-            <BuildEnvironmentDialog
-              open={buildOpen}
-              onClose={() => setBuildOpen(false)}
-              agent={agent}
-              defaultVersion={agent.production || agent.latest}
-              onBuild={(choice) => {
-                setBuildOpen(false);
-                onClose();
-                navigate(paths.dashboard.simulate.environmentBuild, {
-                  state: { presetSource: buildPresetFor(agent, choice), fromIssue: issue?.cluster_id || null },
-                });
-              }}
-            />
+            <Footer onClose={onClose} note="Usually a few seconds." />
           </>
         )}
 
-        {/* ── the fix ── */}
-        {agent && !inFlight && main && (
+        {agent && !inFlight && prepared && (
           <>
             <Stack spacing={2.5} sx={{ flex: 1, overflow: "auto", p: 2.5 }}>
-              {/* Fix starts on confirmed issues only — the rest wait, and say why. */}
+              {/* Built for this issue: the fix starts here now. */}
+              {ready && main.returnToIssue && main.returnToIssue === issue?.cluster_id && (
+                <Stack direction="row" spacing={1.25} sx={{ px: 1.5, py: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+                  <Iconify icon="solar:check-circle-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0, mt: "1px" }} />
+                  <Box flex={1} minWidth={0}>
+                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`${main.name} is built`}</Typography>
+                    <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+                      The fix runs its scenarios on today&apos;s version first. Those that pass every repeat, with any you mark must-pass, must keep passing.
+                    </Typography>
+                  </Box>
+                </Stack>
+              )}
+              {/* Not confirmed yet: said, never blocking — reproducing is the check. */}
               {evidence && (
                 <Stack direction="row" spacing={1.25} sx={{ px: 1.5, py: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
                   <Iconify icon="solar:info-circle-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0, mt: "1px" }} />
                   <Box flex={1} minWidth={0}>
-                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Fix starts on confirmed issues · ${evidence.title}`}</Typography>
+                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>{evidence.title}</Typography>
                     <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{evidence.body}</Typography>
                   </Box>
                 </Stack>
               )}
-              {/* Fix proves the change against production — it needs the traces. */}
-              {!tracing && !gate && (
-                <Stack direction="row" spacing={1.25} sx={{ px: 1.5, py: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
-                  <Iconify icon="solar:lock-keyhole-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0, mt: "1px" }} />
-                  <Box flex={1} minWidth={0}>
-                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Fix needs ${agent.name}'s production traces`}</Typography>
-                    <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>Turn on Watch production calls on the agent&apos;s Connections tab — simulations still run without it.</Typography>
-                  </Box>
-                  <Button
-                    size="small" variant="outlined"
-                    onClick={() => { onClose(); navigate(`${paths.dashboard.agents}/connected/${agent.id}?tab=connections`); }}
-                    sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0, alignSelf: "center" }}
-                  >
-                    Open Connections
-                  </Button>
-                </Stack>
-              )}
-              {gate && (
-                <Stack direction="row" spacing={1.25} sx={{ px: 1.5, py: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
-                  <Iconify icon="solar:lock-keyhole-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0, mt: "1px" }} />
-                  <Box flex={1} minWidth={0}>
-                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>{gate.title}</Typography>
-                    <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{gate.body}</Typography>
-                  </Box>
-                  {gate.action === "connections" && (
-                    <Button
-                      size="small" variant="outlined"
-                      onClick={() => { onClose(); navigate(`${paths.dashboard.agents}/connected/${agent.id}?tab=connections`); }}
-                      sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0, alignSelf: "center" }}
-                    >
-                      Open Connections
-                    </Button>
-                  )}
-                </Stack>
-              )}
+              {gateNote}
+              {consentBlock}
               {/* What we're fixing — the same root cause the issue page shows,
                   carried into the fix's snapshot. */}
               {rootCause && (
@@ -288,8 +390,8 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
                     )}
                     <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.5 }}>
                       {rootCause.source === "analysis"
-                        ? "From the Root cause tab — the search starts from it."
-                        : "The feed's first read. The fix diagnoses it before searching — or run Find root cause first for a fuller one."}
+                        ? "From the Root cause tab."
+                        : "The feed's first read. Find root cause gives a fuller one."}
                     </Typography>
                   </Box>
                 </Box>
@@ -314,16 +416,63 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
 
               <Box>
                 <Typography sx={label}>Environment</Typography>
-                <Stack direction="row" alignItems="center" spacing={1.25} sx={rowSx(false)}>
-                  <Box flex={1} minWidth={0}>
+                {!main && (
+                  <>
+                    <Stack direction="row" alignItems="center" spacing={1.25} sx={{ ...rowSx(false), borderStyle: "dashed" }}>
+                      <Iconify icon="solar:box-minimalistic-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
+                      <Box flex={1} minWidth={0}>
+                        <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>Not set up yet</Typography>
+                        <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>Where the fix is tried before anything ships</Typography>
+                      </Box>
+                    </Stack>
+                    <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
+                      {`Built from ${agent.name} — a few minutes. Then you come back here and start.`}
+                    </Typography>
+                  </>
+                )}
+                {main && (
+                <Stack direction="row" alignItems="center" spacing={1.25} sx={rowSx(false)}>                  <Box flex={1} minWidth={0}>
                     <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{main.name}</Typography>
-                    <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>Main environment · where every fix for this agent runs</Typography>
+                    <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
+                      {ready ? "Main environment · where every fix for this agent runs" : "Main environment · still building"}
+                    </Typography>
                   </Box>
                 </Stack>
+                )}
                 {/* Its must-pass set is the regression check (three scenario sets). */}
-                <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
-                  {`${pairOf(main)} · its must-pass scenarios are the regression check — any it breaks rejects the candidate.`}
-                </Typography>
+                {main && (
+                  <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
+                    {ready
+                      ? `${pairOf(main)} · measured on today's version first; a change that breaks what passes is rejected.`
+                      : "The fix starts once it's built."}
+                  </Typography>
+                )}
+                {/* The agent's other environments: their must-pass sets can join
+                    the check — the candidate must pass every one. */}
+                {ready && others.length > 0 && (
+                  <Box sx={{ mt: 1.25 }}>
+                    <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 0.5 }}>Also check must-pass in</Typography>
+                    <Stack spacing={0.25}>
+                      {others.map((e) => {
+                        const on = alsoIn.includes(e.id);
+                        const n = mustPassIn(e);
+                        return (
+                          <Stack
+                            key={e.id} direction="row" alignItems="center" spacing={1}
+                            {...clickable(() => setAlsoIn((ids) => (on ? ids.filter((x) => x !== e.id) : [...ids, e.id])), { role: "checkbox", checked: on })}
+                            sx={{ ...rowSx(on), cursor: "pointer", ...focusRing }}
+                          >
+                            <Iconify icon={on ? "solar:check-square-bold" : "solar:stop-linear"} width={16} sx={{ color: on ? "text.primary" : "text.subtitle", flexShrink: 0 }} />
+                            <Typography noWrap sx={{ typography: "s2", flex: 1, minWidth: 0 }}>{e.name}</Typography>
+                            <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
+                              {n ? `${n} must-pass · ${pairOf(e)}` : `No must-pass yet · ${pairOf(e)}`}
+                            </Typography>
+                          </Stack>
+                        );
+                      })}
+                    </Stack>
+                  </Box>
+                )}
               </Box>
 
               {members.length > 0 && (
@@ -354,14 +503,14 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
                   {drafts.map((d) => (
                     <Stack key={d.id} direction="row" alignItems="flex-start" spacing={0.5} sx={rowSx(false)}>
                       <Checkbox
-                        size="small" checked={!!picked[d.id]}
+                        size="small" checked={!!picked[d.id]} disabled={!ready}
                         onChange={(e) => setPicked((p) => ({ ...p, [d.id]: e.target.checked }))}
-                        sx={{ p: 0.25, mt: 0.125 }}
+                        sx={{ p: 0.25, mt: 0.125, ...(!ready && { "&.Mui-disabled": { color: "text.disabled" } }) }}
                       />
                       <Box flex={1} minWidth={0}>
                         {/* The title is the scenario — edit it in place. */}
                         <InputBase
-                          fullWidth multiline value={titles[d.id] ?? d.title}
+                          fullWidth multiline value={titles[d.id] ?? d.title} readOnly={!ready}
                           onChange={(e) => setTitles((t) => ({ ...t, [d.id]: e.target.value }))}
                           sx={{ py: 0, color: picked[d.id] ? "text.primary" : "text.disabled", "& .MuiInputBase-input": { typography: "s2", p: 0 } }}
                         />
@@ -374,11 +523,13 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
                 </Stack>
                 {drafts[0]?.subGoals?.[1] && (
                   <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.75 }}>
-                    {`Critical sub-goal on each — the step that failed in production: “${drafts[0].subGoals[1]}”.`}
+                    {`Each checks the step that failed: ${drafts[0].subGoals[1].replace(/^Verify the step that failed in production:\s*/i, "")}.`}
                   </Typography>
                 )}
                 <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
-                  {`Starting the fix adds the ones you keep to ${main.name} as a new version of its scenarios, so they stay covered after the fix ships. Each is reproduced first; only the ones that fail become targets, and some are held back to prove the fix on scenarios it never saw.`}
+                  {ready
+                    ? `Used by this fix only. Failing ones become targets; some are held back to prove the fix.`
+                    : "Used by this fix only. You can edit them when you're back to start."}
                 </Typography>
               </Box>
 
@@ -401,11 +552,11 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
                   ))}
                 </Box>
                 <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
-                  A candidate that breaks any of these is rejected, however much it helps.
+                  A change that breaks any of these is rejected.
                 </Typography>
               </Box>
 
-              {main.surface === "voice" && (
+              {ready && main.surface === "voice" && (
                 <Box>
                   <Stack direction="row" alignItems="center" spacing={1}>
                     <Box flex={1} minWidth={0}>
@@ -421,6 +572,34 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
                 </Box>
               )}
 
+              {/* Search across the lineage (RSI PRD): changes earlier versions
+                  made, offered to the search again. */}
+              {lineageVersions.length > 0 && (
+                <Box>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <Box flex={1} minWidth={0}>
+                      <Typography sx={{ typography: "s2", fontWeight: 600 }}>Search across earlier versions</Typography>
+                      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                        {`Also tries the changes ${lineageVersions[0].label}–${lineageVersions[lineageVersions.length - 1].label} made, on ${production.label}. Checked the same way as every other proposed change.`}
+                      </Typography>
+                    </Box>
+                    <Switch size="small" checked={acrossLineage} onChange={(e) => setAcrossLineage(e.target.checked)} />
+                  </Stack>
+                </Box>
+              )}
+
+              {!ready && (
+                <Box>
+                  <Typography sx={label}>Budget</Typography>
+                  <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+                    <SpecRow k="Up to" first><Typography sx={{ typography: "s2" }}>{`${creditsLabel(spend)} · ${spendMinutes} min, from the agent`}</Typography></SpecRow>
+                  </Box>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
+                    {"You set it when you start."}
+                  </Typography>
+                </Box>
+              )}
+              {ready && (
               <Box>
                 <Typography sx={label}>Budget</Typography>
                 <Stack direction="row" alignItems="center" spacing={1.5}>
@@ -440,19 +619,53 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
                     : `About ${estimate.conversations.toLocaleString()} simulated conversations. If it runs over, it stops at the budget with the best it found so far.`}
                 </Typography>
               </Box>
+              )}
             </Stack>
 
-            <Footer onClose={onClose} note="Nothing ships on its own — the fix ends as a draft for you to review.">
-              <Button
-                variant="contained" color="primary" size="small"
-                disabled={!chosen.length || !!gate || !!evidence || !tracing}
-                onClick={go}
-                startIcon={<Iconify icon="solar:magic-stick-3-linear" width={15} />}
-                sx={{ typography: "s2", fontWeight: 700 }}
-              >
-                Start fix
-              </Button>
+            <Footer
+              onClose={onClose}
+              note={needsEnv
+                ? "Build its environment first — then start the fix from here."
+                : building ? "Its environment is still building — start the fix when it's done."
+                  : "Nothing ships on its own — the fix ends as a draft for you to review."}
+            >
+              {needsEnv && (
+                <Button variant="contained" color="primary" size="small" disabled={!!hardGate} onClick={() => setBuildOpen(true)} sx={{ typography: "s2", fontWeight: 700 }}>
+                  Build environment
+                </Button>
+              )}
+              {building && (
+                <Button variant="contained" color="primary" size="small" disabled={!!hardGate} onClick={openBuilding} sx={{ typography: "s2", fontWeight: 700 }}>
+                  Open environment
+                </Button>
+              )}
+              {ready && (
+                <Button
+                  variant="contained" color="primary" size="small"
+                  disabled={!chosen.length || !!hardGate || consentNeeded}
+                  onClick={go}
+                  startIcon={<Iconify icon="solar:magic-stick-3-linear" width={15} />}
+                  sx={{ typography: "s2", fontWeight: 700 }}
+                >
+                  Start fix
+                </Button>
+              )}
             </Footer>
+            {needsEnv && (
+              <BuildEnvironmentDialog
+                open={buildOpen}
+                onClose={() => setBuildOpen(false)}
+                agent={agent}
+                defaultVersion={agent.production || agent.latest}
+                onBuild={(choice) => {
+                  setBuildOpen(false);
+                  onClose();
+                  navigate(paths.dashboard.simulate.environmentBuild, {
+                    state: { presetSource: buildPresetFor(agent, choice), fromIssue: issue?.cluster_id || null },
+                  });
+                }}
+              />
+            )}
           </>
         )}
       </Stack>
@@ -462,13 +675,25 @@ export default function FixSheet({ open, onClose, issue, rootCause = null }) {
 
 FixSheet.propTypes = { open: PropTypes.bool, onClose: PropTypes.func.isRequired, issue: PropTypes.object, rootCause: PropTypes.object };
 
-function Footer({ onClose, note, children }) {
+function Footer({ onClose, note, closeLabel = "Cancel", children }) {
   return (
     <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, py: 1.75, borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}>
       <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>{note}</Typography>
-      <Button onClick={onClose} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
+      <Button onClick={onClose} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>{closeLabel}</Button>
       {children}
     </Stack>
   );
 }
-Footer.propTypes = { onClose: PropTypes.func, note: PropTypes.node, children: PropTypes.node };
+Footer.propTypes = { onClose: PropTypes.func, note: PropTypes.node, closeLabel: PropTypes.string, children: PropTypes.node };
+
+/* One key–value row of the set-up summary — the constraints table's look. */
+function SpecRow({ k, first = false, children }) {
+  return (
+    <Stack direction="row" spacing={2} sx={{ px: 1.5, py: 1, borderTop: first ? "none" : "1px solid", borderColor: "divider" }}>
+      <Typography sx={{ typography: "s2", color: "text.subtitle", width: 150, flexShrink: 0 }}>{k}</Typography>
+      <Box flex={1} minWidth={0}>{children}</Box>
+    </Stack>
+  );
+}
+SpecRow.propTypes = { k: PropTypes.string, first: PropTypes.bool, children: PropTypes.node };
+

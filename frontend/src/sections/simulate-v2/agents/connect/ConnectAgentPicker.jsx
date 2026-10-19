@@ -1,22 +1,24 @@
 import PropTypes from "prop-types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Stack } from "@mui/material";
+import { useSnackbar } from "notistack";
+import { Box, Button, Stack, Typography } from "@mui/material";
+import Iconify from "src/components/iconify";
 import { useSimStore } from "../../store";
 import { agentRecordFromSource } from "../../_mock/agentRegistry";
 import { DEFAULT_LIMITS } from "../../_mock/optimizationRuns";
-import { emptyProfile, limitsCustomised, observeChoiceOf, profileSourceOf, resolveObserve } from "../../_mock/connectAgent";
+import { emptyProfile, limitsCustomised, observeChoiceOf, observeProjectById, profileSourceOf, resolveObserve } from "../../_mock/connectAgent";
 import { currentUser } from "../../_mock/scenarioProvenance";
-import { isSecretRef } from "../../_mock/secretRefs";
 import { ConnectModeContext, InDrawerContext } from "../../environments/connectMode";
 import { FlowPanel } from "../../environments/StartEnvironment";
 import { Directory, PasteBar } from "../../environments/ConnectDirectory";
 import SetupDrawer from "../../environments/SetupDrawer";
-import { connectGroupsFor, detectAgentPaste, pasteExamplesFor } from "./agentConnectData";
+import { detectAgentPaste, newAgentChoicesFor, pasteExamplesFor } from "./agentConnectData";
 import HostedAgentFlow from "./HostedAgentFlow";
 import RepoAgentFlow from "./RepoAgentFlow";
 import BuiltinAgentFlow from "./BuiltinAgentFlow";
 import FrameworkAgentFlow from "./FrameworkAgentFlow";
-import { CONNECT_KINDS, MORE_WAYS } from "./connectKinds";
+import ClosedPlatformFlow from "./ClosedPlatformFlow";
+import { CLOSED_WAY, CONNECT_KINDS, MORE_WAYS } from "./connectKinds";
 import { useConnectSubmitLabel } from "./connectSubmit";
 
 /**
@@ -31,7 +33,8 @@ import { useConnectSubmitLabel } from "./connectSubmit";
  */
 export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn = "drawer", request = null, catalogue = true, channel = null }) {
   const submitLabel = useConnectSubmitLabel();
-  const { commit } = useSimStore();
+  const { state, commit } = useSimStore();
+  const { enqueueSnackbar } = useSnackbar();
   /* Who it is and how it's reached (the confirm step), and the Observe
      project its traces land in — the same for every kind, so kept here. */
   const [profile, setProfile] = useState(() => emptyProfile(currentUser().name));
@@ -44,9 +47,10 @@ export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn
   const [framework, setFramework] = useState("langgraph");
   const [limits, setLimits] = useState(DEFAULT_LIMITS);
   /* An endpoint or an upload uses the environment builder's own panel; its
-     Connect saves the agent straight away. */
+     Connect saves the agent straight away. An upload is built in our hosted
+     sandbox — your own machine is Coming soon. */
   const [name, setName] = useState("");
-  const [runtime, setRuntime] = useState({ endpoint: "", tokenRef: "" });
+  const [runtime, setRuntime] = useState({ endpoint: "", tokenRef: "", location: "hosted" });
   const panelRef = useRef(null);
 
   const pick = (id, fw, item = null) => {
@@ -70,12 +74,11 @@ export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn
   const save = useCallback((raw) => {
     const { flowReach, ...source } = raw;
     const agentName = agentRecordFromSource(source).name;
-    /* Hosted agents are linked through their key (call logs); an issue's
-       project comes with it. Anything else is chosen on the agent's page,
-       in Finish setting up — never guessed here. */
-    const observeProject = source.kind === "platform"
-      ? observeChoiceOf({ ...source, name: agentName }, prefill?.project)
-      : observe || prefill?.project ? resolveObserve(observe, prefill?.project, agentName) : null;
+    /* Vapi, Retell and Bland agents are linked through their key (call
+       logs); an issue's project comes with any agent. Anything else is
+       chosen on the agent's page, in Finish setting up — never guessed here. */
+    const observeProject = (source.kind === "platform" && observeChoiceOf({ ...source, name: agentName }, prefill?.project))
+      || (observe || prefill?.project ? resolveObserve(observe, prefill?.project, agentName) : null);
     const full = {
       ...source,
       ...profileSourceOf(profile, { defaultChannel: source.agentType === "voice" ? "voice" : "chat", owner: currentUser().name, flowReach }),
@@ -88,10 +91,27 @@ export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn
     if (limitsCustomised(limits)) {
       commit({ type: "setAgentLimits", agentKey, limits });
     }
-    /* Error Feed → Fix finds the agent through its project, for every issue from it. */
-    if (observeProject?.id) commit({ type: "linkProjectAgent", project: observeProject.id, agentKey });
+    /* Error Feed → Fix finds the agent through its project, for every issue
+       from it. One Observe project per agent: an agent already in Agents,
+       found again by connecting it the same way, links this project instead
+       of the one it had. */
+    if (observeProject?.id) {
+      const existing = (state?.connectedAgents || []).find((a) => a.key === agentKey);
+      const replaced = [...new Set([
+        ...Object.entries(state?.projectLinks || {}).filter(([, k]) => k === agentKey).map(([p]) => p),
+        existing?.values?.observability?.project,
+      ])].filter((p) => p && p !== observeProject.id);
+      replaced.forEach((p) => {
+        if (state?.projectLinks?.[p] === agentKey) commit({ type: "linkProjectAgent", project: p, agentKey: null });
+      });
+      commit({ type: "linkProjectAgent", project: observeProject.id, agentKey });
+      if (replaced.length) {
+        const nameOf = (id) => observeProjectById(id)?.name || id;
+        enqueueSnackbar(`${existing?.name || agentName} now links ${nameOf(observeProject.id)} instead of ${replaced.map(nameOf).join(", ")} — one Observe project per agent.`, { variant: "info" });
+      }
+    }
     onConnect(full);
-  }, [commit, limits, onConnect, observe, prefill?.project, profile]);
+  }, [commit, enqueueSnackbar, limits, onConnect, observe, prefill?.project, profile, state]);
 
   const needsRuntime = choice === "upload";
   /* The panels' context is memoised; save is read through a ref so it's current. */
@@ -104,10 +124,8 @@ export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn
          start at the defaults and are set on the agent's page. */
       onConnect: (source) => saveRef.current({
         ...source, name,
-        /* The auth token travels only as a reference — a half-typed one is dropped. */
-        ...(needsRuntime && { runtime: runtime.location === "hosted"
-          ? { endpoint: "", location: "hosted" }
-          : { ...runtime, tokenRef: isSecretRef(runtime.tokenRef) ? runtime.tokenRef.trim() : "" } }),
+        /* An upload is built in the hosted sandbox — nothing to reach. */
+        ...(needsRuntime && { runtime: { endpoint: "", location: "hosted" }, runLocation: "hosted" }),
       }),
       name, setName, preset: null,
       runtime, setRuntime,
@@ -117,6 +135,9 @@ export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn
     }),
     [name, runtime, needsRuntime, submitLabel],
   );
+  /* Code first, then the platforms; built in Future AGI is its own choice. */
+  const { builtin, groups } = useMemo(() => newAgentChoicesFor(channel), [channel]);
+  const pickItem = (item) => open(item.kind, item.initial, item.id, { name: item.name, logo: item.logo, icon: item.icon });
   const legacy = MORE_WAYS.find((o) => o.id === choice);
   const kind = CONNECT_KINDS.find((o) => o.id === choice);
   const flowProps = {
@@ -127,9 +148,10 @@ export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn
 
   const flows = (
     <Box key={picked?.at || 0}>
-          {choice === "hosted" && <HostedAgentFlow {...flowProps} onSwitch={pick} />}
+          {choice === "hosted" && <HostedAgentFlow {...flowProps} onSwitch={pick} onPlatform={(pl) => setPicked((cur) => (cur && cur.meta?.name !== pl.name ? { ...cur, meta: { ...cur.meta, name: pl.name, logo: pl.id } } : cur))} />}
           {choice === "repo" && <RepoAgentFlow {...flowProps} preset={preset} />}
           {choice === "builtin" && <BuiltinAgentFlow {...flowProps} />}
+          {choice === CLOSED_WAY.id && <ClosedPlatformFlow {...flowProps} title={CLOSED_WAY.title} />}
           {choice === "framework" && (
             <FrameworkAgentFlow
               {...flowProps}
@@ -155,24 +177,42 @@ export default function ConnectAgentPicker({ onConnect, preset, prefill, flowsIn
         detect={detectAgentPaste}
         examples={pasteExamplesFor(channel)}
         hint={channel ? "Paste a link or an ID. We open the right setup." : "Paste a link, an ID or a prompt. We open the right setup."}
-        placeholder={channel === "voice" ? "Paste a Vapi or Retell ID, a GitHub repo or a phone number" : "Paste a GitHub repo, a Vapi or Retell ID, an endpoint — or a prompt"}
+        placeholder={channel === "voice" ? "Paste a Vapi or Retell ID, a GitHub or GitLab repo, or a phone number" : "Paste a GitHub, GitLab or Bitbucket repo, a Vapi or Retell ID, an endpoint — or a prompt"}
         onPick={(kind, initial, meta) => open(kind, initial, "paste", meta)}
       />
       <Directory
         title="Connect your agent"
-        subtitle={channel ? `Pick where your ${channel} agent runs today. Each group says how far a fix can go.` : "Pick where it runs today. Each group says how far a fix can go."}
-        groups={connectGroupsFor(channel)}
+        subtitle={`Bring it from code — GitHub or an upload — or from the platform ${channel ? `your ${channel} agent` : "it"} runs on today, or build it in Future AGI. Each group says how far a fix can go.`}
+        groups={groups}
         compact={flowsIn === "inline"}
+        /* Long groups fold behind "N more" — search always shows every match. */
+        perGroup={8}
         pickedId={choice ? picked?.id : null}
-        onPick={(item) => open(item.kind, item.initial, item.id, { name: item.name, logo: item.logo, icon: item.icon })}
+        onPick={pickItem}
         emptyHint="If it runs somewhere we can call, connect it as an agent endpoint."
+        footer={builtin && (
+          <Stack direction="row" alignItems="center" spacing={1.25}>
+            <Iconify icon={builtin.icon} width={18} sx={{ color: "text.secondary", flexShrink: 0 }} />
+            <Box flex={1} minWidth={0}>
+              <Typography sx={{ typography: "s1", fontWeight: 700 }}>Built in Future AGI</Typography>
+              <Typography sx={{ typography: "s3", color: "text.secondary" }}>Prompt, model and tools, defined and run here. Fixes ship as a new version.</Typography>
+            </Box>
+            <Button
+              size="small" variant={choice === "builtin" ? "contained" : "outlined"} color={choice === "builtin" ? "primary" : "inherit"}
+              onClick={() => pickItem(builtin)}
+              sx={{ typography: "s3", fontWeight: 700, height: 28, flexShrink: 0, ...(choice !== "builtin" && { color: "text.primary", borderColor: "divider" }) }}
+            >
+              Build in Future AGI
+            </Button>
+          </Stack>
+        )}
       />
       </>
       )}
       {flowsIn === "inline" ? (
         choice && <Box ref={panelRef} sx={{ scrollMarginTop: 16 }}>{flows}</Box>
       ) : (
-        <SetupDrawer open={!!choice} onClose={close} meta={picked?.meta || { name: kind?.title || MORE_WAYS.find((o) => o.id === choice)?.title }} width={760}>
+        <SetupDrawer open={!!choice} onClose={close} meta={picked?.meta || { name: kind?.title || MORE_WAYS.find((o) => o.id === choice)?.title || (choice === CLOSED_WAY.id ? CLOSED_WAY.title : undefined) }} width={760}>
           {choice && <InDrawerContext.Provider value><Box sx={{ p: 2 }}>{flows}</Box></InDrawerContext.Provider>}
         </SetupDrawer>
       )}

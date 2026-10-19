@@ -3,17 +3,17 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle,
-  Menu, MenuItem, Stack, Switch, Tooltip, Typography,
+  Menu, MenuItem, Stack, Tooltip, Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import { useConnectedAgents } from "../store";
 import { projectsOfAgent } from "../_mock/projectLinks";
-import { agentRecordFromSource, agentSourceOf, definitionOf } from "../_mock/agentRegistry";
+import { agentNeedsRuntime, agentRecordFromSource, agentSourceOf, definitionOf } from "../_mock/agentRegistry";
 import {
   GITHUB_PERMISSIONS, GITHUB_WRITE_PERMISSIONS, approveGithubRequest, cancelGithubRequest, dismissGithubRemoved, githubAccountsLabel, githubInstalls, installedRepos,
-  markScanned, repoNameOf, reposOfInstall, scannedAgentSource, setSyncOnPush, uninstallGithub, useIntegrations,
+  markScanned, prCheckSummary, repoNameOf, reposOfInstall, scannedAgentSource, uninstallGithub, useIntegrations,
 } from "../_mock/integrations";
 import { hasVerifyCheck } from "../_mock/prChecks";
 import BuildEnvironmentDialog from "../agents/BuildEnvironmentDialog";
@@ -22,25 +22,18 @@ import BrandMark from "./BrandMark";
 import GithubInstallDialog from "./GithubInstallDialog";
 import { PrVerifyStatus } from "./PrVerifyCheck";
 import { clickable, focusRing } from "../components/clickable";
+import { useDemoMode } from "../agents/demoMode";
+import { DemoLabel } from "../agents/AgentBits";
 
 const MONO = "ui-monospace, Menlo, monospace";
 
-/* What the per-agent switch does — shown on hover, since the label is short. */
-const syncOnPushHelp = (branch) => (
-  <Box sx={{ p: 0.25, maxWidth: 280 }}>
-    <Typography sx={{ typography: "s3", fontWeight: 700, mb: 0.5 }}>Sync on push</Typography>
-    <Typography sx={{ typography: "s3" }}>
-      {`When someone pushes to ${branch} and the push changes this agent — its prompt, model, tools or entry file — we save it as a new version, linked to that commit.`}
-    </Typography>
-    <Typography sx={{ typography: "s3", mt: 0.75 }}>
-      Environments keep testing the version they&apos;re on until someone switches. Off: use Sync on the agent page to pull in changes by hand.
-    </Typography>
-  </Box>
-);
+/* Re-reads are automatic — there is no per-agent switch (RSI PRD: "it also
+   re-reads whenever the release branch moves and once a day"). */
+const AUTO_REREAD = "We re-read each agent whenever its release branch moves and once a day. A change becomes a new version, linked to its commit.";
 
 const CAPABILITIES = [
   { icon: "solar:magnifer-linear", title: "Connect agents straight from code", body: "We scan the repositories you choose, find the agents in them, and you pick which one to connect — no pasting URLs." },
-  { icon: "solar:layers-minimalistic-linear", title: "A version for every change", body: "Turn on Sync on push and every commit that changes the agent's prompts, tools or config becomes a version you can test — tied to its commit." },
+  { icon: "solar:layers-minimalistic-linear", title: "A version for every change", body: "We re-read the agent whenever its release branch moves and once a day — every change to its prompts, tools or config becomes a version you can test, tied to its commit." },
   { icon: "solar:code-square-linear", title: "Fixes as draft pull requests", body: "A fix from an improvement opens as a draft PR — prompts and tool code — with the diagnosis and before/after results. Write access is asked for at the first one; we push only to branches we create, and you review and merge." },
   { icon: "solar:chart-2-linear", title: "Simulation results on the PR", body: "The PR carries a check with the scenarios it was tested on — re-run on every push. It informs the review; it never blocks a merge." },
 ];
@@ -49,7 +42,8 @@ const CAPABILITIES = [
 export default function GithubIntegrationPage() {
   const navigate = useNavigate();
   const integrations = useIntegrations();
-  const { github, prs, syncOnPush, githubRequests, githubRemoved } = integrations;
+  const { github, prs, githubRequests, githubRemoved } = integrations;
+  const demo = useDemoMode();
   const { agents, state: simState } = useConnectedAgents();
   /* false | true (new install) | "<account>" (configure that installation) */
   const [installOpen, setInstallOpen] = useState(false);
@@ -192,7 +186,7 @@ export default function GithubIntegrationPage() {
             </>
           )}
         >
-          {`Agents from ${r.account} keep their versions and history. Syncing, Sync on push and pull requests stop until it's reinstalled.`}
+          {`Agents from ${r.account} keep their versions and history. Re-reads and pull requests stop until it's reinstalled.`}
         </Notice>
       ))}
 
@@ -202,9 +196,11 @@ export default function GithubIntegrationPage() {
           action={(
             <>
               <Button size="small" onClick={() => cancelGithubRequest(r.id)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>Withdraw</Button>
-              <Button size="small" variant="outlined" onClick={() => approveGithubRequest(r.id)} sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
-                Owner approved (prototype)
-              </Button>
+              {demo && (
+                <Button size="small" variant="outlined" onClick={() => approveGithubRequest(r.id)} sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
+                  <DemoLabel />Owner approved
+                </Button>
+              )}
             </>
           )}
         >
@@ -271,7 +267,7 @@ export default function GithubIntegrationPage() {
               <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>{`Uninstall from ${uninstalling}?`}</DialogTitle>
               <DialogContent>
                 <DialogContentText sx={{ typography: "s2" }}>
-                  {`Agents from ${uninstalling} keep their versions and history. Syncing, Sync on push and pull requests stop until the app is installed again. To also remove the app on GitHub's side, uninstall it from ${uninstalling}'s GitHub settings.`}
+                  {`Agents from ${uninstalling} keep their versions and history. Re-reads and pull requests stop until the app is installed again. To also remove the app on GitHub's side, uninstall it from ${uninstalling}'s GitHub settings.`}
                 </DialogContentText>
               </DialogContent>
               <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -353,7 +349,7 @@ export default function GithubIntegrationPage() {
           </Card>
 
           <Card>
-            <SectionHead title="Agents connected from GitHub" sub="Their versions come from commits. With Sync on push, every push that changes the agent saves one." />
+            <SectionHead title="Agents connected from GitHub" sub={AUTO_REREAD} />
             {ghAgents.length === 0 ? (
               <Typography sx={{ px: 3, pb: 2.5, typography: "s2", color: "text.subtitle" }}>None yet — scan a repository above and connect an agent.</Typography>
             ) : ghAgents.map((a, i) => (
@@ -366,7 +362,7 @@ export default function GithubIntegrationPage() {
                   <Typography sx={{ typography: "s2", fontWeight: 600 }}>{a.name}</Typography>
                   {agentSourceOf(a).appLost ? (
                     <Typography sx={{ typography: "s3", color: "text.secondary" }}>The app lost access to this repository — reinstall to sync it again</Typography>
-                  ) : !agentSourceOf(a).runtime.where && (
+                  ) : agentNeedsRuntime(a) && (
                     <Typography sx={{ typography: "s3", color: "text.secondary" }}>Add where it runs before the first simulation</Typography>
                   )}
                 </Box>
@@ -393,23 +389,14 @@ export default function GithubIntegrationPage() {
                     Build environment
                   </Button>
                 )}
-                <Stack direction="row" alignItems="center" spacing={0.5} onClick={(e) => e.stopPropagation()} sx={{ pl: 1 }}>
-                  <Tooltip arrow placement="top" title={syncOnPushHelp(definitionOf(a).ref || "main")}>
-                    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ cursor: "help" }}>
-                      <Typography sx={{ typography: "s3", color: agentSourceOf(a).appLost ? "text.disabled" : "text.secondary", whiteSpace: "nowrap" }}>Sync on push</Typography>
-                      <Iconify icon="solar:info-circle-linear" width={13} sx={{ color: "text.disabled" }} />
-                    </Stack>
-                  </Tooltip>
-                  <Switch size="small" disabled={agentSourceOf(a).appLost} checked={!agentSourceOf(a).appLost && !!syncOnPush?.[a.key]} onChange={(e) => setSyncOnPush(a.key, e.target.checked)} />
-                </Stack>
               </Stack>
             ))}
           </Card>
 
           <Card>
-            <SectionHead title="Pull requests opened by Future AGI" sub="Every fix and tracing setup we propose, and what happened to it." />
+            <SectionHead title="Pull requests opened by Future AGI" sub="Every fix we propose, and what happened to it." />
             {prs.length === 0 ? (
-              <Typography sx={{ px: 3, pb: 2.5, typography: "s2", color: "text.subtitle" }}>None yet — fixes from Improvements and the Error Feed, and tracing setups, open here as pull requests.</Typography>
+              <Typography sx={{ px: 3, pb: 2.5, typography: "s2", color: "text.subtitle" }}>None yet — fixes from Improvements and the Error Feed open here as draft pull requests.</Typography>
             ) : prs.map((p, i) => (
               <Stack key={p.id} direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, py: 1.25, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
                 <PrStatus status={p.status} />
@@ -417,7 +404,7 @@ export default function GithubIntegrationPage() {
                   <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{p.title}</Typography>
                   <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
                     <Box component="span" sx={{ fontFamily: MONO }}>{`${p.repo} #${p.number}`}</Box>
-                    {` · ${p.by ? `by ${p.by}` : `${p.files.length} file${p.files.length === 1 ? "" : "s"}`}${p.check ? ` · ${p.check.before}% → ${p.check.after}%` : ""}${p.approvedIn ? ` · approved in ${p.approvedIn}` : ""}`}
+                    {` · ${p.by ? `by ${p.by}` : `${p.files.length} file${p.files.length === 1 ? "" : "s"}`}${prCheckSummary(p.check) ? ` · ${prCheckSummary(p.check)}` : ""}`}
                   </Typography>
                 </Box>
                 {hasVerifyCheck(p) && <PrVerifyStatus pr={p} />}

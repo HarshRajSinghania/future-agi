@@ -13,19 +13,17 @@ import { isConnectOnly, rulesOf, ruleOfScenario, subGoalsOfScenario } from "../_
 import { withSubGoalMark } from "../_mock/scenarioSubGoals";
 import { envLabelOf } from "../_mock/envVersionKinds";
 import { canRunMeaning, proofGatesOf, stateActionOf, STATE_ACTION_LABEL, archivedOf, countsTowardNoDecision, NO_DECISION_NOTE } from "../_mock/scenarioStates";
-import { TIERS, tierOf, isAnchor, anchorLogFor, ANCHOR_LOG_KIND } from "../_mock/tiers";
-import { CANARY_NOTE } from "../_mock/cheatControls";
-import { scenarioVersionOf, SCENARIO_BUMPS } from "../_mock/decoupled";
+import { EDIT_EFFECT, SCENARIO_BUMPS } from "../_mock/decoupled";
 import { subGoalVersionLabel } from "../_mock/subGoalCatalog";
 import {
-  StateChip, ArchiveControl, TextAction, MarkToggle, TierBadge, CanaryBadge,
-  PersonalDataTag, ReproTag, PriorityPicker,
+  StateChip, ArchiveControl, TextAction, MarkToggle, ProposedBadge,
+  PersonalDataTag, ReproTag,
 } from "../workspace/scenarios/ScenarioStateBits";
-import { priorityOf } from "../_mock/scenarioPriority";
 import { protectionOf } from "../_mock/mustPassProtection";
 import { personalDataDetail, REPLAY_NOTE } from "../_mock/scenarioSources";
 import { ScenarioRowContext } from "../workspace/scenarios/scenarioRowContext";
 import { clickable, focusRing } from "./clickable";
+import { scenarioTitle } from "../_mock/scenarios";
 
 /**
  * A scenario, in full.
@@ -44,7 +42,7 @@ import { clickable, focusRing } from "./clickable";
  * it still run, is it still correct — and offers what that state asks for
  * through `onAction(kind, row, arg)`: reprove · rewrite · archive (arg = note)
  * · restore · update (row = the re-marked row) · subgoal (arg = catalogue id)
- * · pin · unpin · approve (its tier).
+ * · edit · approve (add a proposed scenario).
  * `bare` drops the collapsible row, for the detail drawer.
  */
 export default function ScenarioDetail({
@@ -124,7 +122,7 @@ export default function ScenarioDetail({
             flexShrink: 0,
           }}
         >
-          {s.name || s.title}
+          {scenarioTitle(s.title) || s.name}
         </Typography>
         {/* The one-line summary, else the conversation category. Never the
             brief itself — shouted in capitals, it read as an error. */}
@@ -141,8 +139,7 @@ export default function ScenarioDetail({
           </Typography>
         )}
         {/* Where it came from is in the scenario's drawer, not on every row. */}
-        {row.canary && <CanaryBadge />}
-        {(isAnchor(row) || row.tier === "exploration" || row.proposed) && <TierBadge row={row} compact />}
+        {row.proposed && <ProposedBadge />}
         {state && <StateChip state={state} />}
       </Stack>
       )}
@@ -231,15 +228,17 @@ export default function ScenarioDetail({
               </Field>
             )}
 
-            {/* Its own version, and every bump with what it did to past results. */}
-            <Field label="Version">
-              <VersionRow row={row} />
+            {/* Every edit, with what it did to past results. */}
+            <Field label="Changes">
+              <ChangeLog row={row} />
             </Field>
 
-            {/* Where it sits in the set — and whether it is a canary. */}
-            <Field label="Tier">
-              <TierRow row={row} envState={envState} onAction={onAction} locked={locked || archived} />
-            </Field>
+            {/* A proposed scenario waits for someone to add it. */}
+            {row.proposed && (
+              <Field label="Proposed">
+                <ProposedRow row={row} onAction={onAction} locked={locked || archived} />
+              </Field>
+            )}
 
             {/* The doc's two questions, then what this state asks for. */}
             {state && (
@@ -461,20 +460,18 @@ function DrawerSheet({ row, env, envState, state, s, brief, goals, path, connect
   const applicable = gates.filter((g) => !g.na);
   const checksPassed = applicable.filter((g) => g.ok === true).length;
   const checksFailed = applicable.filter((g) => g.ok === false).length;
-  const tier = tierOf(row);
   const log = row.versionLog || [];
-  const anchorLog = anchorLogFor(envState, row.id);
 
   /* Healthy — it runs and is still correct: one line; the two questions are
      spelled out only when an answer isn't yes. */
-  const healthy = !!state && state.canRun === true && state.correct === true && state.id !== "archived" && state.id !== "na";
+  const healthy = !!state && state.canRun === true && state.correct === true && state.id !== "archived" && state.id !== "stale";
   const archivedNote = archivedOf(row);
   /* What the state means — not what to do; the header's button says that. */
   const stateLine = !state || healthy ? null
     : state.id === "archived" && archivedNote
       ? `Archived${archivedNote.at ? ` ${shortDate(archivedNote.at)}` : ""}${archivedNote.note ? ` — ${archivedNote.note}` : ""}`
       : stateActionOf(state) || !state.note ? null : `${state.note.charAt(0).toUpperCase()}${state.note.slice(1)}`;
-  const showHistory = log.length > 0 || anchorLog.length > 0 || row.canary || row.proposed || hasOrigin(row);
+  const showHistory = log.length > 0 || row.proposed || hasOrigin(row);
   const openLatest = latest?.runId
     ? () => navigate(`${paths.dashboard.simulate.simulationRun(env.id, latest.runId)}?task=${encodeURIComponent(latest.task.scenarioId || latest.task.id)}`)
     : null;
@@ -507,9 +504,9 @@ function DrawerSheet({ row, env, envState, state, s, brief, goals, path, connect
             : proof.stale ? `Not yet proved on ${vl(proof.current)}` : `Passed on ${vl(proof.proved)}`}
         />
         <Figure
-          label="Version"
-          value={<Box component="span" sx={{ fontFamily: MONO, fontSize: "0.92em" }}>{scenarioVersionOf(row)}</Box>}
-          sub={`${row.proposed ? "Proposed" : TIERS[tier].long}${log.length ? ` · ${log.length} change${log.length === 1 ? "" : "s"}` : ""}`}
+          label="Changes"
+          value={log.length ? String(log.length) : "None"}
+          sub={row.proposed ? "Proposed" : log.length ? "Edits in History" : "As written"}
         />
       </Box>
 
@@ -592,14 +589,6 @@ function DrawerSheet({ row, env, envState, state, s, brief, goals, path, connect
             </Row>
           );
         })()}
-        <Row label="Priority">
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <PriorityPicker row={row} locked={!onAction || !!archivedOf(row)} onChange={onAction ? (p) => onAction("priority", row, p) : undefined} />
-            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-              {row.critical ? "Must-pass, so always high" : priorityOf(row) === "high" ? "Quick runs draw from these" : "Runs in full runs"}
-            </Typography>
-          </Stack>
-        </Row>
         {latest?.runId && (
           <Row label="Latest run">
             <Stack direction="row" alignItems="center" spacing={1}>
@@ -648,9 +637,9 @@ function DrawerSheet({ row, env, envState, state, s, brief, goals, path, connect
       {showHistory && (
         <Part title="History">
           {hasOrigin(row) && <Row label="From"><OriginRow row={row} /></Row>}
-          {log.length > 0 && <Row label="Version"><VersionRow row={row} /></Row>}
-          {(row.canary || row.proposed || anchorLog.length > 0) && (
-            <Row label="Tier"><TierRow row={row} envState={envState} onAction={null} locked quiet /></Row>
+          {log.length > 0 && <Row label="Changes"><ChangeLog row={row} /></Row>}
+          {row.proposed && (
+            <Row label="Proposed"><ProposedRow row={row} onAction={null} locked /></Row>
           )}
         </Part>
       )}
@@ -841,34 +830,29 @@ SubGoalList.propTypes = { goals: PropTypes.array, usageOf: PropTypes.func, versi
 const shortDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : null);
 
 /*
-  The scenario's major.minor.patch and its log, newest first. Each bump says
-  what it did to past results — reused, re-graded or re-run.
+  The scenario's edits, newest first. Each says what it did to past results —
+  still compare, re-graded or re-run. No version numbers: the environment
+  version is the one people pick and compare by.
 */
-function VersionRow({ row }) {
+function ChangeLog({ row }) {
   const [all, setAll] = useState(false);
   const log = [...(row.versionLog || [])].reverse();
   const shown = all ? log : log.slice(0, 3);
   return (
     <Stack spacing={0.5} sx={{ maxWidth: 760 }}>
-      <Tooltip arrow placement="top-start" title="Every edit bumps it by kind — patch, minor or major — never in place">
-        <Typography sx={{ typography: "s2", color: "text.secondary", lineHeight: 1.6, alignSelf: "flex-start" }}>
-          <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5, color: "text.primary", fontWeight: 600 }}>
-            {scenarioVersionOf(row)}
-          </Box>
-          {log.length ? ` · ${log.length} change${log.length === 1 ? "" : "s"} since 1.0.0` : " · as written"}
-        </Typography>
-      </Tooltip>
+      {!log.length && (
+        <Typography sx={{ typography: "s2", color: "text.secondary", lineHeight: 1.6 }}>As written</Typography>
+      )}
       {shown.length > 0 && (
-        <Box sx={{ display: "grid", gridTemplateColumns: "max-content max-content minmax(0, 1fr) max-content", columnGap: 1.5, rowGap: 0.25 }}>
+        <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) max-content max-content", columnGap: 1.5, rowGap: 0.25 }}>
           {shown.map((l, i) => (
             <Fragment key={`${l.v}-${i}`}>
-              <Typography sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11.5, color: "text.primary", lineHeight: 1.7 }}>{l.v}</Typography>
+              <Typography noWrap sx={{ typography: "s3", color: "text.primary", lineHeight: 1.7 }}>{l.why || "Edited"}</Typography>
               <Tooltip arrow title={SCENARIO_BUMPS[l.level]?.note || ""}>
                 <Typography sx={{ typography: "s3", color: "text.secondary", lineHeight: 1.7, cursor: "help" }}>
-                  {`${l.level} · ${SCENARIO_BUMPS[l.level]?.past || ""}`}
+                  {EDIT_EFFECT[l.level] || "Edited"}
                 </Typography>
               </Tooltip>
-              <Typography noWrap sx={{ typography: "s3", color: "text.secondary", lineHeight: 1.7 }}>{l.why || "Edited"}</Typography>
               <Typography sx={{ typography: "s3", color: "text.subtitle", lineHeight: 1.7 }}>{shortDate(l.at)}</Typography>
             </Fragment>
           ))}
@@ -882,46 +866,23 @@ function VersionRow({ row }) {
     </Stack>
   );
 }
-VersionRow.propTypes = { row: PropTypes.object };
+ChangeLog.propTypes = { row: PropTypes.object };
 
-/*
-  Anchor core, core or exploration — with the one move it offers — then the
-  canary mark, and any logged anchor decisions.
-*/
-function TierRow({ row, envState, onAction, locked, quiet = false }) {
-  const tier = tierOf(row);
-  const anchored = tier === "anchor";
-  const log = anchorLogFor(envState, row.id);
+/* A proposed scenario — the review step: it joins the environment, and
+   starts running, only once someone adds it. */
+function ProposedRow({ row, onAction, locked }) {
   const can = onAction && !locked;
   return (
-    <Stack spacing={0.5} sx={{ maxWidth: 760 }}>
-      <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" rowGap={0.5}>
-        <TierBadge row={row} />
-        {/* The badge's tooltip carries what the tier means; the drawer keeps to the fact. */}
-        {(!quiet || row.proposed) && (
-          <Typography sx={{ typography: "s2", color: "text.subtitle", lineHeight: 1.6 }}>
-            {row.proposed ? "Proposed — joins the set once approved" : TIERS[tier].note.replace(/\.$/, "")}
-          </Typography>
-        )}
-        {can && row.proposed && <TextAction onClick={(e) => { e.stopPropagation(); onAction("approve", row); }}>Approve</TextAction>}
-        {can && !row.proposed && !anchored && <TextAction onClick={(e) => { e.stopPropagation(); onAction("pin", row); }}>Pin to anchor core</TextAction>}
-        {can && anchored && <TextAction onClick={(e) => { e.stopPropagation(); onAction("unpin", row); }}>Move out of anchor core</TextAction>}
-      </Stack>
-      {row.canary && (
-        <Stack direction="row" alignItems="flex-start" spacing={1}>
-          <CanaryBadge />
-          <Typography sx={{ typography: "s3", color: "text.secondary", lineHeight: 1.6 }}>{CANARY_NOTE}</Typography>
-        </Stack>
-      )}
-      {log.map((e) => (
-        <Typography key={e.id} sx={{ typography: "s3", color: "text.subtitle", lineHeight: 1.6 }}>
-          {`${ANCHOR_LOG_KIND[e.kind] || e.kind} · ${shortDate(e.at)}${e.by ? ` · ${e.by}` : ""}${e.note ? ` — ${e.note}` : ""}`}
-        </Typography>
-      ))}
+    <Stack direction="row" alignItems="center" spacing={1.25} flexWrap="wrap" rowGap={0.5} sx={{ maxWidth: 760 }}>
+      <ProposedBadge />
+      <Typography sx={{ typography: "s2", color: "text.subtitle", lineHeight: 1.6 }}>
+        {"Joins the environment once you add it — it doesn't run until then"}
+      </Typography>
+      {can && <TextAction onClick={(e) => { e.stopPropagation(); onAction("approve", row); }}>Add</TextAction>}
     </Stack>
   );
 }
-TierRow.propTypes = { row: PropTypes.object, envState: PropTypes.object, onAction: PropTypes.func, locked: PropTypes.bool, quiet: PropTypes.bool };
+ProposedRow.propTypes = { row: PropTypes.object, onAction: PropTypes.func, locked: PropTypes.bool };
 
 /* TASK_COMPLETED → "Task completed" */
 const checkName = (label = "") => {
@@ -959,7 +920,7 @@ const conversationPath = (row) => {
 */
 const canRunAnswer = (state, env) => {
   if (state.id === "archived") return { verdict: "Not run", text: "archived scenarios stay listed but don't run or count" };
-  if (state.id === "na") return { verdict: "Not for this agent version", text: state.why };
+  if (state.id === "stale") return { verdict: "Yes — but stale", text: state.why };
   if (state.canRun === true) return { verdict: "Yes", text: canRunMeaning(env) };
   if (state.canRun === false) return { verdict: state.id === "later" ? "Not on this version" : "No", text: state.why, bad: state.id !== "later" };
   return { verdict: "Re-checking", text: state.why };
@@ -968,7 +929,8 @@ const canRunAnswer = (state, env) => {
 const correctAnswer = (state, rule) => {
   const ruleRef = state.ruleChange?.id || rule?.id || null;
   const ruleText = state.ruleChange?.to || rule?.text || null;
-  if (state.id === "archived" || state.id === "na") return { verdict: "Not asked", text: state.id === "na" ? "it isn't run for this agent version" : "it isn't run", ruleRef, ruleText };
+  if (state.id === "archived") return { verdict: "Not asked", text: "it isn't run", ruleRef, ruleText };
+  if (state.id === "stale") return { verdict: "Not for this agent version", text: "it needs a tool the agent no longer has, so it counts toward no decision until it's updated or archived", ruleRef, ruleText };
   if (state.correct === true) {
     return rule
       ? { verdict: "Yes", text: "the rule it tests is still the intended behaviour", ruleRef, ruleText }
@@ -1047,7 +1009,7 @@ function StateActions({ state, row, onAction, locked }) {
             </TextAction>
           )}
           {state.id !== "archived" && (
-            <ArchiveControl variant="text" anchor={isAnchor(row)} onArchive={(note) => onAction("archive", row, note)} />
+            <ArchiveControl variant="text" onArchive={(note) => onAction("archive", row, note)} />
           )}
         </>
       )}

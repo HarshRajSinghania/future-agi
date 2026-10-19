@@ -8,9 +8,9 @@
     its own major.minor.patch, which decides what happens to past results:
       patch → reused · minor → re-graded · major → re-run (until bridged).
   · Nothing is retired. A dropped capability marks the scenarios that need it
-    NOT APPLICABLE to agent versions without it — kept in S, not run or
-    charged for those versions, back automatically if the capability returns.
-    A user can still archive a scenario by hand.
+    STALE for agent versions without it (RSI PRD) — they still run, but count
+    toward no decision until the user updates or archives them. Updating one
+    so it no longer needs the tool clears it; so does the tool coming back.
   · The harness informs; the user decides. It never gates, promotes, blocks
     or ships an agent version.
 
@@ -19,6 +19,7 @@
                       ask, detail, capability?, ruleId?, scenarioIds, likely? }]
                     status: "open" | "approved" | "dismissed"
     applicability  [{ id, capability, scenarioIds, reason, at, nudgeId }]
+                    (stale rules from an acknowledged Remove)
     scenario rows  .version ("1.0.0"), .versionLog [{ v, level, why, at,
                     snapshot: { ...the replaced version's row, v } }],
                     .archived { at, by }
@@ -45,15 +46,26 @@ export const requiredCapsOf = (row, env, envState) => {
 };
 
 /**
- * Whether a scenario applies to an agent version: only an approved Remove
- * nudge's rule can say no, and only while that version lacks the capability.
- * { applies, capability?, reason? }
+ * Whether a scenario is stale for an agent version (RSI PRD): an agent change
+ * removed a tool the scenario still needs. Read from the Remove nudges a new
+ * agent version raised (whatever their answer) and the rules an acknowledged
+ * one recorded. It clears once the scenario is updated so it no longer needs
+ * the tool, or once the version has the tool again.
+ * { stale, capability?, reason? }
  */
-export const applicabilityOf = (row, agentLabel, env, envState) => {
-  const rule = (envState?.applicability || []).find((a) => (a.scenarioIds || []).includes(row?.id));
-  if (!rule) return { applies: true };
-  const has = manifestOf(env, envState, agentLabel).tools.includes(rule.capability);
-  return has ? { applies: true } : { applies: false, capability: rule.capability, reason: rule.reason };
+export const staleForAgentOf = (row, agentLabel, env, envState) => {
+  if (!row?.id || !agentLabel) return { stale: false };
+  const rules = [
+    ...(envState?.applicability || []),
+    ...(envState?.nudges || []).filter((n) => n.kind === "remove" && n.capability)
+      .map((n) => ({ capability: n.capability, scenarioIds: n.scenarioIds, reason: `Needs ${n.capability}, which ${n.agentVersion} doesn't have` })),
+  ];
+  const rule = rules.find((a) => (a.scenarioIds || []).includes(row.id));
+  if (!rule) return { stale: false };
+  if (manifestOf(env, envState, agentLabel).tools.includes(rule.capability)) return { stale: false };
+  /* Updated so it no longer calls the tool: not stale any more. */
+  if (!requiredCapsOf(row, env, envState).includes(rule.capability)) return { stale: false };
+  return { stale: true, capability: rule.capability, reason: rule.reason || `Needs ${rule.capability}` };
 };
 
 /* ── scenario versions: major.minor.patch ─────────────────────────────────── */
@@ -62,6 +74,12 @@ export const SCENARIO_BUMPS = {
   patch: { label: "patch", past: "reused", note: "Cosmetic fields only — past results still compare." },
   minor: { label: "minor", past: "re-graded", note: "A grader fix on one of its sub-goals — past runs are re-graded from stored traces." },
   major: { label: "major", past: "re-run", note: "What the caller does changed — past results don't compare until re-run or bridged." },
+};
+/* The same three, as people read them — the UI never shows the numbers. */
+export const EDIT_EFFECT = {
+  patch: "Past results still compare",
+  minor: "Past runs are re-graded",
+  major: "Past results need a re-run",
 };
 
 export { scenarioVersionOf, scenarioVersionsPin };
@@ -169,8 +187,6 @@ export const VERDICT_CAUSES = {
   pass: { label: "Passed", outcome: "passed", scored: true },
   "fail-agent": { label: "Failed · agent", outcome: "failed", scored: true, note: "The agent had the capability and failed." },
   "fail-required": { label: "Failed · required evaluation", outcome: "failed", scored: true, note: "An evaluation marked required failed, so the conversation failed whatever the others scored." },
-  "fail-capability": { label: "Failed · capability-missing", outcome: "failed", scored: true, note: "Failed, and a capability the scenario needs is missing from this agent version. Counted in the score, shown as its own count." },
-  "fail-cheat": { label: "Failed · cheat", outcome: "failed", scored: true, note: "A shortcut confirmed by evidence — scored 0 and flagged." },
   "inc-evidence": { label: "Inconclusive · evidence", outcome: "inconclusive", scored: false, note: "Not enough evidence to grade — opaque tools, no ground truth, or coverage skipped. Never counted as a pass." },
   "inc-simulator": { label: "Test invalid · simulator", outcome: "test-invalid", scored: false, note: "The simulated user left its goal. Counts neither for nor against the agent — above 10% of a run the result is flagged unreliable." },
   "inc-setup": { label: "Test invalid · setup", outcome: "test-invalid", scored: false, note: "The starting state didn't load, so the conversation tested nothing. Counts neither for nor against the agent." },
@@ -185,11 +201,10 @@ export const outcomeOfCause = (cause) => VERDICT_CAUSES[cause]?.outcome
 
 /**
  * One task's verdict and cause, from the fields runs already carry
- * (status, fault.{environment,transport,simulator,grading}, cheat flags,
- * a failed required evaluation). `missingCaps` = capabilities the scenario
- * needs that the agent version lacks.
+ * (status, fault.{environment,transport,simulator,grading}, a failed required
+ * evaluation).
  */
-export const causeOf = (task, { missingCaps = [] } = {}) => {
+export const causeOf = (task) => {
   const f = task?.fault || {};
   if (task?.status === "unmeasured" || f.environment || f.transport || f.simulator || f.grading) {
     if (f.simulator) return "inc-simulator";
@@ -200,16 +215,14 @@ export const causeOf = (task, { missingCaps = [] } = {}) => {
     return "inc-infra";
   }
   if (task?.status === "passed") return "pass";
-  if (task?.cheat) return "fail-cheat";
-  if (missingCaps.length) return "fail-capability";
   if (task?.requiredFail) return "fail-required";
   return "fail-agent";
 };
 
 /** Counts by cause, plus whether simulator failures make the run unreliable (>10%). */
-export const causeTally = (tasks = [], missingOf = () => []) => {
+export const causeTally = (tasks = []) => {
   const counts = Object.fromEntries(Object.keys(VERDICT_CAUSES).map((k) => [k, 0]));
-  tasks.forEach((t) => { counts[causeOf(t, { missingCaps: missingOf(t) })] += 1; });
+  tasks.forEach((t) => { counts[causeOf(t)] += 1; });
   const total = tasks.length || 1;
   return { counts, simulatorShare: counts["inc-simulator"] / total, unreliable: counts["inc-simulator"] / total > 0.1 };
 };
@@ -259,7 +272,7 @@ export const detectNudges = (env, envState, newLabel, prevLabel) => {
         capability: tool, scenarioIds: using.map((r) => r.id),
         title: `You added ${tool}`,
         ask: `${using.length} scenario${using.length === 1 ? "" : "s"} exercise it. Add a ${tool} handler to the environment and generate 3 scenarios for it?`,
-        detail: "On approval the environment and scenario set each get a new version; the new scenarios land in a separate New band, with no delta until backfilled.",
+        detail: "On approval the environment and scenario set each get a new version; the new scenarios are shown apart until they have run on both versions.",
       });
     });
     [...a].filter((t) => !b.has(t)).forEach((tool) => {
@@ -269,8 +282,8 @@ export const detectNudges = (env, envState, newLabel, prevLabel) => {
         id: nid("remove", newLabel, tool), kind: "remove", agentVersion: newLabel, prevVersion: prev, at: now, status: "open",
         capability: tool, scenarioIds: need.map((r) => r.id),
         title: `${tool} is gone in ${newLabel}`,
-        ask: `${need.length} scenario${need.length === 1 ? "" : "s"} need ${tool}, which ${newLabel} doesn't have. Mark them not applicable to agent versions without ${tool}?`,
-        detail: "Nothing is retired: they stay in the set, aren't run or charged for versions without it, and come back if it returns. Dismiss and they run and score fail · capability-missing.",
+        ask: `${need.length} scenario${need.length === 1 ? "" : "s"} need ${tool}, which ${newLabel} doesn't have, so ${need.length === 1 ? "it is" : "they are"} stale on ${newLabel}.`,
+        detail: "Stale scenarios still run, but count toward no decision until you update or archive them. Nothing is retired.",
       });
     });
   }
@@ -285,7 +298,7 @@ export const detectNudges = (env, envState, newLabel, prevLabel) => {
       id: nid("rule", newLabel, impact.rule.id), kind: "rule", agentVersion: newLabel, prevVersion: prev, at: now, status: "open",
       ruleId: impact.rule.id, scenarioIds: impact.scenarios,
       title: `${newLabel} changed how the agent handles ${impact.rule.id}`,
-      ask: `"${impact.rule.text}" — a policy change, not intended, or unsure?`,
+      ask: `"${impact.rule.text}" — a policy change, or not intended?`,
       detail: `${impact.subGoals.length} sub-goal${impact.subGoals.length === 1 ? "" : "s"} and ${impact.scenarios.length} scenario${impact.scenarios.length === 1 ? "" : "s"} test it.`,
     });
   });
@@ -296,7 +309,20 @@ export const detectNudges = (env, envState, newLabel, prevLabel) => {
 export const withNudges = (envState, nudges = []) => {
   const have = new Set((envState?.nudges || []).map((n) => n.id));
   const fresh = nudges.filter((n) => !have.has(n.id));
-  return fresh.length ? { ...envState, nudges: [...fresh, ...(envState?.nudges || [])] } : envState;
+  if (!fresh.length) return envState;
+  /* A newer version folds in what an earlier card skipped: its changes are
+     still between the environment and the agent, so they come back open in
+     the newest card instead of being lost. */
+  const kept = (envState?.nudges || []).map((n) => (n.status === "dismissed" && (n.skippedAs || n.scenarioSkipped)
+    ? { ...n, status: "open", skippedAs: undefined, scenarioSkipped: undefined, foldedInto: fresh[0]?.agentVersion || null }
+    : n));
+  /* The scenario step a card skipped comes back with it. */
+  const update = envState?.scenarioUpdate;
+  return {
+    ...envState,
+    nudges: [...fresh, ...kept],
+    ...(update?.status === "skipped" && { scenarioUpdate: { ...update, status: "open" } }),
+  };
 };
 
 /** Patch that answers a nudge: approved or dismissed (dismiss keeps E + S pinned, with a drift badge). */
@@ -304,8 +330,8 @@ export const resolveNudgePatch = (envState, id, status, extra = {}) => ({
   nudges: (envState?.nudges || []).map((n) => (n.id === id ? { ...n, status, resolvedAt: new Date().toISOString(), ...extra } : n)),
 });
 
-/** Patch for an approved Remove: the applicability rule, and S bumps. */
-export const notApplicablePatch = (envState, nudge) => ({
+/** Patch for an acknowledged Remove: the stale rule is recorded. */
+export const staleRulePatch = (envState, nudge) => ({
   applicability: [
     ...(envState?.applicability || []),
     {

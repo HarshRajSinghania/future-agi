@@ -3,8 +3,8 @@
 
   A new agent version that changes a rule a sub-goal tests raises a rule
   nudge in each environment that uses the agent (nudgeEffects.raiseNudgesIn).
-  The question is answered on that nudge card — Policy change / Not intended /
-  Unsure — never by minting an environment version: an agent change never
+  The question is answered on that nudge card — Policy change / Not intended —
+  never by minting an environment version: an agent change never
   moves E. A stricter rule asks nothing (it's labelled a likely fix).
 
   This module keeps the readers other screens use (Compare asks which agent

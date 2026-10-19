@@ -18,8 +18,8 @@
                    one click excludes them
     changed        major bump, or a different simulated-user model → out
     new            in the newer run only                          → out, own band
-    not-applicable applies in one run, N/A for the other agent
-                   version (an approved Remove)                   → out, N/A
+    not-applicable stale for one of the agent versions (a tool it
+                   needs was removed) — shown as "Stale"           → out
     archived       archived by hand, in the older run only        → out
     removed        in the older run only, for no recorded reason  → out
 
@@ -27,20 +27,21 @@
   the current value, so they compare as exact unless something recorded
   says otherwise.
 */
-import { bumpBetween, playedVersionOf, applicabilityOf, requiredCapsOf, scenarioVersionsPin } from "./decoupled";
+import { bumpBetween, playedVersionOf, staleForAgentOf, requiredCapsOf, scenarioVersionsPin } from "./decoupled";
 import {
   evalVersionOf, catalogVersionOf, simulatorOf, simulatorForModel, pinsForNewRun, subGoalsOfScenario, isConnectOnly,
 } from "./envModel";
-import { snapshotOfRun } from "./envSnapshot";
+import { snapshotOfRun, snapshotLabelOf } from "./envSnapshot";
 import { toolFaultsOf } from "./toolEnv";
 import { environmentVersions, currentEnvVersion, agentVersions, versionNumber } from "./versions";
 import { runEnvVersion, knownToolsFor } from "./toolFit";
 import { replicationOf } from "./replication";
 import { sourceKindOf } from "./agentRegistry";
-import { estimateRun, evalCreditsPerRun } from "./metering";
+import { estimateRun, evalCreditsPerRun, creditsLabel } from "./metering";
 import { resolveEval } from "./evals";
 import { isMeasured } from "./failures";
 import { runSummary } from "./comparison";
+import { scenarioTitle } from "./scenarios";
 
 /* ── vocabulary ──────────────────────────────────────────────────────────── */
 
@@ -48,9 +49,9 @@ export const PAIR_CLASSES = {
   exact: { label: "Exact", short: "Exact", inDelta: true, tip: "Same scenario version, world, sub-goals, eval and simulated caller — only the agent differs." },
   regraded: { label: "Re-graded", short: "Re-graded", inDelta: true, tip: "Only a grader fix or the eval version differs; both runs are read under one version." },
   rechecked: { label: "Rechecked", short: "Rechecked", inDelta: true, tip: "A world element it touches changed, its own definition didn't. In the delta, but the delta may mix agent and world effects." },
-  changed: { label: "Changed", short: "Changed", inDelta: false, tip: "A major scenario change or a different simulated caller. Side by side, outside the delta, until a bridge run makes it exact." },
+  changed: { label: "Changed", short: "Changed", inDelta: false, tip: "The scenario was edited in a way that changes what the caller does, or the simulated caller changed. Side by side, outside the delta, until a bridge run makes it exact." },
   new: { label: "New", short: "New", inDelta: false, tip: "Only in the newer run. Read on its own, outside the delta, until backfilled." },
-  "not-applicable": { label: "Not applicable", short: "N/A", inDelta: false, tip: "Doesn't apply to one of the agent versions — outside the delta, counted separately." },
+  "not-applicable": { label: "Stale", short: "Stale", inDelta: false, tip: "Stale for one of the agent versions — an agent change removed a tool it needs. It ran, but counts toward no decision, so it's outside the delta." },
   archived: { label: "Archived", short: "Archived", inDelta: false, tip: "Archived by hand after the older run — outside the delta." },
   removed: { label: "Removed", short: "Removed", inDelta: false, tip: "Only in the older run — the newer one didn't include it." },
 };
@@ -59,11 +60,11 @@ export const PAIR_CLASSES = {
 export const PAIR_ORDER = ["exact", "regraded", "rechecked", "changed", "new", "not-applicable", "archived", "removed"];
 const COUNT_WORD = {
   exact: "exact", regraded: "re-graded", rechecked: "rechecked", changed: "changed",
-  new: "new", "not-applicable": "not applicable", archived: "archived", removed: "removed",
+  new: "new", "not-applicable": "stale", archived: "archived", removed: "removed",
 };
 
 /** Points either side of zero inside which a change isn't meaningful. */
-export const NO_CHANGE_POINTS = 5;
+export const NO_CHANGE_POINTS = 10;
 /** Below this many comparable pairs there is no aggregate — rows only. A display rule, not a gate. */
 export const PAIR_FLOOR = 10;
 /* Default spreads until the workspace has data (calibrated on the PRD's
@@ -93,6 +94,10 @@ export const pairKeyOf = (run, env, envState) => {
     envId: env?.id || null,
     agent: run?.agentVersion || null,
     env: runEnvVersion(env, envState, run),
+    /* The environment version people see ("v7") — every part the run held
+       fixed, one number. Whether two runs can be compared is decided on this,
+       never on the world label underneath. */
+    snapshot: run ? snapshotLabelOf(run, env, envState) : null,
     eval: run?.evalVersion || evalVersionOf(envState),
     catalog: run?.catalogVersion || catalogVersionOf(envState),
     simulator: sim?.model || sim?.label || null,
@@ -157,6 +162,11 @@ const ranIn = (run, id) => {
 const envOfRun = (run, env) => run?._env || env;
 const stateOfRun = (run, envState) => run?._envState || envState;
 
+/* "Environment v5 → v6" — the versions people see, never the world label. */
+const versionSpan = (ka, kb) => (ka.snapshot && kb.snapshot && ka.snapshot !== kb.snapshot
+  ? `Environment ${ka.snapshot} → ${kb.snapshot}`
+  : "The environment");
+
 /**
  * One scenario in two runs → its pair class, and why.
  * `row` is the scenario (or a comparison row carrying its id).
@@ -170,20 +180,22 @@ export const pairClassOf = (row, runA, runB, env, envState) => {
   const out = { cls: "exact", reasons: [], criteria: [], bump: null, tools: [] };
   if (!inA && !inB) return null;
 
-  const napA = applicabilityOf(sc, runA?.agentVersion, env, envState);
-  const napB = applicabilityOf(sc, runB?.agentVersion, env, envState);
-  const nap = !napA.applies ? { ...napA, agent: runA?.agentVersion } : !napB.applies ? { ...napB, agent: runB?.agentVersion } : null;
+  /* Stale for either agent version (a tool it needs was removed): it ran,
+     but counts toward no decision. Internally still the "not-applicable" class. */
+  const napA = staleForAgentOf(sc, runA?.agentVersion, env, envState);
+  const napB = staleForAgentOf(sc, runB?.agentVersion, env, envState);
+  const nap = napA.stale ? { ...napA, agent: runA?.agentVersion } : napB.stale ? { ...napB, agent: runB?.agentVersion } : null;
 
   if (inA && !inB) {
     if (sc?.archived || sc?.retired) return { ...out, cls: "archived", reasons: ["Archived by hand after the older run."] };
-    if (nap) return { ...out, cls: "not-applicable", reasons: [nap.reason || `Doesn't apply to ${nap.agent}`] };
+    if (nap) return { ...out, cls: "not-applicable", reasons: [`Stale for ${nap.agent} — ${nap.reason || "a tool it needs was removed"}`] };
     return { ...out, cls: "removed", reasons: ["Only in the older run."] };
   }
   if (!inA && inB) {
-    if (nap) return { ...out, cls: "not-applicable", reasons: [nap.reason || `Doesn't apply to ${nap.agent}`] };
+    if (nap) return { ...out, cls: "not-applicable", reasons: [`Stale for ${nap.agent} — ${nap.reason || "a tool it needs was removed"}`] };
     return { ...out, cls: "new", reasons: ["Only in the newer run."] };
   }
-  if (nap) return { ...out, cls: "not-applicable", reasons: [nap.reason || `Doesn't apply to ${nap.agent}`] };
+  if (nap) return { ...out, cls: "not-applicable", reasons: [`Stale for ${nap.agent} — ${nap.reason || "a tool it needs was removed"}`] };
 
   const ka = runA?._key || pairKeyOf(runA, envOfRun(runA, env), stateOfRun(runA, envState));
   const kb = runB?._key || pairKeyOf(runB, envOfRun(runB, env), stateOfRun(runB, envState));
@@ -196,8 +208,8 @@ export const pairClassOf = (row, runA, runB, env, envState) => {
   const vb = playedVersionOf(runB, sc);
   const bump = bumpBetween(va, vb);
   out.bump = bump;
-  if (bump === "major") changed.push(`Scenario ${va} → ${vb}: what the caller does changed`);
-  if (bump === "minor") regraded.push(`Scenario ${va} → ${vb}: a grader fix`);
+  if (bump === "major") changed.push("Scenario edited: what the caller does changed");
+  if (bump === "minor") regraded.push("Scenario edited: a grader fix");
 
   /* Run-level: the simulated caller, surface, fidelity. */
   if (ka.simulator !== kb.simulator) changed.push(`Simulated caller ${ka.simulatorLabel} → ${kb.simulatorLabel}`);
@@ -215,9 +227,9 @@ export const pairClassOf = (row, runA, runB, env, envState) => {
       const worldKinds = ["seed", "contract", "toolbehaviour"].filter((k) => world.kinds.has(k));
       const touches = world.tools.length ? caps.some((t) => world.tools.includes(t)) : caps.length > 0;
       if (worldKinds.length && touches && !isConnectOnly(env)) {
-        rechecked.push(`World ${ka.env} → ${kb.env} changed ${worldKinds.map((k) => (k === "contract" ? "tools" : k === "toolbehaviour" ? "tool behaviour" : "seed data")).join(" and ")} it uses`);
+        rechecked.push(`${versionSpan(ka, kb)} changed ${worldKinds.map((k) => (k === "contract" ? "tools" : k === "toolbehaviour" ? "tool behaviour" : "seed data")).join(" and ")} it uses`);
       }
-      if (world.kinds.has("checks") || world.kinds.has("rules")) regraded.push(`World ${ka.env} → ${kb.env} rewrote checks`);
+      if (world.kinds.has("checks") || world.kinds.has("rules")) regraded.push(`${versionSpan(ka, kb)} rewrote checks`);
     }
   }
 
@@ -229,12 +241,12 @@ export const pairClassOf = (row, runA, runB, env, envState) => {
     edits.filter((e) => mine.has(e.id)).forEach((e) => {
       if (e.policy) {
         if (!out.criteria.some((c) => c.id === e.id)) out.criteria.push({ id: e.id, name: e.name || e.id, version: e.version });
-      } else regraded.push(`Sub-goal ${e.name || e.id} fixed (${e.version || "new version"})`);
+      } else regraded.push(`Sub-goal ${e.name || e.id} fixed`);
     });
   }
 
   /* The eval version. */
-  if (ka.eval !== kb.eval) regraded.push(`Graded under ${ka.eval} and ${kb.eval}`);
+  if (ka.eval !== kb.eval) regraded.push("Evaluations changed between the runs");
 
   /* Worst wins. */
   if (changed.length) return { ...out, cls: "changed", reasons: changed };
@@ -345,14 +357,13 @@ export const bridgeOf = (env, envState, agentLabel) => {
 
 const evalsOf = (envState) => (envState?.evals || []).map(resolveEval).filter(Boolean);
 
-/** Calls and dollars for running `scenarios` × `repeats`. */
+/** Calls and their price (list-price dollars, said as credits) for running `scenarios` × `repeats`. */
 export const priceOf = (env, envState, scenarios, repeats) => {
   const est = estimateRun({ env, scenarios, repeats, evals: evalsOf(envState), runLocation: envState?.agent?.values?.runLocation || null });
   return { calls: scenarios * repeats, usd: est.usd };
 };
 
-const money = (usd) => (usd >= 10 ? `$${Math.round(usd)}` : `$${(usd || 0).toFixed(2)}`);
-export const priceLine = (p) => `${p.calls} call${p.calls === 1 ? "" : "s"} ≈ ${money(p.usd)}`;
+export const priceLine = (p) => `${p.calls} call${p.calls === 1 ? "" : "s"} ≈ ${creditsLabel(p.usd || 0)}`;
 
 /* ── the comparison ──────────────────────────────────────────────────────── */
 
@@ -377,6 +388,18 @@ export const countsSentence = (counts, total) => {
 };
 
 /**
+ * Whether two runs sit on different environment versions — the version people
+ * see (the snapshot), else the world label for keys that carry no snapshot.
+ * Different environments are always different versions.
+ */
+export const differentVersions = (ka, kb) => {
+  if (!ka || !kb) return false;
+  if (ka.envId && kb.envId && ka.envId !== kb.envId) return true;
+  if (ka.snapshot && kb.snapshot) return ka.snapshot !== kb.snapshot;
+  return !!ka.env && !!kb.env && ka.env !== kb.env;
+};
+
+/**
  * Every scenario in the baseline and the newest run, classed and read.
  * `runs` are run summaries (tasks included), baseline first; a run from
  * another environment carries `_env` / `_envState`.
@@ -397,7 +420,7 @@ export const comparisonOf = (runs, env, envState, opts = {}) => {
     if (!pc) return null;
     const ta = taskOf(a, id);
     const tb = taskOf(b, id);
-    return { id, title: row.title, ...pc, flip: flipOf(ta, tb), shareA: shareOf(ta), shareB: shareOf(tb) };
+    return { id, title: scenarioTitle(row.title), ...pc, flip: flipOf(ta, tb), shareA: shareOf(ta), shareB: shareOf(tb) };
   }).filter(Boolean);
 
   const counts = classCounts(pairs);
@@ -405,11 +428,24 @@ export const comparisonOf = (runs, env, envState, opts = {}) => {
   const inClasses = opts.excludeRechecked ? ["exact", "regraded"] : ["exact", "regraded", "rechecked"];
   const usable = pairs.filter((p) => inClasses.includes(p.cls) && p.shareA != null && p.shareB != null);
   const iv = pairedInterval(usable.map((p) => ({ a: p.shareA, b: p.shareB, ka: a._key.repeats, kb: b._key.repeats })));
-  const sideBySide = relation === "unrelated";
+  /* RSI PRD: "two runs are comparable only when the environment version
+     matches." Across versions — or environments — the runs sit side by side
+     with no verdict; re-running one agent on the other's version makes them
+     comparable. */
+  const otherVersion = relation !== "unrelated" && differentVersions(a._key, b._key);
+  const sideBySide = relation === "unrelated" || otherVersion;
   const selfNoise = sideBySide || a._env || a._key.agent === b._key.agent ? null : selfNoiseOf(env, envState, a._key, b.id);
-  const read = sideBySide
-    ? { id: "side", label: "Side by side", note: "Unrelated environments share no scenario ids — no delta." }
-    : verdictLabelOf(iv);
+  const read = relation === "unrelated"
+    ? { id: "side", label: "Side by side", note: "Unrelated environments share no scenarios — no verdict." }
+    : otherVersion
+      ? {
+        id: "side",
+        label: "Side by side",
+        note: a._key.envId !== b._key.envId
+          ? "Different environments — runs are compared only on the same environment version, so these sit side by side with no verdict."
+          : `Environment ${a._key.snapshot || "—"} and ${b._key.snapshot || "—"} — runs are comparable only on the same environment version. Re-run one agent on the other's version to compare them.`,
+      }
+      : verdictLabelOf(iv);
   /* A change counts only when it beats the noise measured by running the
      baseline's version against itself. Inside it, the read is Inconclusive. */
   const label = selfNoise && (read.id === "improved" || read.id === "regressed") && Math.abs(iv.delta) <= selfNoise.noise
@@ -419,22 +455,23 @@ export const comparisonOf = (runs, env, envState, opts = {}) => {
   /* Run-level mismatches, each with its offer (AC-14.12). */
   const regraded = (opts.regrades || []).some((g) => g.a === a.id && g.b === b.id);
   const warnings = [];
-  if (a._key.eval !== b._key.eval) {
+  /* Side by side there is no verdict to firm up — no re-grade or bridge offers. */
+  if (!sideBySide && a._key.eval !== b._key.eval) {
     const to = versionNumber(a._key.eval) > versionNumber(b._key.eval) ? a._key.eval : b._key.eval;
     const n = counts.exact + counts.regraded + counts.rechecked;
     const credits = evalCreditsPerRun({ evals: evalsOf(envState), scenarios: n, repeats: a._key.repeats })
       + evalCreditsPerRun({ evals: evalsOf(envState), scenarios: n, repeats: b._key.repeats });
     warnings.push({
       id: "eval", kind: "regrade", done: regraded, to,
-      title: regraded ? `Re-graded both to ${to}` : `Graded under different eval versions (${a._key.eval} and ${b._key.eval})`,
+      title: regraded ? "Re-graded both to the newer evaluations" : "Graded under different evaluations",
       body: regraded
-        ? "Both runs read from their stored traces under one eval version."
-        : `Re-grade both runs to ${to} from their stored traces — no calls are made.`,
-      action: regraded || !n ? null : `Re-grade both to ${to} · ≈ ${credits || n * 2} credits`,
+        ? "Both runs read from their stored traces under one set of evaluations."
+        : "Re-grade both runs to the newer evaluations from their stored traces — no calls are made.",
+      action: regraded || !n ? null : `Re-grade both · ≈ ${credits || n * 2} credits`,
     });
   }
   const bridge = bridgeOf(env, envState, a._key.agent);
-  if (a._key.simulator !== b._key.simulator) {
+  if (!sideBySide && a._key.simulator !== b._key.simulator) {
     const ids2 = pairs.filter((p) => p.cls === "changed").map((p) => p.id);
     warnings.push({
       id: "simulator", kind: "bridge",
@@ -533,7 +570,7 @@ export const selfNoiseOf = (env, envState, key, skipId = null) => {
       /* A true self-run: everything but the clock matches — same agent,
          environment version, tool dial, simulated caller and eval. */
       const k = pairKeyOf(r, env, envState);
-      return k.agent === key.agent && k.env === key.env && k.eval === key.eval
+      return k.agent === key.agent && !differentVersions(k, key) && k.eval === key.eval
         && k.simulator === key.simulator && sameJson(k.faults, key.faults);
     })
     .sort((x, y) => Date.parse(y.finishedAt) - Date.parse(x.finishedAt))

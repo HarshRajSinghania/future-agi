@@ -4,41 +4,56 @@ import { Box, Button, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { useConnectedAgents, useSimStore } from "../store";
 import { PROVIDER_LABELS, agentNeedsRuntime, agentSourceOf } from "../_mock/agentRegistry";
-import { needsLiveConsent } from "../_mock/rsiModel";
+import { needsLiveConsent, platformTestingOf } from "../_mock/rsiModel";
+import { elevenlabsVersioningOn } from "../_mock/improvementPolicy";
 import { replicationOf } from "../_mock/replication";
-import { projectsOfAgent } from "../_mock/projectLinks";
+import { observeProjectOf } from "./observeProject";
 import { resolveObserve } from "../_mock/connectAgent";
 import { ObserveProjectStep } from "./connect/ConnectAboutStep";
 import { showsSetup, testedInLine } from "./agentViewUtils";
+import AgentFoundReview from "./AgentFoundReview";
+import { isCodeAgent, needsFoundCheck } from "./foundFacts";
 
 /**
  * Finish setting up — what connecting in one step left for later: the things
- * a run needs before it can start (where it runs, consent, an environment)
- * and the Observe project its production traces land in, chosen here — an
- * existing project, or a new one named after the agent. What we read and the
- * constraints are on their own tabs, not repeated here.
+ * a run needs before it can start (where it runs, consent, an environment),
+ * what we read from a code agent to confirm or correct (Flow 1, step 3), and
+ * the Observe project its production traces land in, chosen here — an
+ * existing project, or a new one named after the agent. The constraints
+ * start at safe defaults; this says so and links to their tab.
  *
  * Shown for an agent connected through the one-step connect, or any agent
  * not tested anywhere yet (`showsSetup`), until everything is done or it's
- * hidden.
+ * hidden. A code agent's "Check what we found" is needed before it runs or
+ * is improved, so the card can't be hidden while it's open.
  */
 export default function AgentSetupCard({ agent, env, onTab, onBuild, onSaveValues }) {
   const { agents, state } = useConnectedAgents();
+  /* Set on the Constraints tab, or still the safe defaults. */
+  const customLimits = !!state?.agentLimits?.[agent?.key];
   const { dispatch } = useSimStore();
   /* The Observe project chooser, opened in place. */
   const [choosing, setChoosing] = useState(false);
   const [observeChoice, setObserveChoice] = useState(null);
+  /* "Check what we found", opened in place. */
+  const [reviewing, setReviewing] = useState(false);
   if (!showsSetup(agent)) return null;
   const v = agent.values || {};
 
   const source = agentSourceOf(agent);
   const readFrom = source.kind === "repo" ? "the code" : source.kind === "framework" ? "the adapter" : source.kind === "platform" ? source.label : null;
-  const projects = projectsOfAgent(agent, state, agents);
+  /* One Observe project per agent. */
+  const one = observeProjectOf(agent, state, agents);
+  const projects = one ? [one] : [];
   /* Settled only when someone chose it — or a platform's call logs decide it.
      A link made for them is a suggestion until it's confirmed here. */
   const observeSettled = projects.length > 0 && (!!v.observeChosenAt || (source.kind === "platform" && !!v.observability?.on));
   const saveObserve = () => {
     const chosen = resolveObserve(observeChoice, null, agent.name);
+    /* One Observe project per agent — a new choice replaces the old link. */
+    Object.entries(state?.projectLinks || {})
+      .filter(([p, k]) => k === agent.key && p !== chosen.id)
+      .forEach(([p]) => dispatch({ type: "linkProjectAgent", project: p, agentKey: null }));
     dispatch({ type: "linkProjectAgent", project: chosen.id, agentKey: agent.key });
     setChoosing(false);
     onSaveValues({ observeChosenAt: new Date().toISOString() }, chosen.mode === "create" ? `Created ${chosen.id} — ${agent.name}'s traces land there.` : `Linked to ${chosen.id}.`);
@@ -46,13 +61,35 @@ export default function AgentSetupCard({ agent, env, onTab, onBuild, onSaveValue
   const consent = needsLiveConsent(agent) && !replicationOf(agent, env).needsConsent;
 
   /* Each: done, what it is, why it matters, and the way to it. Needed ones gate a run. */
+  const foundChecked = !!v.foundCheckedAt;
+  /* Needed before it runs or is improved — the card stays until it's done. */
+  const foundNeeded = needsFoundCheck(agent);
   const items = [
+    isCodeAgent(agent) && {
+      id: "found",
+      needed: foundNeeded,
+      done: foundChecked && !reviewing,
+      title: "Check what we found",
+      body: foundChecked
+        ? "Entry point, prompts, tools, model, how to run it and its tests — confirmed. Tools that must never run for real and test credentials are on the record."
+        : `What we read from ${readFrom || "the code"}: confirm or correct each item, including the tests every change must keep passing, say which tools must never run for real and which test credentials to use.`,
+      action: reviewing ? null : { label: foundChecked ? "Review" : "Check", onClick: () => setReviewing(true) },
+      panel: reviewing && (
+        <Box sx={{ pl: 4.25, pr: 2, pb: 1.5 }}>
+          <AgentFoundReview
+            agent={agent}
+            onCancel={() => setReviewing(false)}
+            onSave={(patch, message) => { onSaveValues(patch, message); setReviewing(false); }}
+          />
+        </Box>
+      ),
+    },
     agentNeedsRuntime(agent) && {
       id: "runtime",
       needed: true,
       done: false,
       title: "Say where it runs",
-      body: "Simulations call the agent on every turn — add the address it's served at, or run it in our sandbox.",
+      body: "Simulations call the agent on every turn — add the address our adapter's serve() answers on.",
       action: { label: "Add", onClick: () => onTab("connections") },
     },
     consent && {
@@ -64,12 +101,29 @@ export default function AgentSetupCard({ agent, env, onTab, onBuild, onSaveValue
       body: `Tests call your real ${PROVIDER_LABELS[agent.values?.provider] ? `${PROVIDER_LABELS[agent.values.provider]} ` : ""}agent, so anything it does — like issuing a refund — really happens. Approve this once before the first run.`,
       action: { label: "Review", onClick: () => onTab("connections") },
     },
+    /* ElevenLabs: changes ship as a branch, which needs versioning on — the
+       person switches it on in ElevenLabs. Runs don't wait for it. */
+    platformTestingOf(agent)?.needsVersioning && {
+      id: "versioning",
+      done: elevenlabsVersioningOn(agent) || !!v.versioningOnAt,
+      title: "Switch versioning on",
+      body: elevenlabsVersioningOn(agent) || v.versioningOnAt
+        ? "On — improvements can ship their change as a branch."
+        : `In ${PROVIDER_LABELS[v.provider] || "the platform"}: Agent → Settings → Versioning. It can't be undone. Until then, tests run but a change can't ship as a branch.`,
+      action: elevenlabsVersioningOn(agent) || v.versioningOnAt ? null : {
+        label: "It's on",
+        onClick: () => {
+          const at = new Date().toISOString();
+          onSaveValues({ versioningOnAt: at, versioning: { at } }, "Versioning recorded as on — changes can ship as a branch.");
+        },
+      },
+    },
     {
       id: "observe",
       done: observeSettled,
       title: observeSettled ? "Observe project" : "Choose its Observe project",
       body: observeSettled
-        ? `${projects.map((p) => p.name).join(", ")} · its production traces land here, so Error Feed issues can be fixed`
+        ? `${projects[0].name} · its traces or call logs land here, so Error Feed issues can be fixed`
         : projects.length
           ? `Suggested: ${projects[0].name}. Confirm it or pick another — Error Feed issues from it can be fixed.`
           : "Where its production traces land — an existing project, or a new one named after the agent. Error Feed issues from it can be fixed.",
@@ -83,6 +137,16 @@ export default function AgentSetupCard({ agent, env, onTab, onBuild, onSaveValue
           </Stack>
         </Box>
       ),
+    },
+    /* New agents start at safe defaults — said here, set on their own tab. */
+    {
+      id: "constraints",
+      done: true,
+      title: "Constraints",
+      body: customLimits
+        ? "Set on the Constraints tab — every improvement for this agent is held to them."
+        : "Safe defaults applied — prompts and tool descriptions only, model locked, no cost increase.",
+      action: { label: "Review", onClick: () => onTab("constraints") },
     },
     {
       id: "environment",
@@ -107,13 +171,15 @@ export default function AgentSetupCard({ agent, env, onTab, onBuild, onSaveValue
         <Typography sx={{ typography: "s1", fontWeight: 700 }}>Finish setting up</Typography>
         <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>{`${done} of ${total}`}</Typography>
         <Box flex={1} />
-        <Button
-          size="small"
-          onClick={() => onSaveValues({ setupDismissedAt: new Date().toISOString() }, "Hidden — everything here is still on the agent's tabs.")}
-          sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", minWidth: 0 }}
-        >
-          Hide
-        </Button>
+        {!foundNeeded && (
+          <Button
+            size="small"
+            onClick={() => onSaveValues({ setupDismissedAt: new Date().toISOString() }, "Hidden — everything here is still on the agent's tabs.")}
+            sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", minWidth: 0 }}
+          >
+            Hide
+          </Button>
+        )}
       </Stack>
 
       <Row done title="Connected" body={`${agent.name} is in Agents — v1 ${readFrom ? `read from ${readFrom}` : "saved"}.`} />

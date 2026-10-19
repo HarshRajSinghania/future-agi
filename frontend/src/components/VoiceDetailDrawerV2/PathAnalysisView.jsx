@@ -210,6 +210,9 @@ const PathAnalysisView = ({
   const seekTo = useVoiceAudioStore((s) => s.seekTo);
   const resolvedTestExecutionId = testExecutionId || executionId;
   const responseScenarioGraph = data?.scenario_graph || null;
+  // A caller that already has the flow (e.g. a simulated call, which has no
+  // flow-analysis service behind it) passes it on `data.flow_analysis`.
+  const providedAnalysis = data?.flow_analysis || null;
 
   // `viewMode` is controlled by the parent (VoiceLeftPanel). Fullscreen
   // remains local so it only matters while the user is on one of the
@@ -239,7 +242,7 @@ const PathAnalysisView = ({
     queryKey: ["flow-analysis", openedExecutionId],
     queryFn: () =>
       axios.get(endpoints.testExecutions.flowAnalysis(openedExecutionId)),
-    enabled: !!enabled && !!openedExecutionId,
+    enabled: !!enabled && !!openedExecutionId && !providedAnalysis,
     select: (res) => res.data,
   });
 
@@ -247,7 +250,7 @@ const PathAnalysisView = ({
   const scenarioGraph = responseScenarioGraph?.nodes
     ? responseScenarioGraph
     : scenarioGraphs?.[scenarioId];
-  const analysis = flowAnalysis?.analysis || {};
+  const analysis = providedAnalysis || flowAnalysis?.analysis || {};
   const currentPath =
     analysis.current_path ?? analysis.currentPath ?? undefined;
   const expectedPath =
@@ -452,9 +455,12 @@ const PathAnalysisView = ({
         return undefined;
       },
       (e) => {
-        if (greenNodes.includes(e.to)) return { highlightColor: "success" };
-        if (redNodes.includes(e.to)) return { highlightColor: "error" };
-        return undefined;
+        // A flow passed in with the call data labels only the edges it has
+        // something to say about; the rest show no label.
+        const quiet = providedAnalysis ? { hideEmptyLabel: true } : {};
+        if (greenNodes.includes(e.to)) return { highlightColor: "success", ...quiet };
+        if (redNodes.includes(e.to)) return { highlightColor: "error", ...quiet };
+        return providedAnalysis ? quiet : undefined;
       },
       // Compact sizes for path analysis — full-size 400×200 nodes make
       // the whole graph zoom out to 10% and the text unreadable.
@@ -479,12 +485,14 @@ const PathAnalysisView = ({
     newNodes,
     newEdges,
     selectedStepName,
+    providedAnalysis,
   ]);
 
   // ── Loading / empty ─────────────────────────────────────────────────────
   const loading = isKpisLoading || isFlowLoading;
   const missingFlowAnalysis =
-    requiresFlowAnalysis && (isFlowError || !Array.isArray(currentPath));
+    requiresFlowAnalysis &&
+    ((isFlowError && !providedAnalysis) || !Array.isArray(currentPath));
 
   if (loading) {
     return (

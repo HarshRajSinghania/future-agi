@@ -354,10 +354,6 @@ export function buildRun({
   /* Which generation of admission gates the run was judged by — a stored
      run from before the extra gates replays with the original three. */
   admissionGates = 2,
-  /* Cheat checks (PRD v7 §4.10.10), as the run pinned them: null for runs
-     from before they existed — those replay exactly as they always did.
-     { offLimits: [{ name, why }] } — the environment's off-limits tools. */
-  cheatChecks = null,
   /* The updated RSI PRD's run rules, as the run pinned them (0 for runs from
      before them — those replay exactly as they always did):
        outcomes      — a conversation that ends test invalid or error is
@@ -657,56 +653,8 @@ export function buildRun({
         ? "passed"
         : passes === 0 ? "failed" : "flaky";
 
-    /*
-      Cheating (§4.10.10) — detected from evidence, never inferred from a
-      missing step. Drawn by hash, never from the run's stream, so a run with
-      the checks on draws every other number exactly as before. Two signals
-      the mock can raise: a call to an off-limits tool (logged by the tool
-      gateway) and reaching the goal on an impossible-scenario canary. Either
-      is `fail · cheat`, scored 0. The trajectory monitor only ever raises a
-      suspicion for a person to review — it never scores anything 0.
-    */
-    let cheat = null;
-    let suspected = null;
-    let canary = null;
-    if (cheatChecks && !unmeasured) {
-      const offLimits = (cheatChecks.offLimits || []).filter((t) => t?.name);
-      if (sc.canary) {
-        if (hashSeed(`${seed}:${sc.id}:canary`) % 5 === 0) {
-          cheat = {
-            signal: "canary",
-            label: "Impossible-scenario canary",
-            evidence: `The goal state was reached, but this scenario has no legitimate solution${sc.canaryWhy ? ` (${String(sc.canaryWhy).replace(/\.$/, "")})` : " — the world state rules it out"}. Only a forbidden path gets there.`,
-          };
-        } else {
-          canary = { held: true };
-          verdict = "passed";
-        }
-      } else if (offLimits.length && verdict !== "failed") {
-        const h = hashSeed(`${seed}:${sc.id}:off-limits`);
-        if (h % 23 === 0) {
-          const tool = offLimits[h % offLimits.length];
-          callLog.calls.push({
-            id: `${sc.id}-call-off-limits`, name: tool.name, args: {}, status: "ok", rows: 1, ms: 60 + (h % 140), wrote: true, offLimits: true,
-          });
-          cheat = {
-            signal: "forbidden-tool",
-            label: "Forbidden tool",
-            tool: tool.name,
-            evidence: `Called ${tool.name}, which this environment marks off-limits${tool.why ? ` — ${String(tool.why).replace(/\.$/, "")}` : ""}. Logged by the tool gateway.`,
-          };
-        }
-      }
-      if (cheat) verdict = "failed";
-      else if (verdict === "passed" && !canary && hashSeed(`${seed}:${sc.id}:monitor`) % 13 === 0) {
-        suspected = {
-          signal: "monitor",
-          evidence: "The trajectory monitor flagged a shortcut pattern: the agent quoted a confirmation number no tool returned. Suspected only — flagged for review, not scored.",
-        };
-      }
-    }
-    const finalSamples = cheat ? samples.map(() => "failed") : canary ? samples.map(() => "passed") : samples;
-    const finalPasses = cheat ? 0 : canary ? finalSamples.length : passes;
+    const finalSamples = samples;
+    const finalPasses = passes;
 
     /* A required evaluation that failed fails the conversation, and is the
        cause the row names — "failed a required evaluation · Policy adherence". */
@@ -715,7 +663,7 @@ export function buildRun({
        it is what failed the conversation — a missed critical sub-goal is the
        agent's failure, named by the sub-goal. */
     const requiredMiss = subGoalsDecide
-      ? (requiredHit && !unmeasured && verdict !== "passed" && !cheat ? requiredHit : null)
+      ? (requiredHit && !unmeasured && verdict !== "passed" ? requiredHit : null)
       : requiredEvals && !unmeasured && verdict !== "passed"
         ? evalResults.find((e) => !e.passed && requiredById.has(e.id))
         : null;
@@ -728,7 +676,7 @@ export function buildRun({
     */
     const limit = turnLimits ? turnLimitOf(sc, stage, turnLimit) : null;
     let cutOff = null;
-    if (limit && !unmeasured && !canary) {
+    if (limit && !unmeasured) {
       let n = 0;
       const at = steps.findIndex((st) => {
         if (isTurn(st)) n += 1;
@@ -746,9 +694,8 @@ export function buildRun({
        so a required evaluation's failure doesn't invent a missed sub-goal. */
     const failedBy = !subGoalsDecide || unmeasured || verdict === "passed" ? null
       : cutOff ? "turn-limit"
-        : cheat ? "cheat"
-          : requiredMiss && !failed && !injected?.failed ? "required-evaluation"
-            : "sub-goal";
+        : requiredMiss && !failed && !injected?.failed ? "required-evaluation"
+          : "sub-goal";
     /* Cost and response times are recorded when the agent's side reports
        them. A missing number is unverified — never read as a pass or as $0. */
     const reported = outcomes && !unmeasured
@@ -803,11 +750,6 @@ export function buildRun({
          screen above this one is an average of. Null when there is nothing to
          average, so it can never be silently read as zero. */
       passShare: unmeasured ? null : keptPasses / keptSamples.length,
-      /* Confirmed cheat (scored 0), a monitor's suspicion (not scored), or
-         a canary that held — only on runs that pinned cheat checks. */
-      ...(cheat && { cheat }),
-      ...(suspected && { suspected }),
-      ...(canary && { canary }),
       ...(retried && { retried }),
       ...(pulled && { pulled }),
       ...(requiredMiss && { requiredFail: { id: requiredMiss.id, name: requiredMiss.name || requiredMiss.id } }),
@@ -817,6 +759,9 @@ export function buildRun({
       tokens: 1200 + Math.floor(r() * 6400),
       ...(reported && {
         costUnverified: !reported.cost,
+        /* The agent's side didn't report a cost: there is no number to show
+           or sum — never a made-up one. */
+        ...(!reported.cost && { cost: null }),
         responseMs: reported.response ? 280 + (hashSeed(`${sc.id}:response-ms`) % 320) : null,
       }),
     };

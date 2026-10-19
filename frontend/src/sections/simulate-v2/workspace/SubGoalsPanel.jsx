@@ -16,6 +16,7 @@ import {
 import { currentUser } from "../_mock/scenarioProvenance";
 import { MARK_NOTE } from "../_mock/scenarioSubGoals";
 import { clickable, focusRing } from "../components/clickable";
+import { goalLabel, scenarioTitle } from "../_mock/scenarios";
 
 const MONO = "ui-monospace, Menlo, monospace";
 const VERBATIM_NOTE = "Quotes the prompt word for word — a wording change will fail it.";
@@ -211,7 +212,7 @@ function TestsCell({ tests }) {
   );
   return cases.length
     ? (
-      <Tooltip arrow title={<Box>{cases.map((c) => <Typography key={c} sx={{ typography: "s3" }}>{idForUseCase(c)} · {c}</Typography>)}</Box>}>
+      <Tooltip arrow title={<Box>{cases.map((c) => <Typography key={c} sx={{ typography: "s3" }}>{idForUseCase(c)} · {goalLabel(c)}</Typography>)}</Box>}>
         <Box component="span" sx={{ display: "inline-flex" }}>{body}</Box>
       </Tooltip>
     )
@@ -405,7 +406,7 @@ function SubGoalDetail({ goal, split, env, envState, rules, locked, onClose, onS
             <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
               {scenarios.map(({ row, mark }) => (
                 <Stack key={row.id} direction="row" alignItems="center" spacing={1.25} sx={{ px: 1.5, py: 0.875 }}>
-                  <Typography noWrap sx={{ typography: "s2", flex: 1, minWidth: 0 }}>{row.name || row.title}</Typography>
+                  <Typography noWrap sx={{ typography: "s2", flex: 1, minWidth: 0 }}>{scenarioTitle(row.title) || row.name}</Typography>
                   {row.persona?.name && (
                     <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0, maxWidth: 140 }}>{row.persona.name}</Typography>
                   )}
@@ -505,7 +506,7 @@ function TestsDetail({ tests, env, rules }) {
           {cases.map((c) => (
             <Box key={c} sx={{ display: "grid", gridTemplateColumns: "72px 1fr", columnGap: 1.25, alignItems: "baseline" }}>
               <Typography sx={{ typography: "s3", fontFamily: MONO, color: "text.subtitle" }}>{idForUseCase(c)}</Typography>
-              <Typography sx={{ typography: "s2", color: "text.secondary" }}>{c}</Typography>
+              <Typography sx={{ typography: "s2", color: "text.secondary" }}>{goalLabel(c)}</Typography>
             </Box>
           ))}
         </Stack>
@@ -515,7 +516,8 @@ function TestsDetail({ tests, env, rules }) {
   const rule = kind === "rule" ? rules.find((r) => r.id === tests.ref) : null;
   const tool = kind === "tool" ? (env?.tools || []).find((t) => t.name === tests.ref) : null;
   const id = kind === "use case" ? (tests.ref ? idForUseCase(tests.ref) : null) : tests?.ref;
-  const text = rule?.text || tool?.desc || (kind === "use case" ? tests.ref : null);
+  /* Ids stay keyed on the stored text; only the words shown are reworded. */
+  const text = rule?.text || tool?.desc || (kind === "use case" ? goalLabel(tests.ref) : null);
   return (
     <Stack direction="row" spacing={1.25} alignItems="baseline">
       <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0, minWidth: 56 }}>{TESTS_LABEL[kind] || "Nothing recorded"}</Typography>

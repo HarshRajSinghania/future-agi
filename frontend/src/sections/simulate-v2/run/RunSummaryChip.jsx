@@ -8,6 +8,7 @@ import { paths } from "src/routes/paths";
 import { VERDICT_CAUSES } from "../_mock/decoupled";
 import { CAUSE_ORDER } from "../_mock/runCauses";
 import { causeCountsLine } from "../_mock/runRollup";
+import { creditsLabel } from "../_mock/metering";
 
 const RED = "#DC2626";
 
@@ -209,9 +210,9 @@ function BarEditor({ bar, onSetBar }) {
 BarEditor.propTypes = { bar: PropTypes.object, onSetBar: PropTypes.func };
 
 /* What the strip doesn't say: the scenarios that ended outside the rate, by
-   cause, and any confirmed cheat (scored 0). Nothing on a clean run. */
+   cause. Nothing on a clean run. */
 function NotScored({ summary, onFilter }) {
-  const causes = CAUSE_ORDER.filter((c) => summary.counts[c] > 0 && (!VERDICT_CAUSES[c]?.scored || c === "fail-cheat"));
+  const causes = CAUSE_ORDER.filter((c) => summary.counts[c] > 0 && !VERDICT_CAUSES[c]?.scored);
   if (!causes.length) return null;
   return (
     <Stack direction="row" flexWrap="wrap" alignItems="baseline" columnGap={2} rowGap={0.5} sx={{ px: 2, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}>
@@ -222,8 +223,7 @@ function NotScored({ summary, onFilter }) {
           <Tooltip key={c} arrow title={meta.note || ""}>
             <Typography noWrap sx={{ typography: "s2", color: "text.secondary", cursor: "default", ...num }}>
               {`${meta.label} `}
-              <Count n={summary.counts[c]} ids={summary.causeIds[c]} label={meta.label} onFilter={onFilter} sx={{ color: c === "fail-cheat" ? RED : "text.primary", fontWeight: 600 }} />
-              {c === "fail-cheat" && <Box component="span" sx={{ color: "text.subtitle" }}>{" · scored 0"}</Box>}
+              <Count n={summary.counts[c]} ids={summary.causeIds[c]} label={meta.label} onFilter={onFilter} sx={{ color: "text.primary", fontWeight: 600 }} />
             </Typography>
           </Tooltip>
         );
@@ -245,12 +245,11 @@ export function RunSummaryBlock({ summary, onFilter, onSetBar, envId = null, rea
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   if (!summary) return null;
-  const { health, coverage, bar } = summary;
+  const { health, bar } = summary;
   const barPct = Math.round(bar.pass1 * 100);
 
   /* The notes under the issues — only when one applies. */
-  const hasNotes = !!(summary.cheats.length || summary.suspected.length || summary.na.count || summary.canaries.count
-    || summary.exploration?.count || summary.pulled?.count || summary.stale?.count || summary.retried?.count || summary.critical.failed.length);
+  const hasNotes = !!(summary.exploration?.count || summary.pulled?.count || summary.stale?.count || summary.retried?.count || summary.critical.failed.length);
   /* A cell of the metric strip: a label, the number, one quiet caption. */
   const cell = (key, label, value, caption, { tone, tip } = {}) => (
     <Box key={key} sx={{ px: 2, py: 1.5, minWidth: 0 }}>
@@ -284,7 +283,6 @@ export function RunSummaryBlock({ summary, onFilter, onSetBar, envId = null, rea
       </>,
       `${summary.scored} scored`,
     ),
-    cell("cov", "Coverage", `${coverage.pct}%`, `${coverage.graded} of ${coverage.planned} scored`),
     cell("health", "Test setup", health.label, null, { tip: health.note }),
     summary.proofKind && cell(
       "proof", "Proof", summary.proofKind.kind === "live" ? "Live" : summary.proofKind.label,
@@ -292,7 +290,11 @@ export function RunSummaryBlock({ summary, onFilter, onSetBar, envId = null, rea
       { tip: summary.proofKind.note },
     ),
     summary.speed && cell(
-      "cost", "Cost", `$${summary.speed.cost.toFixed(2)}`,
+      "cost", "Cost",
+      /* Credits over the costs the agent's side reported; unverified ones are never summed. */
+      summary.speed.costUnverified && !(summary.speed.cost > 0)
+        ? "unverified"
+        : `${creditsLabel(summary.speed.cost || 0)}${summary.speed.costUnverified ? ` + ${summary.speed.costUnverified} unverified` : ""}`,
       summary.speed.responseMs != null ? `Median response ${fmtMs(summary.speed.responseMs)}` : "Response time unverified",
       { tip: `Over ${summary.speed.conversations} scenarios that reached a verdict. Unverified means the agent's side didn't report it — it's left out, not counted as met.${summary.speed.costUnverified ? ` ${summary.speed.costUnverified} cost unverified.` : ""}` },
     ),
@@ -321,7 +323,7 @@ export function RunSummaryBlock({ summary, onFilter, onSetBar, envId = null, rea
       {open && (
         <Box sx={{ px: 2, pb: 1.25 }}>
           <Typography sx={{ typography: "s3", color: "text.subtitle", maxWidth: 900 }}>
-            Passed is the mean share of repeats each scored scenario passed; all repeats is the share of scenarios that passed every repeat. Every conversation ends passed, failed, inconclusive, test invalid or error. Scored means passed and failed (agent, required evaluation, capability-missing, and cheat scored 0). Inconclusive never counts as a pass; test invalid (the test broke, not the agent) and error (our infrastructure or the connection) count neither for nor against the agent — each is retried once on new runs, and a scenario test invalid twice is pulled for review. N/A and canary scenarios sit outside every count; Outdated and Re-check scenarios run but count toward no decision; exploration and proposed scenarios show separately. The test setup reports — it never blocks, promotes or ships an agent version.
+            Passed is the mean share of repeats each scored scenario passed; all repeats is the share of scenarios that passed every repeat. Every conversation ends passed, failed, inconclusive, test invalid or error. Scored means passed and failed. Inconclusive never counts as a pass; test invalid (the test broke, not the agent) and error (our infrastructure or the connection) count neither for nor against the agent — each is retried once on new runs, and a scenario test invalid twice is pulled for review. Outdated, Re-check and Stale scenarios run but count toward no decision; proposed scenarios show separately. The test setup reports — it never blocks, promotes or ships an agent version.
           </Typography>
         </Box>
       )}
@@ -357,57 +359,12 @@ export function RunSummaryBlock({ summary, onFilter, onSetBar, envId = null, rea
 
         {hasNotes && (
         <Stack spacing={0.5} sx={{ px: 2, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
-          {summary.cheats.length > 0 && (
-            <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-              <Box component="span" sx={{ color: "text.subtitle" }}>Confirmed cheats · </Box>
-              {summary.cheats.slice(0, 3).map((c, i) => (
-                <Box component="span" key={c.id}>
-                  {i ? "; " : ""}
-                  <Box
-                    component="span" role="link" tabIndex={0}
-                    onClick={() => onFilter?.(`fail · cheat · ${c.title}`, [c.id])}
-                    onKeyDown={(e) => { if (e.key === "Enter") onFilter?.(`fail · cheat · ${c.title}`, [c.id]); }}
-                    sx={linkSx(!!onFilter)}
-                  >
-                    {c.title}
-                  </Box>
-                  {` (${(c.label || c.signal).toLowerCase()}${c.tool ? ` ${c.tool}` : ""})`}
-                </Box>
-              ))}
-              {summary.cheats.length > 3 ? ` +${summary.cheats.length - 3} more` : ""}
-            </Typography>
-          )}
-          {summary.suspected.length > 0 && (
-            <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-              <Box component="span" sx={{ color: "text.subtitle" }}>Suspected · </Box>
-              <Count n={summary.suspected.length} ids={summary.suspected.map((x) => x.id)} label="Suspected shortcut" onFilter={onFilter} />
-              {" passing "}
-              {summary.suspected.length === 1 ? "scenario" : "scenarios"}
-              {" flagged by the trajectory monitor for review. Never scored 0 on the monitor alone."}
-            </Typography>
-          )}
-          {summary.na.count > 0 && (
-            <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-              <Box component="span" sx={{ color: "text.subtitle" }}>N/A · </Box>
-              <Count n={summary.na.count} ids={summary.na.ids} label="N/A" onFilter={onFilter} />
-              {` not applicable to this agent version — ${summary.na.reasons.map((r) => r.reason).join("; ")}. Outside every count.`}
-            </Typography>
-          )}
-          {summary.canaries.count > 0 && (
-            <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-              <Box component="span" sx={{ color: "text.subtitle" }}>Canaries · </Box>
-              <Count n={summary.canaries.count} ids={summary.canaries.ids} label="Canaries" onFilter={onFilter} />
-              {summary.canaries.held === summary.canaries.count
-                ? " impossible scenarios, all held. They count only as a cheat check."
-                : ` impossible scenarios — ${summary.canaries.held} checked and held. They count only as a cheat check.`}
-            </Typography>
-          )}
           {summary.exploration?.count > 0 && (
             <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-              <Box component="span" sx={{ color: "text.subtitle" }}>Exploration · </Box>
-              <Count n={summary.exploration.count} ids={summary.exploration.ids} label="Exploration" onFilter={onFilter} />
-              {` scenarios${summary.exploration.candidates ? `, ${summary.exploration.candidates} of them proposed, not yet in the set` : ""} — ${summary.exploration.passed} passed, `}
-              <Count n={summary.exploration.failedIds.length} ids={summary.exploration.failedIds} label="Exploration · failed" onFilter={onFilter} />
+              <Box component="span" sx={{ color: "text.subtitle" }}>Proposed · </Box>
+              <Count n={summary.exploration.count} ids={summary.exploration.ids} label="Proposed" onFilter={onFilter} />
+              {` scenarios, not yet added to the environment — ${summary.exploration.passed} passed, `}
+              <Count n={summary.exploration.failedIds.length} ids={summary.exploration.failedIds} label="Proposed · failed" onFilter={onFilter} />
               {` failed${summary.exploration.inconclusive ? `, ${summary.exploration.inconclusive} inconclusive` : ""}. Shown separately, outside the rates above.`}
             </Typography>
           )}
@@ -442,7 +399,7 @@ export function RunSummaryBlock({ summary, onFilter, onSetBar, envId = null, rea
           {summary.stale?.count > 0 && (
             <Typography sx={{ typography: "s2", color: "text.secondary" }}>
               <Box component="span" sx={{ color: "text.subtitle" }}>Stale scenarios · </Box>
-              <Count n={summary.stale.count} ids={summary.stale.ids} label="Outdated or re-check" onFilter={onFilter} />
+              <Count n={summary.stale.count} ids={summary.stale.ids} label="Outdated, re-check or stale" onFilter={onFilter} />
               {` ${summary.stale.line.replace(/^\d+ /, "")}. Left out of the pass rates and the counts above.`}
             </Typography>
           )}

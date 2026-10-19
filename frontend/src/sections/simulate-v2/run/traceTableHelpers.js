@@ -4,6 +4,7 @@
   TraceTable.jsx so that file only exports components (Fast Refresh), and so
   the analytics, compare and widget code can read them without the table.
 */
+import { goalLabel } from "../_mock/scenarios";
 
 const hash = (str) => {
   let h = 0;
@@ -82,8 +83,8 @@ export const GROUPINGS = [
   { id: "subGoal", label: "Failure sub-goal", icon: "solar:map-linear" },
   { id: "pattern", label: "Failure pattern",   icon: "solar:danger-triangle-linear" },
   { id: "status",  label: "Status",            icon: "solar:check-circle-linear" },
-  /* Verdict · cause (PRD v7 §4.10.10) — fail · agent, capability-missing,
-     cheat, the inconclusive kinds, N/A. Rows carry it as `verdictCause`. */
+  /* Verdict · cause — fail · agent, required evaluation, the inconclusive
+     kinds. Rows carry it as `verdictCause`. */
   { id: "cause",   label: "Verdict cause",     icon: "solar:tag-linear" },
   /* Persona-attribute buckets — same-accent / same-age-band callers
      cluster together, so a reader can spot regional or generational
@@ -116,7 +117,7 @@ export const humanize = (s = "") => s
   .trim();
 
 export function deriveUseCaseLabel(t) {
-  if (t?.useCase) return t.useCase;
+  if (t?.useCase) return goalLabel(t.useCase);
   const id = String(t?.id || "");
   const title = String(t?.title || "");
   if (id.includes("-core-")) {

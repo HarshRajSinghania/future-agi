@@ -7,6 +7,7 @@ import Iconify from "src/components/iconify";
 import { SectionCard } from "../components/primitives";
 import { contractFor } from "../_mock/contract";
 import { actorsOf, castOf } from "../_mock/actors";
+import { goalLabel } from "../_mock/scenarios";
 
 /**
  * The capability graph.
@@ -52,7 +53,7 @@ export default function CapabilityGraph({ env, envState, onGo }) {
 
   const data = {
     tools: (env.tools || []).map((t) => t.name),
-    flows: (contract.useCases || []).map((u) => u.replace(/ using .*/, "").replace(/^Refuse the request that would break: /, "Refuse: ")),
+    flows: (contract.useCases || []).map((u) => goalLabel(u).replace(/ using .*/, "").replace(/^Refuse the request that would break: /, "Refuse: ")),
     people: [
       ...personaNames,
       ...castOf(env, envState).map((a) => a.name),

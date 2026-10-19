@@ -180,13 +180,13 @@ export default function useChatActions() {
         /* Live is the real tool: never set without a confirmation. */
         if (plan.tier === "live") return { type: "liveConfirm", plan, status: "asking" };
         const undo = applyTier(plan.tool, plan.tier);
-        return { type: "change", title: `${plan.tool}: ${plan.from} → ${plan.to}`, line: `${tierOf(plan.tier).note} Recorded as a world edit — the next run is on a new minor version.`, undo, undoKind: "tool", review: "world", applied: true };
+        return { type: "change", title: `${plan.tool}: ${plan.from} → ${plan.to}`, line: `${tierOf(plan.tier).note} Recorded as a world edit — saved as the next environment version.`, undo, undoKind: "tool", review: "world", applied: true };
       }
       case "setFaults": {
         if (locked) return lockedNote;
         if (intent.all) {
           const undo = applyFaults(null, intent.preset);
-          return { type: "change", title: `${FAULT_PRESETS[intent.preset]?.label || "Clean"} faults on every tool`, line: "One world edit for all of them — the next run is on a new minor version.", undo, undoKind: "tool", review: "world", applied: true };
+          return { type: "change", title: `${FAULT_PRESETS[intent.preset]?.label || "Clean"} faults on every tool`, line: "One world edit for all of them — saved as the next environment version.", undo, undoKind: "tool", review: "world", applied: true };
         }
         const plan = faultPlan(e, es, intent.tool, intent.preset);
         if (!plan) return { type: "note", text: `There's no ${intent.tool} in this world.` };
@@ -200,7 +200,7 @@ export default function useChatActions() {
         const has = (es.evals || []).some((x) => (typeof x === "string" ? x : x.id) === intent.evalId);
         if (has) return { type: "note", text: `${item.name} is already scoring every scenario here.` };
         const undo = addEval(intent.evalId);
-        return { type: "change", title: `Added ${item.name}`, line: `${item.blurb || item.description || ""} Scores every scenario from the next run; evaluations keep their own version, so the environment's doesn't move.`.trim(), undo, undoKind: "eval", review: "evals", applied: true };
+        return { type: "change", title: `Added ${item.name}`, line: `${item.blurb || item.description || ""} Scores every scenario from the next run — saved as the next environment version.`.trim(), undo, undoKind: "eval", review: "evals", applied: true };
       }
       case "setSecret": {
         if (locked) return lockedNote;

@@ -15,6 +15,7 @@ import { relativeTime } from "../../_mock/scenarioProvenance";
 import { failingCaseVariations, variationCheck, asProposal, VARIATIONS_PER_CASE } from "../../_mock/scenarioSources";
 import { currentAgentVersion } from "../../_mock/versions";
 import { clickable, focusRing } from "../../components/clickable";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 const RED = "#DC2626";
 
@@ -41,7 +42,7 @@ const CHECKBOX_SX = {
  *
  * Each variation is run on the agent version under test first. It must
  * still fail there; one that now passes reads "Already fixed" and isn't
- * added. The rest arrive as proposals in exploration, each linking back to
+ * added. The rest arrive as proposals, each linking back to
  * the run and the task it came from.
  */
 export default function FailingCasesImport({ env, envState, onAdd, selected }) {
@@ -206,7 +207,7 @@ export default function FailingCasesImport({ env, envState, onAdd, selected }) {
       </Stack>
 
       <Typography sx={{ typography: "s3", color: "text.subtitle", px: 2.5, py: 0.875, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-        {`Each pick becomes ${VARIATIONS_PER_CASE} new variations — a different caller, wording and world values, the same goal and sub-goals — grouped under the scenario they came from. Each is run on ${agentNow ? `agent ${agentNow}` : "today's agent"} first; only the ones that still fail are added, as proposals in exploration.`}
+        {`Each pick becomes ${VARIATIONS_PER_CASE} new variations — a different caller, wording and world values, the same goal and sub-goals — grouped under the scenario they came from. Each is run on ${agentNow ? `agent ${agentNow}` : "today's agent"} first; only the ones that still fail are proposed, for you to add.`}
       </Typography>
 
       {shown.length === 0 ? (
@@ -306,6 +307,9 @@ function CaseTableRow({ kase, env, added, picked, onToggle, variations = [] }) {
   const isDark = theme.palette.mode === "dark";
   const k = kase;
   const failing = variations.filter((v) => v.check.state === "fails").length;
+  /* Line 2 says which variation of the scenario failed; the counts follow it. */
+  const sub = k.summary && k.summary !== (k.title || k.name) ? k.summary : null;
+  const dot = sub || k.critical ? "· " : "";
 
   return (
     <>
@@ -334,12 +338,15 @@ function CaseTableRow({ kase, env, added, picked, onToggle, variations = [] }) {
         <TableCell>
           <Stack spacing={0.25} justifyContent="center">
             <Typography noWrap sx={{ typography: "s2", fontWeight: 500, color: added ? "text.disabled" : "text.primary", maxWidth: 440 }}>
-              {k.title || k.name}
+              {scenarioTitle(k.title) || k.name}
             </Typography>
             <Stack direction="row" alignItems="center" spacing={0.75}>
-              <Typography noWrap sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", color: "text.subtitle", maxWidth: 280 }}>
-                {k.name}
-              </Typography>
+              {/* The variation, not the title again (the name is now the title). */}
+              {sub && (
+                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", maxWidth: 320 }}>
+                  {sub}
+                </Typography>
+              )}
               {k.critical && (
                 <Tooltip arrow title="Written as critical">
                   <Box sx={{ display: "flex", color: RED }}>
@@ -347,14 +354,14 @@ function CaseTableRow({ kase, env, added, picked, onToggle, variations = [] }) {
                   </Box>
                 </Tooltip>
               )}
-              {added && <Typography sx={{ typography: "s3", color: "text.disabled" }}>· already added</Typography>}
+              {added && <Typography sx={{ typography: "s3", color: "text.disabled" }}>{`${dot}already added`}</Typography>}
               {!added && (
                 <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
                   {failing === variations.length
-                    ? `· ${failing} variations`
+                    ? `${dot}${failing} variations`
                     : failing === 0
-                      ? "· already fixed"
-                      : `· ${failing} of ${variations.length} variations still fail`}
+                      ? `${dot}already fixed`
+                      : `${dot}${failing} of ${variations.length} variations still fail`}
                 </Typography>
               )}
             </Stack>

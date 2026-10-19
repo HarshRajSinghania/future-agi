@@ -6,6 +6,8 @@
  * Deterministic, so the demo lands on the same answers every time.
  */
 import { DEFAULT_LIMITS } from "./optimizationRuns";
+import { FRAMEWORK_META, frameworkIdOf } from "./agentRegistry";
+import { FRAMEWORK_TUNING } from "./agentLifecycle";
 
 const hash = (s) => {
   let h = 0;
@@ -38,10 +40,20 @@ const ASSISTANTS = {
   ],
   retell: [
     /* Retell agents are one of two kinds — a single prompt, or a
-       conversation flow of nodes, each with its own instructions. */
-    { id: "agent_5f20c1d9e7", name: "Front desk", updated: "3 hours ago", phone: "+1 650 555 0131", model: "gpt-4o", retellKind: "single_prompt" },
+       conversation flow of nodes, each with its own instructions. Voice
+       and chat agents are separate agents on Retell. */
+    { id: "agent_5f20c1d9e7", name: "Front desk", updated: "3 hours ago", phone: "+1 650 555 0131", model: "gpt-4o", retellKind: "single_prompt", channels: ["voice"] },
+    { id: "agent_chat_3b7e10a4", name: "Website chat", updated: "yesterday", phone: null, model: "gpt-4.1", retellKind: "single_prompt", channels: ["chat"] },
     {
-      id: "agent_a81b44f302", name: "Claims intake", updated: "6 days ago", phone: "+1 650 555 0199", model: "claude-sonnet-4",
+      id: "agent_chat_9d02c6f1", name: "Claims chat", updated: "4 days ago", phone: null, model: "claude-sonnet-4", channels: ["chat"],
+      retellKind: "conversation_flow",
+      members: [
+        { id: "welcome", name: "Welcome", role: "Start node · finds the policy", model: "claude-sonnet-4", promptRef: "Node: Welcome" },
+        { id: "status", name: "Claim status", role: "Calls get_claim, explains where it stands", model: "claude-sonnet-4", promptRef: "Node: Claim status" },
+      ],
+    },
+    {
+      id: "agent_a81b44f302", name: "Claims intake", updated: "6 days ago", phone: "+1 650 555 0199", model: "claude-sonnet-4", channels: ["voice"],
       retellKind: "conversation_flow",
       members: [
         { id: "welcome", name: "Welcome", role: "Start node · confirms the policy holder", model: "claude-sonnet-4", promptRef: "Node: Welcome" },
@@ -53,8 +65,10 @@ const ASSISTANTS = {
   ],
   bland: [
     /* Bland's new agent model — ids are agent ids, not pathway ids. */
-    { id: "agent_3e9d71", name: "Lead qualification", updated: "yesterday", phone: "+1 312 555 0164", model: "gpt-4o" },
+    { id: "agent_3e9d71", name: "Lead qualification", updated: "yesterday", phone: "+1 312 555 0164", model: "gpt-4o", channels: ["voice"] },
     { id: "agent_c04a28", name: "Delivery rescheduling", updated: "last week", phone: "+1 312 555 0108", model: "gpt-4o" },
+    /* A messaging agent — texts rather than calls. */
+    { id: "agent_m7f15b", name: "Appointment reminders (SMS)", updated: "2 days ago", phone: "+1 312 555 0152", model: "gpt-4o-mini", channels: ["chat"] },
   ],
   elevenlabs: [
     /* A multi-node workflow: each node its own instructions. */
@@ -67,15 +81,67 @@ const ASSISTANTS = {
       ],
     },
     { id: "agent_01jw3p9q7r", name: "Order status", updated: "3 days ago", phone: null, model: "gpt-4o" },
+    /* Chat only — reached on WhatsApp as well as web chat. */
+    { id: "agent_01jy5t2w8x", name: "WhatsApp concierge", updated: "6 hours ago", phone: "+44 7700 900412", model: "gpt-4.1", channels: ["chat"] },
   ],
   livekit: [
     { id: "returns-line-agent", name: "returns-line-agent", updated: "1 hour ago", phone: "+1 415 555 0190", model: "gpt-4o" },
     { id: "triage-agent", name: "triage-agent", updated: "2 days ago", phone: null, model: "gpt-4.1" },
   ],
+  /* Platforms with their full configuration behind an API; a change ships
+     as a draft version (rsiModel PLATFORM_TESTING). */
+  telnyx: [
+    { id: "assistant-7c1e9a42-ba0d", name: "Clinic scheduling", updated: "1 hour ago", phone: "+1 512 555 0123", model: "gpt-4o", channels: ["voice"] },
+    { id: "assistant-1f0e33c8-77aa", name: "Order status line", updated: "3 days ago", phone: "+1 512 555 0186", model: "gpt-4o-mini", channels: ["voice"] },
+  ],
+  google_cx: [
+    {
+      id: "projects/acme-support/locations/global/agents/5f2c1d9e", name: "Account support", updated: "yesterday", phone: "+1 650 555 0144", model: "gemini-2.5-flash",
+      members: [
+        { id: "start", name: "Default Start Flow", role: "Start · greets and routes", model: "gemini-2.5-flash", promptRef: "Flow: Default Start Flow" },
+        { id: "billing", name: "Billing", role: "Explains charges, takes disputes", model: "gemini-2.5-flash", promptRef: "Flow: Billing" },
+        { id: "password", name: "Password reset", role: "Verifies and resets", model: "gemini-2.5-flash", promptRef: "Flow: Password reset" },
+      ],
+    },
+    { id: "projects/acme-support/locations/global/agents/a81b44f3", name: "Store locator", updated: "last week", phone: null, model: "gemini-2.5-flash", channels: ["chat"] },
+  ],
+  voiceflow: [
+    {
+      id: "66f2c1d9e7a0b1c2", name: "Booking assistant", updated: "2 hours ago", phone: "+1 312 555 0119", model: "gpt-4o",
+      members: [
+        { id: "book", name: "Book a table", role: "Workflow · takes the booking", model: "gpt-4o", promptRef: "Workflow: Book a table" },
+        { id: "change", name: "Change a booking", role: "Workflow · moves or cancels", model: "gpt-4o", promptRef: "Workflow: Change a booking" },
+      ],
+    },
+    { id: "66e0aa13b2c4d5e6", name: "Help-centre widget", updated: "5 days ago", phone: null, model: "claude-sonnet-4", channels: ["chat"] },
+  ],
+  agentforce: [
+    {
+      id: "Service_Agent", name: "Service Agent", updated: "4 hours ago", phone: null, model: "gpt-4o", channels: ["chat"],
+      members: [
+        { id: "orders", name: "Order Inquiries", role: "Topic · order status and changes", model: "gpt-4o", promptRef: "Topic: Order Inquiries" },
+        { id: "cases", name: "Case Management", role: "Topic · opens and updates cases", model: "gpt-4o", promptRef: "Topic: Case Management" },
+        { id: "escalation", name: "Escalation", role: "Topic · hands over to a rep", model: "gpt-4o", promptRef: "Topic: Escalation" },
+      ],
+    },
+    { id: "Returns_Agent", name: "Returns Agent", updated: "last week", phone: null, model: "gpt-4o", channels: ["chat"] },
+  ],
+  copilot_studio: [
+    {
+      id: "cr4f2_itHelpDesk", name: "IT help desk", updated: "yesterday", phone: null, model: "gpt-4o", channels: ["chat"],
+      members: [
+        { id: "reset", name: "Reset password", role: "Topic · verifies and resets", model: "gpt-4o", promptRef: "Topic: Reset password" },
+        { id: "device", name: "Device request", role: "Topic · orders a laptop or phone", model: "gpt-4o", promptRef: "Topic: Device request" },
+      ],
+    },
+    { id: "cr4f2_hrPolicies", name: "HR policies", updated: "2 weeks ago", phone: null, model: "gpt-4o", channels: ["chat"] },
+  ],
 };
 
-/** The assistants the account can see with the key it gave us. */
-export const assistantsFor = (provider) => ASSISTANTS[provider] || [];
+/** The assistants the account can see with the key it gave us — for one
+    agent type, the ones that serve it (an untagged one serves both). */
+export const assistantsFor = (provider, agentType = null) => (ASSISTANTS[provider] || [])
+  .filter((a) => !agentType || !a.channels || a.channels.includes(agentType));
 
 /*
   What importing the picked assistant brings with it beyond its config:
@@ -89,9 +155,11 @@ export const importedStructureOf = (provider, assistant) => {
   if (!assistant) return { members: [], retellKind: null, structure: null };
   const members = (assistant.members || []).map((m) => ({ ...m, instructions: m.promptRef }));
   const retellKind = provider === "retell" ? assistant.retellKind || "single_prompt" : null;
+  /* What each platform calls the parts of one agent. */
+  const parts = { google_cx: "Flows", voiceflow: "Workflows", agentforce: "Topics", copilot_studio: "Topics" }[provider];
   const structure = provider === "vapi" && assistant.squad ? `Squad · ${members.length} assistants`
     : provider === "retell" ? (retellKind === "conversation_flow" ? `Conversation flow · ${members.length} nodes` : "Single prompt agent")
-      : members.length ? `Workflow · ${members.length} nodes`
+      : members.length ? (parts ? `${parts} · ${members.length}` : `Workflow · ${members.length} nodes`)
         : null;
   return { members, retellKind, structure };
 };
@@ -99,6 +167,10 @@ export const importedStructureOf = (provider, assistant) => {
 /* Hosted platforms whose agents can be imported as a sealed copy: the
    assistant's config into our sandbox, with the tool code uploaded. */
 export const SANDBOX_IMPORT_PROVIDERS = ["vapi", "retell"];
+/* RSI PRD: "Vapi, Retell and Bland agents created with call logs switched on
+   are linked already" — their call logs come through the same key. Any other
+   platform's Observe project is chosen in Finish setting up. */
+export const CALL_LOG_PROVIDERS = ["vapi", "retell", "bland"];
 
 /* ── Observe projects (where an agent's traces land) ─────────────────────── */
 
@@ -116,14 +188,15 @@ export const SANDBOX_IMPORT_PROVIDERS = ["vapi", "retell"];
   the right agent without the full catalogue:
     traceai   — spans from the agent's code: framework, language, model, tools
     call-logs — a platform's call logs, pulled by Observe's own integration:
-                provider, assistant ID, and the key that integration holds
+                provider, the assistant's ID and name, and the key that
+                integration holds
 */
 export const OBSERVE_PROJECTS = [
-  { id: "returns-refunds-line-agent", name: "Returns & refunds line", traces: "2,140 traces · last 12 min ago", issues: 2 },
-  { id: "customer-support-line-agent", name: "Customer support line", traces: "5,812 traces · last 3 min ago", issues: 2 },
-  { id: "airline-rebooking", name: "Airline rebooking", traces: "1,204 traces · last 20 min ago", issues: 1 },
-  { id: "guest-booking-line", name: "Guest booking line", traces: "3,377 traces · last 6 min ago", issues: 2 },
-  { id: "clinic-appointment-line", name: "Clinic appointment line", traces: "1,486 traces · last 9 min ago", issues: 1 },
+  { id: "returns-refunds-line-agent", name: "Returns & refunds line", traces: "2,140 traces · last 12 min ago", issues: 3 },
+  { id: "customer-support-line-agent", name: "Customer support line", traces: "5,812 traces · last 3 min ago", issues: 6 },
+  { id: "airline-rebooking", name: "Airline rebooking", traces: "1,204 traces · last 20 min ago", issues: 2 },
+  { id: "guest-booking-line", name: "Guest booking line", traces: "3,377 traces · last 6 min ago", issues: 3 },
+  { id: "clinic-appointment-line", name: "Clinic appointment line", traces: "1,486 traces · last 9 min ago", issues: 2 },
   {
     id: "pickup-dispatch", name: "Pickup dispatch", traces: "918 traces · last 1 hour ago", issues: 3,
     traced: {
@@ -131,11 +204,19 @@ export const OBSERVE_PROJECTS = [
       tools: ["book_pickup", "update_pickup_address", "quote_fare"], service: "pickup-dispatch",
     },
   },
-  { id: "billing-copilot", name: "Billing copilot", traces: "406 traces · last yesterday", issues: 0 },
+  { id: "billing-copilot", name: "Billing copilot", traces: "406 traces · last yesterday", issues: 1 },
+  { id: "rebooking-assistant", name: "Rebooking assistant", traces: "233 traces · last 26 min ago", issues: 1 },
   {
     id: "travel-rebooking-chat", name: "Travel rebooking chat", traces: "77 traces · last 48 min ago", issues: 1,
     traced: {
-      via: "call-logs", provider: "vapi", agentType: "chat", agentId: "asst_trc_51q8",
+      via: "call-logs", provider: "vapi", agentType: "chat", agentId: "asst_trc_51q8", agentName: "Travel rebooking assistant",
+      integration: "Observe → Vapi integration", keyRef: "vault://acme/observe/vapi_api_key",
+    },
+  },
+  {
+    id: "storefront-chat", name: "Storefront chat", traces: "412 traces · last 44 min ago", issues: 1,
+    traced: {
+      via: "call-logs", provider: "vapi", agentType: "chat", agentId: "asst_sf_2m8x", agentName: "Storefront assistant",
       integration: "Observe → Vapi integration", keyRef: "vault://acme/observe/vapi_api_key",
     },
   },
@@ -147,12 +228,12 @@ export const observeSlugOf = (name) => String(name || "agent").toLowerCase().rep
 /**
  * The Observe project a source ends up linked to, or null:
  *   · what the Observe step picked ({ mode: "existing" | "create", id })
- *   · a hosted agent watched through its key: the project it came from
- *     (Fix → Connect a new agent), else one named after it
+ *   · a Vapi, Retell or Bland agent watched through its call logs: the
+ *     project it came from (Fix → Connect a new agent), else one named after it
  */
 export const observeChoiceOf = (source, prefillProject) => {
   if (source?.observeProject?.id) return source.observeProject;
-  if (source?.kind === "platform" && source?.agentMode !== "prompt" && source?.observability) {
+  if (source?.kind === "platform" && source?.agentMode !== "prompt" && source?.observability && CALL_LOG_PROVIDERS.includes(source?.provider)) {
     return prefillProject
       ? { mode: "existing", id: prefillProject }
       : { mode: "create", id: observeSlugOf(source.name || source.agentId) };
@@ -259,10 +340,20 @@ const poolFor = (text) => {
   return TOOL_POOLS.returns;
 };
 
+const entryFile = (entry) => String(entry).split(":")[0];
+const pyOrTs = (entry) => (entryFile(entry).endsWith(".ts") ? `npx tsx ${entryFile(entry)}` : `python ${entryFile(entry)}`);
 const RUNNERS = {
-  "LiveKit Agents": (entry) => `python ${entry.split(":")[0]} start`,
+  "LiveKit Agents": (entry) => `python ${entryFile(entry)} start`,
   LangGraph: () => "langgraph up",
-  "OpenAI Agents SDK": (entry) => (entry.endsWith(".ts") ? `npx tsx ${entry}` : `python ${entry}`),
+  "OpenAI Agents SDK": pyOrTs,
+  /* No framework: the code calls the model API itself. */
+  "Direct API calls": pyOrTs,
+  Pipecat: (entry) => `python ${entryFile(entry)} --transport webrtc`,
+  "Google ADK": (entry) => `adk api_server ${entryFile(entry).split("/").slice(0, -1).join("/") || "."}`,
+  Mastra: () => "npx mastra dev",
+  "Vercel AI SDK": () => "npm run dev",
+  CrewAI: () => "crewai run",
+  "Claude Agent SDK": pyOrTs,
 };
 
 /**
@@ -276,7 +367,9 @@ export const readAgentFolder = ({ repo, folder, branch, entryId }) => {
   const seed = hash(`${repo?.name || repo}:${folder}:${branch}`);
   const ts = repo?.language === "TypeScript";
   const entry = agent?.entry || `${folder}/${ts ? "index.ts" : "agent.py"}`;
-  const framework = agent?.framework || (ts ? "OpenAI Agents SDK" : "LangGraph");
+  /* A folder the scan found no framework in: the generic path — code that
+     calls the model API directly, started where the person says. */
+  const framework = agent?.framework || "Direct API calls";
   const tools = poolFor(`${repo?.name || ""} ${folder}`).slice(0, agent?.tools || 3 + (seed % 2));
   return {
     name: agent?.name || folder.split("/").pop().replace(/[-_]/g, " ").replace(/^./, (c) => c.toUpperCase()),
@@ -287,7 +380,7 @@ export const readAgentFolder = ({ repo, folder, branch, entryId }) => {
       prompts: { value: agent?.prompts || [`${folder}/prompts/system.md`], from: agent ? "Loaded by the entry file" : "Guessed from the folder" },
       tools: { value: tools, from: `${tools.length} functions registered as tools` },
       model: { value: agent?.model || ["gpt-4o", "gpt-4.1", "claude-sonnet-4"][seed % 3], from: "Model argument in the entry file" },
-      run: { value: (RUNNERS[framework] || RUNNERS.LangGraph)(entry), from: `${framework} · from pyproject and the README` },
+      run: { value: (RUNNERS[framework] || pyOrTs)(entry), from: `${framework} · from ${ts ? "package.json" : "pyproject"} and the README` },
     },
   };
 };
@@ -331,13 +424,14 @@ const promptSlugFor = (text) => {
 export const repoDetectionOf = ({ repo, folder, branch, found }) => {
   const ts = repo?.language === "TypeScript";
   const seed = hash(`${repo?.name || repo}:${folder}:${branch}`);
-  const framework = found?.framework || (ts ? "OpenAI Agents SDK" : "LangGraph");
+  const framework = found?.framework || "Direct API calls";
   const here = (repo?.agents || []).filter((a) => dirOf(a.entry) === folder);
   const entry = found?.facts?.entry?.value || `${folder}/agent.py`;
   const livekit = /livekit/i.test(framework);
   const model = found?.facts?.model?.value || "gpt-4o";
   const keys = [
-    ts ? "OPENAI_API_KEY" : framework === "LangGraph" && seed % 2 ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
+    /claude|anthropic/i.test(`${framework} ${model}`) ? "ANTHROPIC_API_KEY" : /gemini|adk/i.test(`${framework} ${model}`) ? "GOOGLE_API_KEY"
+      : ts ? "OPENAI_API_KEY" : framework === "LangGraph" && seed % 2 ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
     ...(livekit ? ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "DEEPGRAM_API_KEY"] : []),
     ...keyPoolFor(`${repo?.name || ""} ${folder}`),
   ];
@@ -374,9 +468,10 @@ export const repoDetectionOf = ({ repo, folder, branch, found }) => {
   };
 };
 
-/** Members of a framework agent with handoffs, from what the adapter described. */
+/** Members of a framework agent made of several agents, from what the adapter described. */
 export const frameworkMembersOf = (framework, structure, model) => {
-  if (framework !== "openai-agents" || !structure?.agents) return [];
+  /* Several agents working as one; a single agent is just the agent. */
+  if (!structure?.agents || structure.agents.length < 2) return [];
   return structure.agents.map((a, i) => ({
     id: a.name,
     name: a.name,
@@ -427,14 +522,40 @@ export const repoChecksOf = ({ repo, folder, tools = [] }) => {
   };
 };
 
-/* ── framework adapters: LangGraph, OpenAI Agents SDK, CrewAI ─────────────── */
+/* ── framework adapters ───────────────────────────────────────────────────── */
 
 /*
-  The adapter is one pip extra and two lines around the object the team
-  already has — a compiled graph, the entry Agent, a Crew. serve() exposes
-  it at /fagi and answers two calls: "describe" (what's on the next step)
-  and "run" (a simulated conversation, in the framework's own run loop).
+  The adapter is one package extra and two lines around the object the team
+  already has — a compiled graph, the entry agent, a crew, a pipeline.
+  serve() exposes it at /fagi and answers two calls: "describe" (what's on
+  the next step) and "run" (a simulated conversation, in the framework's own
+  run loop). Python frameworks take a pip extra; the TypeScript ones an npm
+  package.
 */
+const py = (extra, wraps, lines, entry) => ({
+  install: `pip install "futureagi[${extra}]"`,
+  wraps,
+  code: [...lines, "", `app = fagi.serve(${lines.serveArg})  # serves /fagi on :8000`].join("\n"),
+  run: "uvicorn serve:app --port 8000",
+  entry,
+});
+const pyLines = (module, from, what, serveArg) => Object.assign([
+  `from futureagi.adapters import ${module} as fagi`,
+  `from ${from} import ${what.split(" ")[0]}${what.includes(" ") ? `  # ${what.split(" ").slice(1).join(" ")}` : ""}`,
+], { serveArg });
+const ts = (subpath, wraps, importLine, serveArg, entry) => ({
+  install: "npm install @futureagi/adapters",
+  wraps,
+  code: [
+    `import { serve } from "@futureagi/adapters/${subpath}";`,
+    importLine,
+    "",
+    `serve(${serveArg}, { port: 8000 }); // serves /fagi`,
+  ].join("\n"),
+  run: "npx tsx serve.ts",
+  entry,
+});
+
 export const ADAPTERS = {
   langgraph: {
     install: 'pip install "futureagi[langgraph]"',
@@ -473,29 +594,56 @@ export const ADAPTERS = {
     run: "uvicorn serve:app --port 8000",
     entry: "support/crew.py:SupportCrew",
   },
+  "claude-agent-sdk": py("claude-agent-sdk", "your agent's options", pyLines("claude_agent_sdk", "support.agent", "options your ClaudeAgentOptions: system prompt, tools, subagents", "options"), "support/agent.py:options"),
+  livekit: {
+    ...py("livekit", "your agent's entrypoint", pyLines("livekit", "agent", "entrypoint your AgentSession entrypoint", "entrypoint"), "agent.py:entrypoint"),
+    run: "python serve.py  # audio over WebRTC",
+  },
+  pipecat: {
+    ...py("pipecat", "your pipeline", pyLines("pipecat", "bot", "build_pipeline returns your Pipeline", "build_pipeline"), "bot.py:build_pipeline"),
+    run: "python serve.py  # audio over WebRTC",
+  },
+  "google-adk": py("google-adk", "your root agent", pyLines("google_adk", "support.agent", "root_agent your root Agent", "root_agent"), "support/agent.py:root_agent"),
+  mastra: ts("mastra", "your Mastra agent", 'import { mastra } from "./src/mastra"; // your Mastra instance', 'mastra.getAgent("supportAgent")', "src/mastra/index.ts:supportAgent"),
+  "vercel-ai": ts("ai-sdk", "your agent", 'import { supportAgent } from "./lib/agent"; // your Agent: model, system and tools', "supportAgent", "lib/agent.ts:supportAgent"),
+  strands: py("strands", "your Strands agent", pyLines("strands", "support.agent", "agent your strands Agent", "agent"), "support/agent.py:agent"),
+  "pydantic-ai": py("pydantic-ai", "your agent", pyLines("pydantic_ai", "support.agent", "support_agent your pydantic_ai Agent", "support_agent"), "support/agent.py:support_agent"),
+  agno: py("agno", "your agent or team", pyLines("agno", "support.team", "support_team your Agent or Team", "support_team"), "support/team.py:support_team"),
+  haystack: py("haystack", "your pipeline", pyLines("haystack", "support.pipeline", "pipeline your Pipeline or Agent", "pipeline"), "support/pipeline.py:pipeline"),
+  llamaindex: py("llamaindex", "your workflow", pyLines("llamaindex", "support.workflow", "SupportAgent your Workflow", "SupportAgent()"), "support/workflow.py:SupportAgent"),
+  smolagents: py("smolagents", "your manager agent", pyLines("smolagents", "support.agent", "manager your CodeAgent", "manager"), "support/agent.py:manager"),
+  dspy: py("dspy", "your compiled program", pyLines("dspy", "support.program", "program your compiled dspy.Module", "program"), "support/program.py:program"),
+  "microsoft-agent-framework": py("agent-framework", "your agent or workflow", pyLines("agent_framework", "support.app", "agent your ChatAgent or Workflow", "agent"), "support/app.py:agent"),
 };
 
 export const ADAPTER_ENDPOINT_PLACEHOLDER = "http://localhost:8000/fagi";
 
 /*
   What "describe" returns per framework — the structure as the framework
-  itself holds it. Each `facts` entry is one row the person confirms; the
-  structural ones can only be confirmed, since they're read from compiled
-  code, not guessed.
+  itself holds it, in one of three shapes the agent record keeps:
+    graph   steps in order (a LangGraph graph, a Pipecat or Haystack
+            pipeline, a LlamaIndex workflow, a DSPy program)
+    agents  agents and who they hand to (sub-agents, delegation, managed
+            agents, workflows)
+    crew    a CrewAI crew
+  `from` says where each structural fact was read.
 */
+const node = (id, prompt, tools) => ({ id, prompt, ...(tools && { tools }) });
+const agt = (name, instructions, handoffs, tools) => ({ name, instructions, handoffs, tools });
 const DESCRIBED = {
   langgraph: {
     name: "Support router",
     graph: {
       flow: "router → refund_agent | order_agent → respond",
       nodes: [
-        { id: "router", prompt: "prompts/router.md" },
-        { id: "refund_agent", prompt: "prompts/refund_agent.md", tools: ["lookup_order", "check_return_eligibility", "issue_refund"] },
-        { id: "order_agent", prompt: "prompts/order_agent.md", tools: ["lookup_order", "shipment_status", "update_shipping_address"] },
-        { id: "respond", prompt: "prompts/respond.md" },
+        node("router", "prompts/router.md"),
+        node("refund_agent", "prompts/refund_agent.md", ["lookup_order", "check_return_eligibility", "issue_refund"]),
+        node("order_agent", "prompts/order_agent.md", ["lookup_order", "shipment_status", "update_shipping_address"]),
+        node("respond", "prompts/respond.md"),
       ],
       edges: 5,
       conditional: 1,
+      from: "the compiled StateGraph",
     },
     tools: ["lookup_order", "check_return_eligibility", "issue_refund", "shipment_status", "update_shipping_address", "escalate_to_human"],
     model: "gpt-4o",
@@ -503,11 +651,13 @@ const DESCRIBED = {
   "openai-agents": {
     name: "Support triage",
     agents: [
-      { name: "triage_agent", instructions: "prompts/triage.md", handoffs: ["refunds_agent", "orders_agent"], tools: [] },
-      { name: "refunds_agent", instructions: "prompts/refunds.md", handoffs: ["escalation_agent"], tools: ["lookup_order", "issue_refund"] },
-      { name: "orders_agent", instructions: "prompts/orders.md", handoffs: [], tools: ["lookup_order", "shipment_status", "cancel_order"] },
-      { name: "escalation_agent", instructions: "prompts/escalation.md", handoffs: [], tools: ["escalate_to_human"] },
+      agt("triage_agent", "prompts/triage.md", ["refunds_agent", "orders_agent"], []),
+      agt("refunds_agent", "prompts/refunds.md", ["escalation_agent"], ["lookup_order", "issue_refund"]),
+      agt("orders_agent", "prompts/orders.md", [], ["lookup_order", "shipment_status", "cancel_order"]),
+      agt("escalation_agent", "prompts/escalation.md", [], ["escalate_to_human"]),
     ],
+    agentsFrom: "Agent objects reachable from the entry",
+    handoffsFrom: "handoffs= on each Agent",
     guardrails: ["input · pii_redaction", "output · refund_limit_check"],
     tools: ["lookup_order", "issue_refund", "shipment_status", "cancel_order", "escalate_to_human"],
     model: "gpt-4.1",
@@ -531,36 +681,179 @@ const DESCRIBED = {
     tools: ["lookup_order", "check_return_eligibility", "issue_refund", "escalate_to_human"],
     model: "gpt-4o",
   },
+  "claude-agent-sdk": {
+    name: "Support agent",
+    agents: [
+      agt("main", "CLAUDE.md", ["refunds", "orders"], ["mcp__shop__lookup_order"]),
+      agt("refunds", ".claude/agents/refunds.md", [], ["mcp__shop__lookup_order", "mcp__shop__issue_refund"]),
+      agt("orders", ".claude/agents/orders.md", [], ["mcp__shop__lookup_order", "mcp__shop__shipment_status"]),
+    ],
+    agentsFrom: "ClaudeAgentOptions and the subagents in .claude/agents/",
+    handoffsFrom: "Subagents the main agent can hand a task to",
+    tools: ["mcp__shop__lookup_order", "mcp__shop__issue_refund", "mcp__shop__shipment_status", "mcp__shop__escalate_to_human"],
+    model: "claude-sonnet-4",
+  },
+  livekit: {
+    name: "Returns line agent",
+    graph: {
+      flow: "room audio → stt → llm → tts → room audio",
+      nodes: [
+        node("stt", null),
+        node("llm", "prompts/returns_system.md", ["lookup_order", "check_return_eligibility", "issue_refund", "escalate_to_human"]),
+        node("tts", null),
+      ],
+      edges: 4,
+      conditional: 0,
+      from: "the AgentSession and its Agent",
+    },
+    tools: ["lookup_order", "check_return_eligibility", "issue_refund", "escalate_to_human"],
+    model: "gpt-4o",
+  },
+  pipecat: {
+    name: "Concierge bot",
+    graph: {
+      flow: "transport.input → stt → context → llm → tts → transport.output",
+      nodes: [
+        node("stt", null),
+        node("llm", "flows/concierge_flow.json", ["lookup_booking", "update_booking", "escalate_to_human"]),
+        node("tts", null),
+      ],
+      edges: 5,
+      conditional: 0,
+      from: "the Pipeline and its Pipecat Flows file",
+    },
+    tools: ["lookup_booking", "update_booking", "escalate_to_human"],
+    model: "gpt-4o",
+  },
+  "google-adk": {
+    name: "Concierge planner",
+    agents: [
+      agt("root_agent", "root_agent.yaml · instruction", ["booking_agent", "faq_agent"], []),
+      agt("booking_agent", "booking_agent.yaml · instruction", [], ["lookup_booking", "rebook_segment"]),
+      agt("faq_agent", "faq_agent.yaml · instruction", [], ["search_knowledge_base"]),
+    ],
+    agentsFrom: "The root Agent and its sub_agents",
+    handoffsFrom: "sub_agents= on each Agent",
+    tools: ["lookup_booking", "rebook_segment", "search_knowledge_base"],
+    model: "gemini-2.5-pro",
+  },
+  mastra: {
+    name: "Order help",
+    agents: [
+      agt("supportAgent", "src/mastra/agents/support.ts · instructions", ["ordersWorkflow"], ["lookupOrder"]),
+      agt("ordersWorkflow", "src/mastra/workflows/orders.ts", [], ["lookupOrder", "cancelOrder", "shipmentStatus"]),
+    ],
+    agentsFrom: "Agents and workflows registered on the Mastra instance",
+    handoffsFrom: "Workflows the agent can start",
+    tools: ["lookupOrder", "cancelOrder", "shipmentStatus"],
+    model: "gpt-4.1",
+  },
+  "vercel-ai": {
+    name: "Returns chat",
+    agents: [agt("supportAgent", "lib/prompts/returns.ts · system", [], ["lookupOrder", "checkReturnEligibility", "createReturnLabel"])],
+    agentsFrom: "The Agent's model, system prompt and tools",
+    tools: ["lookupOrder", "checkReturnEligibility", "createReturnLabel"],
+    model: "gpt-4o",
+  },
+  strands: {
+    name: "Billing helper",
+    agents: [
+      agt("billing_agent", "agent.yaml · system_prompt", ["refund_agent"], ["list_transactions"]),
+      agt("refund_agent", "agent.yaml · refund_agent.system_prompt", [], ["issue_refund"]),
+    ],
+    agentsFrom: "The Agent and the agents it calls as tools",
+    handoffsFrom: "Agents passed as tools",
+    tools: ["list_transactions", "issue_refund", "escalate_to_human"],
+    model: "claude-sonnet-4",
+  },
+  "pydantic-ai": {
+    name: "Refund checker",
+    agents: [
+      agt("refund_agent", "instructions.md", ["policy_agent"], ["lookup_order", "issue_refund"]),
+      agt("policy_agent", "policy_instructions.md", [], ["search_knowledge_base"]),
+    ],
+    agentsFrom: "The Agent and the agents its tools delegate to",
+    handoffsFrom: "Agent delegation inside tools",
+    tools: ["lookup_order", "issue_refund", "search_knowledge_base"],
+    model: "gpt-4.1",
+  },
+  agno: {
+    name: "Support team",
+    agents: [
+      agt("support_team", "team instructions", ["orders_agent", "billing_agent"], []),
+      agt("orders_agent", "orders_agent.instructions", [], ["lookup_order", "shipment_status"]),
+      agt("billing_agent", "billing_agent.instructions", [], ["list_transactions", "issue_refund"]),
+    ],
+    agentsFrom: "The Team and its members",
+    handoffsFrom: "Members the team routes to",
+    tools: ["lookup_order", "shipment_status", "list_transactions", "issue_refund"],
+    model: "gpt-4o",
+  },
+  haystack: {
+    name: "Policy Q&A",
+    graph: {
+      flow: "query_embedder → retriever → prompt_builder → llm → answer_builder",
+      nodes: [node("retriever", null, ["search_knowledge_base"]), node("prompt_builder", "prompts/answer.jinja"), node("llm", null)],
+      edges: 4,
+      conditional: 0,
+      from: "the Pipeline's components and connections",
+    },
+    tools: ["search_knowledge_base", "escalate_to_human"],
+    model: "gpt-4o",
+  },
+  llamaindex: {
+    name: "Docs agent",
+    graph: {
+      flow: "start → retrieve → answer | escalate → stop",
+      nodes: [node("retrieve", null, ["search_knowledge_base"]), node("answer", "prompts/system.md"), node("escalate", "prompts/escalate.md", ["escalate_to_human"])],
+      edges: 4,
+      conditional: 1,
+      from: "the Workflow's steps and events",
+    },
+    tools: ["search_knowledge_base", "escalate_to_human"],
+    model: "gpt-4.1",
+  },
+  smolagents: {
+    name: "Order lookup",
+    agents: [
+      agt("manager", "system_prompt.yaml", ["search_agent"], ["lookup_order"]),
+      agt("search_agent", "search_agent.description", [], ["web_search"]),
+    ],
+    agentsFrom: "The CodeAgent and its managed_agents",
+    handoffsFrom: "managed_agents= on the manager",
+    tools: ["lookup_order", "web_search"],
+    model: "gpt-4o",
+  },
+  dspy: {
+    name: "Intent router",
+    graph: {
+      flow: "classify → route → respond",
+      nodes: [node("classify", "compiled/router.json · classify.signature"), node("route", null, ["lookup_order", "escalate_to_human"]), node("respond", "compiled/router.json · respond.signature")],
+      edges: 2,
+      conditional: 1,
+      from: "the Module's predictors, compiled by its optimizer",
+    },
+    tools: ["lookup_order", "escalate_to_human"],
+    model: "gpt-4o-mini",
+  },
+  "microsoft-agent-framework": {
+    name: "Escalation desk",
+    agents: [
+      agt("triage", "instructions.md", ["specialist", "human_handoff"], []),
+      agt("specialist", "specialist_instructions.md", [], ["lookup_order", "issue_refund"]),
+      agt("human_handoff", "handoff_instructions.md", [], ["escalate_to_human"]),
+    ],
+    agentsFrom: "ChatAgents in the workflow",
+    handoffsFrom: "Edges between the workflow's agents",
+    tools: ["lookup_order", "issue_refund", "escalate_to_human"],
+    model: "gpt-4o",
+  },
 };
 
-/* The rows "Here's what we found" shows, per framework, in review order. */
-export const ADAPTER_FACTS = {
-  langgraph: [
-    { key: "name", label: "Name" },
-    { key: "entry", label: "Entry point", mono: true },
-    { key: "graph", label: "Graph", mono: true, fixed: true },
-    { key: "prompts", label: "Prompts by node", mono: true, list: true },
-    { key: "tools", label: "Tools", mono: true, list: true, chips: true },
-    { key: "model", label: "Model", mono: true },
-  ],
-  "openai-agents": [
-    { key: "name", label: "Name" },
-    { key: "entry", label: "Entry point", mono: true },
-    { key: "agents", label: "Agents", mono: true, list: true, fixed: true },
-    { key: "handoffs", label: "Handoffs", mono: true, list: true, fixed: true },
-    { key: "tools", label: "Tools", mono: true, list: true, chips: true },
-    { key: "guardrails", label: "Guardrails", mono: true, list: true },
-    { key: "model", label: "Model", mono: true },
-  ],
-  crewai: [
-    { key: "name", label: "Name" },
-    { key: "entry", label: "Entry point", mono: true },
-    { key: "crew", label: "Crew", fixed: true },
-    { key: "agents", label: "Agents", list: true, fixed: true },
-    { key: "tasks", label: "Tasks", mono: true, list: true, fixed: true },
-    { key: "tools", label: "Tools", mono: true, list: true, chips: true },
-    { key: "model", label: "Model", mono: true },
-  ],
+/** The structure's shape for a framework: "graph" | "agents" | "crew". */
+export const adapterShapeOf = (framework) => {
+  const d = DESCRIBED[framework] || DESCRIBED.langgraph;
+  return d.crew ? "crew" : d.agents ? "agents" : "graph";
 };
 
 /**
@@ -571,24 +864,27 @@ export const describeAdapter = ({ framework, endpoint }) => {
   const d = DESCRIBED[framework] || DESCRIBED.langgraph;
   const a = ADAPTERS[framework] || ADAPTERS.langgraph;
   const local = /localhost|127\.0\.0\.1/.test(endpoint || "");
+  const shape = adapterShapeOf(framework);
+  const across = shape === "crew" ? "crew" : shape === "agents" ? "agents" : "steps";
   const base = {
     name: { value: d.name, from: "Name passed to serve(), or the module" },
     entry: { value: a.entry, from: `The object handed to serve()${local ? " · running locally" : ""}` },
-    tools: { value: d.tools, from: `${d.tools.length} tools bound across the ${framework === "crewai" ? "crew" : framework === "langgraph" ? "graph" : "agents"}` },
+    tools: { value: d.tools, from: `${d.tools.length} tools bound across the ${across}` },
     model: { value: d.model, from: "Model the adapter saw on the first describe call" },
   };
-  if (framework === "openai-agents") {
+  if (shape === "agents") {
+    const handing = d.agents.filter((x) => x.handoffs.length);
     return {
-      structure: { agents: d.agents, guardrails: d.guardrails },
+      structure: { agents: d.agents, ...(d.guardrails && { guardrails: d.guardrails }) },
       facts: {
         ...base,
-        agents: { value: d.agents.map((x) => `${x.name} · ${x.instructions}`), from: `${d.agents.length} Agent objects reachable from the entry` },
-        handoffs: { value: d.agents.filter((x) => x.handoffs.length).map((x) => `${x.name} → ${x.handoffs.join(" | ")}`), from: "handoffs= on each Agent" },
-        guardrails: { value: d.guardrails, from: "input_guardrails and output_guardrails" },
+        agents: { value: d.agents.map((x) => `${x.name} · ${x.instructions}`), from: `${d.agents.length} ${d.agents.length === 1 ? "agent" : "agents"} · ${d.agentsFrom || "reachable from the entry"}` },
+        ...(handing.length && { handoffs: { value: handing.map((x) => `${x.name} → ${x.handoffs.join(" | ")}`), from: d.handoffsFrom || "Handoffs on each agent" } }),
+        ...(d.guardrails && { guardrails: { value: d.guardrails, from: "input_guardrails and output_guardrails" } }),
       },
     };
   }
-  if (framework === "crewai") {
+  if (shape === "crew") {
     const c = d.crew;
     return {
       structure: { crew: c },
@@ -605,10 +901,27 @@ export const describeAdapter = ({ framework, endpoint }) => {
     structure: { graph: g },
     facts: {
       ...base,
-      graph: { value: g.flow, from: `${g.nodes.length} nodes · ${g.edges} edges · ${g.conditional} conditional — from the compiled StateGraph` },
-      prompts: { value: g.nodes.filter((n) => n.prompt).map((n) => `${n.id} · ${n.prompt}`), from: "System message each node loads" },
+      graph: { value: g.flow, from: `${g.nodes.length} steps · ${g.edges} edges · ${g.conditional} conditional — from ${g.from || "the compiled graph"}` },
+      prompts: { value: g.nodes.filter((n) => n.prompt).map((n) => `${n.id} · ${n.prompt}`), from: "What each step loads its instructions from" },
     },
   };
+};
+
+/* Frameworks a repository scan names that the adapter doesn't wrap. */
+const TUNING_BY_NAME = { "Direct API calls": "Direct OpenAI, Anthropic or Gemini calls" };
+
+/**
+ * What improvements edit for a framework (an adapter id like "google-adk",
+ * or the name a scan found like "Google ADK"), from the tuning table:
+ *   { label, edits, tuned, traced } — null when it's none we know.
+ */
+export const frameworkTuningOf = (framework) => {
+  const id = FRAMEWORK_META[framework] ? framework : frameworkIdOf(framework);
+  const meta = id ? FRAMEWORK_META[id] : null;
+  const key = meta?.tuning || TUNING_BY_NAME[framework];
+  const row = key ? FRAMEWORK_TUNING.find((t) => t.edits?.[key]) : null;
+  if (!row) return null;
+  return { label: meta?.label || framework, edits: row.edits[key], tuned: !!row.tuned, traced: meta?.traced !== false };
 };
 
 /* ── built in Future AGI ──────────────────────────────────────────────────── */

@@ -2,6 +2,7 @@ import PropTypes from "prop-types";
 import { Box, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import DigestLine from "./RunDigest";
+import { creditsLabel } from "../_mock/metering";
 
 /*
   What a finished run consumed, as recorded on it (PRD v6 · AC-16.9). Calls
@@ -11,13 +12,18 @@ import DigestLine from "./RunDigest";
 function MeterTooltip({ metering }) {
   return (
     <Stack spacing={0.5} sx={{ py: 0.25 }}>
-      {metering.detail.map((d) => (
-        <Stack key={d.label} direction="row" spacing={2} justifyContent="space-between">
-          <span>{d.label}</span>
-          <span>{`${d.amount} · ${d.usd}`}</span>
-        </Stack>
-      ))}
-      <span>{`≈ $${metering.usd.toFixed(2)} at list price${metering.sandboxTbd ? ", sandbox minutes not priced yet" : ""}`}</span>
+      {/* Spend is said in credits, as everywhere else. */}
+      {metering.detail.map((d, i) => {
+        const usd = metering.lines?.[i]?.usd;
+        const price = usd == null ? (metering.lines?.[i]?.amount ? "not priced yet" : "0 credits") : creditsLabel(usd);
+        return (
+          <Stack key={d.label} direction="row" spacing={2} justifyContent="space-between">
+            <span>{d.label}</span>
+            <span>{`${d.amount} · ${price}`}</span>
+          </Stack>
+        );
+      })}
+      <span>{`≈ ${creditsLabel(metering.usd || 0)} in all${metering.sandboxTbd ? ", plus run time not priced yet" : ""}`}</span>
       {metering.judged.length > 0 && <span>{`Credits: ${metering.judged.join(", ")} (managed judge)`}</span>}
       {metering.notes.map((n) => <span key={n}>{n}</span>)}
     </Stack>

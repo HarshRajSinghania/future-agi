@@ -48,7 +48,6 @@ export function writtenReason(row) {
 /** The sentence the red triangle shows on hover. */
 export function blockerReason(row) {
   if (!row?.critical) return null;
-  if (row.mustPassGoal) return "Must-pass with its goal — you marked the goal, so scenarios added to it join too.";
   return row.criticalBy === "you" ? "You marked this must-pass." : writtenReason(row);
 }
 

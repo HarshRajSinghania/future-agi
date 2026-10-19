@@ -5,13 +5,14 @@ import { Box, ButtonBase, IconButton, InputBase, MenuItem, Select, Stack, Toolti
 import Iconify from "src/components/iconify";
 import { SANDBOX_TYPE, WORLD_TYPES, domainLabelOf, filterWorlds, prebuiltWorlds, sandboxMatches, worldTotal } from "./landingData";
 import { SaasSandboxCard } from "./SaasSandbox";
-import { WorldCard } from "./LandingBits";
+import { QuietTag, WorldCard } from "./LandingBits";
 import { AGENT_TYPES } from "./connectOptions";
 import WorldDrawer from "./WorldDrawer";
 
 /*
   Every prebuilt world, filterable. A world is the world only — open one to
-  see what's in it and build it, then connect your agent.
+  see what's in it, pick the agent it's for, and build that agent's
+  environment from it. Worlds for Coming-soon agent types are listed, inert.
   `bare` drops the page heading — the Build environment drawer's own header
   says "Prebuilt worlds" and carries the way back.
 */
@@ -33,6 +34,8 @@ export default function PrebuiltWorldsView({ onBack, bare = false }) {
     ...WORLD_TYPES.map((t) => ({ ...t, icon: AGENT_TYPES.find((a) => a.id === t.id)?.icon })),
   ].filter((t) => countOf(t.id) > 0);
   const listed = type === SANDBOX_TYPE.id ? [] : shown;
+  /* Agent types that are Coming soon — their worlds can't be built yet. */
+  const soonTypes = useMemo(() => new Set(WORLD_TYPES.filter((t) => t.soon).map((t) => t.id)), []);
   const grid = { display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(3, 1fr)" } };
   const selectSx = { height: 34, flexShrink: 0, "& .MuiSelect-select": { typography: "s2", fontWeight: 600, py: 0.75, display: "flex", alignItems: "center", gap: 0.75 } };
 
@@ -52,7 +55,7 @@ export default function PrebuiltWorldsView({ onBack, bare = false }) {
             <Box component="span" sx={{ color: "text.secondary", fontWeight: 500, ml: 0.75 }}>{total}</Box>
           </Typography>
           <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-            Tables, tools, rules and starter scenarios, ready to run. A placeholder agent stands in until you connect yours.
+            Tables, tools and rules, as designed. Pick one of your agents and its environment starts from the world you choose.
           </Typography>
         </Box>
       </Stack>
@@ -88,6 +91,7 @@ export default function PrebuiltWorldsView({ onBack, bare = false }) {
             <MenuItem key={t.id} value={t.id} sx={{ typography: "s2", gap: 0.75 }}>
               {t.icon && <Iconify icon={t.icon} width={14} sx={{ color: "text.secondary" }} />}
               {t.label}
+              {t.soon && <QuietTag>Coming soon</QuietTag>}
               <Box component="span" sx={{ ml: "auto", pl: 1.5, color: "text.disabled", fontVariantNumeric: "tabular-nums" }}>{countOf(t.id)}</Box>
             </MenuItem>
           ))}
@@ -113,7 +117,7 @@ export default function PrebuiltWorldsView({ onBack, bare = false }) {
       {listed.length || withSandbox ? (
         <Box sx={grid}>
           {withSandbox && <SaasSandboxCard />}
-          {listed.map((w) => <WorldCard key={w.id} world={w} onOpen={setOpen} selected={open?.id === w.id} />)}
+          {listed.map((w) => <WorldCard key={w.id} world={w} onOpen={setOpen} selected={open?.id === w.id} soon={soonTypes.has(w.type)} />)}
         </Box>
       ) : (
         <Stack alignItems="center" spacing={0.75} sx={{ py: 8, border: "1px dashed", borderColor: "divider", borderRadius: 1.5 }}>

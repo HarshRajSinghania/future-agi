@@ -21,17 +21,19 @@ import SetupDrawer from "./SetupDrawer";
 import SideDrawer from "../components/SideDrawer";
 import { worldTotal } from "./landingData";
 import GithubRepoPicker from "../integrations/GithubRepoPicker";
-import { repoUrlOf, installedRepos } from "../_mock/integrations";
+import { gitHostOfUrl, hostRepoUrlOf, repoUrlOf, installedRepos } from "../_mock/integrations";
 import DescribeFlowStep from "./intake/DescribeFlowStep";
 import MyEnvironmentsTable from "./MyEnvironmentsTable";
 import PersonaLibraryTab from "./personas/PersonaLibraryTab";
-import { PLATFORM_LOGOS, AGENT_TYPES, HOSTED_PLATFORMS_BY_TYPE, firstLive, isLivePlatform, COUNTRY_OPTIONS, COUNTRY_BY_ISO, LATER_PLATFORMS, PLATFORM_KEY_SCOPE } from "./connectOptions";
+import { PLATFORM_LOGOS, AGENT_TYPES, HOSTED_PLATFORMS_BY_TYPE, firstLive, isLivePlatform, COUNTRY_OPTIONS, COUNTRY_BY_ISO, PLATFORM_KEY_SCOPE } from "./connectOptions";
 import { CloneScopeChoice, EndpointConsent, HintLine, HowWeCopyIt, RunLocationChoice } from "../agents/connect/replicationBits";
 import { canCloneProvider, keyLacksCreateScope, webhookUrlFor } from "../_mock/replication";
 import { isSecretRef, keyRefOf } from "../_mock/secretRefs";
 import SecretRefField from "../agents/connect/SecretRefField";
 import { CLOSED_PLATFORMS, CLOSED_PLATFORM_NOTE, PLATFORM_TESTING } from "../_mock/rsiModel";
 import { clickable, focusRing } from "../components/clickable";
+import WorldAgentPicker from "./AgentChoice";
+import { buildableAgentsOf, mcpWorldSource, useBuildForAgent } from "./worldSource";
 
 /**
  * Variation B entry point.
@@ -310,8 +312,8 @@ export default function StartEnvironment({ entry = false }) {
                   </Typography>
                   <Typography noWrap sx={{ typography: "s2", color: "text.secondary" }}>
                     {view === "worlds"
-                      ? "Tables, tools, rules and starter scenarios, ready to run. A placeholder agent stands in until you connect yours."
-                      : "Start from anything you have — a link, a prebuilt world, or the agent itself."}
+                      ? "Tables, tools and rules, as designed. Pick one of your agents and its environment starts from the world you choose."
+                      : "Every environment belongs to one agent — pick yours, or connect one, then start from its own world or one of these."}
                   </Typography>
                 </Box>
                 <IconButton size="small" onClick={closeBuild} aria-label="Close">
@@ -716,7 +718,8 @@ LinkedRepoField.propTypes = { value: PropTypes.string, onChange: PropTypes.func 
    from the code in our hosted sandbox, or run locally through the SDK — then
    the address serve() answers on, optional until the first run. */
 function WhereItRuns({ choice, runtime, setRuntime }) {
-  const location = runtime.location || "sdk";
+  /* The hosted sandbox by default — running locally through the SDK is Coming soon. */
+  const location = runtime.location || "hosted";
   const agent = { sourceKind: choice === "source" ? "repo" : "upload", values: { runLocation: location } };
   return (
     <Stack spacing={1.25}>
@@ -834,7 +837,7 @@ function useBuildEnvironment() {
       connect.onConnect(source);
       return;
     }
-    const runLocation = rt ? rt.runtime.location || "sdk" : null;
+    const runLocation = rt ? rt.runtime.location || "hosted" : null;
     const endpoint = runLocation === "sdk" ? rt.runtime.endpoint.trim() : "";
     /* Only a reference travels; a half-typed one is dropped, never sent. */
     const tokenRef = rt && isSecretRef(rt.runtime?.tokenRef) ? rt.runtime.tokenRef.trim() : "";
@@ -974,11 +977,13 @@ function PanelSourceRepo() {
   /* A repository pasted on the landing screen: picked straight from the
      GitHub App when it can see it, otherwise typed in by hand. */
   const pasted = useContext(PrefillContext)?.repo || null;
-  const pastedVisible = !!pasted && installedRepos().some((r) => r.name.toLowerCase() === pasted.toLowerCase());
+  /* A GitLab or Bitbucket repository pasted on the landing screen. */
+  const pastedHost = useContext(PrefillContext)?.host || "github";
+  const pastedVisible = !!pasted && pastedHost === "github" && installedRepos().some((r) => r.name.toLowerCase() === pasted.toLowerCase());
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
-  const [provider, setProvider] = useState("github");
+  const [provider, setProvider] = useState(pastedHost);
   /* From GitHub (pick a repository, we find the agents) or typed by hand. */
-  const [mode, setMode] = useState(pasted && !pastedVisible ? "manual" : "github");
+  const [mode, setMode] = useState((pasted && !pastedVisible) || pastedHost !== "github" ? "manual" : "github");
   const [ghRepo, setGhRepo] = useState(preset?.repo || (pastedVisible ? pasted : ""));
   const [ghAgent, setGhAgent] = useState(preset?.agent || null);
   const [repo, setRepo] = useState(pasted && !pastedVisible ? pasted : "");
@@ -1048,7 +1053,9 @@ function PanelSourceRepo() {
           kind: "repo",
           scenarioCount: scenarioCountOf(scenarioCount),
           provider: viaGithub ? "github" : provider,
-          value: viaGithub ? repoUrlOf(ghRepo) : repo.trim(),
+          /* Another host's "owner/repo" is that host's URL, never GitHub's. */
+          value: viaGithub ? repoUrlOf(ghRepo) : provider !== "github" && !gitHostOfUrl(repo) ? hostRepoUrlOf(provider, repo.trim()) : repo.trim(),
+          gitHost: viaGithub ? "github" : provider,
           ...(viaGithub && { githubApp: true, agentName: ghAgent?.name, framework: ghAgent?.framework }),
           ref: branch.trim() || "main",
           entry: entry.trim(),
@@ -1088,7 +1095,9 @@ function PanelRunningAgent() {
   const [linkedRepo, setLinkedRepo] = useState("");
   /* An endpoint can't be watched from outside — the team adds tracing.
      Asking here means the agent page shows how straight away. */
-  const [watchProduction, setWatchProduction] = useState(true);
+  /* An agent made by an environment build isn't linked to an Observe
+     project here — that's set on the agent, in Finish setting up. */
+  const watchProduction = false;
   /* An endpoint can't be copied, so simulations drive the real agent — not
      until someone says so (AC-1.12). { acknowledgedAt, webhookAt } */
   const [consent, setConsent] = useState(null);
@@ -1187,13 +1196,6 @@ function PanelRunningAgent() {
         </Box>
       )}
       <LinkedRepoField value={linkedRepo} onChange={setLinkedRepo} />
-      <ToggleRow
-        checked={watchProduction}
-        onChange={setWatchProduction}
-        title="Watch production traffic"
-        body="We'll show you how to send traces."
-        hint="A short snippet, or a pull request if the repo is in the GitHub app."
-      />
       {endpoint.trim() && (
         <>
           <HowWeCopyIt agent={pseudo} />
@@ -1252,7 +1254,9 @@ function PanelHostedPlatform() {
   /* Watch the agent's real calls too — on by default, since the provider
      key is already here and production is what tells you whether the
      simulations were the right ones. */
-  const [watchProduction, setWatchProduction] = useState(true);
+  /* An agent made by an environment build isn't linked to an Observe
+     project here — that's set on the agent, in Finish setting up. */
+  const watchProduction = false;
   /* Others-only: a pasted system prompt. We run it against the LLM
      directly — no platform, no endpoint — and seed scenarios from it. */
   const [otherPrompt, setOtherPrompt] = useState("");
@@ -1320,7 +1324,7 @@ function PanelHostedPlatform() {
                 /* "Others" has no brand logo; render the Solar icon instead
                    so it doesn't collapse to a coloured monogram tile. */
                 icon={p.isOther ? p.icon : undefined}
-                logo={p.isOther ? undefined : <PlatformLogo id={p.id} name={p.name} brand={p.brand} />}
+                logo={p.isOther ? undefined : <PlatformLogo id={p.id} name={p.name} brand={p.brand} icon={p.icon} />}
                 /* Wordmark logos already spell the name — don't repeat it. */
                 label={PLATFORM_LOGOS[p.id]?.type === "wordmark" ? null : p.name}
                 comingSoon={p.comingSoon}
@@ -1382,14 +1386,6 @@ function PanelHostedPlatform() {
           {/* A pasted prompt has no production to watch, and is its own
               instructions — only a hosted agent links a repository. */}
           {!isOther && <LinkedRepoField value={linkedRepo} onChange={setLinkedRepo} />}
-          {!isOther && (
-            <ToggleRow
-              checked={watchProduction}
-              onChange={setWatchProduction}
-              title="Watch production calls"
-              body="Brings its real calls into Observe and Error Feed."
-            />
-          )}
         </>
       )}
       {chosen && credsOk && (
@@ -1402,7 +1398,7 @@ function PanelHostedPlatform() {
       <ContinueRow
         disabled={!canGo}
         hint={
-          !chosen ? (agentType === "chat" ? "Chat platforms are coming soon — use Agent endpoint for now" : "Pick a supported path above")
+          !chosen ? "Pick a platform above"
           : lacksScope && credsOk ? "Choose how to go on without create scope"
           : !versioningOk ? "Switch versioning on for the agent first"
           : !phoneOk ? "Add a contact number for telephony simulation"
@@ -1576,18 +1572,29 @@ function PanelPhoneNumber() {
   );
 }
 
+/* An MCP server's tools are a world source, never an environment of their
+   own: the agent the environment belongs to is picked (or connected) first,
+   and its build starts from the server's tools. */
 function PanelMcpServer() {
   const prefill = useContext(PrefillContext);
-  const build = useBuildEnvironment();
+  const buildFor = useBuildForAgent();
+  const { agents: all } = useConnectedAgents();
+  const [agentId, setAgentId] = useState(null);
+  const agent = buildableAgentsOf(all).find((a) => a.id === agentId) || null;
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
   const [transport, setTransport] = useState(prefill?.transport || "http");
   const [target, setTarget] = useState(prefill?.target || "");
   /* A token for an HTTP server, by reference (AC-6.12). */
   const [tokenRef, setTokenRef] = useState("");
   const tokenOk = !tokenRef.trim() || isSecretRef(tokenRef);
-  const canGo = !!target.trim() && tokenOk;
+  const canGo = !!target.trim() && tokenOk && !!agent;
   return (
     <Stack spacing={1.75} sx={{ p: 2.5 }}>
+      <WorldAgentPicker
+        value={agentId}
+        onChange={setAgentId}
+        subtitle="The server's tools become the world of this agent's environment."
+      />
       <ProviderRow
         options={MCP_TRANSPORTS}
         value={transport}
@@ -1599,7 +1606,7 @@ function PanelMcpServer() {
         placeholder={transport === "stdio" ? "uvx my-mcp-server --flag" : "https://mcp.yourapp.com/sse"}
         value={target} onChange={setTarget}
         mono
-        helper={<HintLine hint="We list the tools the server exposes and derive the environment from them.">Its tools become the environment&apos;s actions.</HintLine>}
+        helper={<HintLine hint="We list the tools the server exposes and build the agent's world from them.">Its tools become the world the agent acts on.</HintLine>}
       />
       {transport !== "stdio" && (
         <SecretRefField
@@ -1611,14 +1618,20 @@ function PanelMcpServer() {
       <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
       <ContinueRow
         disabled={!canGo}
-        hint={!target.trim() ? "Add the server" : "Use a reference for the auth token"}
-        onClick={() => build({
-          kind: "mcp",
-          scenarioCount: scenarioCountOf(scenarioCount),
-          transport,
-          value: target.trim(),
-          ...(transport !== "stdio" && tokenRef.trim() && { tokenRef: tokenRef.trim() }),
-        })}
+        hint={!agent ? "Pick the agent this environment is for" : !target.trim() ? "Add the server" : "Use a reference for the auth token"}
+        onClick={() => buildFor(
+          agent,
+          {
+            name: `${agent.name.replace(/\s+agent$/i, "")} environment`,
+            version: agent.production || agent.latest,
+            count: scenarioCountOf(scenarioCount) || Number(DEFAULT_SCENARIOS),
+          },
+          mcpWorldSource({
+            transport,
+            value: target.trim(),
+            tokenRef: transport !== "stdio" && tokenRef.trim() ? tokenRef.trim() : null,
+          }),
+        )}
       />
     </Stack>
   );
@@ -1904,7 +1917,7 @@ function PanelNotImplemented() {
   return (
     <Box sx={{ p: 2.5 }}>
       <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-        This flow is not wired in the prototype.
+        Coming soon.
       </Typography>
     </Box>
   );
@@ -2176,9 +2189,9 @@ ToggleRow.propTypes = {
   hint: PropTypes.node,
 };
 
-/* How many scenarios the build generates — 10 unless changed; clearing the
-   field removes the cap. The body restates what will happen either way. */
-const MAX_SCENARIOS = 500;
+/* How many scenarios the build generates — 10 by default, up to 1,000 (RSI
+   PRD: "A build makes 10 scenarios by default and up to 1,000"). */
+const MAX_SCENARIOS = 1000;
 const DEFAULT_SCENARIOS = "10";
 
 function ScenarioCountRow({ value, onChange }) {
@@ -2215,7 +2228,7 @@ function ScenarioCountRow({ value, onChange }) {
         sx={{ width: 150, flexShrink: 0, "& .MuiInputBase-input": { typography: "s2", fontVariantNumeric: "tabular-nums" } }}
       />
         <Typography sx={{ typography: "s3", color: "text.subtitle", minWidth: 0 }}>
-          {n ? `Up to ${MAX_SCENARIOS}. Clear it for no cap.` : `No cap — as many as the agent needs.`}
+          {`10 by default, up to ${MAX_SCENARIOS.toLocaleString()}.`}
         </Typography>
       </Stack>
     </Box>
@@ -2245,17 +2258,6 @@ function ProviderRow({ options, value, onChange }) {
 ProviderRow.propTypes = { options: PropTypes.array, value: PropTypes.string, onChange: PropTypes.func };
 
 
-/* Platforms we'll connect later — inert chips, one row, under the live ones. */
-export function LaterPlatformsRow() {
-  return (
-    <Stack direction="row" alignItems="center" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mt: 0.75 }}>
-      {LATER_PLATFORMS.map((p) => (
-        <ChipCard key={p.id} icon={p.icon} label={p.name} tag="Coming soon" disabled />
-      ))}
-    </Stack>
-  );
-}
-
 /* A platform note cut to its first sentence — the rest behind an ⓘ. */
 export function NoteLine({ text }) {
   const cut = String(text || "").indexOf(". ");
@@ -2269,13 +2271,13 @@ NoteLine.propTypes = { text: PropTypes.string };
 export function PlatformKeyScope({ prototypeHint = false }) {
   return (
     <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
-      <span>Secret-manager path · read and test access only</span>
+      <span>Stored encrypted · used only to read the agent and place test calls</span>
       <Tooltip
         arrow
         title={(
           <Box sx={{ typography: "s3" }}>
-            The key itself never leaves your secret manager. {PLATFORM_KEY_SCOPE}
-            {prototypeHint && <Box sx={{ mt: 0.5, opacity: 0.8 }}>Prototype: a path containing “readonly” acts like a key without create scope.</Box>}
+            Stored encrypted — never shown again, never sent to the improver. {PLATFORM_KEY_SCOPE}
+            
           </Box>
         )}
       >
@@ -2296,8 +2298,12 @@ PlatformKeyScope.propTypes = { prototypeHint: PropTypes.bool };
  * providers — fall back to a brand-coloured monogram tile so the picker still
  * reads as branded.
  */
-export function PlatformLogo({ id, name, brand }) {
+export function PlatformLogo({ id, name, brand, icon }) {
   const spec = PLATFORM_LOGOS[id];
+  /* A brand mark from Iconify, for platforms without a bundled logo. */
+  if (!spec && /^(simple-icons|logos):/.test(icon || "")) {
+    return <Iconify icon={icon} width={15} aria-label={name} sx={{ color: "text.primary", flexShrink: 0 }} />;
+  }
   if (spec) {
     const isMark = spec.type === "mark";
     return (
@@ -2334,7 +2340,7 @@ export function PlatformLogo({ id, name, brand }) {
     </Box>
   );
 }
-PlatformLogo.propTypes = { id: PropTypes.string, name: PropTypes.string, brand: PropTypes.string };
+PlatformLogo.propTypes = { id: PropTypes.string, name: PropTypes.string, brand: PropTypes.string, icon: PropTypes.string };
 
 function ContinueRow({ disabled, hint, label = "Build environment", onClick }) {
   const connect = useContext(ConnectModeContext);
@@ -2400,7 +2406,7 @@ const OPTIONS = [
     title: "Source repository",
     icon: "solar:code-linear",
     blurb: "Read the code straight from a git host. Scenarios and tools stay in sync with the real code as it changes — no manual updates when your agent evolves.",
-    preview: ["GitHub", "GitLab · Coming soon", "Bitbucket · Coming soon"],
+    preview: ["GitHub", "GitLab", "Bitbucket"],
     setupSubtitle: "We read the code so scenarios stay in sync with your actual tools.",
   },
   {
@@ -2408,8 +2414,8 @@ const OPTIONS = [
     group: "bring",
     title: "Hosted platform",
     icon: "solar:cloud-linear",
-    blurb: "Connect an agent living on a managed voice platform by its ID. We handle the auth and route every simulated turn through the platform's own API.",
-    preview: ["Vapi", "Retell", "Bland", "ElevenLabs", "LiveKit"],
+    blurb: "Connect an agent living on a managed voice or chat platform by its ID. We handle the auth and route every simulated turn through the platform's own API.",
+    preview: ["Vapi", "Retell", "ElevenLabs", "Bland", "Google CX"],
     setupSubtitle: "Point at an agent living on a managed platform.",
   },
   {
@@ -2417,9 +2423,9 @@ const OPTIONS = [
     group: "bring",
     title: "MCP server",
     icon: "solar:plug-circle-linear",
-    blurb: "Any MCP server can back the environment. Its tools become the action space your agent operates against, one-to-one — no adapter code required.",
+    blurb: "Any MCP server can be an agent's world. Its tools become what the agent acts on, one-to-one — no adapter code required.",
     preview: ["HTTP", "SSE", "stdio"],
-    setupSubtitle: "The MCP server exposes tools; those tools become the environment's action space.",
+    setupSubtitle: "Pick the agent, then the server — its tools become the world of that agent's environment.",
   },
   {
     id: "upload",
@@ -2458,7 +2464,7 @@ const OPTIONS = [
     title: "Phone number",
     icon: "solar:phone-linear",
     blurb: "Only a number to call? Paste its instructions and we test it by phone. We can't change it ourselves, so improvements end in a suggested fix you apply.",
-    preview: ["Test only", "Sierra", "Decagon"],
+    preview: ["Test only", "Sierra", "Decagon", "Zendesk"],
     setupSubtitle: "The number we dial, and the instructions it follows.",
   },
   /* Not in the picker grid — reached via the "Start from scratch" button in
@@ -2488,8 +2494,8 @@ const PANELS = {
 
 const REPO_PROVIDERS = [
   { id: "github", name: "GitHub", icon: "eva:github-fill" },
-  { id: "gitlab", name: "GitLab", icon: "logos:gitlab", tag: "Coming soon", disabled: true },
-  { id: "bitbucket", name: "Bitbucket", icon: "logos:bitbucket", tag: "Coming soon", disabled: true },
+  { id: "gitlab", name: "GitLab", icon: "logos:gitlab" },
+  { id: "bitbucket", name: "Bitbucket", icon: "logos:bitbucket" },
 ];
 
 const MCP_TRANSPORTS = [

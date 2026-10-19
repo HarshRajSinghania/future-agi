@@ -10,8 +10,8 @@
  *
  * On the surface there is one number. A snapshot is the state of all those
  * parts at once, and any change to any of them mints the next one — like a
- * lockfile. "env v7" = world E v3 · scenarios s5 · sub-goals c1 · evals e2 ·
- * caller gpt-4o-mini.
+ * lockfile. People only ever see "environment v7" and, in words, what changed
+ * in it — never the part numbers underneath.
  *
  * Derived from the logs each part already keeps, oldest first; nothing is
  * stored or migrated:
@@ -33,7 +33,7 @@ const num = (label) => parseInt(String(label || "").replace(/\D/g, ""), 10) || 0
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 /* Changes this close together came from one action. */
-const SAME_ACTION_MS = 2000;
+export const SAME_ACTION_MS = 2000;
 
 /* World kinds that are the contract (tools and rules) rather than the world. */
 const CONTRACT_KINDS = ["contract", "rules"];
@@ -93,14 +93,14 @@ const apply = (parts, e, counters) => {
       const head = world.some((k) => CONTRACT_KINDS.includes(k)) ? "Contract" : "World";
       pieces.push({ kind: "world", text: `${head}: ${firstSentence(e.v.note) || world.map(envChangeLabel).join(", ")}` });
     }
-    details.push({ part: "env", label: `E ${e.v.label}`, text: [world.map(envChangeLabel).join(", "), e.v.note].filter(Boolean).join(" — ") });
+    details.push({ part: "env", label: e.v.label, text: [world.map(envChangeLabel).join(", "), e.v.note].filter(Boolean).join(" — ") });
     if (changed.includes("checks")) {
       pieces.push({ kind: "sub-goals", text: "Scenario checks rewritten" });
     }
     if (changed.includes("scoring")) {
       counters.eval += 1;
       parts.eval = `e${counters.eval}`;
-      pieces.push({ kind: "evals", text: `Evaluations ${parts.eval}` });
+      pieces.push({ kind: "evals", text: "Evaluations changed" });
       details.push({ part: "eval", label: parts.eval, text: "Evaluations changed with this world version" });
     }
     return { pieces, details };
@@ -116,24 +116,25 @@ const apply = (parts, e, counters) => {
     counters.eval += 1;
     parts.eval = `e${counters.eval}`;
     return {
-      pieces: [{ kind: "evals", text: `Evaluations ${parts.eval}${e.c.detail ? `: ${e.c.detail}` : ""}` }],
+      pieces: [{ kind: "evals", text: `Evaluations changed${e.c.detail ? `: ${e.c.detail}` : ""}` }],
       details: [{ part: "eval", label: parts.eval, text: e.c.detail || "Evaluations changed" }],
     };
   }
   if (e.type === "catalog") {
     counters.catalog += 1;
     parts.catalog = `c${counters.catalog}`;
-    const at = e.g.n ? `@${e.g.n}` : "";
+    const goal = e.g.name || String(e.g.id || "").replace(/^SG-(tool-|rule-)?/, "");
+    const how = e.g.kind === "policy" || e.g.policy ? "policy change" : e.g.kind === "revert" || e.g.revertOf ? "reverted" : "grader fix";
     return {
-      pieces: [{ kind: "sub-goals", text: `Sub-goal ${e.g.name || e.g.id}${at} published` }],
-      details: [{ part: "catalog", label: parts.catalog, text: `${e.g.id}${at}${e.g.kind === "policy" ? " · policy change" : " · grader fix"}${e.g.note ? ` — ${e.g.note}` : ""}` }],
+      pieces: [{ kind: "sub-goals", text: `Sub-goal ${goal} updated` }],
+      details: [{ part: "catalog", label: parts.catalog, text: `${goal} · ${how}${e.g.note ? ` — ${e.g.note}` : ""}` }],
     };
   }
   /* caller */
   parts.caller = e.c.to || parts.caller;
   return {
     pieces: [{ kind: "caller", text: `Simulated caller: ${e.c.from} → ${e.c.to}` }],
-    details: [{ part: "caller", label: e.c.to, text: `was ${e.c.from}` }],
+    details: [{ part: "caller", label: e.c.to, text: `${e.c.from} → ${e.c.to}` }],
   };
 };
 
@@ -191,21 +192,21 @@ export const envSnapshotsOf = (env, envState) => {
   const drift = Object.keys(now).filter((k) => now[k] && now[k] !== tail.parts[k]
     && !(k !== "caller" && num(now[k]) < num(tail.parts[k])));
   if (drift.length) {
-    const rows = (envState?.scenarios || []).filter((r) => ms(r.addedAt || r.editedAt) > tail.lastT);
+    const rows = (envState?.scenarios || []).filter((r) => !r.proposed && ms(r.addedAt || r.editedAt) > tail.lastT);
     const latest = rows.reduce((m, r) => Math.max(m, ms(r.addedAt || r.editedAt)), tail.lastT);
     const pieces = drift.map((k) => ({
       kind: { set: "scenarios", catalog: "sub-goals", eval: "evals", caller: "caller" }[k],
       text: k === "set"
         ? (rows.length ? `${plural(rows.length, "scenario")} added or edited` : "Scenario set changed")
         : k === "caller" ? `Simulated caller: ${tail.parts.caller} → ${now.caller}`
-          : k === "eval" ? `Evaluations ${now.eval}` : `Sub-goals ${now.catalog}`,
+          : k === "eval" ? "Evaluations changed" : "Sub-goals changed",
     }));
     groups.push({
       at: latest ? new Date(latest).toISOString() : tail.at,
       t: latest,
       lastT: latest,
       pieces,
-      details: drift.map((k) => ({ part: k, label: now[k], text: "recorded without a log entry" })),
+      details: pieces.map((p, i) => ({ part: drift[i], label: now[drift[i]], text: p.text })),
       parts: { ...tail.parts, ...Object.fromEntries(drift.map((k) => [k, now[k]])) },
     });
   }
@@ -216,6 +217,10 @@ export const envSnapshotsOf = (env, envState) => {
       label: `v${i + 1}`,
       n: i + 1,
       at: g.at,
+      /* When the snapshot's changes were made — what a rollback reads the
+         scenario set, sub-goals and evaluations at. */
+      startMs: g.t,
+      endMs: g.lastT,
       parts: g.parts,
       kind: kinds[0] || "world",
       kinds,
@@ -338,22 +343,21 @@ export const frozenSnapshotOf = (env, envState) => {
   return s ? { label: s.label, parts: { ...s.parts } } : null;
 };
 
-/** "world E v3 · scenarios s5 · sub-goals c1 · evals e2 · caller gpt-4o-mini" — for drill-downs. */
-export const snapshotPartsLine = (snap) => (snap?.parts ? [
-  snap.parts.env && `world E ${snap.parts.env}`,
-  snap.parts.set && `scenarios ${snap.parts.set}`,
-  snap.parts.catalog && `sub-goals ${snap.parts.catalog}`,
-  snap.parts.eval && `evals ${snap.parts.eval}`,
-  snap.parts.caller && `caller ${snap.parts.caller}`,
-].filter(Boolean).join(" · ") : "");
+/* What one part's move reads as — in words, never its internal number. */
+const PART_MOVED = {
+  env: () => "world and contract changed",
+  set: () => "scenario set changed",
+  catalog: () => "sub-goals changed",
+  eval: () => "evaluations changed",
+  caller: (a, b) => `simulated caller → ${b.parts.caller}`,
+};
 
-/** Which parts differ between two snapshots — "scenarios s4 → s5", … */
+/** Which parts differ between two snapshots, in words — "evaluations changed", "simulated caller → gpt-4o-mini". */
 export const snapshotDiff = (a, b) => {
   if (!a?.parts || !b?.parts) return [];
-  const NAMES = { env: "world", set: "scenarios", catalog: "sub-goals", eval: "evals", caller: "caller" };
-  return Object.keys(NAMES)
+  return Object.keys(PART_MOVED)
     .filter((k) => a.parts[k] !== b.parts[k])
-    .map((k) => ({ part: k, label: `${NAMES[k]} ${k === "env" ? `E ${a.parts[k]} → E ${b.parts[k]}` : `${a.parts[k]} → ${b.parts[k]}`}` }));
+    .map((k) => ({ part: k, label: PART_MOVED[k](a, b) }));
 };
 
 /**

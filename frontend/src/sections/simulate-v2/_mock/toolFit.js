@@ -151,7 +151,10 @@ export const rebuildForAgent = (env, envState, agentLabel) => {
   /* One small batch per new tool, from the same generator the core pack uses,
      with ids that cannot collide with the originals — and never a second batch
      for a tool an earlier rebuild already covered. Proved against the version
-     they were written for, so they read as fresh rather than stale. */
+     they were written for, so they read as fresh rather than stale.
+     Proposed, not added: "Nothing is added to an environment automatically
+     after it is built. Every source proposes scenarios" (RSI PRD) — they wait
+     in Needs input until someone adds them. */
   const covered = new Set((envState?.scenarios || []).map((sc) => sc.newTool).filter(Boolean));
   const now = new Date().toISOString();
   const added = missing.filter((tool) => !covered.has(tool.name))
@@ -162,6 +165,15 @@ export const rebuildForAgent = (env, envState, agentLabel) => {
         addedInEnv: version.label,
         newTool: tool.name,
         requiredTools: [tool.name],
+        /* Its own short list, like the core pack's ordinary rows — derived from
+           the id, the rebuild's suffixed ids landed on the 8–15-step "deep"
+           list and read as 13–15 sub-goals beside siblings' 4–6. */
+        subGoals: [
+          "Understand what the caller is trying to get done",
+          ...(row.persona?.name ? ["Verify who is asking, before touching any account state"] : []),
+          `Call ${tool.name} with the arguments the task actually needs`,
+          "Report the result to the caller and close the turn cleanly",
+        ],
         provedAgainst: version.label,
         provedAt: now,
         /* Its own batch: the environment added these, and says why. */
@@ -169,10 +181,14 @@ export const rebuildForAgent = (env, envState, agentLabel) => {
         addedBy: { kind: "system", id: "sys", name: "System" },
         source: "rebuild",
         batchId: `batch_rebuild_${version.label}`,
-        batchNote: `when environment ${version.label} learned ${names.join(", ")} for agent ${agentLabel}`,
-      })));
+        batchNote: `when the environment learned ${names.join(", ")} for agent ${agentLabel}`,
+      }))
+      /* scenarioSources.asProposal's shape, inline — importing it here
+         would loop back through agentRegistry to this file. */
+      .map((row) => ({ ...row, proposed: row.proposed || { at: now, source: "rebuild" } })));
 
-  version.scenarios = (envState?.scenarios?.length || 0) + added.length;
+  /* Proposals aren't part of the version until someone adds them. */
+  version.scenarios = (envState?.scenarios || []).filter((r) => !r.proposed).length;
 
   return {
     version,
@@ -180,6 +196,7 @@ export const rebuildForAgent = (env, envState, agentLabel) => {
     patch: {
       envVersions: [...list, version],
       activeEnvVersion: version.label,
+      unsavedEnvChanges: [],
       ...(added.length && { scenarios: [...(envState?.scenarios || []), ...added] }),
     },
   };
@@ -245,7 +262,7 @@ export const scenariosInEnvVersion = (envState, envLabel) => (envState?.scenario
  * run and every later replay of it read the same inputs, so the numbers you
  * watched are the numbers the run keeps.
  */
-export const runInputs = (env, envState, { agent, envVersion, actors, actorEdits, toolFaults, admissionGates = 3, cheatChecks = 0, outcomes = 0, requiredEvals = 0, gradingRule = 0, turnLimits = 0, turnLimit = undefined }) => ({
+export const runInputs = (env, envState, { agent, envVersion, actors, actorEdits, toolFaults, admissionGates = 3, outcomes = 0, requiredEvals = 0, gradingRule = 0, turnLimits = 0, turnLimit = undefined }) => ({
   admissionGates,
   /* "Environments, defined" — sub-goals decide (gradingRule 2) and the turn
      limit (turnLimits 1, at the environment limit the run pinned). Only runs
@@ -257,10 +274,6 @@ export const runInputs = (env, envState, { agent, envVersion, actors, actorEdits
      twice, required evaluations. Only runs that pinned them; missing → 0. */
   outcomes,
   requiredEvals,
-  /* Cheat checks (PRD v7 §4.10.10): a run that pinned them is checked against
-     the environment's off-limits tools and canary scenarios; a run from before
-     them (missing → 0) replays without. */
-  cheatChecks: cheatChecks ? { offLimits: Array.isArray(envState?.offLimits) ? envState.offLimits : [] } : null,
   /* The world the run is on — a scenario's "broken" is about one world. */
   envVersion: envVersion || currentEnvVersion(env, envState)?.label,
   tools: worldToolsFor(env, envState, envVersion),

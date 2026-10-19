@@ -17,7 +17,8 @@ const btnSx = { height: 30, fontSize: "12px", borderRadius: "6px", textTransform
   is running, waiting for review, shipped or being watched, the button opens
   that fix — it never starts a second one against the version the first fix
   produced. Only an ending that left the issue unfixed (no safe improvement,
-  could not reproduce, failed) or a Reopened issue offers Fix again.
+  could not reproduce, failed, stopped at budget before searching) or a
+  Reopened issue offers Fix again.
 */
 const IN_FLIGHT = {
   fixing: { label: "View fix", why: "A fix is running for this issue — open it to follow the search." },
@@ -26,7 +27,9 @@ const IN_FLIGHT = {
   watching: { label: "View fix", why: "The fix is released and the Error Feed is watching for this issue. If it comes back, the issue reopens and Fix again starts a new fix." },
   resolved: { label: "View fix", why: "The fix held through the watch window." },
 };
-const AGAIN = new Set(["reopened", "no-fix", "not-reproduced"]);
+const AGAIN = new Set(["reopened", "no-fix", "not-reproduced", "over-budget"]);
+/* What Fix again would do differently, where there's something to say. */
+const AGAIN_HOW = { "over-budget": "Fix again with a bigger budget" };
 
 /**
  * Fix on an Error Feed issue. It opens the Fix sheet — Future AGI's engine
@@ -38,13 +41,14 @@ const AGAIN = new Set(["reopened", "no-fix", "not-reproduced"]);
  * whose project no agent records reads Connect agent to fix (Flow 3): a
  * dialog over the issue connects it with this project already linked.
  *
- * Fix starts on confirmed issues only (PRD, Risks: "Fix only on confirmed
- * issues"); an emerging or dismissed one says why.
+ * Fix opens on any issue: its first step reproduces it, so a noisy one stops
+ * at Could not reproduce before a search is spent (the sheet says when the
+ * feed hasn't confirmed it yet).
  */
 export default function FixButton({ issue, onOpenSheet }) {
   const navigate = useNavigate();
   const improving = useAgentImprovementFlag();
-  const { agent, agents, state, tracing, gate, evidence, status } = useIssueFix(issue);
+  const { agent, agents, state, gate, status } = useIssueFix(issue);
   /* Controlled so a link inside it closes it before it navigates. */
   const [tip, setTip] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -75,18 +79,18 @@ export default function FixButton({ issue, onOpenSheet }) {
     );
   }
 
-  /* Disconnected, archived, Coming soon, or waiting on live-test consent —
-     said on the button, with the way out when there is one. */
-  const blocked = !!agent && (!tracing || !!gate);
-  /* Not confirmed yet — Fix waits. */
-  const unconfirmed = !!agent && !blocked && !!evidence;
+  /* Disconnected, archived or Coming soon — said on the button, with the
+     way out when there is one. Live-test consent isn't one of them: the
+     sheet asks for it, right where it's needed, before anything runs. */
+  const hardGate = gate && gate.key !== "consent" ? gate : null;
+  const blocked = !!agent && !!hardGate;
   const again = !!status && AGAIN.has(status.key);
 
-  const why = gate ? (
+  const why = hardGate ? (
     <Box sx={{ py: 0.25 }}>
-      <Typography sx={{ typography: "s3", fontWeight: 700 }}>{gate.title}</Typography>
-      <Typography sx={{ typography: "s3", mt: 0.25 }}>{gate.body}</Typography>
-      {gate.action === "connections" && (
+      <Typography sx={{ typography: "s3", fontWeight: 700 }}>{hardGate.title}</Typography>
+      <Typography sx={{ typography: "s3", mt: 0.25 }}>{hardGate.body}</Typography>
+      {hardGate.action === "connections" && (
         <Typography
           {...clickable(() => { setTip(false); openConnections(); })}
           sx={{ typography: "s3", fontWeight: 700, mt: 0.5, cursor: "pointer", textDecoration: "underline", ...focusRing }}
@@ -95,18 +99,13 @@ export default function FixButton({ issue, onOpenSheet }) {
         </Typography>
       )}
     </Box>
-  ) : blocked
-    ? `Fix needs ${agent.name}'s production traces. Turn on Watch production calls on the agent's Connections tab — simulations still run without it.`
-    : unconfirmed ? (
-      <Box sx={{ py: 0.25 }}>
-        <Typography sx={{ typography: "s3", fontWeight: 700 }}>{`Fix starts on confirmed issues · ${evidence.title}`}</Typography>
-        <Typography sx={{ typography: "s3", mt: 0.25 }}>{evidence.body}</Typography>
-      </Box>
-    ) : !agent
+  ) : !agent
       ? `No agent in Agents is linked to ${link.name || "this issue's project"}. Connect it once — this project comes with it, and Fix works for every issue from it.`
       : again
-        ? `${status.label}${status.detail ? ` · ${status.detail}` : ""}. Fix again starts a new fix; the last one stays on its page.`
-        : "";
+        ? `${status.label}${status.detail ? ` · ${status.detail}` : ""}. ${AGAIN_HOW[status.key] || "Fix again"} starts a new fix; the last one stays on its page.`
+        : gate?.key === "consent"
+          ? `${agent.name} runs live — Fix asks for your consent before its first test.`
+          : "";
 
   return (
     <Stack direction="row" alignItems="center" spacing={0.75}>
@@ -119,7 +118,7 @@ export default function FixButton({ issue, onOpenSheet }) {
         <span>
           {agent ? (
             <Button
-              variant="contained" color="primary" disabled={blocked || unconfirmed}
+              variant="contained" color="primary" disabled={blocked}
               startIcon={<Iconify icon="mdi:wrench-outline" width={13} />}
               onClick={onOpenSheet}
               sx={{ ...btnSx, boxShadow: "none" }}

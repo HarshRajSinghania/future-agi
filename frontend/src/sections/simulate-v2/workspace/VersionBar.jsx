@@ -3,12 +3,10 @@ import { useState } from "react";
 import { Box, Stack, Typography, Button, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
 import {
-  currentEnvVersion, currentAgentVersion, pendingEnvChanges, saveEnvChangesPatch, envChangeLabel,
+  currentEnvVersion, currentAgentVersion, pendingEnvChanges, saveEnvChangesPatch, envChangeLabel, isEnvDraft, scenariosInSet,
 } from "../_mock/versions";
-import { scenariosInEnvVersion } from "../_mock/toolFit";
 import { envLabelOf, pendingCostOf } from "../_mock/envVersionKinds";
-import { currentEnvSnapshot, snapshotPartsLine } from "../_mock/envSnapshot";
-import { referenceOf } from "../_mock/nudgeEffects";
+import { currentEnvSnapshot } from "../_mock/envSnapshot";
 import useEnvViewAs from "./useEnvViewAs";
 import VersionHistoryMenu from "./VersionHistory";
 
@@ -29,15 +27,17 @@ import VersionHistoryMenu from "./VersionHistory";
  * version (?viewAs=), a slim read-only banner sits under the bar.
  */
 export default function VersionBar({ env, envState, patch, locked = false }) {
+  const { viewAs, clearViewAs } = useEnvViewAs(env, envState);
   const envV = currentEnvVersion(env, envState);
-  const scenarioCount = scenariosInEnvVersion(envState, envV.label).length;
+  /* Viewing an older version names that version and its own suite. */
+  const scenarioCount = scenariosInSet(envState, viewAs || envV.label).length;
   const agentV = currentAgentVersion(envState);
   const pending = pendingEnvChanges(envState);
-  const snap = currentEnvSnapshot(env, envState);
+  const snap = viewAs ? null : currentEnvSnapshot(env, envState);
   const cost = pendingCostOf(env, envState);
-  const shownLabel = snap?.label || envLabelOf(env, envState, envV.label);
-  const ref = referenceOf(envState);
-  const { viewAs, clearViewAs } = useEnvViewAs(env, envState);
+  const shownLabel = viewAs ? envLabelOf(env, envState, viewAs) : snap?.label || envLabelOf(env, envState, envV.label);
+  /* Before the first run nothing is a version yet: edits land in place. */
+  const draft = !viewAs && isEnvDraft(envState);
   const [historyAnchor, setHistoryAnchor] = useState(null);
   const strong = (t) => <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>{t}</Box>;
 
@@ -57,11 +57,15 @@ export default function VersionBar({ env, envState, patch, locked = false }) {
               An agent change moves only the agent. The environment version moves when the world, scenarios, sub-goals, evaluations or simulated caller change.
             </Typography>
             <Typography sx={{ typography: "s3", color: "common.white" }}>
-              <b>{agentV ? `Agent ${agentV.label}` : "No agent"}</b>{` — the test subject${ref?.label === agentV?.label && ref?.marked ? " (the reference)" : ""}`}
+              <b>{agentV ? `Agent ${agentV.label}` : "No agent"}</b>{" — the test subject"}
             </Typography>
-            <Typography sx={{ typography: "s3", color: "common.white" }}><b>{`Environment ${shownLabel}`}</b>{snap?.summary ? ` — ${snap.summary}` : ""}</Typography>
-            {snap && (
-              <Typography sx={{ typography: "s3", color: "common.white", opacity: 0.8, mt: 0.25 }}>{snapshotPartsLine(snap)}</Typography>
+            {draft ? (
+              <Typography sx={{ typography: "s3", color: "common.white" }}><b>{`Environment ${shownLabel}`}</b> — not run yet. Edits land in place until its first run fixes it.</Typography>
+            ) : (
+              <Typography sx={{ typography: "s3", color: "common.white" }}><b>{`Environment ${shownLabel}`}</b>{snap?.summary ? ` — ${snap.summary}` : ""}</Typography>
+            )}
+            {snap?.parts?.caller && (
+              <Typography sx={{ typography: "s3", color: "common.white", opacity: 0.8, mt: 0.25 }}>{`Simulated caller: ${snap.parts.caller}`}</Typography>
             )}
           </Box>
         )}
@@ -74,6 +78,7 @@ export default function VersionBar({ env, envState, patch, locked = false }) {
           {agentV ? <>Agent {strong(agentV.label)}</> : "No agent yet"}
           <Typography component="span" sx={{ typography: "s3", color: "text.disabled", mx: 0.5 }}>×</Typography>
           environment {strong(shownLabel)}
+          {draft && <Box component="span" sx={{ typography: "s3", color: "text.subtitle" }}> · not run yet</Box>}
           <Box component="span" sx={{ typography: "s3", color: "text.subtitle" }}>{` · ${scenarioCount} scenario${scenarioCount === 1 ? "" : "s"}`}</Box>
         </Typography>
       </Tooltip>
@@ -81,7 +86,7 @@ export default function VersionBar({ env, envState, patch, locked = false }) {
       {/* Drift is said once, by the chip in the environment header. */}
       <Box flex={1} />
 
-      {pending.length > 0 && (
+      {pending.length > 0 && !viewAs && (
         <Tooltip
           arrow
           title={`${pending.map((c) => c.detail || envChangeLabel(c.kind)).join(" · ")}. ${cost?.comparability || ""} Runs use environment ${shownLabel} until these are saved.`}

@@ -13,7 +13,9 @@
 const keyOf = (t) => t.scenarioId || t.id;
 const shareOf = (t) => t.passShare ?? (t.status === "passed" ? 1 : 0);
 /* A verdict for or against the agent — not inconclusive, invalid or errored. */
-const measuredTasks = (run) => (run?.tasks || []).filter((t) => !t.pulled && ["passed", "failed", "flaky"].includes(t.status));
+/* An improvement's run carries its outcomes as `trialTasks` (comparison.js). */
+const tasksOf = (run) => (run?.tasks?.length ? run.tasks : run?.trialTasks || []);
+const measuredTasks = (run) => tasksOf(run).filter((t) => !t.pulled && ["passed", "failed", "flaky"].includes(t.status));
 
 /** The columns a run row shows. */
 export const runStatsOf = (run) => {
@@ -26,7 +28,7 @@ export const runStatsOf = (run) => {
     scenarioPassed: passed,
     scenarioRate: m.length ? Math.round((passed / m.length) * 100) : null,
     callRate: m.length ? Math.round((m.reduce((a, t) => a + shareOf(t), 0) / m.length) * 1000) / 10 : null,
-    calls: (run?.tasks || []).length * repeats,
+    calls: tasksOf(run).length * repeats,
     flaky: m.filter((t) => t.status === "flaky").length,
     failed: m.length - passed,
     tookMs: took && took > 0 ? took : null,
@@ -52,12 +54,32 @@ export const sharedDeltaOf = (run, base) => {
   return { pts, noise, within: Math.abs(pts) <= noise, shared: shared.length };
 };
 
-/** The run a run is read against: the latest earlier one on the same environment version, else the latest earlier one. */
-export const previousRunOf = (runs, run) => {
+/*
+  Runs are read against each other only on the same environment version —
+  the one people see. Callers that know the environment pass `versionOf`
+  (envSnapshot.snapshotLabelOf); without it the stamped version is used.
+*/
+const stampedVersion = (r) => r?.envVersion || null;
+
+/** Whether two runs sit on the same environment version. */
+export const sameEnvVersion = (a, b, versionOf = stampedVersion) => {
+  if (!a || !b) return false;
+  const va = versionOf(a);
+  const vb = versionOf(b);
+  /* Neither stamped (runs from before versions existed): one version. */
+  return va === vb || (!va && !vb);
+};
+
+/**
+ * The run a run is read against: the latest earlier one on the same
+ * environment version. None there, none at all — a run on another version
+ * is never the comparison.
+ */
+export const previousRunOf = (runs, run, versionOf = stampedVersion) => {
   if (!run) return null;
   const earlier = runs.filter((r) => r.id !== run.id && (r.ordinal || 0) < (run.ordinal || 0) && r.finishedAt && measuredTasks(r).length);
-  const same = earlier.filter((r) => r.envVersion === run.envVersion);
-  return [...(same.length ? same : earlier)].sort((x, y) => (y.ordinal || 0) - (x.ordinal || 0))[0] || null;
+  const same = earlier.filter((r) => sameEnvVersion(r, run, versionOf));
+  return [...same].sort((x, y) => (y.ordinal || 0) - (x.ordinal || 0))[0] || null;
 };
 
 /** Plain words for a delta: "+4 pts ±19 · within noise". */

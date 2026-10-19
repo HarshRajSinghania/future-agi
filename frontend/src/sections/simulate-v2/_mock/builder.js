@@ -12,6 +12,8 @@
 
 import { getAgentType, agentTypesForSurface } from "./agentTypes";
 import { argsSignatureLine } from "./rlContract";
+import { worldFor, worldToolsOf, seededRowsOf } from "./agentWorlds";
+import { proofKindOf } from "./rsiModel";
 
 /**
  * The providers come off the voice_platform agent type rather than a second
@@ -141,7 +143,7 @@ export const SOURCE_KINDS = [
   {
     id: "platform",
     label: "Hosted agent platform",
-    blurb: "Vapi, Retell, Bland, ElevenLabs, LiveKit — the agent lives on their platform, not in a repo you can point at.",
+    blurb: "Vapi, Retell, Bland, ElevenLabs — the agent lives on their platform, not in a repo you can point at.",
     icon: "solar:phone-calling-rounded-linear",
     placeholder: "asst_9f2c…",
     depth: "Exact — we read the assistant config from the provider",
@@ -282,167 +284,249 @@ const file = (path, note) => ({ kind: "file", path, note });
 const note = (text) => ({ kind: "note", text });
 const json = (label, value) => ({ kind: "json", label, value });
 
-const TOOLS = [
-  { name: "verify_identity", args: ["phone", "postcode"], desc: "Match a caller to an account before touching it." },
-  { name: "send_otp", args: [], desc: "Text a one-time code to the number on file." },
-  { name: "check_otp", args: ["code"], desc: "Verify a code the caller reads back. Never inferred." },
-  { name: "create_guest_customer", args: ["first_name"], desc: "Open a guest record when a caller has no account." },
-  { name: "lookup_order", args: ["order_id"], desc: "Fetch an order, its status and delivery history." },
-  { name: "get_return_window", args: ["order_id"], desc: "Days remaining, and whether the item is excluded." },
-  { name: "get_refund_quote", args: ["order_id", "reason"], desc: "What would be refunded, before anything is promised." },
-  { name: "issue_refund", args: ["order_id", "amount", "caller_confirmed"], desc: "Refund to the original payment method." },
-  { name: "send_replacement", args: ["order_id", "reason"], desc: "Ship a replacement instead of refunding." },
-  { name: "get_refund_status", args: ["order_id"], desc: "Where an in-flight refund has got to." },
-  { name: "apply_goodwill_credit", args: ["amount"], desc: "Store credit, capped by policy." },
-  { name: "escalate_to_human", args: ["reason"], desc: "Hand the call to a person." },
-];
-
-const RULES = [
-  "Never issue a refund outside the return window without a supervisor.",
-  "Never read back more than the last four digits of a card.",
-  "Verify identity before disclosing or changing anything on an account.",
-  "An OTP must be read aloud by the caller — never inferred or guessed.",
-  "Goodwill credit is capped at £25 per call.",
-];
-
-const SEED = [
-  { name: "customers", rows: 240, note: "40 with saved cards, 12 guests" },
-  { name: "orders", rows: 610, note: "18% delivered outside the window" },
-  { name: "returns", rows: 95, note: "22 excluded items" },
-  { name: "payments", rows: 480, note: "9 expired cards" },
-  { name: "policies", rows: 12, note: "window, exclusions, credit cap" },
-];
-
 /* The tools a build is narrating: the source's own when it carries them (a
-   template, a twin, a scratch build), else the agent's read from its code. */
-const toolsOfSource = (source) => (Array.isArray(source?.tools) ? source.tools : TOOLS);
+   template, a twin, a scratch build), else the world read from the agent. */
+const toolsOfSource = (source) => (Array.isArray(source?.tools) && source.tools.every((t) => t && typeof t === "object")
+  ? source.tools
+  : worldToolsOf(worldFor(source), source));
+
+/*
+  How the agent is read, which decides what the narration may claim. Only a
+  repository or an uploaded bundle has code, files and READMEs to read; a
+  platform agent is read from its assistant config; a prompt from the
+  prompt; an agent we can only call from its record and conversations.
+*/
+const readKindOf = (source) => {
+  const k = source?.kind;
+  if (k === "repo" || k === "upload") return "code";
+  if (k === "template" || k === "twin") return "world";
+  if (k === "platform" && (source.agentMode === "prompt" || source.provider === "builtin" || source.provider === "other")) return "prompt";
+  if (k === "platform") return "platform";
+  return "endpoint";
+};
+
+/* Sealed, live or prompt only — the agent's own proof kind when it's known
+   (RSI PRD, Sealed and live environments), else what its source implies. */
+const proofOf = (source) => {
+  if (source?.connectedAgent) return proofKindOf(source.connectedAgent).kind;
+  const read = readKindOf(source);
+  if (read === "platform" || read === "endpoint") return "live";
+  if (read === "prompt") return "prompt-only";
+  return "sealed";
+};
+
+const providerLabel = (id) => PLATFORM_PROVIDERS.find((o) => o.value === id)?.label || "the platform";
+
+/* "12 sub-goals · how" — the distinct named sub-goals the scenarios use, when
+   the caller knows them; never a fixed number. */
+const subGoalLine = (source, how) => {
+  const n = source?.subGoalCount;
+  return n ? `${n} sub-goal${n === 1 ? "" : "s"} · ${how}` : `one check per sub-goal · ${how}`;
+};
 
 const STAGES = {
-  understand: (source) => ({
-    title: "Understanding the agent",
-    steps: [
-      think(`Reading ${source.value || source.repoUrl || (source.agentId ? `${source.provider || "the platform"} agent ${source.agentId}` : "the agent")} — entrypoint, tool registry, prompt package.`),
-      tool("read_source", "142 files · Python 3.12 · Dockerfile, db/schema.sql"),
-      think("Taking each tool's signature from the code rather than its name, so the arguments and their permitted values are exact."),
-      tool("extract_tools", toolsOfSource(source).length
-        ? `${toolsOfSource(source).length} tools${source?.tools ? "" : " · 9 with required arguments"}`
-        : "no tools yet — the world will answer whatever the first agent you connect calls"),
-      /* One signature, read the way the Contract tab lists it — names, types, permitted values. */
-      (() => {
-        const sample = toolsOfSource(source).find((t) => t.name === "issue_refund") || toolsOfSource(source).find((t) => t.args?.length) || toolsOfSource(source)[0];
-        return sample
-          ? json(sample.name, argsSignatureLine(sample) || "no arguments")
-          : json("issue_refund", "order_id: str · amount: float · caller_confirmed: bool (must be true)");
-      })(),
-      think("Separating rules the code enforces from rules only the prompt states — the second kind is where agents drift."),
-      tool("extract_rules", `${RULES.length} hard rules · 2 enforced in code, 2 prompt-only, 1 found in prose`),
-      file("contract.json", "tools, permitted values, hard rules, the real data"),
-      note(
-        "Contract written from the source, not from a form — nothing here was typed by hand. " +
-        "Three of the five rules are not enforced anywhere in code, so the code will happily let the agent break them — those are worth the hardest scenarios. " +
-        "One of the three was found in a README rather than the prompt, and a README is writable by anything in the repo, so it is recorded with its origin and held back until you accept it.",
-      ),
-    ],
-    chips: ["build the world →", "show me the tools"],
-  }),
+  understand: (source) => {
+    const read = readKindOf(source);
+    const tools = toolsOfSource(source);
+    const world = worldFor(source);
+    const ws = source?.worldSource;
+    const who = source?.agentName || source?.connectedAgent?.name || "the agent";
+    const sample = tools.find((t) => t.name === world.sampleTool) || tools.find((t) => t.args?.length) || tools[0];
+    const opening = {
+      code: [
+        think(`Reading ${source.value || source.repoUrl || "the agent"} — entrypoint, tool registry, prompt package.`),
+        tool("read_source", "142 files · Python 3.12 · Dockerfile, db/schema.sql"),
+        think("Taking each tool's signature from the code rather than its name, so the arguments and their permitted values are exact."),
+      ],
+      platform: [
+        think(`Reading the assistant config from ${providerLabel(source.provider)} — the prompt, tools and settings ${who} runs with.`),
+        tool("read_config", `${providerLabel(source.provider)} assistant ${source.agentId || source.value || ""}`.trim()),
+      ],
+      prompt: [
+        think(`Reading ${who}'s prompt — the instructions it follows and the tools it names.`),
+        tool("read_prompt", "system prompt"),
+      ],
+      world: [
+        think(`Reading ${source.value || "the world"} — its tools, tables and rules.`),
+      ],
+      endpoint: [
+        think(`We can only call ${who}, so we read its record and recent conversations — not its code.`),
+        tool("read_record", "agent record · recent conversations"),
+      ],
+    }[read];
+    const fromWorld = ws?.kind === "template"
+      ? [think(`Starting from the ${ws.label} world — its tables, tools and rules as designed — and checking the agent's own tools against it.`)]
+      : ws?.kind === "mcp"
+        ? [tool("list_tools", `${ws.label} · the MCP server's tools become the world's`)]
+        : [];
+    const rules = read === "code"
+      ? [
+        think("Separating rules the code enforces from rules only the prompt states — the second kind is where agents drift."),
+        tool("extract_rules", `${world.rules.length} hard rules · 2 enforced in code, 2 prompt-only, 1 found in prose`),
+        file("contract.json", "tools, permitted values, hard rules, the real data"),
+        note(
+          "Contract written from the source, not from a form — nothing here was typed by hand. " +
+          "Three of the five rules are not enforced anywhere in code, so the code will happily let the agent break them — those are worth the hardest scenarios. " +
+          "One of the three was found in a README rather than the prompt, and a README is writable by anything in the repo, so it is recorded with its origin and held back until you accept it.",
+        ),
+      ]
+      : [
+        tool("extract_rules", `${world.rules.length} hard rules · ${read === "world" || ws?.kind === "template" ? "as the world states them" : "read from the prompt"}`),
+        note(
+          "Contract written from what we read, not from a form — correct anything here in chat. " +
+          "Rules stated only in a prompt are graded rather than guaranteed, so they get the hardest scenarios.",
+        ),
+      ];
+    return {
+      title: "Understanding the agent",
+      steps: [
+        ...opening,
+        ...fromWorld,
+        tool("extract_tools", tools.length
+          ? `${tools.length} tools${read === "code" && !source?.tools ? " · 9 with required arguments" : ""}`
+          : "no tools yet — the world will answer whatever the agent calls"),
+        /* One signature, read the way the Contract tab lists it — names, types, permitted values. */
+        sample ? json(sample.name, argsSignatureLine(sample) || "no arguments") : json("tools", "none read yet"),
+        ...rules,
+      ],
+      chips: ["build the world →", "show me the tools"],
+    };
+  },
 
-  build: (source) => ({
-    title: "Building the world its tools act on",
-    steps: [
-      think("The agent's tools have to hit something that answers truthfully, including a truthful refusal."),
-      tool("write_handlers", toolsOfSource(source).length
-        ? `${toolsOfSource(source).length} handlers · one per tool`
-        : "no handlers yet — written when an agent's tools are read"),
-      think("Seeding what the use cases need, including the awkward rows — a world of happy customers proves nothing."),
-      tool("seed_world", "1,437 rows across 5 tables"),
-      json("seeded_edges", "18% of orders outside the window · 22 excluded items · 9 expired cards · 12 guests"),
-      tool("write_checks", "12 sub-goals · each check written as code in checks/<goal>.py"),
-      file("world/handlers.py", "answers every tool call from real state"),
-      note(
-        "The world is up and resettable. Grading is settled from world state and every tool call, " +
-        "so a scenario asserts the order is actually cancelled rather than that the agent said so.",
-      ),
-    ],
-    chips: ["write the scenarios →", "what did you seed?"],
-  }),
+  build: (source) => {
+    const world = worldFor(source);
+    const tools = toolsOfSource(source);
+    const proof = proofOf(source);
+    const seeded = tool("seed_world", `${seededRowsOf(world).toLocaleString()} rows across ${world.seed.length} tables`);
+    /* Live: the agent's tools reach the customer's real systems, so only the
+       starting state is checked and a model judges sub-goals (RSI PRD). */
+    if (proof === "live") {
+      return {
+        title: "Staging the starting state",
+        steps: [
+          think("This agent runs live in your account, so its tools reach your real systems — the world stages each scenario's starting state; it doesn't answer the tools."),
+          seeded,
+          json("seeded_edges", world.edges),
+          tool("write_checks", subGoalLine(source, "judged by a model from the conversation")),
+          note("Live: only the starting state is checked, and a model judges each sub-goal from the conversation. Results from this environment are labelled Live."),
+        ],
+        chips: ["write the scenarios →", "what did you seed?"],
+      };
+    }
+    return {
+      title: "Building the world its tools act on",
+      steps: [
+        think("The agent's tools have to hit something that answers truthfully, including a truthful refusal."),
+        tool("write_handlers", tools.length
+          ? `${tools.length} handlers · one per tool`
+          : "no handlers yet — written when an agent's tools are read"),
+        think("Seeding what the use cases need, including the awkward rows — a world of happy customers proves nothing."),
+        seeded,
+        json("seeded_edges", world.edges),
+        tool("write_checks", subGoalLine(source, "each checked against the world's end state and the agent's tool calls")),
+        ...(readKindOf(source) === "code" ? [file("world/handlers.py", "answers every tool call from real state")] : []),
+        note(proof === "prompt-only"
+          ? `The world is up and resettable. The prompt runs on our model without your own tools, so a scenario asserts ${world.proof} in this world — results are labelled Prompt only.`
+          : "The world is up and resettable. In a sealed environment grading is settled from world state and every tool call, " +
+            `so a scenario asserts ${world.proof} rather than that the agent said so.`),
+      ],
+      chips: ["write the scenarios →", "what did you seed?"],
+    };
+  },
 
   scenarios: (source) => {
     /* A count set on the connect form is honoured exactly; with none the
        builder drafts across the whole use-case range. */
     const n = source?.scenarioCount || source?.draftCount || 8;
     /* Each scenario is checked as it's written, not all at the end — so the
-       narration reports checks as they land, and the scenario the third gate
-       sends back (the third one written, when there are enough) is rewritten
-       and re-checked before the next is kept. The Scenarios table shows the
-       same thing row by row: Checking…, then Proved. */
+       narration reports checks as they land, and the scenario a check sends
+       back (the third one written, when there are enough) is rewritten and
+       re-checked before the next is kept. The Scenarios table shows the same
+       thing row by row: Checking…, then Proved. */
     const third = Math.min(3, n);
     const early = Math.max(1, Math.min(2, n - 1));
     const mid = Math.max(third, Math.round(n * 0.6));
+    /* The three validity checks are a sealed environment's (RSI PRD); a live
+       or prompt-only one checks that the starting state is ready. */
+    const sealed = proofOf(source) === "sealed";
+    const checks = sealed
+      ? [
+        think("Each one is checked as soon as it's written — three gates, all code, no model: ready, solvable, not vacuous — and kept only once it passes."),
+        tool("write + check", `${early} of ${n} kept · each passed ready, solvable and not vacuous`),
+        tool("gate · not vacuous", `scenario ${third} failed — running nothing still passed its checks`),
+        note(
+          `Scenario ${third} was sent back, not kept: its identity check asserted ` +
+          "\"no modification happened before authentication\", which is trivially true when nothing happened. " +
+          "A check that passes while the agent did nothing grades nothing while reporting a result.",
+        ),
+        tool("rewrite + re-check", `scenario ${third} rewritten · all three gates pass · kept`),
+      ]
+      : [
+        think("Each one is checked as soon as it's written — its starting state has to be ready before it's kept."),
+        tool("write + check", `${early} of ${n} kept · starting state ready`),
+        tool("check · ready", `scenario ${third} failed — it presumed a record the starting state doesn't hold`),
+        tool("rewrite + re-check", `scenario ${third} rewritten · starting state ready · kept`),
+      ];
     return ({
-    title: "Proving scenarios",
-    steps: [
-      think(source?.scenarioCount
-        ? `Writing exactly ${n} — the number you asked for — spread across rules, traps, adversarial callers and edge cases.`
-        : `Writing ${n}, one per real use case, each with its own persona brief and sub-goals.`),
-      think("Each one is checked as soon as it's written — three gates, all code, no model: ready, solvable, not vacuous — and kept only once it passes."),
-      tool("write + check", `${early} of ${n} kept · each passed ready, solvable and not vacuous`),
-      tool("gate · not vacuous", `scenario ${third} failed — running nothing still passed its checks`),
-      note(
-        `Scenario ${third} was sent back, not kept: its identity check asserted ` +
-        "\"no modification happened before authentication\", which is trivially true when nothing happened. " +
-        "A check that passes while the agent did nothing grades nothing while reporting a result.",
-      ),
-      tool("rewrite + re-check", `scenario ${third} rewritten · all three gates pass · kept`),
-      tool("write + check", `${mid} of ${n} kept`),
-      tool("write + check", `${n} of ${n} kept · 1 rewritten`),
-      file("scenarios/", "one folder each: scenario.json, setup.py, ready.py, checks/"),
-      note(`${n} of ${n} kept, each proved as it was written. Only proved scenarios are ever run.`),
-    ],
-    chips: ["use this environment →", "write 4 more edge cases"],
-  });
+      title: "Proving scenarios",
+      steps: [
+        think(source?.scenarioCount
+          ? `Writing exactly ${n} — the number you asked for — spread across rules, traps, adversarial callers and edge cases.`
+          : `Writing ${n}, one per real use case, each with its own persona brief and sub-goals.`),
+        ...checks,
+        tool("write + check", `${mid} of ${n} kept`),
+        tool("write + check", `${n} of ${n} kept · 1 rewritten`),
+        ...(readKindOf(source) === "code" ? [file("scenarios/", "one folder each: scenario.json, setup.py, ready.py, checks/")] : []),
+        note(`${n} of ${n} kept, each proved as it was written. Only proved scenarios are ever run.`),
+      ],
+      chips: ["use this environment →", "write 4 more edge cases"],
+    });
   },
 };
 
-const ASKS = [
+const asksOf = (world, source) => [
   {
     match: /tool|argument|permitted/i,
     steps: [
-      json("tools", TOOLS.map((t) => `${t.name}(${t.args.join(", ") || ""})`).join(" · ")),
-      note("Read from the source, so the argument names and permitted values are the agent's real ones — that is what a hand-typed list could never give you."),
+      json("tools", toolsOfSource(source).map((t) => `${t.name}(${(t.args || []).join(", ")})`).join(" · ")),
+      note(readKindOf(source) === "code"
+        ? "Read from the source, so the argument names and permitted values are the agent's real ones — that is what a hand-typed list could never give you."
+        : "Read from what the agent exposes — correct any of them here in chat."),
     ],
   },
   {
     match: /seed|data|world/i,
     steps: [
-      json("seeded", SEED.map((s) => `${s.name} ${s.rows}`).join(" · ")),
-      note("The distribution is the test: 18% of orders sit outside the return window, 22 items are excluded, 9 cards have expired."),
+      json("seeded", world.seed.map((t) => `${t.name} ${t.rows}`).join(" · ")),
+      note(`The distribution is the test: ${world.edges}.`),
     ],
   },
   {
     match: /rule|guardrail|policy/i,
     steps: [
-      json("hard_rules", RULES.join(" · ")),
-      note("Two are enforced in code. Two more exist only in the prompt, which is why they are graded rather than guaranteed — and one was read out of prose, so nothing grades against it until you confirm it."),
+      json("hard_rules", world.rules.join(" · ")),
+      note(readKindOf(source) === "code"
+        ? "Two are enforced in code. Two more exist only in the prompt, which is why they are graded rather than guaranteed — and one was read out of prose, so nothing grades against it until you confirm it."
+        : "Rules stated only in a prompt are graded rather than guaranteed."),
     ],
   },
   {
+    /* Asked about, not asked for — "write 5 more scenarios" is handled
+       before this and proposes them for real. */
     match: /more (scenario|edge|case)/i,
     steps: [
-      think("Reading the 8 that exist first so I do not repeat them."),
-      tool("draft_scenarios", "4 drafted · abusive caller, double refund attempt, wrong order id, silence mid-call"),
-      tool("gates", "4 / 4 passed ready, solvable and not vacuous"),
-      note("Four added. The double-refund one is the interesting failure — it needs the agent to notice a refund is already in flight."),
+      note("Ask me to write them — for example “write 5 more scenarios” — and I'll propose them for review on the Scenarios tab."),
     ],
   },
 ];
 
 export const builderRun = (stage, source, text = "") => {
   if (stage === "ask") {
-    const hit = ASKS.find((a) => a.match.test(text));
+    const hit = asksOf(worldFor(source), source).find((a) => a.match.test(text));
     if (hit) return { title: null, steps: hit.steps, chips: [] };
     return {
       title: null,
-      steps: [note("In this prototype I answer on tools, seeded data, rules and adding scenarios — and the stage buttons drive the rest.")],
+      steps: [note("Ask about tools, data or rules, or ask for more scenarios.")],
       chips: [],
     };
   }
@@ -458,6 +542,12 @@ const REACH_BY_MODALITY = {
   coding: { agentType: "mcp_agent", surface: "chat" },
 };
 
+/* An agent that only talks one way (its Type on the agent page) is built for that way. */
+const soleChannelOf = (source) => {
+  const ch = source?.connectedAgent?.values?.channels;
+  return Array.isArray(ch) && ch.length === 1 ? ch[0] : null;
+};
+
 const agentLabelOf = (source) => String(source?.agentName || source?.name || "").trim();
 
 /**
@@ -467,21 +557,27 @@ const agentLabelOf = (source) => String(source?.agentName || source?.name || "")
  * caller. (A fixed id made every build the same environment and overwrote
  * the seeded demo that shares it.) The seeded demo passes its own id.
  */
-export const derivedEnvironment = (source, { id } = {}) => ({
-  id: id || "env-returns-line",
-  ...(REACH_BY_MODALITY[source?.channel] || REACH_BY_MODALITY[detectedStack(source).modality] || REACH_BY_MODALITY.voice),
-  /* Named by whoever started the build (the agent page asks); otherwise after
-     the agent it tests. The demo name only when nothing is known. */
-  name: source?.envName || (agentLabelOf(source) ? `${agentLabelOf(source)} environment` : "Returns & refunds line"),
-  domain: "support",
-  tagline: "Read from your agent",
-  description:
-    "Phone support for an online storefront. Callers chase deliveries, ask for refunds and dispute charges; the agent resolves inside policy or hands over.",
-  difficulty: "Advanced",
-  popularity: 1,
-  builtFrom: source,
-  seed: { tables: SEED },
-  tools: TOOLS.map((t) => ({ name: t.name, desc: t.desc, args: t.args })),
-  rules: RULES,
-  evalPreset: ["task_success", "policy_adherence"],
-});
+export const derivedEnvironment = (source, { id } = {}) => {
+  /* The world the agent's own tools act on — read from what it is. */
+  const world = worldFor(source);
+  return {
+    id: id || "env-returns-line",
+    /* A chat agent on a voice platform (Vapi chat, ElevenLabs chat) is
+       still reached in chat — what it was connected as decides, before the
+       platform's usual modality. */
+    ...(REACH_BY_MODALITY[source?.channel] || REACH_BY_MODALITY[soleChannelOf(source)] || REACH_BY_MODALITY[source?.agentType] || REACH_BY_MODALITY[detectedStack(source).modality] || REACH_BY_MODALITY.voice),
+    /* Named by whoever started the build (the agent page asks); otherwise after
+       the agent it tests. The demo name only when nothing is known. */
+    name: source?.envName || (agentLabelOf(source) ? `${agentLabelOf(source)} environment` : "Returns & refunds line"),
+    domain: world.domain,
+    tagline: "Read from your agent",
+    description: world.description,
+    difficulty: "Advanced",
+    popularity: 1,
+    builtFrom: source,
+    seed: { tables: world.seed },
+    tools: worldToolsOf(world, source),
+    rules: world.rules,
+    evalPreset: ["task_success", "policy_adherence"],
+  };
+};

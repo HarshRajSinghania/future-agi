@@ -6,6 +6,7 @@ import Iconify from "src/components/iconify";
 import ReactApexChart from "../components/SafeApexChart";
 import { useOptionalSimStore } from "../store";
 import { runIdentityOf } from "../_mock/runIdentity";
+import { agentStatusOf, isComingSoon } from "../_mock/rsiModel";
 import { MONO, ago, passRate, plural } from "./agentViewUtils";
 import { QuietTag } from "./AgentBits";
 import { clickable, focusRing } from "../components/clickable";
@@ -21,10 +22,9 @@ const rateTone = (r) => (r == null ? "text.disabled" : r >= 80 ? "#16A34A" : r >
 
 /**
  * The agent at a glance — how it's doing and what to do next, nothing more:
- * three numbers (production, the last simulation, improvements), the one
- * next step worth taking, then the latest runs. Pass rate by version lives on
- * Versions with what changed in each; production's detail sits below,
- * folded until it's opened.
+ * three numbers (the version in production, the last simulation,
+ * improvements), the one next step worth taking, then the latest runs. Pass
+ * rate by version lives on Versions; real calls live in its Observe project.
  */
 export default function AgentOverviewTab({
   agent, runs, inProgress, scopedRuns, statsOf, production, improvements,
@@ -34,7 +34,7 @@ export default function AgentOverviewTab({
   return (
     <Stack spacing={2.5}>
       <KpiStrip
-        agent={agent} runs={scoped} statsOf={statsOf} scopeEnv={scopeEnv} production={production} improvements={improvements}
+        agent={agent} runs={scoped} anyRuns={(runs || []).length > 0} statsOf={statsOf} scopeEnv={scopeEnv} production={production} improvements={improvements}
         onSwitch={onSwitch} onOpenRun={onOpenRun} onTab={onTab}
       />
       <RecentRuns agent={agent} runs={runs} inProgress={inProgress || []} onOpenRun={onOpenRun} />
@@ -45,12 +45,12 @@ AgentOverviewTab.propTypes = {
   agent: PropTypes.object, source: PropTypes.object, files: PropTypes.array, runs: PropTypes.array, inProgress: PropTypes.array,
   scopedRuns: PropTypes.array, statsOf: PropTypes.func, production: PropTypes.object, improvements: PropTypes.object,
   scopeEnv: PropTypes.object, scopeEnvVersion: PropTypes.string, scopes: PropTypes.array,
-  onScopeEnv: PropTypes.func, onSwitch: PropTypes.func, onOpenFile: PropTypes.func, onOpenRun: PropTypes.func, onTab: PropTypes.func,
+  onScopeEnv: PropTypes.func, onSwitch: PropTypes.func, onOpenRun: PropTypes.func, onTab: PropTypes.func,
 };
 
 /* ── three numbers and the next step ───────────────────────────────────────── */
 
-function KpiStrip({ agent, runs, statsOf, scopeEnv, production, improvements, onSwitch, onOpenRun, onTab }) {
+function KpiStrip({ agent, runs, anyRuns, statsOf, scopeEnv, production, improvements, onSwitch, onOpenRun, onTab }) {
   const latestStats = statsOf(agent.latest);
   const running = scopeEnv ? agent.usedIn.find((u) => u.envId === scopeEnv.envId) : null;
   /* Behind what's in production — a draft nobody released isn't something
@@ -66,10 +66,13 @@ function KpiStrip({ agent, runs, statsOf, scopeEnv, production, improvements, on
     : "";
   const prod = production || {};
   const imp = improvements || { total: 0 };
+  /* Archived or deleted: read-only, so nothing new is offered — nor for a
+     kind improvements can't run on yet. */
+  const stopped = ["archived", "deleted"].includes(agentStatusOf(agent).status) || isComingSoon(agent);
 
   /* The one next step — the first of these that applies. */
   const next = behind
-    ? { text: `${running.envName} still tests ${running.running} — ${agent.production} is in production.`, label: `Switch to ${agent.production}`, onClick: () => onSwitch(running.envId) }
+    ? { text: `${running.envName} still tests ${running.running} — ${agent.production} is in production.`, label: "Follow production", onClick: () => onSwitch(running.envId) }
     : !latestStats && agent.latest !== agent.production && agent.usedIn.length
       ? { text: `${agent.latest} is a draft that hasn't run yet — test it before it's released.`, label: "See versions", onClick: () => onTab("versions") }
       : failing && lastRun
@@ -83,27 +86,43 @@ function KpiStrip({ agent, runs, statsOf, scopeEnv, production, improvements, on
         "& > *": { borderColor: "divider", borderStyle: "solid", borderWidth: 0 },
         "& > *:not(:first-of-type)": { borderLeftWidth: { md: 1 }, borderTopWidth: { xs: 1, md: 0 } },
       }}>
+        {/* The version in production; its real calls live in its Observe project. */}
         <Kpi
-          label={<>In production · <Box component="span" sx={{ fontFamily: MONO }}>{agent.production}</Box></>}
-          value={!prod.on ? "Not watched" : prod.rate == null ? "—" : `${prod.rate}%`}
-          tone={prod.on && prod.rate != null ? rateTone(prod.rate) : null}
-          sub={prod.on ? `of ${(prod.sampled || 0).toLocaleString()} sampled calls passed · ${(prod.weekTotal || 0).toLocaleString()} this week` : "Only simulations are scored"}
-          action={prod.on ? { label: "View calls", onClick: prod.onOpen } : { label: prod.turnOnLabel || "Watch production calls", onClick: prod.onTurnOn }}
+          label="In production"
+          value={agent.production || "—"}
+          mono
+          sub={prod.project ? `Observe project: ${prod.project.name} · linked` : "Observe project not linked"}
+          action={prod.project
+            ? { label: "Open in Observe", onClick: prod.onOpenProject }
+            : { label: "Link a project", onClick: prod.onLink }}
         />
         <Kpi
           label={lastRun ? <>Last simulation · <Box component="span" sx={{ fontFamily: MONO }}>{lastRun.agentVersion}</Box></> : "Last simulation"}
           value={lastRate == null ? "—" : `${lastRate}%`}
           tone={rateTone(lastRate)}
-          sub={lastRun ? `${lastRun.passed} of ${lastRun.measured ?? lastRun.total} passed · ${ago(lastRun.finishedAt)}` : "No finished run yet"}
+          sub={lastRun
+            ? `${lastRun.passed} of ${lastRun.measured ?? lastRun.total} passed · ${ago(lastRun.finishedAt)}`
+            : anyRuns ? "No full run on the current environment version yet" : "No finished run yet"}
           action={lastRun ? { label: "Open run", onClick: () => onOpenRun(lastRun) } : null}
         />
         <Kpi
           label="Improvements"
           value={String(imp.total)}
           sub={imp.ready ? `${imp.ready} ready for review` : imp.running ? `${imp.running} running` : imp.total ? "None waiting on you" : "None yet"}
-          action={{ label: imp.total ? "Open improvements" : "Start one", onClick: () => onTab("improvements") }}
+          action={imp.total || !stopped ? { label: imp.total ? "Open improvements" : "Start one", onClick: () => onTab("improvements") } : null}
         />
       </Box>
+      {/* No traces or call logs reach Observe: Fix has nothing to find this
+          agent by, so it's off — said here; "Link a project" sits in the
+          production card just above. */}
+      {!prod.project && (
+        <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2, py: 1, borderTop: "1px solid", borderColor: "divider" }}>
+          <Iconify icon="solar:info-circle-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+          <Typography noWrap sx={{ typography: "s2", color: "text.secondary", flex: 1, minWidth: 0 }}>
+            Fix is off for this agent — it sends no traces or call logs yet. Simulations still run and grade.
+          </Typography>
+        </Stack>
+      )}
       {next && (
         <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2, py: 1, borderTop: "1px solid", borderColor: "divider" }}>
           <Iconify icon="solar:arrow-right-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
@@ -120,13 +139,14 @@ function KpiStrip({ agent, runs, statsOf, scopeEnv, production, improvements, on
   );
 }
 KpiStrip.propTypes = {
+  anyRuns: PropTypes.bool,
   agent: PropTypes.object, runs: PropTypes.array, statsOf: PropTypes.func, scopeEnv: PropTypes.object, production: PropTypes.object,
   improvements: PropTypes.object, onSwitch: PropTypes.func, onOpenRun: PropTypes.func, onTab: PropTypes.func,
 };
 
 /* One number: a label, the value, one line under it, one action. */
-function Kpi({ label, value, tone, extra, sub, action }) {
-  const word = !/^[—\d]/.test(value);
+function Kpi({ label, value, tone, extra, sub, action, mono }) {
+  const word = !mono && !/^[—\d]/.test(value);
   return (
     <Stack sx={{ px: 2, py: 1.75, minWidth: 0 }} spacing={0.5}>
       <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{label}</Typography>
@@ -134,6 +154,7 @@ function Kpi({ label, value, tone, extra, sub, action }) {
         <Typography noWrap sx={{
           fontSize: word ? 18 : 24, fontWeight: 700, lineHeight: "30px", fontVariantNumeric: "tabular-nums",
           color: word ? "text.secondary" : tone || "text.primary",
+          ...(mono && { fontFamily: MONO }),
         }}>
           {value}
         </Typography>
@@ -155,13 +176,13 @@ function Kpi({ label, value, tone, extra, sub, action }) {
     </Stack>
   );
 }
-Kpi.propTypes = { label: PropTypes.node, value: PropTypes.string, tone: PropTypes.string, extra: PropTypes.node, sub: PropTypes.node, action: PropTypes.object };
+Kpi.propTypes = { label: PropTypes.node, value: PropTypes.string, tone: PropTypes.string, extra: PropTypes.node, sub: PropTypes.node, action: PropTypes.object, mono: PropTypes.bool };
 
 /* ── pass rate by version ─────────────────────────────────────────────────── */
 
 /* Only the versions that ran here, and the latest — a row of "not run" gaps
    says nothing; one line says how many were skipped. */
-export function PassRateCard({ agent, statsOf, scopeEnv, scopeEnvVersion, scopes, onScopeEnv }) {
+export function PassRateCard({ agent, statsOf, scopeEnv, scopeEnvVersion, scopes, onScopeEnv, heldBack = null }) {
   const theme = useTheme();
   const [chartReady, setChartReady] = useState(false);
   useEffect(() => {
@@ -227,7 +248,12 @@ export function PassRateCard({ agent, statsOf, scopeEnv, scopeEnvVersion, scopes
       ) : (
         <Stack alignItems="center" justifyContent="center" spacing={0.75} sx={{ flex: 1, minHeight: 220, px: 3, textAlign: "center" }}>
           <Iconify icon="solar:chart-2-linear" width={26} sx={{ color: "text.disabled" }} />
-          <Typography sx={{ typography: "s2", color: "text.subtitle" }}>{"Each version's pass rate shows here once it runs every scenario."}</Typography>
+          <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
+            {heldBack
+              /* Runs exist here, but none on every scenario of this version. */
+              ? `No run yet on every scenario of environment ${scopeEnvVersion || "the current version"}. Earlier runs here ${{ older: "were on an older version", subset: "ran only some scenarios", "older-or-subset": "were on an older version or ran only some scenarios" }[heldBack]}.`
+              : "Each version's pass rate shows here once it runs every scenario."}
+          </Typography>
         </Stack>
       )}
       {head && skipped > 0 && (
@@ -240,6 +266,7 @@ export function PassRateCard({ agent, statsOf, scopeEnv, scopeEnvVersion, scopes
 }
 PassRateCard.propTypes = {
   agent: PropTypes.object, statsOf: PropTypes.func, scopeEnv: PropTypes.object, scopeEnvVersion: PropTypes.string, scopes: PropTypes.array, onScopeEnv: PropTypes.func,
+  heldBack: PropTypes.oneOf(["older", "subset", "older-or-subset"]),
 };
 
 
@@ -283,7 +310,7 @@ function RecentRuns({ agent, runs, inProgress, onOpenRun }) {
       ),
     },
     { id: "env", header: "Environment", meta: { flex: 1.2 }, minSize: 160, cell: ({ row: { original: r } }) => <Typography noWrap title={r.envName} sx={{ typography: "s2" }}>{r.envName}</Typography> },
-    { id: "pair", header: "Agent × environment", size: 180, cell: ({ row: { original: r } }) => <Typography noWrap sx={{ typography: "s3", fontWeight: 600, fontFamily: MONO }}>{pairOf(r)}</Typography> },
+    { id: "pair", header: "Agent × environment", size: 250, cell: ({ row: { original: r } }) => <Typography noWrap title={pairOf(r)} sx={{ typography: "s3", fontWeight: 600, fontFamily: MONO }}>{pairOf(r)}</Typography> },
     {
       id: "rate", header: "Pass rate", size: 200,
       cell: ({ row: { original: r } }) => {
@@ -313,7 +340,7 @@ function RecentRuns({ agent, runs, inProgress, onOpenRun }) {
       </Stack>
       {recent.length === 0 ? (
         <Typography sx={{ py: 1.5, typography: "s2", color: "text.secondary" }}>
-          {agent.usedIn.length ? "No simulations have run against this agent yet." : "No environment yet — build one from this agent to start running simulations."}
+          {agent.usedIn.length ? "No simulations have run against this agent yet." : ["archived", "deleted"].includes(agentStatusOf(agent).status) ? "No simulations ran against this agent." : "No environment yet — build one from this agent to start running simulations."}
         </Typography>
       ) : (
         <FitDataTable columns={columns} data={recent} getRowId={(r) => `${r.envId}-${r.id}`} onRowClick={onOpenRun} />

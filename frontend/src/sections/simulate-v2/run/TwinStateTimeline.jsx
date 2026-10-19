@@ -35,7 +35,7 @@ export default function TwinStateTimeline({ envState, task }) {
     return (
       <Box sx={{ p: 3, textAlign: "center" }}>
         <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-          This environment isn&apos;t backed by a service twin.
+          This environment doesn&apos;t copy any outside services.
         </Typography>
       </Box>
     );
@@ -227,7 +227,7 @@ export default function TwinStateTimeline({ envState, task }) {
 
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 1, border: "1px dashed", borderColor: "divider" }}>
         <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          Clone end-state at run finish:{" "}
+          Sandbox end state at run finish:{" "}
           {services.map((sId, i) => (
             <Box component="span" key={sId}>
               {i > 0 && " · "}

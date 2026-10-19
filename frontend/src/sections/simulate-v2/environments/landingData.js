@@ -41,11 +41,22 @@ export const detectPaste = (raw) => {
     };
   }
   if (GITLAB.test(text) || BITBUCKET.test(text)) {
-    const host = GITLAB.test(text) ? "GitLab" : "Bitbucket";
+    const host = GITLAB.test(text) ? "gitlab" : "bitbucket";
+    const label = host === "gitlab" ? "GitLab" : "Bitbucket";
+    /* "acme-inc/claims-voice" from any of the URL forms, subgroups kept. */
+    const repo = text.replace(/^(?:https?:\/\/|git@)(?:www\.)?(?:gitlab\.com|bitbucket\.org)[/:]/i, "").replace(/\.git$|\/+$/g, "").split("/-/")[0];
     return {
-      kind: "git-later", label: `${host} repository`, detail: text.replace(/^https?:\/\//, ""), logo: host.toLowerCase(), tag: "Coming soon",
-      note: `${host} is coming soon. Upload the folder instead, or connect it from GitHub.`,
-      blocked: true,
+      kind: host, label: `${label} repository`, detail: repo, logo: host,
+      note: `Read through your ${label} connection — fixes open as draft ${host === "gitlab" ? "merge" : "pull"} requests.`,
+      choice: "source", prefill: { repo, host },
+    };
+  }
+  /* A Dialogflow CX agent's resource name. */
+  if (/^projects\/[\w-]+\/locations\/[\w-]+\/agents\/[\w-]+$/i.test(text)) {
+    return {
+      kind: "google_cx", label: "Google CX agent", detail: text.split("/").pop(), icon: "simple-icons:dialogflow",
+      note: "Tested on a draft flow version in your project — reference the service account key next.",
+      choice: "hosted", prefill: { agentType: "chat", platform: "google_cx", agentId: text },
     };
   }
   if (/^vault:\/\/|^aws-sm:\/\/|^gcp-sm:\/\//i.test(text)) {
@@ -58,7 +69,7 @@ export const detectPaste = (raw) => {
   if (RAW_KEY.test(text) && !UUID.test(text) && !/^(asst|agent)_/i.test(text)) {
     return {
       kind: "raw-key", label: "Looks like an API key", detail: "Not kept", icon: "solar:shield-warning-linear",
-      note: "Keys never go in here. Add it to your secret manager, then pick the platform below and reference it.",
+      note: "Not kept here. Pick the platform below and paste it into its key field — stored encrypted, never shown again.",
       warn: true, blocked: true,
     };
   }
@@ -66,7 +77,7 @@ export const detectPaste = (raw) => {
     const transport = /^(npx|uvx|docker)\s/i.test(text) ? "stdio" : /\/sse\b/i.test(text) ? "sse" : "http";
     return {
       kind: "mcp", label: "MCP server", detail: text, logo: "mcp",
-      note: "Its tools become the environment's action space — connect the agent afterwards.",
+      note: "Its tools become the world of one of your agents' environments — pick the agent next.",
       choice: "mcp", prefill: { target: text, transport },
     };
   }
@@ -108,13 +119,13 @@ export const detectPaste = (raw) => {
   if (text.split(/\s+/).length >= 6) {
     return {
       kind: "describe", label: "A description", detail: `${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`, icon: "solar:document-text-linear",
-      note: "No agent yet? We'll draft the world from this — connect an agent when it's ready.",
+      note: "We'll set this up as an agent built in Future AGI, then build its environment.",
       choice: "scratch", prefill: { flowText: text },
     };
   }
   return {
     kind: "unknown", label: "Not recognised yet", detail: text, icon: "solar:question-circle-linear",
-    note: "Try a GitHub URL, a Vapi or Retell ID, an MCP URL, an endpoint, a phone number — or describe the agent in a sentence.",
+    note: "Try a GitHub, GitLab or Bitbucket URL, a Vapi or Retell ID, an MCP URL, an endpoint, a phone number — or describe the agent in a sentence.",
     blocked: true,
   };
 };
@@ -134,8 +145,7 @@ export const PASTE_EXAMPLES = [
 /*
   Grouped by where the agent lives today, each group with the one line a buyer
   needs: how we test it there, and how far a fix can go. `need` is what they'll
-  be asked for. Coming soon and Later entries stay visible so nobody wonders
-  whether theirs is missing — they just can't be picked.
+  be asked for.
 */
 export const CONNECT_GROUPS = [
   {
@@ -145,7 +155,7 @@ export const CONNECT_GROUPS = [
     items: [
       { id: "vapi", name: "Vapi", logo: "vapi", need: "API key · assistant ID", choice: "hosted", prefill: { agentType: "voice", platform: "vapi" } },
       { id: "retell", name: "Retell AI", logo: "retell", need: "API key · agent ID", choice: "hosted", prefill: { agentType: "voice", platform: "retell" } },
-      { id: "livekit", name: "LiveKit", logo: "livekit", need: "Server URL · agent name", choice: "hosted", prefill: { agentType: "voice", platform: "livekit" } },
+      { id: "livekit", name: "LiveKit", logo: "livekit", need: "Test only · server URL · agent name", choice: "hosted", prefill: { agentType: "voice", platform: "livekit" } },
       { id: "elevenlabs", name: "ElevenLabs", logo: "elevenlabs", need: "Agents API key", choice: "hosted", prefill: { agentType: "voice", platform: "elevenlabs" } },
       { id: "bland", name: "Bland.ai", logo: "bland", need: "API key · agent ID", choice: "hosted", prefill: { agentType: "voice", platform: "bland" } },
       { id: "phone", name: "Phone number", icon: "solar:phone-calling-rounded-linear", need: "Any agent you can call", choice: "phone" },
@@ -154,13 +164,12 @@ export const CONNECT_GROUPS = [
   {
     id: "chat",
     title: "Chat and prompts",
-    reach: "Vapi chat runs live. A pasted prompt runs on our model — fixes ship as a new prompt version.",
+    reach: "Chat agents run live on their platform. A pasted prompt runs on our model — fixes ship as a new prompt version.",
     items: [
       { id: "vapi-chat", name: "Vapi chat", logo: "vapi", need: "Same assistant, over chat", choice: "hosted", prefill: { agentType: "chat", platform: "vapi" } },
+      { id: "retell-chat", name: "Retell chat", logo: "retell", need: "API key · chat agent", choice: "hosted", prefill: { agentType: "chat", platform: "retell" } },
+      { id: "elevenlabs-chat", name: "ElevenLabs chat", logo: "elevenlabs", need: "Chat or WhatsApp agent", choice: "hosted", prefill: { agentType: "chat", platform: "elevenlabs" } },
       { id: "prompt", name: "Paste a system prompt", icon: "solar:document-text-linear", need: "No key or endpoint", choice: "hosted", prefill: { agentType: "voice", platform: "other" } },
-      { id: "langgraph", name: "LangGraph Cloud", logo: "langgraph", need: "Deployment URL · key", soon: true },
-      { id: "crewai", name: "CrewAI", logo: "crewai", need: "Crew endpoint", soon: true },
-      { id: "claude-agents", name: "Claude Agents", logo: "claude", need: "API key", soon: true },
     ],
   },
   {
@@ -170,18 +179,20 @@ export const CONNECT_GROUPS = [
     items: [
       { id: "github", name: "GitHub", logo: "github", need: "Read-only app · repo and folder", choice: "source" },
       { id: "upload", name: "Upload a folder", icon: "solar:upload-minimalistic-linear", need: "Folder or .zip, up to 200 MB", choice: "upload" },
-      { id: "gitlab", name: "GitLab", logo: "gitlab", need: "Read-only app", later: true },
-      { id: "bitbucket", name: "Bitbucket", logo: "bitbucket", need: "Read-only app", later: true },
+      /* Frameworks, not hosted platforms — they come in as code. */
+      { id: "gitlab", name: "GitLab", logo: "gitlab", need: "Group token · repo and folder", choice: "source", prefill: { host: "gitlab" } },
+      { id: "bitbucket", name: "Bitbucket", logo: "bitbucket", need: "Workspace token · repo and folder", choice: "source", prefill: { host: "bitbucket" } },
+      { id: "langgraph", name: "LangGraph", logo: "langgraph", need: "Framework · from a repository or an upload", choice: "source" },
+      { id: "claude-agent-sdk", name: "Claude Agent SDK", logo: "claude", need: "Framework · from a repository or an upload", choice: "source" },
     ],
   },
   {
     id: "other",
     title: "Endpoints and tools",
-    reach: "An agent we can only call is test only. Tools and runtimes build a world first.",
+    reach: "An agent we can only call is test only. An MCP server's tools can be an agent's world.",
     items: [
       { id: "endpoint", name: "Agent endpoint", icon: "solar:global-linear", need: "HTTP or WebSocket URL", choice: "running" },
       { id: "mcp", name: "MCP server", logo: "mcp", need: "HTTP · SSE · stdio", choice: "mcp" },
-      { id: "local", name: "Build locally", icon: "solar:laptop-minimalistic-linear", need: "Secure tunnel from your machine", choice: "local" },
     ],
   },
 ];
@@ -201,28 +212,31 @@ export const itemCount = CONNECT_GROUPS.reduce((n, g) => n + g.items.length, 0);
 /* ── seeds and prebuilt worlds ──────────────────────────────────────────── */
 
 /*
-  A prebuilt world is ready to run — tables, tools, rules, starter scenarios,
-  and a placeholder agent until you connect yours. A seed (shown as a
-  ready-made example) has already run: a stand-in agent and a finished demo
-  run to read. Seeds are never prebuilt worlds too, so the lists don't overlap.
+  A prebuilt world is tables, tools and rules as designed — the world an
+  agent's environment can start from. It's never an environment on its own:
+  the agent is picked from Agents first.
 */
 
-/* The kind of agent a world is built for — the same five as the agent types. */
+/* The kind of agent a world is built for — the same as the agent types:
+   voice and chat, with browser and computer use coming soon. Worlds built
+   for other kinds of agent (coding, robotics) aren't offered. */
 export const WORLD_TYPES = [
   { id: "voice", label: "Voice" },
   { id: "chat", label: "Chat" },
   { id: "computer", label: "Computer use", soon: true },
-  { id: "code", label: "Code", soon: true },
-  { id: "robotics", label: "Robotics", soon: true },
 ];
 const TYPE_OF_AGENT = {
   voice_platform: "voice",
   chat_webhook: "chat", api_agent: "chat", mcp_agent: "chat",
   browser_agent: "computer", game_agent: "computer",
-  coding_agent: "code",
-  sim_agent: "robotics",
+  coding_agent: null,
+  sim_agent: null,
 };
-export const worldTypeOf = (agentType) => WORLD_TYPES.find((t) => t.id === (TYPE_OF_AGENT[agentType] || "chat"));
+/** The world's agent type, or null for one built for an agent type we don't offer. */
+export const worldTypeOf = (agentType) => {
+  const id = agentType in TYPE_OF_AGENT ? TYPE_OF_AGENT[agentType] : "chat";
+  return id ? WORLD_TYPES.find((t) => t.id === id) : null;
+};
 
 const DOMAIN_LABEL = {
   ecommerce: "E-commerce", fintech: "Finance", travel: "Travel", software: "Software", robotics: "Robotics",
@@ -233,7 +247,7 @@ export const domainLabelOf = (d) => DOMAIN_LABEL[d] || (d ? d.charAt(0).toUpperC
 
 /** Prebuilt worlds — the template catalogue, most used first. */
 export const prebuiltWorlds = () => ENVIRONMENT_TEMPLATES
-  .filter((t) => t.agentType !== "twin_backed")
+  .filter((t) => t.agentType !== "twin_backed" && worldTypeOf(t.agentType))
   .map((t) => {
     const type = worldTypeOf(t.agentType);
     return {

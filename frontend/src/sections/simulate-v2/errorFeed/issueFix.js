@@ -15,11 +15,10 @@ import { useCallback, useMemo } from "react";
 import { useSimStore, useConnectedAgents } from "../store";
 import { limitsOf } from "../agents/agentLimits";
 import { useIntegrations } from "../_mock/integrations";
-import { observabilityOf } from "../_mock/observability";
 import { rereadFor } from "../_mock/improvementPolicy";
-import { addImprovementScenariosPatch } from "../_mock/improvementScenarios";
+import { currentUser } from "../_mock/scenarioProvenance";
 import {
-  agentKeyForIssue, envsForAgent, evidenceGateOf, fixGateOf, fixStatusOf, issueFixRecord, issueProjectLinkOf, issueProjectOf,
+  agentKeyForIssue, envsForAgent, evidenceGateOf, fixGateOf, fixStatusOf, issueFixRecord, issueProjectOf, todayRunFor,
 } from "./issueFixModel";
 
 export * from "./issueFixModel";
@@ -32,21 +31,15 @@ export function useIssueFix(issue) {
   const issueId = issue?.cluster_id;
   const agentKey = agentKeyForIssue(issue, state, agents);
   const agent = useMemo(() => agents.find((a) => a.key === agentKey) || null, [agents, agentKey]);
-  /* Fix needs the agent's production traces: the scenarios are built from
-     them and the watch after release reads them. */
-  /* Its traces exist when the agent's calls are watched — or when this very
-     issue came from an Observe project linked to the agent: the issue is
-     built from those production traces. */
-  const fromLinkedProject = !!agent && issueProjectLinkOf(issue, state, agents).agentKey === agent.key;
-  const tracing = agent ? observabilityOf(agent).on || fromLinkedProject : null;
   const status = useMemo(() => (issueId ? fixStatusOf(issue, state, prs || []) : null), [issue, issueId, state, prs]);
 
   /* The issue's Observe project — its agent was set when the project was. */
   const project = issueProjectOf(issue);
 
   /*
-    Start: an improvement run is written against the environment's newest
-    run, on its scenarios plus the issue's. The issue's scenarios — the ones
+    Start: today is measured first — the environment's scenarios on the
+    production version, recorded as a run — and the improvement is written
+    against that run, on its scenarios plus the issue's. The issue's scenarios — the ones
     picked on the Fix sheet — are added to the agent's main environment as
     it starts (RSI PRD: the fix runs in the main environment; new scenarios
     make a new version), so the failure is tested where its must-pass set is
@@ -58,7 +51,7 @@ export function useIssueFix(issue) {
   */
   /* Fix runs Future AGI's engine. A customer's own coding agent comes in
      through Copy for coding agent instead (RSI PRD, Flow 6). */
-  const start = useCallback(({ env, drafts, regressionEnvIds, budget, minutes, textSearch, targetMember, rootCause }) => {
+  const start = useCallback(({ env, drafts, regressionEnvIds, budget, minutes, textSearch, targetMember, rootCause, lineage }) => {
     const es = state.byEnv[env.id];
     const reread = rereadFor(agent, state);
     if (reread?.changed && reread.versionRecord && agentKey) {
@@ -66,24 +59,43 @@ export function useIssueFix(issue) {
     }
     /* The time budget the sheet set caps the search the same way dollars do. */
     const limits = limitsOf(state, agentKey);
+    /* Measure today: the environment's scenarios on the production version,
+       recorded as a run of it — the baseline and must-pass set come from it. */
+    const today = todayRunFor(env, es, issue.cluster_id);
+    if (today) commit({ type: "recordRun", envId: env.id, run: today });
+    const esNow = today ? { ...es, runs: [today, ...(es?.runs || [])] } : es;
     const record = issueFixRecord({
-      issue, env, es, drafts, budget, regressionEnvIds, state, reread, textSearch, targetMember, rootCause,
+      issue, env, es: esNow, drafts, budget, regressionEnvIds, state, reread, textSearch, targetMember, rootCause, lineage, today,
       limits: minutes ? { ...limits, budget: { ...limits.budget, minutes } } : limits,
     });
-    /* Saved now — Start fix leaves the Error Feed straight after. */
+    /* Saved now — Start fix leaves the Error Feed straight after. The
+       issue's scenarios belong to this improvement only (RSI PRD: "They join
+       the environment only if the user adds them, or through regression
+       memory") — the improvement page and Scenarios tab offer to add them. */
     const optimizations = [...(es?.optimizations || []), record];
-    commit({
-      type: "patchEnvState",
-      envId: env.id,
-      patch: { optimizations, ...addImprovementScenariosPatch({ ...es, optimizations }, record) },
-    });
+    commit({ type: "patchEnvState", envId: env.id, patch: { optimizations } });
     return { envId: env.id, runId: record.fromRunId, optId: record.id };
   }, [state, commit, issue, agentKey, agent]);
 
   /* Why Fix can't start, if it can't — said on the button and the sheet. */
   const gate = useMemo(() => (agent ? fixGateOf(agent, envsForAgent(agent, state)[0]) : null), [agent, state]);
-  /* Fix starts on confirmed issues only. */
+  /* How sure the feed is — a note on the sheet, never a gate. */
   const evidence = useMemo(() => evidenceGateOf(issue), [issue]);
 
-  return { state, agent, agentKey, agents, project, tracing, status, gate, evidence, start };
+  /* A person reopening (or taking back a reopen of) the shipped fix, from the
+     issue's triage status. Saved with commit: the Error Feed and the
+     improvement page are different stores. */
+  const setReopened = useCallback((on) => {
+    if (!status?.envId || !status?.optId) return;
+    const es = state.byEnv[status.envId];
+    const optimizations = (es?.optimizations || []).map((o) => {
+      if (o.id !== status.optId) return o;
+      if (on) return { ...o, reopenedBy: { by: currentUser().name, at: new Date().toISOString() } };
+      const { reopenedBy: _drop, ...rest } = o;
+      return rest;
+    });
+    commit({ type: "patchEnvState", envId: status.envId, patch: { optimizations } });
+  }, [status, state, commit]);
+
+  return { state, agent, agentKey, agents, project, status, gate, evidence, start, setReopened };
 }

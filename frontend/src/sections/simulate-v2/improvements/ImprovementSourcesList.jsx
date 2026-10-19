@@ -1,4 +1,6 @@
 import PropTypes from "prop-types";
+import ImprovementMetricsStrip from "./ImprovementMetricsStrip";
+import NewImprovement from "./NewImprovement";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -8,13 +10,12 @@ import {
 import { alpha } from "@mui/material/styles";
 import { neutralCheckboxSx } from "../components/primitives";
 import Iconify from "src/components/iconify";
-import { paths } from "src/routes/paths";
 import { DataTable } from "src/components/data-table";
 import FilterPanel from "src/components/filter-panel/FilterPanel";
 import { useSimStore, useConnectedAgents } from "../store";
 import { useIntegrations } from "../_mock/integrations";
 import { improvementRowsOf } from "./improvementRows";
-import { DATASET_SOURCES, MODALITY, formatCreatedAt, modalityOfSurface, relativeTime } from "./improvementSources";
+import { formatCreatedAt, modalityOfSurface } from "./improvementSources";
 import StatusPill from "./ImprovementStatusPill";
 
 const compactInputSx = {
@@ -44,8 +45,7 @@ export default function ImprovementSourcesList({ agent }) {
   const [filters, setFilters] = useState({});
   const [selectedIds, setSelectedIds] = useState([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  /* Sample dataset rows have nothing behind them — deleting hides them here. */
-  const [hiddenDatasets, setHiddenDatasets] = useState(() => new Set());
+  const [newOpen, setNewOpen] = useState(false);
 
   /* A running improvement ticks its phase — read the clock while one runs. */
   const [now, setNow] = useState(() => Date.now());
@@ -75,24 +75,7 @@ export default function ImprovementSourcesList({ agent }) {
         agentId: a?.values?.agentId || r.agentKey || null,
       };
     });
-    /* Datasets aren't tied to one agent, so they're listed on the page, not an agent's tab. */
-    const datasetRows = agent ? [] : DATASET_SOURCES.filter((d) => !hiddenDatasets.has(d.id)).map((d) => ({
-      id: d.id,
-      kind: "dataset",
-      datasetId: d.datasetId,
-      /* No dataset improvement flow exists yet — the row says so instead of
-         showing results nobody produced; its page says Coming soon too. */
-      name: `Improve on ${d.name}`,
-      envName: "Dataset",
-      sub: `${d.rowCount.toLocaleString()} rows run as scenarios`,
-      modality: MODALITY[d.modalityKey] || MODALITY.chat,
-      status: { key: "soon", label: "Coming soon" },
-      headline: "Improving an agent against a dataset isn't available yet.",
-      runCount: 0,
-      createdAt: d.latestAt,
-      latestAt: d.latestAt,
-    }));
-    const all = [...envRows, ...datasetRows];
+    const all = envRows;
     /* Two environments with one name: say which agent each is. */
     const counts = new Map();
     all.filter((r) => r.kind === "env").forEach((r) => counts.set(r.envId, r.envName));
@@ -101,7 +84,7 @@ export default function ImprovementSourcesList({ agent }) {
     return all
       .map((r) => ({ ...r, duplicate: r.kind === "env" && names.get(r.envName) > 1 }))
       .sort((a, b) => (Date.parse(b.createdAt || 0) || 0) - (Date.parse(a.createdAt || 0) || 0));
-  }, [improvements, agent, agents, state.myEnvironments, state.byEnv, hiddenDatasets]);
+  }, [improvements, agent, agents, state.myEnvironments, state.byEnv]);
 
   const filterFields = useMemo(() => {
     const choicesOf = (pick) => [...new Set(rows.map(pick).filter(Boolean))].sort();
@@ -125,21 +108,31 @@ export default function ImprovementSourcesList({ agent }) {
 
   /* Level 2 comes back here — this page, or the agent's Improvements tab. */
   const back = { to: `${location.pathname}${location.search}`, label: agent ? agent.name : "Improvements" };
-  const openRow = (r) => navigate(r.kind === "dataset"
-    ? paths.dashboard.simulate.improvementDataset(r.datasetId)
-    : r.href, { state: { back } });
+  const openRow = (r) => navigate(r.href, { state: { back } });
 
   const toggleRow = (id) => setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   const selectedRows = rows.filter((r) => selectedIds.includes(r.id));
+  /* A change that has shipped is still followed — the Error Feed watches
+     it, the agent's versions name it — so its improvement stays. */
+  const keptRows = selectedRows.filter((r) => !!r.output);
+  const deletable = selectedRows.filter((r) => !r.output);
   const performDelete = () => {
     const byEnv = {};
-    selectedRows.filter((r) => r.kind === "env").forEach((r) => { byEnv[r.envId] = [...(byEnv[r.envId] || []), r.recordId]; });
+    deletable.filter((r) => r.kind === "env").forEach((r) => { byEnv[r.envId] = [...(byEnv[r.envId] || []), r.recordId]; });
     Object.entries(byEnv).forEach(([envId, ids]) => {
-      const opts = state.byEnv?.[envId]?.optimizations || [];
-      dispatch({ type: "patchEnvState", envId, patch: { optimizations: opts.filter((o) => !ids.includes(o.id)) } });
+      const es = state.byEnv?.[envId] || {};
+      /* Its unshipped draft and landing records go with it. */
+      const without = (map) => Object.fromEntries(Object.entries(map || {}).filter(([k]) => !ids.includes(k)));
+      dispatch({
+        type: "patchEnvState",
+        envId,
+        patch: {
+          optimizations: (es.optimizations || []).filter((o) => !ids.includes(o.id)),
+          ...(es.handoffDrafts && { handoffDrafts: without(es.handoffDrafts) }),
+          ...(es.handoffLandings && { handoffLandings: without(es.handoffLandings) }),
+        },
+      });
     });
-    const datasets = selectedRows.filter((r) => r.kind === "dataset").map((r) => r.id);
-    if (datasets.length) setHiddenDatasets((h) => new Set([...h, ...datasets]));
     setSelectedIds([]);
     setConfirmDelete(false);
   };
@@ -178,38 +171,51 @@ export default function ImprovementSourcesList({ agent }) {
         </Box>
       ),
     },
-    {
-      id: "agentType", header: "Agent type", size: 150, enableSorting: false,
+    /* The PRD's columns: which agent, how it ended, what it proved, what it
+       shipped and what it cost. The runs it tried live on its own page. */
+    ...(agent ? [] : [{
+      id: "agent", header: "Agent", size: 190, enableSorting: false,
       cell: ({ row: { original: r } }) => (
         <Stack direction="row" alignItems="center" spacing={0.875} sx={{ minWidth: 0 }}>
           <Box sx={{ width: 22, height: 22, borderRadius: 0.75, flexShrink: 0, display: "grid", placeItems: "center", bgcolor: "background.neutral", color: "text.secondary" }}>
             <Iconify icon={r.modality.icon} width={13} />
           </Box>
-          <Typography noWrap sx={{ typography: "s2" }}>{r.modality.label}</Typography>
+          <Typography noWrap sx={{ typography: "s2", minWidth: 0 }}>{r.agentName || r.modality.label}</Typography>
         </Stack>
       ),
-    },
+    }]),
     {
       id: "status", header: "Status", size: 190, enableSorting: false,
       cell: ({ row: { original: r } }) => <StatusPill ending={r.status} headline={r.headline} />,
     },
     {
-      id: "runs", header: "Runs", size: 90, enableSorting: false,
-      cell: ({ row: { original: r } }) => (r.runCount ? (
-        <Box sx={{ display: "inline-flex", alignItems: "center", px: 0.75, py: 0.25, borderRadius: 0.75, border: "1px solid", borderColor: "divider" }}>
-          <Typography sx={{ typography: "s3", fontWeight: 700, fontVariantNumeric: "tabular-nums", color: "text.secondary" }}>{r.runCount}</Typography>
+      id: "result", header: "Result", size: 170, enableSorting: false,
+      cell: ({ row: { original: r } }) => (r.held ? (
+        <Box minWidth={0}>
+          <Typography noWrap sx={{ typography: "s2", fontVariantNumeric: "tabular-nums" }}>{r.held.text}</Typography>
+          {(r.held.broke != null || r.held.note) && (
+            <Typography noWrap sx={{ typography: "s3", color: r.held.broke ? "#DC2626" : "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
+              {r.held.broke == null ? r.held.note : r.held.broke ? `broke ${r.held.broke} held back` : "broke none held back"}
+            </Typography>
+          )}
         </Box>
       ) : <Typography sx={{ typography: "s3", color: "text.disabled" }}>—</Typography>),
     },
     {
-      id: "createdAt", header: "Created", size: 170, enableSorting: false,
-      cell: ({ row: { original: r } }) => <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{formatCreatedAt(r.createdAt)}</Typography>,
+      id: "output", header: "Output", size: 170, enableSorting: false,
+      cell: ({ row: { original: r } }) => (r.output?.label
+        ? <Typography noWrap sx={{ typography: "s2", minWidth: 0 }}>{r.output.label}</Typography>
+        : <Typography sx={{ typography: "s3", color: "text.disabled" }}>—</Typography>),
     },
     {
-      id: "latestAt", header: "Latest run", size: 140, enableSorting: false,
-      cell: ({ row: { original: r } }) => (r.latestIsRunning
-        ? <Typography sx={{ typography: "s3", color: "text.secondary", fontWeight: 600 }}>in progress</Typography>
-        : <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{relativeTime(r.latestAt)}</Typography>),
+      id: "cost", header: "Cost", size: 120, enableSorting: false,
+      cell: ({ row: { original: r } }) => (r.credits != null
+        ? <Typography noWrap sx={{ typography: "s2", fontVariantNumeric: "tabular-nums" }}>{`${r.credits.toLocaleString()} credits`}</Typography>
+        : <Typography sx={{ typography: "s3", color: "text.disabled" }}>—</Typography>),
+    },
+    {
+      id: "createdAt", header: "Created", size: 150, enableSorting: false,
+      cell: ({ row: { original: r } }) => <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{formatCreatedAt(r.createdAt)}</Typography>,
     },
   ];
 
@@ -220,7 +226,7 @@ export default function ImprovementSourcesList({ agent }) {
         <Box sx={{ flexShrink: 0 }}>
           <Typography sx={{ typography: "m2", fontWeight: 600 }}>Improvements</Typography>
           <Typography sx={{ typography: "s1", color: "text.secondary" }}>
-            Every improvement across your environments and datasets.
+            Every improvement across your environments.
           </Typography>
         </Box>
       )}
@@ -242,19 +248,23 @@ export default function ImprovementSourcesList({ agent }) {
           {`Filter${activeFilterCount ? ` (${activeFilterCount})` : ""}`}
         </Button>
         <Box flex={1} />
-        {/* As it always read: improvements start from a run's Debug failures,
-            so the way in is a simulation. The agent's tab has its own header. */}
+        {/* RSI PRD Flow 4 — start one aimed at a goal. A run's Debug failures
+            stays the other way in. The agent's tab has its own header. */}
         {!embedded && (
           <Button
             size="small" variant="contained" color="primary"
-            startIcon={<Iconify icon="solar:play-bold" width={15} />}
-            onClick={() => navigate(paths.dashboard.simulate.environments)}
+            startIcon={<Iconify icon="mingcute:add-line" width={15} />}
+            onClick={() => setNewOpen(true)}
             sx={{ textTransform: "none", fontSize: "13px", height: "32px", fontWeight: 700 }}
           >
-            Run simulation
+            New improvement
           </Button>
         )}
+        <NewImprovement open={newOpen} onClose={() => setNewOpen(false)} />
       </Stack>
+
+      {/* Acceptance rate, time to proposal, fix survival — over what's listed. */}
+      <ImprovementMetricsStrip rows={rows} />
 
       <FilterPanel
         anchorEl={filterAnchorEl} open={Boolean(filterAnchorEl)} onClose={() => setFilterAnchorEl(null)}
@@ -296,24 +306,35 @@ export default function ImprovementSourcesList({ agent }) {
           headerHeight={HEADER_HEIGHT}
           emptyMessage={query || activeFilterCount
             ? "Nothing matches."
-            : agent ? `${agent.name} hasn't been improved yet. Start one from Debug failures on a finished run, or Fix on an Error Feed issue.` : "No improvements yet. Start one from Debug failures on a finished run, or Fix on an Error Feed issue."}
+            : agent ? `${agent.name} hasn't been improved yet. Start one from Debug failures on a finished run, or Fix on an Error Feed issue.` : "No improvements yet. Start one with New improvement, from Debug failures on a finished run, or with Fix on an Error Feed issue."}
         />
       </Box>
 
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>
-          {selectedRows.length === 1 ? `Delete ${selectedRows[0].name}?` : `Delete ${selectedRows.length} improvements?`}
+          {!deletable.length
+            ? keptRows.length === 1 ? `${keptRows[0].name} can't be deleted` : "These improvements can't be deleted"
+            : deletable.length === 1 ? `Delete ${deletable[0].name}?` : `Delete ${deletable.length} improvements?`}
         </DialogTitle>
         <DialogContent>
-          <DialogContentText sx={{ typography: "s2" }}>
-            Their runs go with them. The environments, their own runs and any agent versions or pull requests an improvement shipped stay as they are.
-          </DialogContentText>
+          {deletable.length > 0 && (
+            <DialogContentText sx={{ typography: "s2" }}>
+              {"Their runs and results go with them, and so does any draft they recorded that wasn't released. Their ids aren't reused. The environments and the environments' own runs stay as they are."}
+            </DialogContentText>
+          )}
+          {keptRows.length > 0 && (
+            <DialogContentText sx={{ typography: "s2", mt: deletable.length ? 1.5 : 0 }}>
+              {`${keptRows.length === 1 ? `${keptRows[0].name} stays` : `${keptRows.length} stay`} — ${keptRows.map((r) => r.output.label).join(", ")}. A shipped change is still followed: the Error Feed watches it and the agent's versions point back to the improvement that made it.`}
+            </DialogContentText>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setConfirmDelete(false)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
-          <Button variant="contained" onClick={performDelete} sx={{ typography: "s2", fontWeight: 700, bgcolor: "#DC2626", color: "#fff", "&:hover": { bgcolor: "#B91C1C", color: "#fff" } }}>
-            Delete
-          </Button>
+          <Button onClick={() => setConfirmDelete(false)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>{deletable.length ? "Cancel" : "Close"}</Button>
+          {deletable.length > 0 && (
+            <Button variant="contained" onClick={performDelete} sx={{ typography: "s2", fontWeight: 700, bgcolor: "#DC2626", color: "#fff", "&:hover": { bgcolor: "#B91C1C", color: "#fff" } }}>
+              {keptRows.length ? `Delete ${deletable.length}` : "Delete"}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
     </Box>

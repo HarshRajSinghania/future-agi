@@ -11,6 +11,7 @@ import { SegmentedTabs, CustomTabs } from "src/components/tabs/tabs";
 import SideDrawer from "../components/SideDrawer";
 import { getSurface } from "../_mock/surfaces";
 import { runIdentityOf } from "../_mock/runIdentity";
+import { creditsText } from "./runsTableFormat";
 import { hashSeed } from "../_mock/runStream";
 import {
   callDetail, callDeltas, transcriptDiff, diffTally, graphDiff,
@@ -450,7 +451,7 @@ function RunColumn({ cell, run, name, detail, baseline, isBaseline, voice, diff,
             <SectionLabel>
               Cost breakdown
               <Box component="span" sx={{ float: "right", color: "text.secondary", fontWeight: 600 }}>
-                Total ${detail.costTotal.toFixed(3)}
+                {`Total ${creditsText(detail.costTotal)}`}
               </Box>
             </SectionLabel>
             <Stack spacing={0.25} sx={{ mt: 0.5 }}>
@@ -463,7 +464,7 @@ function RunColumn({ cell, run, name, detail, baseline, isBaseline, voice, diff,
                   </Box>
                   <Box sx={{ width: 62, flexShrink: 0, textAlign: "right" }}>
                     <Typography sx={{ typography: "s2", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-                      ${c.amount.toFixed(3)}
+                      {creditsText(c.amount)}
                     </Typography>
                     <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{c.pct}%</Typography>
                   </Box>
@@ -1117,7 +1118,7 @@ function Recording({ detail }) {
       </Box>
 
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.875 }}>
-        <Tooltip arrow title="No audio in this prototype — the waveform is drawn from the turns">
+        <Tooltip arrow title="Audio unavailable — the waveform is drawn from the transcript">
           <span>
             <IconButton
               size="small" disabled

@@ -47,8 +47,8 @@ export default function IntegrationsList() {
       id: "slack", name: "Slack",
       desc: integrations.slack
         ? `${integrations.slack.workspace} · ${integrations.slack.defaultChannel}`
-        : "Notifications and fix approvals in your team's channels",
-      tags: ["Notifications", "Approvals"],
+        : "Notifications and alerts in your team's channels",
+      tags: ["Notifications", "Alerts"],
       on: !!integrations.slack,
     },
     {

@@ -6,7 +6,9 @@
   production traces, or marked by hand).
 
   Regression memory: an Error Feed fix can leave its issue behind as
-  permanent must-pass scenarios, so a fixed issue can't quietly come back. It
+  permanent must-pass scenarios, so a fixed issue can't quietly come back —
+  and so can every other improvement with targets (Debug failures, a goal, a
+  schedule), its target scenarios kept the same way (owner decision). It
   asks first — "Add 4 scenarios that pass every repeat on the released
   version as must-pass?" — and only the ones that passed every repeat are
   offered. The ones that still fail sometimes stay targets: making a flaky
@@ -31,15 +33,25 @@ const hash = (s) => {
   return h >>> 0;
 };
 
-/* The issue's targets: its scenarios that failed before the fix. */
+/*
+  An improvement's targets: for a fix, its issue's scenarios that failed
+  before it; for any other improvement, the target scenarios it was run on —
+  every one that failed before the change (what it did to each tells: fixed,
+  still failing, flaky — never unchanged or broke, which passed before).
+*/
+const FAILED_BEFORE = new Set(["fixed", "still-failing", "flaky", "inconclusive"]);
 const targetsOf = (record) => {
   const r = record?.result;
-  if (!isFix(record) || !r?.winner) return [];
-  const issueId = record.trigger.issueId;
-  return [
+  if (!r?.winner) return [];
+  const rows = [
     ...(r.trainMeasuredTasks || []).map((t) => ({ ...t, outcome: r.winner.perScenario?.[t.id] })),
     ...(r.heldTasks || []).map((t) => ({ ...t, outcome: r.heldPerScenario?.[t.id] })),
-  ].filter((t) => t.fromIssue === issueId && t.before !== "passed");
+  ];
+  if (isFix(record)) {
+    const issueId = record.trigger.issueId;
+    return rows.filter((t) => t.fromIssue === issueId && t.before !== "passed");
+  }
+  return rows.filter((t) => FAILED_BEFORE.has(t.outcome));
 };
 
 /**
@@ -58,13 +70,20 @@ export const confirmationRunOf = (record, version, at = new Date().toISOString()
 };
 
 /**
- * Record the release — and, for a fix, the confirmation run of its targets
- * on the released version. Regression memory is a separate, approved step.
+ * Record the release — and, for an improvement with targets, the
+ * confirmation run of them on the released version. Regression memory is a
+ * separate, approved step.
  */
 export const releasePatch = (envState, { version, optId, detected = false, at = new Date().toISOString() }) => {
-  const release = { version, runId: null, at, gate: detected ? "detected" : "improvement", optId: optId || null, ...(detected && { detected: true }) };
   const record = (envState?.optimizations || []).find((o) => o.id === optId);
-  const confirm = isFix(record) && record?.result?.winner ? confirmationRunOf(record, version, at) : null;
+  /* A fix's release names its issue, so the Error Feed's watch can tell
+     this issue's first released fix from a later one. */
+  const issueId = record?.trigger?.issueId || null;
+  const release = {
+    version, runId: null, at, gate: detected ? "detected" : "improvement", optId: optId || null,
+    ...(issueId && { issueId }), ...(detected && { detected: true }),
+  };
+  const confirm = targetsOf(record).length ? confirmationRunOf(record, version, at) : null;
   return {
     patch: {
       releases: [release, ...(envState?.releases || [])],
@@ -75,7 +94,7 @@ export const releasePatch = (envState, { version, optId, detected = false, at = 
 };
 
 /**
- * The issue's scenarios a release could keep as must-pass: those that passed
+ * The targets a release could keep as must-pass: those that passed
  * every repeat of the confirmation run on the released version. The ones
  * still failing sometimes stay targets.
  * { mustPass: [{ id, title }], targets: [{ id, title }], confirmation }
@@ -109,7 +128,9 @@ export const memoryCandidates = (envState, optId) => {
 export const rememberPatch = (envState, { optId, ids, version, at = new Date().toISOString() }) => {
   const record = (envState?.optimizations || []).find((o) => o.id === optId);
   const want = new Set(ids);
-  const memory = { issueId: record?.trigger?.issueId, version, optId, at };
+  /* Named by its issue; an improvement without one by its own name, so
+     "Kept from …" still reads where it's shown. */
+  const memory = { issueId: record?.trigger?.issueId || record?.name || optId, ...(!record?.trigger?.issueId && { fromImprovement: true }), version, optId, at };
   const have = new Set((envState?.scenarios || []).map((s) => s.id));
   const toAdd = ids.filter((id) => !have.has(id));
   const added = toAdd.length && record ? addImprovementScenariosPatch(envState, record, toAdd, { at }) : {};
@@ -126,13 +147,14 @@ export const declineMemoryPatch = (envState, optId, at = new Date().toISOString(
   memoryDecisions: { ...(envState?.memoryDecisions || {}), [optId]: { decision: "declined", at } },
 });
 
-/** The issue's scenarios a release turned into must-pass ones. */
+/** The scenarios a release turned into must-pass ones. */
 export const rememberedFor = (envState, optId) => (envState?.scenarios || []).filter((s) => s.regressionMemory?.optId === optId);
 
 /**
- * Where a released fix's regression memory stands — read the same way on the
- * improvement page and the Error Feed issue (RSI PRD: "a fixed issue's
- * scenarios become permanent must-pass scenarios once the user approves").
+ * Where a released improvement's regression memory stands — read the same
+ * way on the improvement page and the Error Feed issue (RSI PRD: "a fixed
+ * issue's scenarios become permanent must-pass scenarios once the user
+ * approves"; owner decision: every improvement with targets).
  *   status: "pending"  — scenarios to offer, not decided yet
  *           "declined" — offered, Not now; still reversible
  *           "kept"     — every one offered is must-pass now

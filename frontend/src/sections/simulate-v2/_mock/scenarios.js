@@ -8,6 +8,28 @@
 
 import { sandboxFit } from "./datasetWorld";
 
+/* A data-trap goal as it reads now. Stored scenarios written before the
+   wording changed say "Handle records in <table> where <note>" — rewritten
+   on read, never migrated in the store. */
+export const goalLabel = (useCase) => (typeof useCase === "string"
+  ? useCase.replace(/^Handle records in (.+?) where (.+)$/s, "Handle the awkward rows in $1: $2")
+  : useCase);
+
+/* A scenario title as it should read. Older generated rows (and copies
+   already stored) carry "Routine task using cancel_order" or
+   "customers: 40 with loyalty tier" — rewritten on read, never migrated. */
+export const scenarioTitle = (title) => {
+  if (typeof title !== "string") return title;
+  /* "Fresh variation · <title>" — an improvement's variation keeps its prefix. */
+  const fresh = title.match(/^(Fresh variation · )(.+)$/);
+  if (fresh) return `${fresh[1]}${scenarioTitle(fresh[2])}`;
+  const routine = title.match(/^Routine task using ([a-z0-9_]+)$/);
+  if (routine) return `Routine ${routine[1].replace(/_/g, " ")} request`;
+  const row = title.match(/^([a-z][a-z0-9_]*): (.+)$/);
+  if (row) return `Awkward ${row[1].replace(/_/g, " ")} row: ${row[2]}`;
+  return title;
+};
+
 /** Persona traits we surface as chips on a scenario row. */
 export const PERSONA_TRAITS = [
   "impatient", "polite", "confused", "angry", "elderly", "accented",
@@ -392,7 +414,8 @@ function derivedRows(env, packId) {
       },
     ];
 
-    const useCaseFor = (table) => `Handle records in ${table.name} where ${table.note.toLowerCase()}`;
+    /* The note is the seeded oddity ("140 on cancelled flights"), not a clause. */
+    const useCaseFor = (table) => `Handle the awkward rows in ${table.name}: ${table.note.replace(/\.$/, "")}`;
 
     const trapBranch = (table, v) => {
       const scan = `scan_${kebab(table.name).replace(/-/g, "_")}`;

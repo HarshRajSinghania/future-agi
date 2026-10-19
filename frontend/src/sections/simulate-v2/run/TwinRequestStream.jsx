@@ -33,7 +33,7 @@ export default function TwinRequestStream({ envState, task }) {
     return (
       <Box sx={{ p: 3, textAlign: "center" }}>
         <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-          This environment isn&apos;t backed by a service twin.
+          This environment doesn&apos;t copy any outside services.
         </Typography>
       </Box>
     );

@@ -15,6 +15,7 @@
 
 import { FAILURE_MODES, modeOf } from "./coverage";
 import { PAIR_CLASSES, PAIR_ORDER } from "./pairs";
+import { goalLabel } from "./scenarios";
 
 /* ── pair class + flip (PRD v7 §4.10.7) ──────────────────────────────────── */
 
@@ -369,7 +370,7 @@ const patternOfCompareRow = (row) => {
   const t = currentTaskOf(row);
   if (!t) return null;
   if (t.status === "passed" || t.status === "unmeasured") return null;
-  if (t.status === "error") return "Errored";
+  if (t.status === "error") return "Error";
   if (row.critical) return "Critical rule broken";
   if (t.callLog?.unsupportedClaim) return "Said, not done";
   if ((t.evalResults || []).some((r) => !r.passed)) return "Evaluation failed";
@@ -381,13 +382,13 @@ const statusOfCompareRow = (row) => {
   if (!t) return "Not measured";
   if (t.status === "passed") return "Passed";
   if (t.status === "unmeasured") return "Not measured";
-  if (t.status === "error") return "Errored";
+  if (t.status === "error") return "Error";
   return "Failed";
 };
 
 const useCaseOfCompareRow = (row) => {
   const t = currentTaskOf(row);
-  return (row?.useCase) || (t?.useCase) || "Other";
+  return goalLabel(row?.useCase || t?.useCase) || "Other";
 };
 
 const collectByLabel = (rows, labelFn) => {
@@ -415,8 +416,8 @@ const orderGroups = (byLabel, order) => {
 };
 
 const GROUP_ORDER = {
-  pattern: ["Critical rule broken", "Said, not done", "Evaluation failed", "Errored", "Other failure"],
-  status:  ["Failed", "Errored", "Not measured", "Passed"],
+  pattern: ["Critical rule broken", "Said, not done", "Evaluation failed", "Error", "Other failure"],
+  status:  ["Failed", "Error", "Not measured", "Passed"],
 };
 
 export const groupRows = (rows, group) => {
@@ -457,7 +458,7 @@ export const groupRows = (rows, group) => {
 export const OUTSIDE_BANDS = {
   changed: { label: "Changed", note: "Side by side, outside the delta — a bridge run makes them exact", offer: "bridge" },
   new: { label: "New", note: "In the newer run only — outside the delta until backfilled", offer: "backfill" },
-  "not-applicable": { label: "Not applicable", note: "Doesn't apply to one of the agent versions — counted separately" },
+  "not-applicable": { label: "Stale", note: "Stale for one of the agent versions — ran, but counts toward no decision" },
   archived: { label: "Archived", note: "Archived by hand — outside the delta" },
   removed: { label: "Removed", note: "Only in the older run" },
 };

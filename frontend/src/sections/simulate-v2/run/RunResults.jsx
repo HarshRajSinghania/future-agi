@@ -1,6 +1,8 @@
 import PropTypes from "prop-types";
+import IssueReturnBanner from "../errorFeed/IssueReturnBanner";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
+import { useSnackbar } from "notistack";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
 import {
@@ -23,6 +25,7 @@ import CallDrawer from "./CallDrawer";
 import VoiceDetailDrawerV2 from "src/components/VoiceDetailDrawerV2";
 import { effectiveModality } from "../_mock/rlContract";
 import { taskToVoiceData } from "../_mock/voiceCallData";
+import { subGoalResultsOf } from "../_mock/scenarioSubGoals";
 import AddEvalsDrawer from "../workspace/evals/AddEvalsDrawer";
 import EditEvalDrawer from "../workspace/evals/EditEvalDrawer";
 import { canEditEval } from "../workspace/evals/canEditEval";
@@ -59,8 +62,9 @@ import MeteredText from "./RunRecord";
 import ShareMenu from "./ShareMenu";
 import ImprovementRunStrip from "./ImprovementRunStrip";
 
-/* The Insights tab is hidden for now; set true to bring it back (its code is unchanged). */
-const SHOW_INSIGHTS = false;
+import { SHOW_INSIGHTS } from "../_mock/featureFlags";
+import { nextSnapshotLabel } from "../_mock/envSnapshot";
+import { scenarioTitle } from "../_mock/scenarios";
 
 /**
  * Run results.
@@ -255,7 +259,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
   const [visibleColumns, setVisibleColumns] = useState(() => defaultTraceColumns());
   /*
     Quick status filter chips sitting beside the Columns picker. A fast
-    one-click narrowing by outcome (All / Failing / Mixed / Inconclusive /
+    one-click narrowing by outcome (All / Failing / Flaky / Inconclusive /
     Passing), separate from the attribute FilterPanel — the two AND together.
   */
   const [statusChip, setStatusChip] = useState("all");
@@ -293,7 +297,10 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
      configurable fields live there. Opens when a column is edited from its
      kebab menu. Delegated to the environment's applied evals so a saved edit
      shows up wherever the eval is used. */
-  const { appliedEvals, update: updateAppliedEval } = useAppliedEvals(envState, patch);
+  const {
+    appliedEvals, update: updateAppliedEval, add: addAppliedEvals, slotsLeft: evalSlotsLeft,
+  } = useAppliedEvals(envState, patch);
+  const { enqueueSnackbar, closeSnackbar } = useSnackbar();
   const [editingEvalId, setEditingEvalId] = useState(null);
   const editingEval = editingEvalId ? appliedEvals.find((x) => x.id === editingEvalId) : null;
   const editEvalColumn = (e) => {
@@ -410,9 +417,8 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
     const older = (envState.scenarios || []).filter((r) => (!ids || ids.has(r.id))
       && sourceRun.scenarioVersions[r.id] && scenarioAtVersion(r, sourceRun.scenarioVersions[r.id]) !== r);
     if (!older.length) return null;
-    const majors = [...new Set(older.map((r) => String(sourceRun.scenarioVersions[r.id]).split(".")[0]))];
     const ordinal = (envState.runs || []).find((r) => r.id === sourceRun.snapshotOf)?.ordinal ?? "—";
-    return `${older.length} scenario${older.length === 1 ? "" : "s"} played ${older.length === 1 ? "its" : "their"} ${majors.length === 1 ? `v${majors[0]}.x` : "earlier"} text from run ${ordinal}`;
+    return `${older.length} scenario${older.length === 1 ? "" : "s"} played ${older.length === 1 ? "its" : "their"} text as it was in run ${ordinal}`;
   })();
   const rerun = (ids, { mode = "now", agent = null } = {}) => checkRunFit(() => {
     const url = paths.dashboard.simulate.simulationRun(envId, protoRunId(envId, Date.now().toString(36)));
@@ -474,12 +480,12 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
     tasks.forEach((t) => subTasksFor(t, env).forEach((sg) => s.add(sg.label)));
     return [...s].sort();
   }, [tasks, env]);
-  const STATUS_LABELS = ["Passed", "Failed", "Errored", "Inconclusive", "Test invalid", "Error"];
+  const STATUS_LABELS = ["Passed", "Failed", "Inconclusive", "Test invalid", "Error"];
   /* Verdict · cause (§4.10.10), from the run summary. */
   const verdicts = report.summary?.verdicts;
-  const causeOfTask = (t) => { const v = verdicts?.get(t.id); return v ? (v.na ? "N/A" : v.label) : null; };
+  const causeOfTask = (t) => { const v = verdicts?.get(t.id); return v ? v.label : null; };
   const CAUSE_LABELS = [...new Set(tasks.map(causeOfTask).filter(Boolean))].sort();
-  const PATTERN_LABELS = ["Critical rule broken", "Said, not done", "Evaluation failed", "Errored", "Other failure"];
+  const PATTERN_LABELS = ["Critical rule broken", "Said, not done", "Evaluation failed", "Error", "Other failure"];
   const CRITICAL_LABELS = ["Critical", "Not critical"];
 
   const filterFields = useMemo(() => [
@@ -499,11 +505,11 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
     tasks.forEach((t) => {
       const statusLabel = t.status === "passed" ? "Passed"
         : t.status === "unmeasured" ? STATUS_CHIPS.find((c) => c.id === statusBucket(t))?.label || "Inconclusive"
-        : t.status === "error" ? "Errored"
+        : t.status === "error" ? "Error"
         : "Failed";
       let patternLabel = null;
       if (t.status !== "passed" && t.status !== "unmeasured") {
-        if (t.status === "error") patternLabel = "Errored";
+        if (t.status === "error") patternLabel = "Error";
         else if (t.critical) patternLabel = "Critical rule broken";
         else if (t.callLog?.unsupportedClaim) patternLabel = "Said, not done";
         else if ((t.evalResults || []).some((r) => !r.passed)) patternLabel = "Evaluation failed";
@@ -682,6 +688,8 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {runFitDialog}
+      {/* Its environment was built for an Error Feed issue's Fix: the way back. */}
+      <IssueReturnBanner envId={env?.id} />
       {/* ── header ── */}
       <Stack
         direction="row" alignItems="center" spacing={2}
@@ -796,6 +804,12 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
                 </Tooltip>
               </>
             )}
+            {/* The credential set it ran with — by version, never the values. */}
+            {(() => {
+              const cs = identity?.credentialSet ?? sourceRun?.credentialSet;
+              const label = typeof cs === "string" ? cs : cs?.label;
+              return label ? ` · Credentials ${label}` : "";
+            })()}
             {/* What it metered, who placed the calls, which rule graded it and
                 the replay header — one hover, not five clauses. */}
             <Tooltip
@@ -805,6 +819,9 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
                 <Box sx={{ py: 0.25, "& > div": { py: 0.125 } }}>
                   <div>{report.metering?.line ? <MeteredText metering={report.metering} /> : "Nothing metered"}</div>
                   <div>{`Caller ${runPinsOf(identity, env, envState).simulator}`}</div>
+                  {identity?.secrets && Object.keys(identity.secrets).length > 0 && (
+                    <div>{`Secrets · ${Object.keys(identity.secrets).join(", ")} — the references set when it ran`}</div>
+                  )}
                   {report.summary?.grading && <div>{report.summary.grading.rule >= 2 ? "Sub-goals decide pass or fail" : report.summary.grading.label}</div>}
                   <div>{stubbed.length ? `Replay header on every call · stubbed: ${stubbed.join(", ")}` : `Replay header on every call (${REPLAY_HEADER})`}</div>
                 </Box>
@@ -1237,10 +1254,35 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
         env={env}
         envState={envState}
         existingIds={envState.evals}
+        slotsLeft={evalSlotsLeft}
         onAdd={(added) => {
-          patch({ evals: [...envState.evals, ...added.map((e) => e.id)] });
+          /* Through the environment's own evals: the change is recorded (a
+             new environment version once runs exist) and capped at 8. The
+             run on screen wasn't graded on it — a re-run is offered, never
+             started for the user. */
+          const nextLabel = (envState.runs || []).length ? nextSnapshotLabel(env, envState) : null;
+          const { added: n, dropped } = addAppliedEvals(added);
           setAddingEvals(false);
-          rerun();
+          if (!n) {
+            enqueueSnackbar(dropped ? "No room — an environment holds 8 evaluations at most" : "Already applied", { variant: "info" });
+            return;
+          }
+          enqueueSnackbar(
+            [
+              `Added ${n} evaluation${n === 1 ? "" : "s"}${nextLabel ? ` · environment ${nextLabel}` : ""}`,
+              dropped ? `${dropped} left out — 8 at most` : null,
+              "this run wasn't graded on it",
+            ].filter(Boolean).join(" · "),
+            {
+              variant: "success",
+              autoHideDuration: 10000,
+              action: (key) => (
+                <Button size="small" color="inherit" onClick={() => { closeSnackbar(key); rerun(); }} sx={{ fontWeight: 700 }}>
+                  Re-run
+                </Button>
+              ),
+            },
+          );
         }}
       />
 
@@ -1457,10 +1499,17 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
                 <VoiceDetailDrawerV2
                   key={`${openTask.id}-${evalFocus || ""}`}
                   /* The verdict and its cause (§4.10.10) ride in the real
-                     drawer's Status chip — "fail · capability-missing". */
+                     drawer's Status chip — "Failed · agent". */
                   data={{
-                    ...taskToVoiceData(openTask, { env, voice: true }),
-                    ...(verdicts?.get(openTask.id) && { status: verdicts.get(openTask.id).na ? "N/A" : verdicts.get(openTask.id).label }),
+                    ...taskToVoiceData(openTask, {
+                      env,
+                      voice: true,
+                      /* The Graph tab draws the scenario's path and where the call left it. */
+                      scenario: (envState.scenarios || []).find((sc) => sc.id === openTask.id) || null,
+                      failedGoal: subGoalResultsOf(openTask, env, envState).items
+                        .find((g) => g.status === "failed" && g.mark === "critical")?.text || null,
+                    }),
+                    ...(verdicts?.get(openTask.id) && { status: verdicts.get(openTask.id).label }),
                   }}
                   initialTab={evalFocus ? "evaluations" : undefined}
                   focusEvalName={evalFocus || undefined}
@@ -1604,11 +1653,11 @@ function statusBucket(t) {
 const NOT_COUNTED_CHIPS = ["inconclusive", "invalid", "error"];
 
 /* One name per status, the same on the chip and on the row. `about` says
-   what each means — Mixed only exists because scenarios are repeated. */
+   what each means — Flaky only exists because scenarios are repeated. */
 const STATUS_CHIPS = [
   { id: "all", label: "All", color: null, about: "" },
   { id: "failing", label: "Failing", color: "#DC2626", about: "Failed every repeat, or errored." },
-  { id: "mixed", label: "Mixed", color: "#CA8A04", about: "Passed some repeats and failed others — the agent isn't reliable here." },
+  { id: "mixed", label: "Flaky", color: "#CA8A04", about: "Passed some repeats and failed others — the agent isn't reliable here." },
   { id: "inconclusive", label: "Inconclusive", color: null, about: "Not enough evidence to grade. Never counted as a pass; left out of pass rates." },
   { id: "invalid", label: "Test invalid", color: null, about: "The test broke, not the agent — the simulated user left its goal, the starting state didn't load, or a judge failed. Counts neither for nor against the agent." },
   { id: "error", label: "Error", color: null, about: "Our infrastructure or the connection failed. Counts neither for nor against the agent." },
@@ -1636,7 +1685,7 @@ function PulledGroup({ tasks, envId }) {
           key={t.id} direction="row" alignItems="center" spacing={1.5}
           sx={{ px: 2.5, py: 0.625, borderBottom: "1px solid", borderColor: "divider", "&:last-of-type": { borderBottom: "none" } }}
         >
-          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, minWidth: 0, flexShrink: 1 }}>{t.name || t.title || t.id}</Typography>
+          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, minWidth: 0, flexShrink: 1 }}>{scenarioTitle(t.title) || t.name || t.id}</Typography>
           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>{t.pulled.reason}</Typography>
           <Button
             size="small" variant="text"

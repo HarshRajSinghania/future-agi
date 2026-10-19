@@ -1,10 +1,11 @@
 /*
   Workspace feature flags.
 
-  `agentImprovement` — the Error Feed's Fix, the Improvements list and New
-  improvement. Phase 1 ships it to design partners only, so it is a flag on
-  the workspace (`state.flags.agentImprovement`), on in this prototype's
-  seeded workspace and labelled "Design partner preview" wherever it shows.
+  `agentImprovement` — the Error Feed's Fix, the Improvements list and Run
+  improvement. The RSI PRD rolls Phase 1 out to one workspace "behind a
+  feature flag": an internal switch on the workspace
+  (`state.flags.agentImprovement`), on in this prototype's seeded workspace.
+  It's ours to set, so nothing in the product shows or toggles it.
 
   Read from the store's saved copy, so it works above every store provider
   too (the left nav) and stays a light import: switching it commits to the
@@ -15,8 +16,11 @@
 import { useSyncExternalStore } from "react";
 
 export const AGENT_IMPROVEMENT = "agentImprovement";
-export const PREVIEW_LABEL = "Design partner preview";
-export const PREVIEW_NOTE = "Agent improvement is in early access for design partners. Fixes and improvements end as drafts for you to review — nothing ships on its own.";
+
+/* The run's Insights tab is hidden for now; set true to bring it back (its
+   code is unchanged). Shared, so links into a run never point at it while
+   it's hidden. */
+export const SHOW_INSIGHTS = false;
 
 const DEFAULTS = { [AGENT_IMPROVEMENT]: true };
 const EVENT = "fagi:flags";

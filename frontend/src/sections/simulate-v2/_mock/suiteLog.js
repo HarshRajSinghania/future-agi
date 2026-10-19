@@ -34,8 +34,12 @@ const fromNudge = (l) => ({
 });
 
 /** Every logged S version, oldest first — edits here and the nudges' changes alike. */
+/* Stored copies may still hold a "Proposed … — waiting to be added" entry
+   from when proposing wrote a version; a proposal isn't a change to the set. */
+const wasProposalOnly = (l) => /waiting to be added$/.test(String(l?.summary || ""));
+
 export const suiteVersionLogOf = (envState) => {
-  const own = envState?.suiteVersions || [];
+  const own = (envState?.suiteVersions || []).filter((l) => !wasProposalOnly(l));
   const nudged = (envState?.suiteLog || []).map(fromNudge);
   if (!nudged.length) return own;
   const merged = [...own, ...nudged].sort((a, b) => Date.parse(a.at || 0) - Date.parse(b.at || 0));
@@ -80,5 +84,6 @@ export const suiteLogPatch = (envState, next, { summary, largestBump = null, by 
 /** "minor" → "re-graded"; how a bump is said in a change summary. */
 export const BUMP_PAST = { patch: "reused", minor: "re-graded", major: "re-run" };
 
-/** "largest bump: minor (re-graded)" — or "no scenario bumped". */
-export const largestBumpLine = (bump) => (bump ? `largest bump: ${bump} (${BUMP_PAST[bump]})` : "no scenario bumped");
+/** "past runs re-graded" — what the set's largest edit did to past results, in words, never the bump level. */
+const BUMP_WORDS = { major: "past results need a re-run", minor: "past runs re-graded", patch: "past results still compare" };
+export const largestBumpLine = (bump) => (bump ? BUMP_WORDS[bump] || null : null);

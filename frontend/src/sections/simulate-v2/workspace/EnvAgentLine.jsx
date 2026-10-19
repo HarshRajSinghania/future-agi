@@ -5,17 +5,19 @@ import { Box, Button, IconButton, Menu, MenuItem, Stack, Typography } from "@mui
 import { useSnackbar } from "notistack";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
-import { useConnectedAgents } from "../store";
+import { useConnectedAgents, useSimStore } from "../store";
 import AgentSyncDialog from "../components/AgentSyncDialog";
 import AgentRuntimeEditor from "../agents/AgentRuntimeEditor";
 import SwitchVersionDialog from "../agents/SwitchVersionDialog";
 import { agentIdOf, agentNameOf, agentNeedsRuntime, agentSourceOf, envAgentKey } from "../_mock/agentRegistry";
-import { agentVersions, currentEnvVersion, versionNumber } from "../_mock/versions";
+import { agentVersions, currentAgentVersion, currentEnvVersion, isAgentPinned, isPendingDraft, versionNumber } from "../_mock/versions";
 import { envLabelOf } from "../_mock/envVersionKinds";
 import { replicationOf } from "../_mock/replication";
 import { agentToolsFor, worldToolsFor } from "../_mock/toolFit";
 import { applyAgentSwitch, fitsEnvChannel } from "../_mock/agentSwitch";
 import { channelLabel } from "../_mock/nudgeEffects";
+import { scenarioStepOf, versionCardOf } from "../_mock/versionCard";
+import { openGapsInbox } from "../_mock/gapsInboxBus";
 import ChangeAgentDrawer from "./agents/ChangeAgentDrawer";
 import ConnectNewAgentDrawer from "./agents/ConnectNewAgentDrawer";
 
@@ -43,6 +45,7 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
   const { agents, state, recordAgentVersion, changeEnvAgent } = useConnectedAgents();
+  const { dispatch: storeDispatch } = useSimStore();
   const agent = envState?.agent || null;
   const placeholder = !!agent?.seeded;
   const key = agent ? envAgentKey(agent, env?.id) : null;
@@ -50,15 +53,22 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
   const name = record?.name || agent?.name || agentNameOf(agent) || "the connected agent";
 
   const versions = agentVersions(envState);
-  const active = envState?.activeAgentVersion || versions[versions.length - 1]?.label || "v1";
+  const active = currentAgentVersion(envState)?.label || versions[versions.length - 1]?.label || "v1";
+  /* Following production (the default) moves with every released version;
+     pinned holds this one. */
+  const pinned = isAgentPinned(envState);
   const production = record?.production || null;
-  const behind = !!production && versionNumber(production) > versionNumber(active);
+  const behind = pinned && !!production && production !== active;
   /* A newer version that isn't in production yet — a synced change or a fix
-     shipped as a draft. Said quietly, with the same switch, so it isn't only
-     findable from the agent's Versions tab. */
+     shipped as a draft. Said quietly; a released one can be tried here, a
+     draft can't — a draft is never what an environment tests. */
   const newest = record?.latest || null;
   const newer = !behind && !!newest && versionNumber(newest) > versionNumber(active) ? newest : null;
-  const switchTo = behind ? production : newer;
+  const newerIsDraft = !!newer && (!!record?.latestIsDraft || isPendingDraft(envState, newer));
+  const switchTo = behind ? production : newerIsDraft ? null : newer;
+  /* Through the store, against the newest state — a version saved a moment
+     ago (Sync) is already production when this runs. */
+  const testHere = (label) => patch && storeDispatch({ type: "pinAgentVersion", envId: env.id, label });
 
   const [menu, setMenu] = useState(null);
   const [switching, setSwitching] = useState(false);
@@ -138,6 +148,13 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
 
   const source = agentSourceOf(agent);
   const rep = replicationOf(agent, env);
+  const card = versionCardOf(envState);
+  const step = scenarioStepOf(envState);
+  const changeLine = card?.status === "open"
+    ? { title: `Agent ${card.newest} changed`, line: "the environment and scenarios stay as they are until you review it" }
+    : step?.status === "open"
+      ? { title: "Scenarios to update", line: "the environment was rebuilt for the agent's change" }
+      : null;
   return (
     <Box sx={{ my: 2, border: "1px solid", borderColor: "divider", borderRadius: 1.5 }}>
       <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2, py: 1.25 }}>
@@ -146,11 +163,12 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
           <Box component="span" sx={{ color: "text.subtitle" }}>Tests </Box>
           <Box component="span" sx={{ fontWeight: 700 }}>{`${name} ${active}`}</Box>
           <Box component="span" sx={{ color: "text.subtitle" }}>{` · ${source.label} · ${rep.proofLabel}`}</Box>
+          <Box component="span" sx={{ color: "text.subtitle" }}>{pinned ? " · pinned" : " · follows production"}</Box>
           {behind && <Box component="span" sx={{ color: "text.secondary" }}>{` · ${production} is in production`}</Box>}
-          {newer && <Box component="span" sx={{ color: "text.secondary" }}>{` · ${newer} is newer${record?.latestIsDraft ? " (a draft)" : ""}`}</Box>}
+          {newer && <Box component="span" sx={{ color: "text.secondary" }}>{newerIsDraft ? ` · ${newer} is a draft, tested here once released` : ` · ${newer} is newer`}</Box>}
         </Typography>
         {switchTo && !locked && (
-          <Button size="small" variant="outlined" onClick={() => setSwitching(true)} sx={outlined}>{`Switch to ${switchTo}`}</Button>
+          <Button size="small" variant="outlined" onClick={() => setSwitching(true)} sx={outlined}>{behind ? "Follow production" : `Try ${switchTo}`}</Button>
         )}
         <Button
           size="small" onClick={viewAgent}
@@ -168,6 +186,19 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
       {agentNeedsRuntime(agent) && !locked && (
         <Box sx={{ px: 2, pb: 1.5 }}><AgentRuntimeEditor agent={{ ...agent, key }} variant="embedded" /></Box>
       )}
+      {/* The agent's change, said where the agent is: one line, one way in. */}
+      {changeLine && (
+        <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2, py: 1, borderTop: "1px solid", borderColor: "divider" }}>
+          <Iconify icon="solar:branching-paths-up-linear" width={14} sx={{ color: "text.secondary", flexShrink: 0 }} />
+          <Typography noWrap sx={{ typography: "s2", flex: 1, minWidth: 0, color: "text.secondary" }}>
+            <Box component="span" sx={{ color: "text.primary", fontWeight: 600 }}>{changeLine.title}</Box>
+            {` · ${changeLine.line}`}
+          </Typography>
+          <Button size="small" onClick={() => openGapsInbox("nudges")} endIcon={<Iconify icon="solar:arrow-right-linear" width={14} />} sx={{ typography: "s2", fontWeight: 700, color: "text.primary", flexShrink: 0 }}>
+            Review
+          </Button>
+        </Stack>
+      )}
 
       <Menu
         anchorEl={menu} open={!!menu} onClose={() => setMenu(null)}
@@ -184,7 +215,7 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
       <SwitchVersionDialog
         open={switching} onClose={() => setSwitching(false)}
         env={env} envState={envState} label={switchTo || active}
-        onConfirm={() => { patch({ activeAgentVersion: switchTo }); setSwitching(false); }}
+        onConfirm={() => { testHere(switchTo); setSwitching(false); }}
       />
       {source.syncable && (
         <AgentSyncDialog
@@ -198,7 +229,7 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
           worldTools={worldToolsFor(env, envState).map((t) => t.name)}
           envVersionLabel={envLabelOf(env, envState, currentEnvVersion(env, envState)?.label)}
           onSave={(v) => recordAgentVersion(key, v)}
-          onRunHere={(l) => patch({ activeAgentVersion: l })}
+          onRunHere={testHere}
         />
       )}
       {drawers}

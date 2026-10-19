@@ -4,10 +4,10 @@ import { useNavigate } from "react-router-dom";
 import { Box, Button, Stack, Typography } from "@mui/material";
 import { paths } from "src/routes/paths";
 import {
-  detectPaste,
+  WORLD_TYPES, detectPaste,
   prebuiltWorlds, worldTotal,
 } from "./landingData";
-import { connectGroupsFor } from "../agents/connect/agentConnectData";
+import { newAgentChoicesFor } from "../agents/connect/agentConnectData";
 import { AGENT_TYPES } from "./connectOptions";
 import ChipCard from "./ChipCard";
 import { SectionHead, WorldCard } from "./LandingBits";
@@ -18,19 +18,20 @@ import SaasSandboxRow from "./SaasSandbox";
 import { ConnectSubmitContext } from "../agents/connect/connectSubmit";
 import { useSaveConnectedAgent } from "../agents/connect/useSaveConnectedAgent";
 import { clickable } from "../components/clickable";
+import { YourAgentsSection } from "./AgentChoice";
 
 /*
   The Environments landing screen — every way in, in the order people reach
-  for them:
+  for them. Every environment belongs to exactly one agent in Agents (RSI
+  PRD), so each way in ends at an agent:
 
-    1. Paste anything: a repository, an assistant ID, an MCP URL, an
+    1. Your agents: the agents already in Agents — pick one and build.
+    2. Paste anything: a repository, an assistant ID, an MCP URL, an
        endpoint. We say what it is and open the right setup, filled in.
-    2. Seeds: a world with a stand-in agent and a finished demo run. Nothing
-       to connect — open the run, or start your own copy.
-    3. Connect your agent: a directory by where the agent lives, each group
+    3. Prebuilt worlds and the SaaS sandbox: a world to start from — the
+       agent it's built for is picked (or connected) before anything builds.
+    4. Connect your agent: a directory by where the agent lives, each group
        saying how we test it there and how far a fix can go.
-    4. Prebuilt worlds: tables, tools and rules already seeded; bring the agent.
-    5. Web environments: live SaaS sandboxes.
 
   Picking anything calls `onPick(choice, prefill, from, itemId, meta)`; the
   page opens the matching setup in a drawer, so the list stays put.
@@ -38,8 +39,8 @@ import { clickable } from "../components/clickable";
   One way to connect an agent: Agents is its home (RSI PRD), so a new agent —
   pasted or picked from the directory — is connected in Agents → New agent
   (source, what we found, Observe project, constraints), which comes back
-  here with it picked. The directory is the same one Agents shows. Only an
-  MCP server's tools, which aren't an agent, start an environment here.
+  here with it picked. The directory is the same one Agents shows. An MCP
+  server's tools are a world source: its setup picks the agent first.
 */
 
 /* Loaded on demand: the picker reaches back into StartEnvironment (FlowPanel),
@@ -70,14 +71,16 @@ export default function EnvironmentsLanding({ onPick, onBrowseWorlds, picked, ex
     const { id } = saveAgent(source);
     onAgentConnected?.(id);
   };
-  /* Prebuilt worlds sit where the ready-made examples were; "No agent yet?" lands there. */
+  /* Prebuilt worlds sit where the ready-made examples were. */
   const ownWorldsRef = useRef(null);
   const worldsRef = givenExamplesRef || ownWorldsRef;
   const connectRef = useRef(null);
-  const scrollTo = (ref) => ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   return (
     <Stack spacing={4} sx={{ pb: 4 }}>
+      {/* Flow 2 starts here: pick the agent from Agents. */}
+      <YourAgentsSection />
+
       <PasteBar
         detect={detectPaste}
         onPick={(choice, prefill, meta) => {
@@ -95,7 +98,6 @@ export default function EnvironmentsLanding({ onPick, onBrowseWorlds, picked, ex
         onPick={(item, prefill) => onPick(item.choice, prefill ?? item.prefill ?? null, "directory", item.id, { name: item.name, logo: item.logo, icon: item.icon })}
         onConnect={(item) => openConnect(item.kind, item.initial || null, item.id, { name: item.name, logo: item.logo, icon: item.icon })}
         onTools={() => onPick("mcp", null, "directory", "mcp", { name: "MCP server", logo: "mcp" })}
-        onSample={() => scrollTo(worldsRef)}
       />
 
       {/* The connect flow's drawer, opened in place. */}
@@ -127,16 +129,13 @@ EnvironmentsLanding.propTypes = {
 
 const linkSx = { color: "text.primary", fontWeight: 600, cursor: "pointer", "&:hover": { textDecoration: "underline" } };
 
-/* Agents already connected aren't repeated here — Agents has them, with Build environment on each. */
-/* Building on your own machine is an environment setup, not an agent to connect — only here. */
-const LOCAL_ITEM = { id: "local", name: "Your own machine", icon: "solar:laptop-minimalistic-linear", need: "Build locally over a secure tunnel", choice: "local" };
-/* The landing's columns for one agent type (or all): only the ways that
-   can bring that type, each opening with the type set. */
-const landingGroups = (type) => connectGroupsFor(type).map((g) => (g.id === "other" ? { ...g, items: [...g.items, LOCAL_ITEM] } : g));
-
-function ConnectSection({ sectionRef, onPick, onConnect, onTools, onSample }) {
+/* Agents already connected are listed under Your agents, at the top. */
+/* The landing's columns for one agent type (or all): the same ways in as
+   New agent — code first, built here on its own line — each opening with
+   the type set. */
+function ConnectSection({ sectionRef, onPick, onConnect, onTools }) {
   const [type, setType] = useState(null);
-  const groups = useMemo(() => landingGroups(type), [type]);
+  const { builtin, groups } = useMemo(() => newAgentChoicesFor(type), [type]);
   return (
     <Directory
       sectionRef={sectionRef}
@@ -156,10 +155,15 @@ function ConnectSection({ sectionRef, onPick, onConnect, onTools, onSample }) {
       emptyHint="If it runs somewhere we can call, connect it as an agent endpoint — or paste its link above."
       footer={(
         <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          {"Only have tools? "}
-          <Box component="span" {...clickable(onTools)} sx={{ ...linkSx, "&:focus-visible": focusRing }}>Use an MCP server</Box>
-          {" · No agent yet? "}
-          <Box component="span" {...clickable(onSample)} sx={{ ...linkSx, "&:focus-visible": focusRing }}>Start from a prebuilt world</Box>
+          {builtin && (
+            <>
+              {"No agent yet? "}
+              <Box component="span" {...clickable(() => onConnect(builtin))} sx={{ ...linkSx, "&:focus-visible": focusRing }}>Build one in Future AGI</Box>
+              {" · "}
+            </>
+          )}
+          {"Tools on an MCP server? "}
+          <Box component="span" {...clickable(onTools)} sx={{ ...linkSx, "&:focus-visible": focusRing }}>Use them as an agent&apos;s world</Box>
         </Typography>
       )}
     />
@@ -167,24 +171,28 @@ function ConnectSection({ sectionRef, onPick, onConnect, onTools, onSample }) {
 }
 ConnectSection.propTypes = {
   sectionRef: PropTypes.object, pickedId: PropTypes.string, onPick: PropTypes.func.isRequired,
-  onConnect: PropTypes.func.isRequired, onTools: PropTypes.func, onSample: PropTypes.func,
+  onConnect: PropTypes.func.isRequired, onTools: PropTypes.func,
 };
 
 /* ── 4. prebuilt worlds ────────────────────────────────────────────────── */
 
 function PrebuiltSection({ sectionRef, onBrowse }) {
   const worlds = useMemo(() => prebuiltWorlds(), []);
-  /* Three upfront, each a different agent type — the rest are in Browse all. */
+  /* Three upfront, each a different agent type — the rest are in Browse all.
+     Coming-soon types (computer use) are never featured: they can't be built yet. */
   const featured = useMemo(() => {
+    const soon = new Set(WORLD_TYPES.filter((t) => t.soon).map((t) => t.id));
     const seen = new Set();
-    return worlds.filter((w) => (seen.has(w.type) ? false : seen.add(w.type))).slice(0, 3);
+    const open = worlds.filter((w) => !soon.has(w.type));
+    const firsts = open.filter((w) => (seen.has(w.type) ? false : seen.add(w.type)));
+    return [...firsts, ...open.filter((w) => !firsts.includes(w))].slice(0, 3);
   }, [worlds]);
   const [open, setOpen] = useState(null);
   return (
     <Box ref={sectionRef} sx={{ scrollMarginTop: 16 }}>
       <SectionHead
         title="Use a prebuilt world"
-        subtitle="Tables, tools and rules, ready to run. Connect your agent — a placeholder stands in until you do."
+        subtitle="Tables, tools and rules, as designed. Pick one of your agents and its environment starts from this world."
         action={(
           <Button size="small" variant="outlined" onClick={onBrowse} sx={OUTLINE_BTN}>
             {`Browse all ${worldTotal()}`}

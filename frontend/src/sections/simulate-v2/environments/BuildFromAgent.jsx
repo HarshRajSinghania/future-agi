@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Button, TextField, InputAdornment, MenuItem, Tooltip, IconButton, Collapse, Popover,
-  Dialog, DialogContent,
+  Dialog,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { useSnackbar } from "notistack";
@@ -26,6 +26,7 @@ import {
 import { ADAPTERS } from "../_mock/rlContract";
 import { generatedPool } from "../_mock/scenarios";
 import { agentPromptOf } from "../_mock/agentPrompt";
+import { agentPinPatch } from "../_mock/versions";
 import { agentRecordFromSource, envAgentKey } from "../_mock/agentRegistry";
 import { MODE_ICONS, REPLICATION_MODES, replicationRecordOf } from "../_mock/replication";
 import AgentPromptDrawer from "../workspace/agents/AgentPromptDrawer";
@@ -48,6 +49,9 @@ import AgentReadReceipt from "./AgentReadReceipt";
 import { clickable, focusRing } from "../components/clickable";
 import { LiveConsentCard } from "../agents/AgentLiveConsent";
 import { uniqueEnvName } from "../_mock/envNames";
+import { subGoalCatalogOf } from "../_mock/envModel";
+import IssueReturnBanner from "../errorFeed/IssueReturnBanner";
+import { currentAgentVersion } from "../_mock/versions";
 
 /**
  * Stage 1 — connect an agent source.
@@ -210,7 +214,8 @@ export default function BuildFromAgent() {
 
   useEffect(() => {
     if (!env) return;
-    setName(env.name || "");
+    /* Numbered up front if the name is taken, so it doesn't change mid-build. */
+    setName(uniqueEnvName(env.name || "", envsRef.current, env.id));
     setDifficulty(env.difficulty || "Advanced");
     /*
       Don't auto-seed the preset into envState.evals — the Evaluations
@@ -312,7 +317,7 @@ export default function BuildFromAgent() {
        fires: name, thoroughness (maps to difficulty + eventual scenario
        count), and a freeform focus note that would be piped into the
        generator in a real backend. */
-    if (answers?.name) setName(answers.name);
+    if (answers?.name) setName(uniqueEnvName(answers.name, envsRef.current, env?.id));
     if (answers?.difficulty) setDifficulty(answers.difficulty);
     setIntake({ ...answers, at: new Date().toISOString() });
     setTurns([]);
@@ -389,11 +394,13 @@ export default function BuildFromAgent() {
   };
 
   const runStage = (id) => {
-    /* The builder narrates the count this screen will actually produce. */
-    const draftCount = env
-      ? sizeToCount(generatedPool({ ...env, difficulty }), source?.scenarioCount).length
-      : undefined;
-    const stage = builderRun(id, { ...source, draftCount });
+    /* The builder narrates the count this screen will actually produce — and
+       the distinct sub-goals those scenarios use, the same count the
+       Environments list shows. */
+    const draft = env ? sizeToCount(generatedPool({ ...env, difficulty }), source?.scenarioCount) : [];
+    const draftCount = env ? draft.length : undefined;
+    const subGoalCount = env ? subGoalCatalogOf(env, { scenarios: draft }).length : undefined;
+    const stage = builderRun(id, { ...source, draftCount, subGoalCount });
     /* Writing scenarios is the stage people wait on, so it runs slower and
        drops each scenario into the table as it is written — spread across
        the stage, finishing on its last step. Each is then checked: its row
@@ -436,10 +443,8 @@ export default function BuildFromAgent() {
 
   const onSend = (text) => {
     setTurns((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", text }]);
-    /* Prototype: recognise "add N scenarios" here too, so the demo
-       works while the env is still in the build phase (not yet the
-       full workspace). Mirrors the intent detect in
-       EnvironmentWorkspace.sendChat. */
+    /* Recognise "add N scenarios" here too, while the environment is still
+       being built. Mirrors the intent detect in EnvironmentWorkspace.sendChat. */
     const intent = detectAddScenariosIntent(text);
     if (intent && env?.id && envPatch) {
       const existing = new Set((envState?.scenarios || []).map((s) => s.id));
@@ -458,9 +463,9 @@ export default function BuildFromAgent() {
         id: `a-${Date.now()}`,
         role: "assistant",
         steps: [{ kind: "note", text: fresh.length === 0
-          ? "This environment has already used every derived scenario in the pool — delete a few first, or connect a fresh source."
+          ? "Every scenario this agent's world can write is already here — remove a few on the Scenarios tab first."
           : fresh.length < intent.count
-            ? `${batch.rows.length} proposed — review and add them on the Scenarios tab. The derivation pool only had ${fresh.length} unused left.${warn ? ` ${warn}` : ""}`
+            ? `${batch.rows.length} proposed — review and add them on the Scenarios tab. Only ${fresh.length} new ones could be written.${warn ? ` ${warn}` : ""}`
             : `${batch.rows.length} proposed — review and add them on the Scenarios tab.${warn ? ` ${warn}` : ""}` }],
       }]);
       return;
@@ -491,7 +496,7 @@ export default function BuildFromAgent() {
     is idempotent for the same id, so re-priming is safe.
   */
   const prime = (confirmed) => {
-    dispatch({ type: "adoptEnvironment", env: { ...confirmed, ...(buildReplication && { replication: buildReplication }) }, now: new Date().toISOString() });
+    dispatch({ type: "adoptEnvironment", env: { ...confirmed, ...(buildReplication && { replication: buildReplication }), ...(fromIssue && { returnToIssue: fromIssue, returnFrom: "built" }) }, now: new Date().toISOString() });
     /* The agent itself was attached when the environment was first created
        (see the seeding effect) — priming only carries the derived content. */
     const patch = {};
@@ -634,9 +639,10 @@ export default function BuildFromAgent() {
         patch: {
           agent: { ...record, connectedAt: record.connectedAt || now },
           ...(connectedVersions?.length && { agentVersions: connectedVersions }),
-          activeAgentVersion: source.agentVersion || latest || "v1",
+          /* Built at the version picked — following production when that is it. */
+          ...agentPinPatch({ agent: record, agentVersions: connectedVersions || [] }, source.agentVersion || latest || "v1"),
           envVersions: [
-            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: `First build, read from agent ${source.agentVersion || latest || "v1"}.`, scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools, builtFor: source.agentVersion || latest || "v1" },
+            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: `First build, read from agent ${source.agentVersion || latest || "v1"}${source.worldSource?.label ? `, starting from ${source.worldSource.label}` : ""}.`, scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools, builtFor: source.agentVersion || latest || "v1" },
           ],
           activeEnvVersion: "v1",
           runs: [],
@@ -647,8 +653,9 @@ export default function BuildFromAgent() {
     const agent = envState.agent
       ? { ...envState.agent, sourceKind: source?.kind || envState.agent.sourceKind || "repo" }
       : agentForBuild(source, env, now);
-    /* An MCP server or a local runtime is the world, not an agent — the
-       environment starts with no test subject, like one built from scratch. */
+    /* Every environment belongs to an agent — an MCP server or a prebuilt
+       world is the world source of an agent's build, never a build of its
+       own. Only an old link to a source with no agent lands here. */
     if (!agent) {
       dispatch({
         type: "patchEnvState",
@@ -656,7 +663,7 @@ export default function BuildFromAgent() {
         patch: {
           agent: null,
           envVersions: [
-            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: "First build — no agent connected yet.", scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools },
+            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: "First build.", scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools },
           ],
           activeEnvVersion: "v1",
           runs: [],
@@ -712,6 +719,8 @@ export default function BuildFromAgent() {
           buildStatus,
           buildProgress,
           ...(buildReplication && { replication: buildReplication }),
+          /* Built from an issue's Fix: the environment links back to it. */
+          ...(fromIssue && { returnToIssue: fromIssue, returnFrom: "built" }),
         },
         now: new Date().toISOString(),
       });
@@ -747,6 +756,49 @@ export default function BuildFromAgent() {
       dispatch({ type: "patchEnvState", envId: env.id, patch: nextPatch });
     }
   }, [env?.id, hydrated, done, scenarios?.length, scenarioSyncKey, evalIds?.length, envState.scenarios?.length, envState.evals?.length, envState.agent, source, name, difficulty, dispatch, buildReplication]);
+
+  /*
+    Step 5, First run (RSI PRD: "the suite runs once on the current agent
+    version to show where it stands"). Once the proven scenarios are saved,
+    the builder ends at Ready to run and the person starts that run from Run
+    simulation. A blocking gap (a Live agent's test-call consent, say) is
+    named first — the header's gap chip is the one click.
+  */
+  const firstRunRef = useRef(null);
+  const firstRunWaitRef = useRef(null);
+  useEffect(() => {
+    if (!env?.id || !hydrated || !scenariosDone || adoptedRef.current !== env.id) return;
+    if (firstRunRef.current === env.id || !envState?.agent) return;
+    const saved = (envState.scenarios || []).filter((r) => !r.proposed && !r.checking);
+    if (!pool.length || saved.length < pool.length) return;
+    const gap = blockingGapsForRun[0];
+    if (gap) {
+      if (firstRunWaitRef.current === env.id) return;
+      firstRunWaitRef.current = env.id;
+      setTurns((prev) => [...prev, {
+        id: `first-run-wait-${Date.now()}`,
+        role: "builder",
+        title: "First run",
+        steps: [{ kind: "note", text: fromIssue
+          ? `Waiting on one step: ${gap.title || "a setup step"}. Then continue fixing ${fromIssue} from the banner above.`
+          : `Waiting on one step: ${gap.title || "a setup step"}. Then run it once — Run simulation, top right.` }],
+      }]);
+      return;
+    }
+    /* Built — the first run is the person's to start and watch, like every
+       run: a live agent's run makes real calls and costs credits, so it never
+       starts (or gets recorded) on its own. Built from an issue's Fix, that
+       first run is the fix's own first step — it measures these scenarios on
+       today's version — so the note sends the person back to the fix. */
+    firstRunRef.current = env.id;
+    const agentLabel = currentAgentVersion(envState)?.label || "v1";
+    play(fromIssue ? "Ready to fix" : "Ready to run", [
+      { kind: "note", text: fromIssue
+        ? `Built — ${saved.length} scenarios. Continue fixing ${fromIssue} from the banner above: the fix's first step runs them on agent ${agentLabel}, so there's nothing to run by hand.`
+        : `Built. Run it once on agent ${agentLabel} to see where it stands today — ${saved.length} scenarios, 3 repeats each. Run simulation, top right, starts it, and you watch it as it goes.` },
+    ], [], null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [env?.id, hydrated, scenariosDone, envState?.agent, envState?.scenarios, pool.length, blockingGapsForRun.length, fromIssue]);
 
   /* Back out of the source picker leaves the route; back out of a derivation
      returns to the picker, so a wrong URL is one click to fix, not a reload.
@@ -791,19 +843,16 @@ export default function BuildFromAgent() {
         blockedReason={runBlockedReason}
       />
 
-      {fromIssue && (
+      {/* Sent here by an issue's Fix: once the environment exists, the shared
+          banner says what's left and leads back (Continue fixing opens Fix). */}
+      {fromIssue && env?.id && storeState.myEnvironments?.some((e) => e.id === env.id && e.returnToIssue) ? (
+        <IssueReturnBanner envId={env.id} />
+      ) : fromIssue && (
         <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2, py: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
           <Iconify icon="solar:bug-linear" width={15} sx={{ color: "text.secondary", flexShrink: 0 }} />
           <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1, minWidth: 0 }}>
-            {`Building the agent's main environment for ${fromIssue}. Once it's built, Fix on the issue runs here and adds the issue's scenarios to it.`}
+            {`Building this agent's environment for ${fromIssue}. When it's built, you can continue the fix.`}
           </Typography>
-          <Button
-            size="small" variant={canLeave ? "contained" : "text"} disabled={!canLeave}
-            onClick={() => navigate(paths.dashboard.errorFeed.detail(fromIssue))}
-            sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}
-          >
-            {`Back to ${fromIssue}`}
-          </Button>
         </Stack>
       )}
 
@@ -1047,11 +1096,11 @@ function Header({
                 onChange={(e) => setName(e.target.value)}
                 onBlur={() => setEditingName(false)}
                 onKeyDown={(e) => e.key === "Enter" && setEditingName(false)}
-                sx={{ width: 230, "& .MuiInputBase-input": { typography: "s1_2", fontWeight: 700, py: 0.5 } }}
+                sx={{ width: 360, "& .MuiInputBase-input": { typography: "s1_2", fontWeight: 700, py: 0.5 } }}
               />
             ) : (
               <>
-                <Typography noWrap sx={{ typography: "s1_2", fontWeight: 700, maxWidth: 230 }}>{name}</Typography>
+                <Typography noWrap title={name} sx={{ typography: "s1_2", fontWeight: 700, maxWidth: 360 }}>{name}</Typography>
                 <Tooltip arrow title="Rename">
                   <IconButton size="small" onClick={() => setEditingName(true)}>
                     <Iconify icon="solar:pen-new-square-linear" width={14} sx={{ color: "text.subtitle" }} />
@@ -1201,18 +1250,20 @@ function Header({
           </Stack>
           <AgentPromptDrawer open={promptOpen} onClose={() => setPromptOpen(false)} label="v1" prompt={agentPrompt} />
           {envState?.agent && (
-            <Dialog open={consentOpen} onClose={() => setConsentOpen(false)} maxWidth="sm" fullWidth>
-              <DialogContent sx={{ p: 2 }}>
-                <LiveConsentCard
-                  agent={envState.agent}
-                  env={env}
-                  onSave={(values, msg) => {
-                    setAgentValues(envAgentKey(envState.agent, env?.id), values);
-                    if (msg) enqueueSnackbar(msg, { variant: "success" });
-                    setConsentOpen(false);
-                  }}
-                />
-              </DialogContent>
+            <Dialog
+              open={consentOpen} onClose={() => setConsentOpen(false)} maxWidth="sm" fullWidth
+              PaperProps={{ sx: { borderRadius: 2, backgroundImage: "none", border: "1px solid", borderColor: "divider" } }}
+            >
+              <LiveConsentCard
+                agent={envState.agent}
+                env={env}
+                onCancel={() => setConsentOpen(false)}
+                onSave={(values, msg) => {
+                  setAgentValues(envAgentKey(envState.agent, env?.id), values);
+                  if (msg) enqueueSnackbar(msg, { variant: "success" });
+                  setConsentOpen(false);
+                }}
+              />
             </Dialog>
           )}
 
@@ -1261,7 +1312,7 @@ function CopyChip({ replication }) {
   /* The same "Runs: Live" chip the environment page shows; which copy it
      runs against is on hover. */
   const tip = replication.cloneName
-    ? `Runs against ${replication.cloneName}, a test copy in your account, called with its real tools. Your live assistant's config hash is checked before and after every run.`
+    ? `Runs against ${replication.cloneName}, a test copy in your account, called with its real tools.`
     : meta.how || replication.label || "";
   return (
     <Tooltip arrow title={tip}>

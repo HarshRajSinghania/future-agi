@@ -224,7 +224,7 @@ export default function CoverageMatrix({ scenarios, env, onClose }) {
             Forced overlays
           </Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            AC-9.9 — must be present regardless of sampling
+            Always included, whatever the sample
           </Typography>
           <Box sx={{ flex: 1 }} />
           <Typography sx={{

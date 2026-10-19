@@ -29,7 +29,7 @@ const lines = (t) => String(t || "").split("\n").map((l) => l.trim()).filter(Boo
  * source: an upload takes the new bundle, a pasted prompt is edited here,
  * an endpoint gets a note on what changed. Only what the source can show is
  * offered, and each change says what it changed to, so Files and Compare
- * show it. Environments keep the version they run until someone switches.
+ * show it. Environments following production move to it; pinned ones stay put.
  *
  * Saving makes an agent version and nothing else (PRD v7 §4.10.1). What no
  * longer fits in the environments that use the agent is raised there as
@@ -194,7 +194,7 @@ export default function AddVersionDialog({ open, onClose, agent, definition, bas
         <Box flex={1} minWidth={0}>
           <Typography sx={{ typography: "m3", fontWeight: 700 }}>{`Add version ${next}`}</Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            {`${intro} This saves an agent version only — environments keep the version they run, and their scenarios stay as they are.`}
+            {`${intro} This saves an agent version only — environments following production test it on their next run (pinned ones stay put), and their scenarios stay as they are.`}
           </Typography>
         </Box>
         <IconButton size="small" onClick={onClose}><Iconify icon="eva:close-fill" width={18} /></IconButton>

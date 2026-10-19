@@ -375,7 +375,7 @@ StudioConsole.propTypes = {
 };
 
 /**
- * Mode picker — Auto vs Guided.
+ * Mode picker — Auto vs Manual (id "guided" in builderModeBus).
  *
  * Compact icon+label chip in the composer row that opens a two-item
  * menu. Shape matches Claude Code's own mode selector: current mode
@@ -391,7 +391,7 @@ function ModePicker({ disabled }) {
 
   return (
     <>
-      <Tooltip arrow title="Builder mode — Auto or Guided">
+      <Tooltip arrow title="Builder mode — Auto or Manual">
         <Button
           size="small"
           disabled={disabled}

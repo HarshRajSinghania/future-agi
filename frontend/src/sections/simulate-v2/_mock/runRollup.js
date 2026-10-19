@@ -13,12 +13,11 @@
 
   pass^1 is the mean per-scenario pass share over scored scenarios (a 2-of-3
   scenario counts 2/3); pass^k is the share of scored scenarios that passed
-  all k repeats (τ-bench). Scored = passed and every failed cause (agent,
-  required evaluation, capability-missing, cheat — scored 0). Inconclusive,
-  test invalid and error count neither for nor against the agent: left out
-  of the rates, always counted. N/A and canaries are outside every count; so
-  are scenarios pulled after testing invalid twice and Outdated / Re-check
-  scenarios, which ran but count toward no decision until updated or archived.
+  all k repeats (τ-bench). Scored = passed and failed (agent, required
+  evaluation). Inconclusive, test invalid and error count neither for nor
+  against the agent: left out of the rates, always counted. Scenarios pulled
+  after testing invalid twice are outside every count; Outdated, Re-check and
+  Stale scenarios ran but count toward no decision until updated or archived.
 */
 import { OUTCOME_ORDER, VERDICT_CAUSES } from "./decoupled";
 import { CAUSE_ORDER, STALE_LABEL, taskVerdictsOf } from "./runCauses";
@@ -79,7 +78,7 @@ export const healthOf = (tasks = []) => {
   return { id: "healthy", ...HEALTH_META.healthy, lost: 0, note: `All ${total} scenarios reached a verdict.` };
 };
 
-const shareOf = (t) => (t?.cheat ? 0 : typeof t?.passShare === "number" ? t.passShare : t?.status === "passed" ? 1 : 0);
+const shareOf = (t) => (typeof t?.passShare === "number" ? t.passShare : t?.status === "passed" ? 1 : 0);
 
 /** "66% passed · 51% all 3 repeats", or fractions when there are too few to rate. */
 export const summaryLineOf = (s) => {
@@ -103,14 +102,12 @@ export const runRollupOf = (run, { env, envState, scenarioCount } = {}) => {
   const health = healthOf(tasks);
   const bar = reportBarOf(envState);
 
-  const na = tasks.filter((t) => verdicts.get(t.id)?.na);
-  const canaries = tasks.filter((t) => verdicts.get(t.id)?.canary);
   /* Test invalid twice: pulled from the run and flagged for review. */
   const pulledTasks = tasks.filter((t) => verdicts.get(t.id)?.pulled);
-  const outside = (v) => !v || v.na || v.canary || v.pulled;
-  /* Outdated / Re-check when the run started: ran, but count toward no decision. */
+  const outside = (v) => !v || v.pulled;
+  /* Outdated / Re-check / Stale when the run started: ran, but count toward no decision. */
   const staleTasks = tasks.filter((t) => { const v = verdicts.get(t.id); return !outside(v) && v.stale; });
-  /* Exploration-tier scenarios and proposed candidates show separately (§4.10.9). */
+  /* Proposed candidates show separately. */
   const explorationTasks = tasks.filter((t) => { const v = verdicts.get(t.id); return !outside(v) && !v.stale && v.exploration; });
   const inScope = tasks.filter((t) => { const v = verdicts.get(t.id); return !outside(v) && !v.stale && !v.exploration; });
 
@@ -142,18 +139,20 @@ export const runRollupOf = (run, { env, envState, scenarioCount } = {}) => {
   const simulatorShare = inScope.length ? counts["inc-simulator"] / inScope.length : 0;
   const unreliable = simulatorShare > UNRELIABLE_SHARE;
 
-  /* What the numbers cover, said once, beside them (AC-12.12). */
-  const planned = Math.max((scenarioCount || 0) - na.length - canaries.length - explorationTasks.length - pulledTasks.length - staleTasks.length, inScope.length);
+  /* What the pass rate leaves out, said once, beside it — in the run's own
+     outcomes (passed · failed · inconclusive · test invalid · error). */
+  const planned = Math.max((scenarioCount || 0) - explorationTasks.length - pulledTasks.length - staleTasks.length, inScope.length);
   const notRun = planned - inScope.length;
-  const coverage = planned ? scoredTasks.length / planned : 0;
-  const coveragePct = pct(coverage);
-  const caveat = coverage < 1
-    ? `${scoredTasks.length} of ${planned} scenarios scored (${coveragePct}%)${[
-      outcomes["test-invalid"] ? `${outcomes["test-invalid"]} test invalid` : null,
-      outcomes.error ? `${outcomes.error} error` : null,
-      outcomes.inconclusive ? `${outcomes.inconclusive} inconclusive` : null,
-      notRun ? `${notRun} not in this run` : null,
-    ].filter(Boolean).map((s, i) => (i ? `, ${s}` : ` — ${s}`)).join("")}. They count neither for nor against the agent — left out of the pass rate, counted below.`
+  const leftOut = [
+    outcomes.inconclusive ? `${outcomes.inconclusive} inconclusive` : null,
+    outcomes["test-invalid"] ? `${outcomes["test-invalid"]} test invalid` : null,
+    outcomes.error ? `${outcomes.error} error` : null,
+  ].filter(Boolean);
+  const caveat = leftOut.length || notRun
+    ? [
+      leftOut.length ? `${leftOut.join(", ")} — ${inconclusive === 1 ? "it counts" : "they count"} neither for nor against the agent, so the pass rate leaves ${inconclusive === 1 ? "it" : "them"} out` : null,
+      notRun ? `${notRun} ${notRun === 1 ? "scenario" : "scenarios"} not in this run` : null,
+    ].filter(Boolean).join(". ").concat(".")
     : null;
 
   /* Retried once (new runs): what came back, and what didn't. */
@@ -172,8 +171,6 @@ export const runRollupOf = (run, { env, envState, scenarioCount } = {}) => {
   };
 
   const nameOf = (t) => String(t?.title || t?.name || t?.id || "").replace(/\.$/, "");
-  const cheats = scoredTasks.filter((t) => t.cheat).map((t) => ({ id: t.id, title: nameOf(t), ...t.cheat }));
-  const suspected = tasks.filter((t) => t.suspected && !t.cheat).map((t) => ({ id: t.id, title: nameOf(t), ...t.suspected }));
   const critical = scoredTasks.filter((t) => t.critical);
   const criticalFailed = critical.filter((t) => verdicts.get(t.id).cause !== "pass");
 
@@ -200,18 +197,8 @@ export const runRollupOf = (run, { env, envState, scenarioCount } = {}) => {
     unreliable,
     belowBar: !lowVolume && scoredTasks.length > 0 && pass1 < bar.pass1,
     caveat,
-    coverage: { graded: scoredTasks.length, planned, pct: coveragePct, unmeasured: inconclusive, notRun },
-    na: {
-      count: na.length,
-      ids: na.map((t) => t.id),
-      reasons: [...na.reduce((m, t) => {
-        const v = verdicts.get(t.id);
-        const r = m.get(v.naReason) || { reason: v.naReason, capability: v.capability, ids: [] };
-        r.ids.push(t.id);
-        return m.set(v.naReason, r);
-      }, new Map()).values()],
-    },
-    canaries: { count: canaries.length, held: canaries.filter((t) => verdicts.get(t.id).checked).length, ids: canaries.map((t) => t.id) },
+    planned,
+    notRun,
     pulled: {
       count: pulledTasks.length,
       ids: pulledTasks.map((t) => t.id),
@@ -222,6 +209,7 @@ export const runRollupOf = (run, { env, envState, scenarioCount } = {}) => {
       ids: staleTasks.map((t) => t.id),
       outdated: staleOf("outdated"),
       recheck: staleOf("recheck"),
+      stale: staleOf("stale"),
       line: staleTasks.length
         ? `${staleParts.map(([k, n]) => `${n} ${STALE_LABEL[k].toLowerCase()}`).join(" and ")} ${staleTasks.length === 1 ? "scenario" : "scenarios"} ran but count toward no decision until updated or archived`
         : null,
@@ -249,8 +237,6 @@ export const runRollupOf = (run, { env, envState, scenarioCount } = {}) => {
       failedIds: explorationTasks.filter((t) => verdicts.get(t.id).cause.startsWith("fail-")).map((t) => t.id),
       inconclusive: explorationTasks.filter((t) => verdicts.get(t.id).cause.startsWith("inc-")).length,
     },
-    cheats,
-    suspected,
     critical: { total: critical.length, failed: criticalFailed.map((t) => ({ id: t.id, title: nameOf(t) })) },
   };
   return { ...summary, line: summaryLineOf(summary) };
@@ -301,22 +287,15 @@ export const gradingOf = (run, envState, { fresh = false } = {}) => {
   return { rule, ...GRADING_RULES[rule], basis };
 };
 
-/** "Failed · agent 9 · Failed · capability-missing 2 · Test invalid · simulator 1" — non-zero causes only. */
+/** "Failed · agent 9 · Test invalid · simulator 1" — non-zero causes only. */
 export const causeCountsLine = (s, { withPass = false } = {}) => CAUSE_ORDER
   .filter((c) => (withPass || c !== "pass") && s?.counts?.[c])
   .map((c) => `${VERDICT_CAUSES[c].label} ${s.counts[c]}`)
   .join(" · ");
 
-/**
- * What a run is read against — runs of the reference agent version if one is
- * marked (AC-13.14), else the run before it.
- */
-export const baselineFor = (summaries = [], runId, envState) => {
-  const ref = envState?.referenceAgentVersion || null;
-  return summaries.find((r) => ref && r.agentVersion === ref && r.id !== runId)
-    || summaries.filter((r) => r.id !== runId).slice(-1)[0]
-    || null;
-};
+/** What a run is read against — the run before it. */
+// eslint-disable-next-line no-unused-vars
+export const baselineFor = (summaries = [], runId, envState) => summaries.filter((r) => r.id !== runId).slice(-1)[0] || null;
 
 /** Scenarios the suite holds today — what a full run would cover. */
 export const suiteSizeOf = (envState) => (envState?.scenarios || []).filter((s) => !s.retired && !s.archived).length;

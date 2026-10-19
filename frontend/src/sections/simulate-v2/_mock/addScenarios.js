@@ -25,7 +25,6 @@ import { stampProvenance, defaultBatchId } from "./scenarioProvenance";
 import { currentEnvVersion } from "./versions";
 import { knownToolsFor, requiredToolsOf, worldToolsFor } from "./toolFit";
 import { connectOnlyEnv, declineKindOf } from "./admissionGates";
-import { inheritsMustPass } from "./mustPassProtection";
 
 const fraction = (seed) => {
   const s = String(seed || "");
@@ -76,7 +75,7 @@ export const stampNewBatch = (rows, { env, envState, source, actor, at = new Dat
   (rows || []).forEach((r) => {
     const proof = r.provedAgainst ? null : proveOnAdd(r, env, envLabel);
     if (proof && !proof.pass) {
-      rejected.push({ id: r.id, name: r.name || r.title || r.id, gate: proof.failed.id, reason: proof.failed.reason });
+      rejected.push({ id: r.id, /* What the table shows, not the slug. */ name: r.summary || r.title || r.name || r.id, gate: proof.failed.id, reason: proof.failed.reason });
       return;
     }
     stamped.push({
@@ -86,8 +85,6 @@ export const stampNewBatch = (rows, { env, envState, source, actor, at = new Dat
       provedAt: r.provedAt || at,
       ...(proof && { proofGates: { at, envVersion: envLabel, gates: proof.gates } }),
       addedInEnv: envLabel,
-      /* Added to a goal marked must-pass — it joins the goal's mark. */
-      ...(inheritsMustPass(r, envState) && { critical: true, criticalBy: "you", criticalWas: !!r.critical, mustPassGoal: true }),
     });
   });
   const unanswerable = [...new Set(stamped.flatMap((r) => r.requiredTools.filter((t) => !answers.has(t))))];

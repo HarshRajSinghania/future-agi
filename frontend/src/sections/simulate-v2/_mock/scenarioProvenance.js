@@ -262,7 +262,9 @@ export function groupByBatch(scenarios) {
       addedBy: s.addedBy,
       addedAt: s.addedAt,
       /* Why the batch exists, when the batch knows (a rebuild does). */
-      note: s.batchNote || null,
+      /* Older rebuilds named the stored world label, which can differ from
+         the version the bar shows — read them without it. */
+      note: s.batchNote?.replace(/^when environment v\d+ learned/, "when the environment learned") || null,
       scenarios: [],
     };
     cur.scenarios.push(s);

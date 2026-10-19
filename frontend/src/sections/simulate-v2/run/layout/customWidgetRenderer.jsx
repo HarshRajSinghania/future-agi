@@ -1,4 +1,5 @@
 import PropTypes from "prop-types";
+import { creditsText } from "../runsTableFormat";
 import { useContext, useMemo } from "react";
 import { alpha, useTheme } from "@mui/material/styles";
 import { Box, Stack, Typography } from "@mui/material";
@@ -202,10 +203,10 @@ function metricLabel(m) {
     tool_success_rate:  "Tool success rate",
     tool_fail_rate:     "Tool failure rate",
     avg_latency:        "Avg latency (ms)",
-    avg_cost:           "Avg cost ($)",
+    avg_cost:           "Avg cost (credits)",
     avg_turns:          "Avg turns",
     avg_tokens:         "Avg tokens",
-    sum_cost:           "Total cost ($)",
+    sum_cost:           "Total cost (credits)",
     p50:                "p50",
     p90:                "p90",
     p99:                "p99",
@@ -224,8 +225,8 @@ function metricFormatter(m) {
     case "p90":
     case "p99":
     case "max":         return (v) => `${Math.round(v)}ms`;
-    case "avg_cost":    return (v) => `$${Number(v).toFixed(3)}`;
-    case "sum_cost":    return (v) => `$${Number(v).toFixed(2)}`;
+    case "avg_cost":    return (v) => creditsText(v);
+    case "sum_cost":    return (v) => creditsText(v);
     case "avg_turns":   return (v) => Number(v).toFixed(1);
     case "avg_tokens":  return (v) => Math.round(v).toLocaleString();
     default:            return (v) => Math.round(v).toLocaleString();
@@ -276,10 +277,11 @@ function reduce(rows, metric) {
       return vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 0;
     }
     case "avg_cost": {
-      const vals = nums((r) => r.cost || 0);
+      /* Unverified costs are left out, never read as zero. */
+      const vals = rows.filter((r) => !r.costUnverified).map((r) => r.cost || 0).filter((v) => v > 0);
       return vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 0;
     }
-    case "sum_cost":   return rows.reduce((a, r) => a + (r.cost || 0), 0);
+    case "sum_cost":   return rows.filter((r) => !r.costUnverified).reduce((a, r) => a + (r.cost || 0), 0);
     case "avg_turns": {
       const vals = nums((r) => r.steps?.length || 0);
       return vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 0;

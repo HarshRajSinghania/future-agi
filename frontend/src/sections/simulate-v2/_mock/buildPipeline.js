@@ -74,7 +74,7 @@ export const BUILD_PIPELINE = [
     phase: "run",
     milestone: "agent",
     label: "Running",
-    detail: "Playing the scenarios against the agent, one episode at a time",
+    detail: "Playing the scenarios against the agent, one conversation at a time",
   },
   {
     id: "grade",

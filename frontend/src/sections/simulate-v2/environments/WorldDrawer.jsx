@@ -6,8 +6,8 @@ import TemplateBuildPanel from "./TemplateBuildPanel";
 import { QuietTag } from "./LandingBits";
 
 /*
-  A prebuilt world, opened from its card: what's in it and how to build it,
-  in a drawer — the list stays where it was.
+  A prebuilt world, opened from its card: what's in it, and the agent whose
+  environment it starts — in a drawer, so the list stays where it was.
 */
 export default function WorldDrawer({ world, onClose }) {
   return (
@@ -21,7 +21,7 @@ export default function WorldDrawer({ world, onClose }) {
                 <QuietTag>{world.typeLabel}</QuietTag>
               </Stack>
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-                Ready to run with a placeholder agent.
+                Pick one of your agents — its environment starts from this world.
               </Typography>
             </Box>
             <ButtonBase onClick={onClose} aria-label="Close" sx={{ width: 28, height: 28, borderRadius: 0.75, color: "text.secondary", "&:hover": { color: "text.primary" } }}>

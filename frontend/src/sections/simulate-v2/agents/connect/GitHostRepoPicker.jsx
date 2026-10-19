@@ -1,0 +1,211 @@
+import PropTypes from "prop-types";
+import { useEffect, useState } from "react";
+import { alpha } from "@mui/material/styles";
+import { Box, Button, Checkbox, CircularProgress, MenuItem, Select, Stack, Typography } from "@mui/material";
+import Iconify from "src/components/iconify";
+import { GIT_HOST_META, connectGitHost, disconnectGitHost, gitHostConnection, gitHostRepos, reviewNounOf, useIntegrations } from "../../_mock/integrations";
+import { keyRefOf } from "../../_mock/secretRefs";
+import { clickable, focusRing } from "../../components/clickable";
+import SecretRefField from "./SecretRefField";
+import { TextLink } from "./connectBits";
+import { HintLine } from "./replicationBits";
+
+const MONO = "ui-monospace, Menlo, monospace";
+
+/**
+ * GitLab or Bitbucket, the same way as GitHub: connect the host once for the
+ * workspace, pick a repository, and say which agent the scan found you mean.
+ * The git host is a setting on the agent — a connection, not a new kind of
+ * agent — so everything after the pick is the GitHub flow as it is.
+ */
+export default function GitHostRepoPicker({ host, repo, agentId, onPick, onManual }) {
+  const integrations = useIntegrations();
+  const meta = GIT_HOST_META[host];
+  const connection = gitHostConnection(host, integrations);
+  const repos = gitHostRepos(host, integrations);
+  const current = repos.find((r) => r.name === repo) || null;
+  const [scanning, setScanning] = useState(false);
+
+  useEffect(() => {
+    if (!repo) return undefined;
+    setScanning(true);
+    const t = setTimeout(() => setScanning(false), 800);
+    return () => clearTimeout(t);
+  }, [repo]);
+
+  if (!connection) {
+    return (
+      <Box>
+        <GitHostConnectForm host={host} />
+        {onManual && <TextLink onClick={() => onManual()} sx={{ mt: 0.75 }}>{`Enter a ${meta.label} repository URL instead`}</TextLink>}
+      </Box>
+    );
+  }
+
+  return (
+    <Stack spacing={1.25}>
+      <Box>
+        <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.5 }}>
+          <Typography sx={{ typography: "s3", fontWeight: 600 }}>Repository</Typography>
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+            {`· from ${meta.label} (${connection.account}) · ${connection.access === "write" ? "read and write" : "read only"}`}
+          </Typography>
+          <Box flex={1} />
+          <TextLink onClick={() => { disconnectGitHost(host); onPick({ repo: "", agent: null }); }}>{`Connect another ${meta.account.toLowerCase()}`}</TextLink>
+        </Stack>
+        <Select
+          size="small" fullWidth displayEmpty
+          value={repo || ""}
+          onChange={(e) => onPick({ repo: e.target.value, agent: null })}
+          renderValue={(v) => (v
+            ? <Box component="span" sx={{ fontFamily: MONO }}>{v}</Box>
+            : <Box component="span" sx={{ color: "text.disabled" }}>Choose a repository</Box>)}
+          sx={{ typography: "s2" }}
+        >
+          {repos.map((r) => (
+            <MenuItem key={r.name} value={r.name} sx={{ typography: "s2", gap: 1 }}>
+              <Box component="span" sx={{ fontFamily: MONO, flex: 1 }}>{r.name}</Box>
+              <Box component="span" sx={{ color: "text.subtitle" }}>{r.language}</Box>
+            </MenuItem>
+          ))}
+        </Select>
+      </Box>
+
+      {current && (scanning ? (
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 1.25, borderRadius: 1, bgcolor: "background.neutral" }}>
+          <CircularProgress size={13} thickness={5} sx={{ color: "text.subtitle" }} />
+          <Typography sx={{ typography: "s2", color: "text.secondary" }}>{`Scanning ${current.name} for agents…`}</Typography>
+        </Stack>
+      ) : current.agents.length === 0 ? (
+        <Box sx={{ px: 1.5, py: 1.25, borderRadius: 1, bgcolor: "background.neutral" }}>
+          <Typography sx={{ typography: "s2", color: "text.secondary" }}>We didn&apos;t find an agent in this repository.</Typography>
+          {onManual && <TextLink onClick={() => onManual({ repo: current.name })} sx={{ mt: 0.5 }}>Point us at the entry file instead</TextLink>}
+        </Box>
+      ) : (
+        <Box>
+          <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>
+            {current.agents.length === 1 ? "We found 1 agent" : `We found ${current.agents.length} agents — which one do you mean?`}
+          </Typography>
+          <Stack spacing={0.75}>
+            {current.agents.map((a) => {
+              const on = a.id === agentId;
+              return (
+                <Stack
+                  key={a.id}
+                  direction="row" alignItems="center" spacing={1.25}
+                  {...clickable(() => onPick({ repo: current.name, agent: a }), { role: "radio", checked: on })}
+                  sx={{
+                    ...focusRing,
+                    px: 1.5, py: 1.125, borderRadius: 1, cursor: "pointer",
+                    border: "1px solid", borderColor: on ? "text.primary" : "divider",
+                    bgcolor: (t) => (on ? alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.06 : 0.03) : "transparent"),
+                  }}
+                >
+                  <Checkbox size="small" checked={on} tabIndex={-1} inputProps={{ "aria-label": `Choose ${a.name}` }} sx={{ p: 0, flexShrink: 0 }} />
+                  <Box flex={1} minWidth={0}>
+                    <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{a.name}</Typography>
+                    <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
+                      {`${a.framework} · `}
+                      <Box component="span" sx={{ fontFamily: MONO }}>{a.entry}</Box>
+                      {` · ${a.tools} tools · ${a.prompts.length} prompt file${a.prompts.length === 1 ? "" : "s"}`}
+                    </Typography>
+                  </Box>
+                </Stack>
+              );
+            })}
+          </Stack>
+        </Box>
+      ))}
+    </Stack>
+  );
+}
+
+GitHostRepoPicker.propTypes = {
+  host: PropTypes.oneOf(["gitlab", "bitbucket"]).isRequired,
+  repo: PropTypes.string,
+  agentId: PropTypes.string,
+  onPick: PropTypes.func.isRequired,
+  onManual: PropTypes.func,
+};
+
+/*
+  Connecting the host, once for the workspace: the group (GitLab) or
+  workspace (Bitbucket) and an access token by reference. Read scopes only —
+  write is asked for at the first draft merge or pull request.
+*/
+export function GitHostConnectForm({ host, onConnected }) {
+  const meta = GIT_HOST_META[host];
+  const review = reviewNounOf(host);
+  const [account, setAccount] = useState(meta.accounts[0]);
+  const [tokenRef, setTokenRef] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  /* What's recorded is a reference — the one typed, or (demo) the host's slot. */
+  const savedRef = keyRefOf(tokenRef, meta.tokenSlot);
+
+  useEffect(() => {
+    if (!connecting) return undefined;
+    const t = setTimeout(() => {
+      connectGitHost(host, { account, tokenRef: savedRef });
+      setConnecting(false);
+      onConnected?.();
+    }, 700);
+    return () => clearTimeout(t);
+  }, [connecting]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.25 }}>
+      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 1.75, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}>
+        <Iconify icon={meta.icon} width={20} sx={{ color: "text.primary", flexShrink: 0 }} />
+        <Box flex={1} minWidth={0}>
+          <Typography sx={{ typography: "s2", fontWeight: 700 }}>{`Connect ${meta.label} to pick the agent`}</Typography>
+          <Typography component="div" sx={{ typography: "s3", color: "text.subtitle" }}>
+            <HintLine hint={`We scan the ${meta.account.toLowerCase()}'s repositories and find the agents in them. Write access is asked for at your first draft ${review.long}.`}>
+              {`Once for the workspace · read only`}
+            </HintLine>
+          </Typography>
+        </Box>
+      </Stack>
+      <Stack spacing={1.5} sx={{ px: 1.75, py: 1.5 }}>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+          <Box sx={{ width: { sm: 200 }, flexShrink: 0 }}>
+            <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>{meta.account}</Typography>
+            <Select size="small" fullWidth value={account} onChange={(e) => setAccount(e.target.value)} sx={{ typography: "s2", fontFamily: MONO }}>
+              {meta.accounts.map((a) => <MenuItem key={a} value={a} sx={{ typography: "s2", fontFamily: MONO }}>{a}</MenuItem>)}
+            </Select>
+          </Box>
+          <SecretRefField
+            label={meta.token} required fullWidth
+            placeholder={meta.tokenSlot}
+            value={tokenRef} onChange={setTokenRef}
+            helper="Stored encrypted. Used only to read the repository — never shown again, never sent to the improver."
+          />
+        </Stack>
+        <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+          {meta.readScopes.map((p, i) => (
+            <Stack key={p.scope} direction="row" spacing={1.5} sx={{ px: 1.5, py: 0.875, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+              <Typography sx={{ typography: "s3", fontFamily: MONO, width: 128, flexShrink: 0 }}>{p.scope}</Typography>
+              <Typography sx={{ typography: "s3", width: 40, flexShrink: 0 }}>{p.access}</Typography>
+              <Typography sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>{p.why}</Typography>
+            </Stack>
+          ))}
+        </Box>
+        <Stack direction="row" justifyContent="flex-end">
+          <Button
+            size="small" variant="contained" color="primary"
+            disabled={!savedRef || connecting}
+            onClick={() => setConnecting(true)}
+            startIcon={connecting ? <CircularProgress size={12} thickness={6} sx={{ color: "inherit" }} /> : <Iconify icon={meta.icon} width={15} />}
+            sx={{ typography: "s2", fontWeight: 700 }}
+          >
+            {connecting ? `Connecting to ${meta.label}…` : `Connect ${meta.label}`}
+          </Button>
+        </Stack>
+      </Stack>
+    </Box>
+  );
+}
+
+GitHostConnectForm.propTypes = {
+  host: PropTypes.oneOf(["gitlab", "bitbucket"]).isRequired,
+  onConnected: PropTypes.func,
+};

@@ -1,4 +1,5 @@
 import PropTypes from "prop-types";
+import { useDemoMode } from "../agents/demoMode";
 import { useState } from "react";
 import { Box, Button, Stack, Tooltip, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -25,6 +26,7 @@ const LINK = { typography: "s3", fontWeight: 700, color: "text.secondary", minWi
  * row and the merge button agree on the status.
  */
 export default function PrVerifyCheck({ pr, now }) {
+  const demo = useDemoMode();
   const [open, setOpen] = useState(false);
   const runs = checksOf(pr);
   const run = runs.at(-1);
@@ -60,7 +62,7 @@ export default function PrVerifyCheck({ pr, now }) {
               <Button size="small" onClick={() => rerunCheck(pr)} sx={LINK}>Re-run</Button>
             )}
             {/* No GitHub on the other end — this stands in for someone pushing to the branch. */}
-            {pr.status === "open" && settled && (
+            {demo && pr.status === "open" && settled && (
               <Button size="small" onClick={() => simulatePush(pr)} sx={{ ...LINK, color: "text.subtitle", fontWeight: 600 }}><DemoLabel />Simulate a new push</Button>
             )}
           </Stack>

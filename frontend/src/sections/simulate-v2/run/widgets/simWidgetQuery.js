@@ -28,6 +28,9 @@ import {
 import { groupKey } from "../layout/customWidgetRenderer";
 import { ALL_AGGREGATIONS } from "src/sections/dashboards/constants";
 import { runSummaries, trialSummaries, buildComparison } from "../../_mock/comparison";
+import { creditsForUsd } from "../../_mock/metering";
+
+const CREDITS_PER_USD = creditsForUsd(1);
 
 /* Same cap and numbering as the runs table, so "Run 7" means the same run here. */
 const TRIAL_CAP = 8;
@@ -154,12 +157,13 @@ const BASE_METRICS = [
   { id: "segment_latency", name: "Voice segment latency", category: "latency", grain: "segment", unit: "ms", aggregation: "p50", measured: true, value: (r) => r.__segmentMs ?? null },
   { id: "agent_latency", name: "Agent latency", category: "latency", unit: "ms", aggregation: "avg", measured: true, value: (t) => own(t, latencyOf(t)) },
 
-  { id: "cost", name: "Cost", category: "cost", unit: "$", aggregation: "sum", value: (t) => own(t, t.cost ?? null) },
+  /* Spend in credits; a cost the agent's side didn't report is no value. */
+  { id: "cost", name: "Cost", category: "cost", unit: "credits", aggregation: "sum", value: (t) => own(t, t.costUnverified || t.cost == null ? null : t.cost * CREDITS_PER_USD) },
   { id: "tokens", name: "Tokens", category: "cost", unit: "tokens", aggregation: "sum", value: (t) => own(t, t.tokens ?? null) },
   /* Cost per pipeline stage — the same split as "Cost breakdown by pipeline stage". */
   ...COST_STAGES.map((st) => ({
-    id: `cost_${st.key}`, name: `${st.label} cost`, category: "cost", unit: "$", aggregation: "sum",
-    value: (t) => (t.cost ? costSplitOf(t)[st.key] : null),
+    id: `cost_${st.key}`, name: `${st.label} cost`, category: "cost", unit: "credits", aggregation: "sum",
+    value: (t) => (t.cost && !t.costUnverified ? costSplitOf(t)[st.key] * CREDITS_PER_USD : null),
   })),
 
   { id: "turns", name: "Turn count", category: "conversation", unit: "", aggregation: "avg", measured: true, value: (t) => own(t, t.steps?.length ?? null) },

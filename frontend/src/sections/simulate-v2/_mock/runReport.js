@@ -41,12 +41,12 @@ export const runMeteringOf = ({ env, envState, run, tasks = [] }) => {
   const metered = meteredOfRun({ env, tasks: callsOf(tasks), evals, runLocation, byoSandbox: byo });
   const notes = [];
   if (metered.excluded) {
-    notes.push(`${metered.excluded} ${metered.excluded === 1 ? "scenario" : "scenarios"} that didn't count — metered $0`);
+    notes.push(`${metered.excluded} ${metered.excluded === 1 ? "scenario" : "scenarios"} that didn't count — not charged`);
   }
   /* Cost the agent's side didn't report is unverified — never read as $0. */
   const unverified = tasks.filter((t) => t.costUnverified && t.status !== "unmeasured" && t.measured !== false).length;
   if (unverified) notes.push(`${unverified} ${unverified === 1 ? "scenario" : "scenarios"} didn't report cost — unverified`);
-  if (byo) notes.push("Ran on your own sandbox — recorded daytona-byo, 0 sandbox minutes");
+  if (byo) notes.push("Ran on your own sandbox — no sandbox minutes charged");
   const judged = evals.filter((e) => /LLM judge/i.test(String(e.type || "")) && !e.byok);
   return {
     ...metered,
@@ -85,7 +85,7 @@ export const runReportOf = ({
       avgDurationMs: list.length ? Math.round(list.reduce((a, t) => a + (t.durationMs || 0), 0) / list.length) : 0,
     };
   const baseline = baselineFor(summaries, runId, envState);
-  /* A report, not a verdict: pass^1 / pass^k, counts by cause, coverage.
+  /* A report, not a verdict: pass^1 / pass^k, counts by outcome and cause.
      It never blocks, promotes or ships anything (T58). */
   const summary = runRollupOf(run, { env, envState, scenarioCount: suiteSizeOf(envState) });
   const insights = given || runInsightsOf({ tasks: list, env, envState, run: identity || { id: runId }, goalOf });

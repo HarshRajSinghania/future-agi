@@ -6,8 +6,6 @@ import { latestEnvVersion, toolFit } from "../_mock/toolFit";
 import { ToolList } from "./toolFitParts";
 import { useRebuildForAgent } from "./useRebuildForAgent";
 import { envLabelOf } from "../_mock/envVersionKinds";
-import { openNudgesOf } from "../_mock/decoupled";
-import { openGapsInbox } from "../_mock/gapsInboxBus";
 
 /**
  * "Can the agent you are about to test actually be tested here?"
@@ -35,8 +33,6 @@ export default function ToolFitBanner({ env, envState, patch, sx, locked = false
   if (fit.fits) return null;
 
   const n = fit.missing.length;
-  const missingNames = new Set(fit.missing.map((t) => t.name || t));
-  const raised = openNudgesOf(envState).filter((x) => x.kind === "add" && missingNames.has(x.capability));
 
   return (
     <Stack
@@ -64,11 +60,6 @@ export default function ToolFitBanner({ env, envState, patch, sx, locked = false
               <ToolList tools={fit.missing} /> {n === 1 ? "is" : "are"} new in {agentV.label}. Environment {envLabelOf(env, envState, latest.label)} already
               answers {n === 1 ? "it" : "them"} — switch to it for a clean run of {agentV.label}.
             </>
-          ) : raised.length ? (
-            <>
-              <ToolList tools={fit.missing} /> {n === 1 ? "is" : "are"} new in {agentV.label} and waiting in Needs input — approve{" "}
-              {n === 1 ? "it" : "them"} there and the world learns {n === 1 ? "it" : "them"}, with scenarios to cover {n === 1 ? "it" : "them"}.
-            </>
           ) : (
             <>
               <ToolList tools={fit.missing} /> {n === 1 ? "is" : "are"} new in {agentV.label}. Rebuild so the world learns{" "}
@@ -84,13 +75,13 @@ export default function ToolFitBanner({ env, envState, patch, sx, locked = false
         variant="contained"
         color="primary"
         size="small"
-        onClick={() => (latestFits ? patch({ activeEnvVersion: latest.label }) : raised.length ? openGapsInbox("nudges") : rebuild(agentV.label))}
-        startIcon={<Iconify icon={latestFits ? "solar:transfer-horizontal-linear" : raised.length ? "solar:inbox-linear" : "solar:refresh-linear"} width={14} />}
+        onClick={() => (latestFits ? patch({ activeEnvVersion: latest.label }) : rebuild(agentV.label))}
+        startIcon={<Iconify icon={latestFits ? "solar:transfer-horizontal-linear" : "solar:refresh-linear"} width={14} />}
         sx={{
           flexShrink: 0, typography: "s2", fontWeight: 700,
         }}
       >
-        {latestFits ? `Use environment ${envLabelOf(env, envState, latest.label)}` : raised.length ? "Review in Needs input" : "Rebuild environment"}
+        {latestFits ? `Use environment ${envLabelOf(env, envState, latest.label)}` : "Rebuild environment"}
       </Button>
       )}
     </Stack>

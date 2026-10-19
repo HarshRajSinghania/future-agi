@@ -332,31 +332,27 @@ export const CONSUME_MODES = {
  *
  *   name        — a human name ("Support-suite twin", "Onboarding sandbox")
  *   services    — twin ids from TWIN_CATALOG that this session includes
- *   lifecycle   — "short-lived" (auto-expires after ttl) or "permanent"
- *   ttlMinutes  — only meaningful when lifecycle === "short-lived"
+ *   lifecycle   — always "permanent": a sandbox is kept until its
+ *                 environment is deleted; nothing expires
  *   seed        — JSON describing the initial state (or the natural-language
  *                 prompt that was resolved into it)
  *   seedPrompt  — the natural-language ask, kept alongside the resolved seed
  *                 so it survives round-trips
- *   status      — "provisioning" → "ready" → "expired" | "stopped"
+ *   status      — "provisioning" → "ready" | "stopped"
  *   endpoints   — { [twinId]: "https://slack.sandbox.futureagi.com/…" }
  *   activity    — captured requests + failures aggregated per twin
- *   createdAt / expiresAt / linkedEnvs — bookkeeping
+ *   createdAt / linkedEnvs — bookkeeping
  */
 export const buildTwinSession = (opts = {}) => {
   const id = opts.id || `twin-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
   const services = opts.services || ["slack"];
-  const lifecycle = opts.lifecycle || "short-lived";
-  const ttl = opts.ttlMinutes ?? 30;
   const now = opts.createdAt || new Date().toISOString();
   return {
     id,
     name: opts.name || defaultSessionName(services),
     services,
-    lifecycle,
-    ttlMinutes: lifecycle === "short-lived" ? ttl : null,
+    lifecycle: "permanent",
     createdAt: now,
-    expiresAt: lifecycle === "short-lived" ? new Date(Date.now() + ttl * 60 * 1000).toISOString() : null,
     status: opts.status || "provisioning",
     seed: opts.seed || defaultSeedFor(services),
     seedPrompt: opts.seedPrompt || "",
@@ -1927,7 +1923,6 @@ const LIVE_TEMPLATES = {
 export const TWIN_STATUS = {
   provisioning: { label: "Provisioning", color: "#F59E0B" },
   ready: { label: "Ready", color: "#16A34A" },
-  expired: { label: "Expired", color: "#94A3B8" },
   stopped: { label: "Stopped", color: "#94A3B8" },
   failed: { label: "Failed", color: "#DC2626" },
 };

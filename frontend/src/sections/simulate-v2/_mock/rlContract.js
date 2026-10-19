@@ -24,8 +24,16 @@ import { toolImplFor } from "./envInternals";
 import { argSpecOf } from "./toolArgSpec";
 import { contractFor } from "./contract";
 import { rulesOf, ruleOfScenario, subGoalsOfScenario, useCaseId as stableCaseId } from "./envModel";
-import { environmentVersions, nextEnvVersion, pendingEnvChanges } from "./versions";
-import { nextSnapshotLabel } from "./envSnapshot";
+import { currentEnvVersion, environmentVersions, envLineage, holdsInEnv, nextEnvVersion, pendingEnvChanges, WORLD_CONFIG_KEYS } from "./versions";
+import { currentEnvSnapshot, envSnapshotsOf, nextSnapshotLabel, SAME_ACTION_MS } from "./envSnapshot";
+import { callerChangePatch, simulatorOf } from "./envModel";
+import { suiteLogPatch, largerBump } from "./suiteLog";
+import { bumpScenario } from "./decoupled";
+import { archivedOf, archiveScenario, restoreScenario } from "./scenarioStates";
+import { nextCatalogVersion, subGoalVersionOf } from "./subGoalCatalog";
+import { envTurnLimitOf } from "./runStream";
+import { resolveEval } from "./evals";
+import { envLabelOf } from "./envVersionKinds";
 import { proofStatus, provedAgainst } from "./proofs";
 import { ruleChangesOnFlow } from "./scenarioStates";
 import { knownToolsFor, requiredToolsOf, withPinnedWorld } from "./toolFit";
@@ -258,25 +266,27 @@ export const rewardSpec = (env) => {
  */
 export const episodeContract = (env, envState) => {
   const adapter = adapterOf(env, envState);
+  const realTime = adapter.id === "voice" || adapter.id === "physical";
+  /* The turn limit Settings sets — the one a run actually stops at. */
+  const turns = envTurnLimitOf(envState);
   return {
     terminate: [
-      { when: "agent calls finish()", note: "Terminal. Goal verifiers settle and the episode has a value." },
-      { when: "a hard rule is violated", note: "Terminal and failed. The run stops rather than accumulating more reward." },
-      { when: "the persona hangs up or leaves", note: "Terminal. Whatever settled, settled." },
+      { when: "The agent says it's done", note: "The checks decide whether it passed, from where the conversation ended up." },
+      { when: "A hard rule is broken", note: "It ends there and fails — nothing after it could make up for it." },
+      { when: "The caller hangs up or leaves", note: "It's graded on what was settled by then." },
     ],
     truncate: [
-      { when: `${adapter.id === "coding" ? "60" : "40"} steps`, note: "Not a failure. No terminal value — bootstrap from the last state." },
-      { when: adapter.id === "voice" ? "8 minutes wall clock" : "12 minutes wall clock", note: "The sandbox is reclaimed. Also not a failure." },
+      { when: `${turns} agent turns`, note: "It stops and fails with “Hit the turn limit”. Change the limit in Settings, under Simulation defaults." },
+      { when: realTime ? "8 minutes" : "12 minutes", note: "It stops and the sandbox is cleared. This one isn't counted as a failure." },
     ],
     clock: {
-      mode: adapter.id === "voice" || adapter.id === "physical" ? "real-time" : "stepped",
-      note:
-        adapter.id === "voice" || adapter.id === "physical"
-          ? "Real time: latency and dead air are part of the problem, so the clock cannot be faked."
-          : "Stepped: the world only advances when the agent acts, so a slow model is not a worse agent.",
+      mode: realTime ? "Real time" : "Turn by turn",
+      note: realTime
+        ? "Pauses and slow replies are part of the test, so time runs as it would on a real call."
+        : "The world only moves when the agent acts, so a slow model isn't marked down for being slow.",
     },
     seed: {
-      note: "Every episode is seeded. The same seed replays the same world, the same persona turns and the same mocked responses — which is what makes a failing scenario debuggable.",
+      note: "Every conversation starts from the same data. Run it again and the world, the caller's turns and the tool answers come back the same — so a failing scenario can be replayed and debugged.",
     },
   };
 };
@@ -348,9 +358,10 @@ const argKey = (tool, arg) => `${tool}.${arg}`;
 export const toolArgsOf = (tool, envState) => {
   const base = baseArgsOf(tool);
   const edits = envState?.toolArgEdits || {};
+  const lineage = envLineage(null, envState);
   return base.map((a) => {
     const e = edits[argKey(tool.name, a.name)];
-    if (!e) return a;
+    if (!e || !holdsInEnv(lineage, e.envVersion)) return a;
     const { at, envVersion, from, ...change } = e;
     return { ...a, ...change, editedIn: envVersion || null };
   });
@@ -395,7 +406,8 @@ export const contractToolsOf = (env, envState) => (env?.tools || []).map((t) => 
  * record the new words, the way rule changes do.
  */
 export const contractUseCasesOf = (env, envState) => {
-  const changes = envState?.useCaseChanges || [];
+  const lineage = envLineage(env, envState);
+  const changes = (envState?.useCaseChanges || []).filter((c) => holdsInEnv(lineage, c.envVersion));
   const removed = new Set(changes.filter((c) => c.kind === "removed").map((c) => c.id));
   const base = contractFor(env).useCases.map((text) => {
     const id = stableCaseId(text);
@@ -558,22 +570,21 @@ export const contractEditPlan = (env, envState, edit) => {
   }
 
   const n = affected.length;
-  const costLine = n
+  /* One draft per environment: edits still unsaved ride along, said up front. */
+  const waiting = pendingEnvChanges(envState).length;
+  const alsoSaves = waiting ? ` Your ${plural(waiting, "unsaved edit")} ${waiting === 1 ? "is" : "are"} saved with it.` : "";
+  const costLine = (n
     ? `This creates environment ${next}; ${plural(n, "scenario")} ${subject} will be marked Re-check.`
-    : `This creates environment ${next}; there are no scenarios ${subject}, so none is marked Re-check.`;
+    : `This creates environment ${next}; there are no scenarios ${subject}, so none is marked Re-check.`) + alsoSaves;
 
   /* Against the newest state: mint the version (folding in any edits still
      pending, as saving them would), record the correction, and carry every
      scenario that doesn't depend on it over to the new version. */
   const patch = (latest = envState) => {
     const now = new Date().toISOString();
-    const pending = pendingEnvChanges(latest);
     const list = latest?.envVersions?.length ? latest.envVersions : [...environmentVersions(env, latest)].reverse();
-    const minted = nextEnvVersion(env, latest, {
-      changed: [...new Set([...pending.map((c) => c.kind), kind])],
-      note: [detail, ...pending.map((c) => c.detail).filter(Boolean)].slice(0, 3).join("; "),
-      now,
-    });
+    /* Edits still pending are folded in by nextEnvVersion. */
+    const minted = nextEnvVersion(env, latest, { changed: [kind], note: detail, now });
     const hit = new Set(affected);
     const scenarios = (latest?.scenarios || []).map((row) => {
       if (hit.has(row.id) || row.retired || row.archived) return row;
@@ -591,4 +602,267 @@ export const contractEditPlan = (env, envState, edit) => {
   };
 
   return { ok: true, title, subject, next, affected, costLine, detail, kind, patch };
+};
+
+/* ── rolling back ─────────────────────────────────────────────────────────── */
+
+/*
+  Roll back = a new environment version whose world and contract are an
+  older one's, the way a revert works: nothing is deleted, numbering only
+  moves forward, and every run still names exactly what it ran on. Its
+  parent is the version it rolls back to, so the rules, use cases and
+  argument values changed in between stop holding (envLineage); the tools
+  and the world's settings (tool answers and faults, actors, seed) are the
+  older version's, and a scenario that needs a tool the older world lacks
+  sits out until the agent and world agree again. This is the world part of
+  a rollback; snapshotRollbackPlan (below) restores the rest of the version
+  — scenarios, sub-goals, evaluations and caller — in the same new version.
+
+  { ok, target, next, changes: [lines], discards, recheck, patch(latest) }
+*/
+const sameJson = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+export const rollbackPlan = (env, envState, targetLabel, { displayName } = {}) => {
+  const list = environmentVersions(env, envState);
+  const target = list.find((v) => v.label === targetLabel);
+  const current = list.find((v) => v.current) || list[0];
+  if (!target || !current || target.label === current.label) return { ok: false, error: "That's the version in use." };
+  const then = { ...envState, activeEnvVersion: target.label };
+  const name = (v) => (displayName && v === target ? displayName : `environment ${envLabelOf(env, envState, v.label)}`);
+
+  /* What actually moves, said before it does. */
+  const toolNames = (v) => new Set((v.tools || env?.tools || []).map((t) => t.name));
+  const toolsNow = toolNames(current);
+  const toolsThen = toolNames(target);
+  const gone = [...toolsNow].filter((t) => !toolsThen.has(t));
+  const back = [...toolsThen].filter((t) => !toolsNow.has(t));
+  const rulesNow = rulesOf(env, envState);
+  const rulesThen = rulesOf(env, then);
+  const ruleMoves = [...new Set([...rulesNow, ...rulesThen].map((r) => r.id))]
+    .filter((id) => rulesNow.find((r) => r.id === id)?.text !== rulesThen.find((r) => r.id === id)?.text);
+  const casesMoved = !sameJson(contractUseCasesOf(env, envState).map((u) => u.text), contractUseCasesOf(env, then).map((u) => u.text));
+  /* Versions made before settings were kept with them can't restore them —
+     said, never guessed. */
+  const config = target.config || null;
+  const settingsMoved = config ? WORLD_CONFIG_KEYS.filter((k) => !sameJson(config[k], envState?.[k])) : [];
+  const discards = config ? pendingEnvChanges(envState).length : 0;
+
+  const changes = [
+    gone.length && `The world stops answering ${gone.join(", ")}`,
+    back.length && `The world answers ${back.join(", ")} again`,
+    ruleMoves.length && `${plural(ruleMoves.length, "rule")} ${ruleMoves.length === 1 ? "reads" : "read"} as in ${name(target)} (${ruleMoves.join(", ")})`,
+    casesMoved && `Use cases read as in ${name(target)}`,
+    settingsMoved.length && `Tool behaviour, actors and seed as in ${name(target)}`,
+    !config && "Tool behaviour, actors and seed stay as they are — that version didn't keep them",
+  ].filter(Boolean);
+
+  /* Scenarios whose proof holds in the older line keep it; the rest are
+     re-checked, and the ones needing a tool the world drops sit out. */
+  const thenLine = envLineage(env, envState, target.label);
+  const holds = (row) => (row.provedOn || [provedAgainst(row, env, envState)]).some((l) => l && thenLine.has(l));
+  const live = (envState?.scenarios || []).filter((r) => !r.retired && !r.archived);
+  const recheck = live.filter((r) => !holds(r)).length;
+  const sitOut = live.filter((r) => requiredToolsOf(r, knownToolsFor(env, envState)).some((t) => gone.includes(t))).length;
+
+  const patch = (latest = envState) => {
+    const base = config ? { ...latest, unsavedEnvChanges: [] } : latest;
+    const minted = {
+      ...nextEnvVersion(env, base, {
+        from: target.label,
+        revertedTo: target.label,
+        changed: [
+          (gone.length || back.length || casesMoved) && "contract",
+          ruleMoves.length && "rules",
+          settingsMoved.length && "toolbehaviour",
+        ].filter(Boolean),
+        note: `Rolled back to ${name(target)}'s world and contract.`,
+      }),
+      ...(config && { config }),
+    };
+    const stored = latest?.envVersions?.length ? latest.envVersions : [...environmentVersions(env, latest)].reverse();
+    const scenarios = (latest?.scenarios || []).map((row) => {
+      if (row.retired || row.archived || !holds(row)) return row;
+      const on = row.provedOn || [provedAgainst(row, env, latest)];
+      return { ...row, provedOn: [...new Set([...on.filter(Boolean), minted.label])] };
+    });
+    return {
+      envVersions: [...stored, minted],
+      activeEnvVersion: minted.label,
+      unsavedEnvChanges: [],
+      scenarios,
+      ...(config && Object.fromEntries(WORLD_CONFIG_KEYS.map((k) => [k, config[k]]))),
+    };
+  };
+
+  return { ok: true, target, targetName: name(target), next: nextSnapshotLabel(env, envState), changes, discards, recheck, sitOut, patch };
+};
+
+/* ── rolling back a whole environment version ─────────────────────────────── */
+
+/*
+  People see one "environment vN" — world and contract, scenario set,
+  sub-goals, evaluations and simulated caller together — so rolling back to
+  one restores all of it, as a NEW version (the way a revert works): nothing
+  is deleted, numbering only moves forward, and every run keeps naming what
+  it ran on.
+
+    world       an older world → rollbackPlan above (tools, rules, use cases,
+                tool behaviour, actors, seed)
+    scenarios   added since → archived (listed, never deleted); archived since
+                → restored; edited since → their wording then, as a new
+                scenario version
+    sub-goals   published since → a revert to the criteria then
+    evaluations the list then (from the change log; a version from before the
+                log kept lists can't be restored — said, never guessed)
+    caller      the model then
+
+  { ok, error?, snap, next, changes, keeps, recheck, sitOut, discards, patch(latest) }
+*/
+const msOf = (iso) => Date.parse(iso || "") || 0;
+const rowName = (r) => r.title || r.name || "scenario";
+const evalName = (e) => (typeof e === "string" ? resolveEval(e)?.name || e : e?.name || resolveEval(e)?.name || e?.id);
+const named = (rows, max = 3) => {
+  const names = rows.slice(0, max).map(rowName);
+  return rows.length > max ? `${names.join(", ")} and ${rows.length - max} more` : names.join(", ");
+};
+
+/* The applied evaluations at a moment: the list the first later change
+   replaced, or the list the last earlier change left. `undefined` = nothing
+   changed since; `null` = changed since, but the list then wasn't kept. */
+const evalsAt = (envState, until) => {
+  const log = [...(envState?.evalChanges || [])].sort((a, b) => msOf(a.at) - msOf(b.at));
+  const later = log.filter((c) => msOf(c.at) > until);
+  if (!later.length) return undefined;
+  if (later[0].before) return later[0].before;
+  const earlier = log.filter((c) => msOf(c.at) <= until).pop();
+  return earlier?.evals || null;
+};
+
+export const snapshotRollbackPlan = (env, envState, snapLabel) => {
+  const list = envSnapshotsOf(env, envState);
+  const snap = list.find((s) => s.label === snapLabel);
+  const current = currentEnvSnapshot(env, envState);
+  if (!snap || !current || snap.label === current.label) return { ok: false, error: "That's the version in use." };
+  const name = `environment ${snap.label}`;
+  /* Everything made after this snapshot's own changes is newer than it —
+     half the gap the snapshot folding leaves between two actions. */
+  const until = (snap.endMs || 0) + SAME_ACTION_MS / 2;
+
+  /* World and contract — only when it's an older world. */
+  const worldNow = currentEnvVersion(env, envState)?.label;
+  const world = snap.parts.env && snap.parts.env !== worldNow ? rollbackPlan(env, envState, snap.parts.env, { displayName: name }) : null;
+  const worldOk = world?.ok ? world : null;
+
+  /* Scenario set membership and wording. Proposals aren't in the set. */
+  const rows = (envState?.scenarios || []).filter((r) => !r.proposed);
+  const leave = rows.filter((r) => !archivedOf(r) && msOf(r.addedAt) > until);
+  const comeBack = rows.filter((r) => archivedOf(r) && msOf(archivedOf(r).at) > until && !(msOf(r.addedAt) > until));
+  const leaving = new Set(leave.map((r) => r.id));
+  const editedSince = rows.filter((r) => !leaving.has(r.id) && (r.versionLog || []).some((e) => msOf(e.at) > until));
+  const firstLaterEdit = (r) => (r.versionLog || []).find((e) => msOf(e.at) > until);
+  const reword = editedSince.filter((r) => firstLaterEdit(r)?.snapshot);
+  const keepWording = editedSince.filter((r) => !firstLaterEdit(r)?.snapshot);
+
+  /* Sub-goals published since go back to their criteria then. */
+  const edits = envState?.subGoalEdits || [];
+  const goalIds = [...new Set(edits.filter((e) => !e.shadow && msOf(e.at) > until).map((e) => e.id))];
+  const goalName = (id) => [...edits].reverse().find((e) => e.id === id)?.name || id.replace(/^SG-(tool-|rule-)?/, "");
+
+  /* Evaluations and caller. */
+  const evalsThen = evalsAt(envState, until);
+  const evalsMove = Array.isArray(evalsThen) && !sameJson(evalsThen, envState?.evals || []);
+  const callerThen = snap.parts.caller;
+  const callerNow = simulatorOf(env, envState).model;
+  const callerMoves = !!callerThen && callerThen !== callerNow;
+
+  const changes = [
+    ...(worldOk ? worldOk.changes : []),
+    !worldOk && (world ? null : "World and contract stay — this version uses the same world"),
+    leave.length && `${plural(leave.length, "scenario")} added since ${leave.length === 1 ? "leaves" : "leave"} the set (archived, not deleted): ${named(leave)}`,
+    comeBack.length && `${plural(comeBack.length, "scenario")} archived since ${comeBack.length === 1 ? "comes" : "come"} back: ${named(comeBack)}`,
+    reword.length && `${plural(reword.length, "scenario")} edited since ${reword.length === 1 ? "goes" : "go"} back to ${name}'s wording, as a new scenario version: ${named(reword)}`,
+    goalIds.length && `${plural(goalIds.length, "sub-goal")} ${goalIds.length === 1 ? "goes" : "go"} back to ${name}'s criteria: ${goalIds.map(goalName).slice(0, 3).join(", ")}`,
+    evalsMove && `Evaluations go back to ${evalsThen.length ? evalsThen.map(evalName).join(", ") : "none"}`,
+    callerMoves && `Simulated caller → ${callerThen}`,
+  ].filter(Boolean);
+  const keeps = [
+    keepWording.length && `${plural(keepWording.length, "edited scenario")} ${keepWording.length === 1 ? "keeps its" : "keep their"} current wording — ${name} didn't keep the earlier one`,
+    evalsThen === null && `Evaluations stay as they are — ${name} didn't keep its list`,
+  ].filter(Boolean);
+  const moves = worldOk || leave.length || comeBack.length || reword.length || goalIds.length || evalsMove || callerMoves;
+  if (!moves) return { ok: false, error: `Nothing differs from ${name} that can be restored.` };
+
+  const patch = (latest = envState) => {
+    const now = new Date().toISOString();
+    let out = worldOk ? worldOk.patch(latest) : {};
+    let working = { ...latest, ...out };
+    const merge = (p) => { out = { ...out, ...p }; working = { ...working, ...p }; };
+
+    /* Scenarios: wording first, then membership. */
+    const leaveIds = new Set(leave.map((r) => r.id));
+    const backIds = new Set(comeBack.map((r) => r.id));
+    const rewordIds = new Set(reword.map((r) => r.id));
+    let bump = null;
+    const scenarios = (working.scenarios || []).map((r) => {
+      let row = r;
+      if (rewordIds.has(r.id)) {
+        const later = (r.versionLog || []).filter((e) => msOf(e.at) > until);
+        const level = later.reduce((m, e) => largerBump(m, e.level), null) || "major";
+        bump = largerBump(bump, level);
+        // eslint-disable-next-line no-unused-vars
+        const { v: _v, versionLog: _log, ...then } = firstLaterEdit(r).snapshot;
+        row = bumpScenario({ ...r, ...then, versionLog: r.versionLog, archived: r.archived }, level, `Rolled back to ${name}`, r);
+      }
+      if (leaveIds.has(r.id)) row = archiveScenario(row, `Rolled back to ${name}`);
+      if (backIds.has(r.id)) row = restoreScenario(row);
+      return row;
+    });
+    if (leave.length || comeBack.length || reword.length) {
+      merge(suiteLogPatch(working, { scenarios }, {
+        summary: `Rolled back to ${name}'s scenarios — ${[
+          leave.length && `${leave.length} archived`,
+          comeBack.length && `${comeBack.length} restored`,
+          reword.length && `${reword.length} reworded`,
+        ].filter(Boolean).join(", ")}`,
+        largestBump: bump,
+      }));
+    }
+
+    /* Sub-goals: a revert each, never an edit in place. */
+    if (goalIds.length) {
+      const all = working.subGoalEdits || [];
+      const first = Number(nextCatalogVersion(working).slice(1));
+      const reverts = goalIds.map((id, i) => {
+        const then = all.filter((e) => e.id === id && !e.shadow && msOf(e.at) <= until).pop();
+        return {
+          id, name: then?.name || null, criterion: then?.criterion, kind: "revert",
+          n: subGoalVersionOf(working, id) + 1, version: `c${first + i}`,
+          note: `Rolled back to ${name}`, at: now,
+        };
+      });
+      merge({ subGoalEdits: [...all, ...reverts] });
+    }
+
+    if (evalsMove) {
+      merge({
+        evals: evalsThen,
+        evalChanges: [...(working.evalChanges || []), { detail: `Rolled back to ${name}'s evaluations`, at: now, before: working.evals || [], evals: evalsThen }],
+      });
+    }
+
+    if (callerMoves) merge(callerChangePatch(env, working, callerThen));
+    return out;
+  };
+
+  return {
+    ok: true,
+    snap,
+    next: nextSnapshotLabel(env, envState),
+    changes,
+    keeps,
+    recheck: worldOk?.recheck || 0,
+    sitOut: worldOk?.sitOut || 0,
+    discards: worldOk?.discards || 0,
+    patch,
+  };
 };

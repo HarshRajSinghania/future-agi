@@ -1,5 +1,6 @@
 import { localizeEval } from "./errorLocalization";
 import { endedReasonFor } from "./endedReason";
+import { voiceFlowOf } from "./voiceFlow";
 
 /**
  * Shape a revamped-flow run task into the `data` object the real
@@ -216,7 +217,7 @@ function getMockRecordingUrl() {
   return cachedRecordingUrl;
 }
 
-export function taskToVoiceData(task, { env, voice = true } = {}) {
+export function taskToVoiceData(task, { env, voice = true, scenario = null, failedGoal = null } = {}) {
   const steps = task?.steps || [];
   const durationSec = (task?.durationMs || 0) / 1000;
   const direction = env?.direction === "inbound" ? "inbound" : "outbound";
@@ -260,6 +261,16 @@ export function taskToVoiceData(task, { env, voice = true } = {}) {
 
   const recordingUrl = voice ? getMockRecordingUrl() : undefined;
   const ended = endedReasonFor(task, { voice });
+  /* The Graph / Checklist tabs: the scenario's path, the tool calls on it,
+     and where a failed call left it (voiceFlow.js). */
+  const failed = task?.status && !["passed", "unmeasured"].includes(task.status) && task?.failStep != null && task.failStep >= 0;
+  const flow = voiceFlowOf({
+    path: scenario?.conversationBranch || task?.conversationBranch,
+    transcript,
+    steps,
+    failStep: failed ? task.failStep : null,
+    failedGoal,
+  });
 
   return {
     module: "simulate",
@@ -315,6 +326,7 @@ export function taskToVoiceData(task, { env, voice = true } = {}) {
     },
 
     scenario: summary,
+    ...(flow && { scenario_graph: flow.scenario_graph, flow_analysis: flow.flow_analysis }),
   };
 }
 

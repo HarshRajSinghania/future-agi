@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useTheme } from "@mui/material/styles";
 import { Box, Button, Stack, Tooltip, Typography } from "@mui/material";
 import { candidatesOf, frontierOf, projectedHeld } from "./tradeoffs";
+import { COST_NOISE, PER_CONVERSATION } from "../../_mock/optimizationRuns";
 
 const W = 640;
 const H = 220;
@@ -23,7 +24,15 @@ export default function TradeoffView({ record, chosen, onChoose }) {
   const onFrontier = new Set(frontier.map((c) => c.n));
   const pick = result?.winner?.n;
   const current = chosen || pick;
-  const ceiling = record.limits?.costCeiling ?? 5;
+  const finalistNs = new Set((result?.finalists || []).map((f) => f.n));
+  /* The cost limit as a change on today: a fixed amount read against
+     today's cost per conversation, "No increase" within run-to-run noise. */
+  const lim = record.limits || {};
+  const today = PER_CONVERSATION[record.surface === "voice" ? "voice" : "chat"];
+  const ceiling = lim.costMode === "abs" && lim.costCeilingAbs != null
+    ? Math.round(((lim.costCeilingAbs / today) - 1) * 1000) / 10
+    : (lim.costCeiling ?? 0) <= 0 ? COST_NOISE : lim.costCeiling;
+  const costMeasured = record.costMeasured !== false;
 
   if (!candidates.length) return null;
   const xs = [...candidates.map((c) => c.cost), ceiling, 0];
@@ -39,7 +48,7 @@ export default function TradeoffView({ record, chosen, onChoose }) {
   return (
     <Box>
       <Typography sx={{ px: 2, pt: 1.5, typography: "s2", color: "text.secondary" }}>
-        Every run by training score and cost per conversation. The line is the frontier — nothing else is at least as good on score, cost and latency at once. Runs past the dashed line break the cost limit.
+        {`Every run by target score and cost per conversation. The line joins the best trade-offs — nothing else is at least as good on quality, cost and latency.${costMeasured ? " Runs past the dashed line break the cost limit." : " This agent reports no cost, so the cost limit can't be checked."} Choosing a run other than the search's pick means verifying it before it can ship.`}
       </Typography>
       <Box sx={{ px: 2, pt: 1 }}>
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", maxHeight: 260 }}>
@@ -47,7 +56,7 @@ export default function TradeoffView({ record, chosen, onChoose }) {
           <line x1={PAD.l} y1={H - PAD.b} x2={W - PAD.r} y2={H - PAD.b} stroke={theme.palette.divider} />
           <line x1={PAD.l} y1={PAD.t} x2={PAD.l} y2={H - PAD.b} stroke={theme.palette.divider} />
           <text x={W - PAD.r} y={H - 8} textAnchor="end" fontSize="10" fill={faint}>cost per conversation →</text>
-          <text x={PAD.l + 4} y={PAD.t + 8} fontSize="10" fill={faint}>training score ↑</text>
+          <text x={PAD.l + 4} y={PAD.t + 8} fontSize="10" fill={faint}>target score ↑</text>
           {[y0 + 3, Math.round((y0 + y1) / 2), y1 - 3].map((v) => (
             <text key={v} x={PAD.l - 6} y={Y(v) + 3} textAnchor="end" fontSize="10" fill={faint}>{`${Math.round(v)}%`}</text>
           ))}
@@ -73,7 +82,7 @@ export default function TradeoffView({ record, chosen, onChoose }) {
                   strokeOpacity={c.eligible ? 0.8 : 0.6}
                 />
                 {(on || isCurrent) && (
-                  <text x={X(c.cost) + 8} y={Y(c.score) + 3} fontSize="10" fill={isCurrent ? "#7857FC" : ink}>{`T${c.n}`}</text>
+                  <text x={X(c.cost) + 8} y={Y(c.score) + 3} fontSize="10" fill={isCurrent ? "#7857FC" : ink}>{`R${c.n}`}</text>
                 )}
               </g>
             );
@@ -97,10 +106,10 @@ export default function TradeoffView({ record, chosen, onChoose }) {
           return (
             <Stack key={c.n} direction="row" alignItems="center" spacing={2} sx={{ px: 2, py: 1, "& + &": { borderTop: "1px solid", borderColor: "divider" } }}>
               <Typography sx={{ typography: "s2", fontWeight: 700, width: 64, flexShrink: 0 }}>{`Run ${c.n}`}</Typography>
-              <Typography sx={{ typography: "s2", width: 120, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{`${c.score}% training`}</Typography>
-              <Tooltip arrow title={isPick ? "Measured on the held-back set." : "Projected from the search's pick until this run's own held-back check finishes."}>
+              <Typography sx={{ typography: "s2", width: 120, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{`${c.score}% target`}</Typography>
+              <Tooltip arrow title={isPick || finalistNs.has(c.n) ? "Measured on the held-back set." : "Projected from the search's pick until you verify this run."}>
                 <Typography sx={{ typography: "s2", color: "text.secondary", width: 140, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                  {held == null ? "—" : `${isPick ? "" : "≈"}${held}% held back`}
+                  {held == null ? "—" : `${isPick || finalistNs.has(c.n) ? "" : "≈"}${held}% held back`}
                 </Typography>
               </Tooltip>
               <Typography sx={{ typography: "s2", color: "text.secondary", width: 90, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{`cost ${signed(c.cost)}`}</Typography>

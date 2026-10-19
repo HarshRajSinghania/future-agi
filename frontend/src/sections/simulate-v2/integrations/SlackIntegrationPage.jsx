@@ -1,12 +1,15 @@
 import PropTypes from "prop-types";
+import { useDemoMode } from "../agents/demoMode";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Button, Card, Chip, Menu, MenuItem, Select, Stack, Switch, Typography } from "@mui/material";
+import {
+  Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Menu, MenuItem, Select, Stack, Switch, Typography,
+} from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import {
-  SLACK_CHANNELS, SLACK_EVENTS, approveSlackRequest, cancelSlackRequest, resolveApproval, uninstallSlack, updateSlack, useIntegrations,
+  SLACK_CHANNELS, SLACK_EVENTS, approveSlackRequest, cancelSlackRequest, uninstallSlack, updateSlack, useIntegrations,
 } from "../_mock/integrations";
 import BrandMark from "./BrandMark";
 import SlackInstallDialog from "./SlackInstallDialog";
@@ -20,22 +23,23 @@ const SAMPLES = {
   regression: { title: "Regression · Returns & refunds agent v4 is down 12 pts", lines: ["Refund scenarios dropped from 96% to 84% against v3 in Customer Support Line", "7 scenarios that passed on v3 now fail"], actions: ["Compare runs", "View failures"] },
   release_blocker: { title: "Must-pass scenario failing · Refunds above $200 need supervisor approval", lines: ["Failed on agent v4 in Customer Support Line — the agent issued a $240 refund without escalating"], actions: ["View scenario", "Open run"] },
   pr: { title: "Fix PR opened · acme-inc/support-voice-agent #142", lines: ["Escalate refunds above $200 before issuing them", "2 files · simulation 84% → 97%"], actions: ["View pull request", "Open run"] },
-  version: { title: "Support voice agent · v5 saved from a push", lines: ["a3f91c2 Hand chargebacks to a human — priya.s", "2 environments keep running their current version until someone switches."], actions: ["Compare with the previous version", "Switch an environment to v5"] },
+  version: { title: "Support voice agent · v5 saved from a push", lines: ["a3f91c2 Hand chargebacks to a human — priya.s", "Its 2 environments test it on the next run if following production; pinned ones stay put."], actions: ["Compare with the previous version", "Review environments"] },
   error_feed: { title: "New issue · Agent promised a delivery date it couldn't confirm", lines: ["23 production calls in the last hour · Customer Support Line"], actions: ["Open issue"] },
   alert: { title: "Alert · p95 latency above 2s", lines: ["Customer Support Line · last 15 minutes"], actions: ["View alert"] },
-  approval: { title: "Approve a fix for Returns & refunds agent?", lines: ["Escalate refunds above $200 — fixes 7 failing scenarios (84% → 97%)", "2 files in acme-inc/support-voice-agent"], actions: ["Approve & open PR", "Decline", "Review in Future AGI"], approvalId: "sample" },
 };
 
 /** Settings → Integrations → Slack. */
 export default function SlackIntegrationPage() {
+  const demo = useDemoMode();
   const navigate = useNavigate();
-  const { slack, slackLog, approvals, slackRequest, slackRemoved } = useIntegrations();
+  const { slack, slackLog, slackRequest, slackRemoved } = useIntegrations();
   const [installOpen, setInstallOpen] = useState(false);
   const [menu, setMenu] = useState(null);
+  const [removing, setRemoving] = useState(false);
   const [preview, setPreview] = useState("regression");
 
   const setRule = (id, channel) => updateSlack({ rules: { ...slack.rules, [id]: channel } });
-  const sample = { ...SAMPLES[preview], at: new Date().toISOString(), channel: preview === "approval" ? slack?.approvals?.channel : (slack?.rules?.[preview] || slack?.defaultChannel || "#agent-quality") };
+  const sample = { ...SAMPLES[preview], at: new Date().toISOString(), channel: slack?.rules?.[preview] || slack?.defaultChannel || "#agent-quality" };
 
   return (
     <Box>
@@ -56,10 +60,10 @@ export default function SlackIntegrationPage() {
             <Typography sx={{ typography: "s1", color: "text.secondary" }}>
               {slack
                 ? `Added to ${slack.workspace} · default channel ${slack.defaultChannel}`
-                : "Tell the team when quality moves, and approve fixes without leaving Slack."}
+                : "Tell the team when quality moves, and send alerts to a channel."}
             </Typography>
             <Stack direction="row" spacing={0.75} sx={{ mt: 1 }}>
-              {["Notifications", "Approvals", "Alert destination"].map((t) => (
+              {["Notifications", "Alert destination"].map((t) => (
                 <Chip key={t} label={t} size="small" variant="outlined" sx={{ height: 22, typography: "s3" }} />
               ))}
             </Stack>
@@ -71,9 +75,27 @@ export default function SlackIntegrationPage() {
                 <Iconify icon="solar:menu-dots-bold" />
               </Button>
               <Menu anchorEl={menu} open={!!menu} onClose={() => setMenu(null)}>
-                <MenuItem onClick={() => { setMenu(null); uninstallSlack({ inSlack: true }); }} sx={{ typography: "s2" }}><DemoLabel />Simulate: removed in Slack</MenuItem>
-                <MenuItem onClick={() => { setMenu(null); uninstallSlack(); }} sx={{ color: "error.main", typography: "s2" }}>Remove from Slack</MenuItem>
+                {demo && <MenuItem onClick={() => { setMenu(null); uninstallSlack({ inSlack: true }); }} sx={{ typography: "s2" }}><DemoLabel />Simulate: removed in Slack</MenuItem>}
+                <MenuItem onClick={() => { setMenu(null); setRemoving(true); }} sx={{ color: "error.main", typography: "s2" }}>Remove from Slack</MenuItem>
               </Menu>
+              <Dialog open={removing} onClose={() => setRemoving(false)} maxWidth="xs" fullWidth>
+                <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>{`Remove from ${slack.workspace}?`}</DialogTitle>
+                <DialogContent>
+                  <DialogContentText sx={{ typography: "s2" }}>
+                    Run, regression, must-pass, fix and alert messages stop posting. Adding it again starts from one default channel.
+                  </DialogContentText>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                  <Button onClick={() => setRemoving(false)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
+                  <Button
+                    variant="contained"
+                    onClick={() => { uninstallSlack(); setRemoving(false); }}
+                    sx={{ typography: "s2", fontWeight: 700, bgcolor: "#DC2626", color: "#fff", "&:hover": { bgcolor: "#B91C1C", color: "#fff" } }}
+                  >
+                    Remove
+                  </Button>
+                </DialogActions>
+              </Dialog>
             </>
           ) : (
             <Stack alignItems="flex-end" spacing={0.5}>
@@ -93,20 +115,22 @@ export default function SlackIntegrationPage() {
       {/* Removed from Slack's side (app_uninstalled / tokens_revoked). */}
       {!slack && slackRemoved && !slackRequest && (
         <Notice icon="solar:link-broken-linear" title={`Future AGI was removed from ${slackRemoved.workspace} in Slack`}>
-          Notifications and approvals stopped. Add it again to pick up where you left off.
+          Notifications and alerts stopped. Add it again to pick up where you left off.
         </Notice>
       )}
 
       {/* The workspace's admins approve apps before anyone can add them. */}
       {!slack && slackRequest?.status === "pending" && (
         <Notice
-          icon="solar:clock-circle-linear" iconColor="#CA8A04" title={`Waiting for an admin of ${slackRequest.workspace} to approve`}
+          icon="solar:clock-circle-linear" title={`Waiting for an admin of ${slackRequest.workspace} to approve`}
           action={(
             <>
               <Button size="small" onClick={cancelSlackRequest} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>Withdraw</Button>
-              <Button size="small" variant="outlined" onClick={approveSlackRequest} sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
-                Admin approved (prototype)
-              </Button>
+              {demo && (
+                <Button size="small" variant="outlined" onClick={approveSlackRequest} sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
+                  <DemoLabel />Admin approved
+                </Button>
+              )}
             </>
           )}
         >
@@ -133,7 +157,7 @@ export default function SlackIntegrationPage() {
             <Stack spacing={2}>
               {[
                 { icon: "solar:bell-linear", title: "Know when quality moves", body: "A run finishes, a version regresses, a must-pass scenario fails — the people who care hear about it in their channel." },
-                { icon: "solar:shield-check-linear", title: "Approve fixes where you are", body: "When a fix is ready, the reviewer approves it in Slack and the pull request opens. Decline, and nothing changes." },
+                { icon: "solar:code-linear", title: "Follow every fix", body: "A fix PR opening or merging, and a new agent version, land where the team already talks. Reviews stay on GitHub." },
                 { icon: "solar:siren-linear", title: "Alerts to a channel, not a webhook URL", body: "Pick a channel for any alert rule instead of pasting a webhook." },
               ].map((c) => (
                 <Stack key={c.title} direction="row" spacing={1.5}>
@@ -150,7 +174,7 @@ export default function SlackIntegrationPage() {
           </Card>
           <Card sx={{ p: 2 }}>
             <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, mb: 1 }}>What your team sees</Typography>
-            <SlackMessage msg={{ ...SAMPLES.approval, at: new Date().toISOString(), channel: "#agent-quality" }} />
+            <SlackMessage msg={{ ...SAMPLES.regression, at: new Date().toISOString(), channel: "#agent-quality" }} />
           </Card>
         </Box>
       )}
@@ -189,36 +213,6 @@ export default function SlackIntegrationPage() {
                 );
               })}
             </Card>
-
-            <Card onMouseEnter={() => setPreview("approval")}>
-              <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, py: 2.5 }}>
-                <Box flex={1} minWidth={0}>
-                  <Typography sx={{ typography: "s1", fontWeight: 700 }}>Approve fixes from Slack</Typography>
-                  <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-                    Optional — your own rule, off by default. When a fix is ready, ask for approval in a channel. Approving opens the pull request; declining leaves the agent untouched.
-                  </Typography>
-                </Box>
-                <Switch checked={!!slack.approvals?.enabled} onChange={(e) => updateSlack({ approvals: { ...slack.approvals, enabled: e.target.checked } })} />
-              </Stack>
-              {slack.approvals?.enabled && (
-                <Stack direction="row" spacing={2} sx={{ px: 3, pb: 2.5 }}>
-                  <Box flex={1}>
-                    <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", mb: 0.5 }}>Ask in</Typography>
-                    <Select size="small" fullWidth value={slack.approvals.channel} onChange={(e) => updateSlack({ approvals: { ...slack.approvals, channel: e.target.value } })} sx={{ typography: "s2" }}>
-                      {SLACK_CHANNELS.map((c) => <MenuItem key={c} value={c} sx={{ typography: "s2" }}>{c}</MenuItem>)}
-                    </Select>
-                  </Box>
-                  <Box flex={1}>
-                    <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", mb: 0.5 }}>Who can approve</Typography>
-                    <Select size="small" fullWidth value={slack.approvals.who} onChange={(e) => updateSlack({ approvals: { ...slack.approvals, who: e.target.value } })} sx={{ typography: "s2" }}>
-                      <MenuItem value="channel" sx={{ typography: "s2" }}>Anyone in the channel</MenuItem>
-                      <MenuItem value="admins" sx={{ typography: "s2" }}>Workspace admins only</MenuItem>
-                      <MenuItem value="owner" sx={{ typography: "s2" }}>The agent&apos;s owner</MenuItem>
-                    </Select>
-                  </Box>
-                </Stack>
-              )}
-            </Card>
           </Stack>
 
           <Stack spacing={3} sx={{ position: { lg: "sticky" }, top: { lg: 16 } }}>
@@ -229,29 +223,24 @@ export default function SlackIntegrationPage() {
             <Card>
               <Box sx={{ px: 2, pt: 2, pb: 1 }}>
                 <Typography sx={{ typography: "s2", fontWeight: 700 }}>Recent messages</Typography>
-                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>What Future AGI posted. Approvals can be answered here too.</Typography>
+                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>What Future AGI posted. Each button opens what the message is about.</Typography>
               </Box>
               {slackLog.length === 0 ? (
                 <Typography sx={{ px: 2, pb: 2, typography: "s2", color: "text.subtitle" }}>Nothing posted yet — finish a simulation run or open a fix.</Typography>
               ) : (
                 <Stack spacing={1} sx={{ px: 2, pb: 2, maxHeight: 520, overflowY: "auto" }}>
-                  {slackLog.map((m) => {
-                    const a = m.approvalId ? approvals.find((x) => x.id === m.approvalId) : null;
-                    const state = a && a.status !== "pending" ? (a.status === "approved" ? `Approved by ${a.by} — pull request opened` : `Declined by ${a.by}`) : null;
-                    return (
+                  {slackLog
+                    /* Messages from when fixes could wait for a Slack OK — no longer a thing. */
+                    .filter((m) => m.event !== "approval")
+                    .map((m) => (
                       <SlackMessage
-                        key={m.id} msg={m} actionState={state}
-                        onAction={a && a.status === "pending" ? (label) => {
-                          if (label.startsWith("Approve")) resolveApproval(a.id, "approved");
-                          else if (label === "Decline") resolveApproval(a.id, "declined");
-                          else if (m.links?.[label]) navigate(m.links[label]);
-                        } : m.links && Object.keys(m.links).length ? (label) => {
+                        key={m.id} msg={m}
+                        onAction={m.links && Object.keys(m.links).length ? (label) => {
                           /* Buttons lead back to what the message is about. */
                           if (m.links[label]) navigate(m.links[label]);
                         } : undefined}
                       />
-                    );
-                  })}
+                    ))}
                 </Stack>
               )}
             </Card>

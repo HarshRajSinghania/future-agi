@@ -4,20 +4,17 @@ import { useSimStore } from "../store";
 import {
   twinById, seedScenariosForClone, resolveSeedPromptToJson,
 } from "../_mock/twins";
+import { agentPinPatch } from "../_mock/versions";
+import { currentUser, stampProvenance } from "../_mock/scenarioProvenance";
 
 /**
- * Creates a twin-backed environment and navigates to its workspace.
+ * Creates an agent's environment on a SaaS sandbox and navigates to it.
  *
- * Shared between the "Create a twin-backed environment" multi-service
- * flow (NewTwinEnvironment) and the one-click flow on the Twins
- * browse page (TwinsBrowse). Both paths must produce the same shape
- * of env — same `twinBacking`, same starter scenarios, same eval
- * preset — so users don't get different behaviours depending on
- * which door they came through.
- *
- * The consumer typically opens `TwinProvisioningModal` first, then
- * calls this on the modal's `onDone` so the animation doesn't race
- * with navigation.
+ * Every environment belongs to exactly one agent in Agents (RSI PRD), so
+ * `agent` is a connected agent (useConnectedAgents) — never a raw endpoint.
+ * Its record, versions and identity are attached the way the builder
+ * attaches them, following the version in production. The sandbox is kept
+ * until the environment is deleted; nothing expires.
  */
 export function useCreateTwinEnv() {
   const navigate = useNavigate();
@@ -26,10 +23,9 @@ export function useCreateTwinEnv() {
   return (services, {
     name = "",
     seedPrompt = "",
-    ttlMinutes = null,
     agent = null,
   } = {}) => {
-    if (!services?.length) return null;
+    if (!services?.length || !agent) return null;
 
     const envId = `env-twin-${Date.now().toString(36)}`;
     const resolvedSeed = resolveSeedPromptToJson(services, seedPrompt.trim());
@@ -37,8 +33,12 @@ export function useCreateTwinEnv() {
     /* Full seed pack: starter-per-service + cross-service combos,
        each pre-stamped with a persona so the Personas tab is populated
        from the moment the env lands. */
-    const starterScenarios = seedScenariosForClone(services);
     const provisionedAt = new Date().toISOString();
+    /* One batch — built by you, just now. Unstamped rows would get the demo
+       back-fill (teammates, days ago), which a sandbox built seconds ago
+       can't have. */
+    const starterScenarios = seedScenariosForClone(services)
+      .map((sc) => stampProvenance(sc, { source: "derived", actor: currentUser(), at: provisionedAt, batchId: `batch_build_${envId}` }));
     const twinBacking = {
       services,
       seedPrompt: seedPrompt.trim(),
@@ -49,16 +49,6 @@ export function useCreateTwinEnv() {
       ])),
       activity: Object.fromEntries(services.map((sId) => [sId, { requests: 0, failures: 0 }])),
       provisionedAt,
-      /*
-        `ttlMinutes: null` = permanent env (default). A number = short-
-        lived env; the workspace header shows a countdown and the
-        surface treats the env as ephemeral. `expiresAt` is pre-computed
-        so the UI doesn't have to keep adding to a Date on every render.
-      */
-      ttlMinutes: ttlMinutes || null,
-      expiresAt: ttlMinutes
-        ? new Date(Date.parse(provisionedAt) + ttlMinutes * 60_000).toISOString()
-        : null,
       /*
         status: "provisioning" while the inline TwinProvisioningView
         is animating; the view flips it to "ready" once every phase
@@ -73,7 +63,7 @@ export function useCreateTwinEnv() {
       name: derivedName,
       surface: primarySurface(services),
       domain: "twin",
-      tagline: `${services.length} twinned service${services.length === 1 ? "" : "s"}`,
+      tagline: `${services.length} sandboxed app${services.length === 1 ? "" : "s"}`,
       description: seedPrompt.trim() || defaultDescription(services),
       difficulty: "Advanced",
       popularity: 1,
@@ -87,7 +77,12 @@ export function useCreateTwinEnv() {
       starterScenarios,
     };
 
-    dispatch({ type: "adoptEnvironment", env, now: new Date().toISOString() });
+    /* The agent from Agents, as the builder attaches it: its record and
+       versions, tested at the version in production. */
+    // eslint-disable-next-line no-unused-vars
+    const { versions, usedIn, latest, id: _agentId, ...record } = agent;
+    const version = agent.production || latest || "v1";
+    dispatch({ type: "adoptEnvironment", env, now: provisionedAt });
     dispatch({
       type: "patchEnvState",
       envId,
@@ -95,27 +90,12 @@ export function useCreateTwinEnv() {
         twinBacking,
         scenarios: starterScenarios,
         scenarioSource: "twin_starter",
-        /*
-          Agent connection captured in the composer — persisted onto
-          envState so the workspace's Agents tab shows the connected
-          agent from the moment the user lands.
-        */
-        agent: agent ? {
-          typeId: "twin_backed",
-          via: "endpoint",
-          connectedAt: new Date().toISOString(),
-          values: {
-            sdkEndpoint: agent.sdkEndpoint,
-            ...(agent.authTokenRef ? { authTokenRef: agent.authTokenRef, hasToken: true } : {}),
-          },
-        } : undefined,
+        agent: { ...record, connectedAt: record.connectedAt || provisionedAt },
+        ...(versions?.length && { agentVersions: versions }),
+        ...agentPinPatch({ agent: record, agentVersions: versions || [] }, version),
       },
     });
-    /*
-      Land directly at the review layout (chat left + workspace tabs
-      right). Agent is already connected from the composer, so no
-      intermediate Connect page — one form to set everything up.
-    */
+    /* Land on the review layout (chat left + workspace tabs right). */
     navigate(paths.dashboard.simulate.environmentTwinReview(envId));
     return envId;
   };
@@ -126,14 +106,14 @@ export function useCreateTwinEnv() {
 export function defaultEnvName(services) {
   if (services.length === 1) {
     const t = twinById(services[0]);
-    return t ? `${t.name} sandbox` : "Twin sandbox";
+    return t ? `${t.name} sandbox` : "SaaS sandbox";
   }
-  return `${services.length}-service sandbox`;
+  return `${services.length}-app sandbox`;
 }
 
 export function defaultDescription(services) {
   const names = services.map((s) => twinById(s)?.name).filter(Boolean).join(", ");
-  return `Clone-backed environment. Agent operates across ${names || "the selected services"}.`;
+  return `SaaS sandbox. The agent works across ${names || "the selected apps"}.`;
 }
 
 export function primarySurface(services) {

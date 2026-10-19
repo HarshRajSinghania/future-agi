@@ -1,7 +1,8 @@
 import PropTypes from "prop-types";
+import { requiredEvalIds } from "../_mock/evals";
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Box, Button, Checkbox, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Checkbox, Stack, Tab, Tabs, Tooltip, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { neutralCheckboxSx } from "../components/primitives";
 import { textTone } from "../components/textTone";
@@ -13,13 +14,19 @@ import { useIntegrations } from "../_mock/integrations";
 import { evalSeries, runSummaries, trialSummaries } from "../_mock/comparison";
 import { allMetrics, deltaAgainst } from "../_mock/winner";
 import { Head, MetricCell, ScoreCell } from "../run/RunsTableCells";
-import { compactTokens } from "../run/runsTableFormat";
-import { candidatesOf } from "../run/fixmyagent/tradeoffs";
+import { compactTokens, creditsText } from "../run/runsTableFormat";
+import { candidatesOf, chosenVerified, shippedCandidate } from "../run/fixmyagent/tradeoffs";
+import WinnerChanges from "../run/fixmyagent/WinnerChanges";
+import ScenarioOutcomes from "../run/fixmyagent/ScenarioOutcomes";
+import { membersChanged, proposalMembers } from "../_mock/improvementPolicy";
+import { improvementOutcome, IMPROVEMENT_PHASES } from "../_mock/optimizationRuns";
 import RunsOverview from "../run/RunsOverview";
 import WinnerDrawer from "../run/WinnerDrawer";
 import { improvementRowsOf } from "./improvementRows";
 import { chartRunOf, trialRowsFor } from "./improvementRunsData";
 import StatusPill from "./ImprovementStatusPill";
+import { agentDefinitionOf } from "../_mock/agentRegistry";
+import ImprovementStages from "./ImprovementStages";
 
 const RED = "#DC2626";
 const DELTA = 56;
@@ -33,35 +40,87 @@ const DELTA = 56;
  * Choosing a winner only picks among runs that passed the checks; one the
  * search didn't verify reads as projected on the held-back set until it's
  * run on the full suite.
+ *
+ * While it's still running (`progress`), it's the same page: the stages it
+ * is in where the verdict will be, and its runs arriving in the table as
+ * they finish — each one a real run that opens on its own page.
  */
-export default function ImprovementRunsView({ env, envState, record, patch, onBack, backLabel, onOpenSearch, onVerify }) {
+const STAGE_LABEL = { reproduce: IMPROVEMENT_PHASES.reproducing, search: IMPROVEMENT_PHASES.searching, verify: IMPROVEMENT_PHASES.verifying };
+
+export default function ImprovementRunsView({ env, envState, record, patch, onBack, backLabel, onOpenSearch, onVerify, onShip, progress = null, onOpenIssue, onOpenStartRun }) {
+  const running = !!progress;
+  /* The model the agent runs on — what a model lock holds every run to. */
+  const agentModel = useMemo(() => {
+    if (!envState?.agent) return null;
+    const def = agentDefinitionOf({ agent: envState.agent, env, envState });
+    return def.model?.visible ? def.model.name : null;
+  }, [env, envState]);
   const navigate = useNavigate();
   const location = useLocation();
   const { agents, state: simState } = useConnectedAgents();
   const { prs } = useIntegrations();
   const [selected, setSelected] = useState([]);
   const [picking, setPicking] = useState(false);
+  /* Flow 5's tabs once it has finished: the runs, what the kept change
+     changes (each with its reason), and what it did to each scenario. */
+  const [tab, setTab] = useState("runs");
 
   const row = useMemo(
     () => improvementRowsOf({ state: simState, agents, prs }).find((r) => r.envId === env.id && r.recordId === record.id) || null,
     [simState, agents, prs, env.id, record.id],
   );
   const candidates = useMemo(() => candidatesOf(record), [record]);
-  const runs = useMemo(() => trialRowsFor(env, envState, record, candidates), [env, envState, record, candidates]);
+  const allRuns = useMemo(() => trialRowsFor(env, envState, record, candidates), [env, envState, record, candidates]);
+  /* Running: only the runs that have finished so far. */
+  const runsDone = running ? progress.runsDone : null;
+  const runs = useMemo(() => (runsDone == null ? allRuns : allRuns.slice(0, runsDone)), [allRuns, runsDone]);
+  /* The run still going, shown as a row so the table never looks stalled. */
+  const pendingN = running && progress.stage === "search" && progress.runsDone < progress.runsTotal ? progress.runsDone + 1 : null;
+  /* While running, the best run so far that nothing rejected. */
+  const bestSoFarN = running ? [...runs].reverse().find((r) => r.improved && !r.why)?.n || null : null;
   const chartRuns = useMemo(() => runs.map((r) => chartRunOf(r, record)), [runs, record]);
   const searchWinner = record.result?.winner?.n || null;
-  const keptN = record.preferredTrial || searchWinner;
+  const keptN = running ? null : record.preferredTrial || searchWinner;
   const kept = runs.find((r) => r.n === keptN) || null;
   /* A winner you chose wasn't the one the search verified — it runs on the
      full suite, held-back scenarios included, before it can be reviewed. */
-  const needsVerify = !!kept && keptN !== searchWinner && record.verifiedTrial !== keptN;
+  const needsVerify = !!kept && !chosenVerified(record);
+  /* The verdict leads: what it found, the held-back figure, the constraints. */
+  const outcome = useMemo(() => improvementOutcome(record, { model: agentModel }), [record, agentModel]);
+  const shippable = ["ready", "budget"].includes(outcome.ending.key) && !!record.result?.winner;
+  const result = record.result;
+  /* What ships — the search's pick or the run someone chose — and which
+     members of a multi-agent its changes touch. */
+  const shipped = shippedCandidate(record) || result?.winner || null;
+  const members = useMemo(() => {
+    const ctx = { agent: envState?.agent || null, limits: record.limits, target: record.targetMember };
+    const proposals = shipped?.proposals || [];
+    return membersChanged(proposals, ctx).hasMembers ? proposalMembers(proposals, ctx) : null;
+  }, [shipped, envState, record.limits, record.targetMember]);
+  const tabbed = !running && !!result;
+  const view = tabbed ? tab : "runs";
+  /*
+    Every pass rate here is on the target scenarios, so a run's change is
+    read against what the agent scored on those same scenarios before
+    (result.base) — never the full suite the starting run covered. A
+    baseline set from this page's own runs is the same set too.
+  */
+  const targetDelta = (rate) => {
+    if (rate == null || result?.base == null) return null;
+    const d = Math.round(rate - result.base);
+    return d === 0 ? { text: "same", better: null, flat: true } : { text: `${Math.abs(d)} pts`, up: d > 0, better: d > 0, flat: false };
+  };
 
   /* Each run's numbers, and the run the improvement started from — what
      every change in the table is read against. */
   const summaries = useMemo(() => trialSummaries(env, envState).filter((t) => t.selfImprovementId === record.id), [env, envState, record.id]);
   const envRuns = useMemo(() => runSummaries(env, envState), [env, envState]);
   const startRun = envRuns.find((r) => r.id === record.fromRunId) || null;
-  const evals = useMemo(() => evalSeries(envRuns, envState).map((e) => ({ id: e.id, name: e.name })), [envRuns, envState]);
+  /* Required ones are marked — only they weigh like a pass/fail signal. */
+  const evals = useMemo(() => {
+    const required = new Set(requiredEvalIds(envState?.evals || []));
+    return evalSeries(envRuns, envState).map((e) => ({ id: e.id, name: e.name, required: required.has(e.id) }));
+  }, [envRuns, envState]);
   const metrics = useMemo(() => Object.fromEntries(allMetrics(evals).map((m) => [m.id, m])), [evals]);
   const tableRows = useMemo(() => runs.map((r) => ({ ...r, s: summaries.find((t) => t.trialN === r.n) || null })), [runs, summaries]);
   /* What the table's changes are read against — the run it started from,
@@ -76,21 +135,23 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
   });
   /* The chart leads with the winner, read against the run the improvement
      started from — the same change its row shows — not the latest run. */
+  /* While it runs, the best run so far leads — never whichever finished last. */
+  const lead = kept || (running ? runs.find((r) => r.n === bestSoFarN) || null : null);
   const headline = useMemo(() => {
-    if (!kept) return null;
-    const run = chartRuns.find((c) => c.id === kept.runId);
+    if (!lead) return null;
+    const run = chartRuns.find((c) => c.id === lead.runId);
     if (!run) return null;
-    const m = tableRows.find((r) => r.n === kept.n)?.s;
+    const m = tableRows.find((r) => r.n === lead.n)?.s;
     return {
       run,
-      /* Scored on the training scenarios, not the full suite its run page shows. */
-      metric: "pass rate on training scenarios",
-      label: `${kept.name} · winner`,
-      delta: m && startRun ? deltaAgainst(metrics.passRate, m, startRun) : null,
+      /* Scored on the target scenarios, not the full suite its run page shows. */
+      metric: "pass rate on the target scenarios",
+      label: `${lead.name} · ${kept ? "winner" : "best so far"}`,
+      delta: targetDelta(m?.passRate ?? lead.score),
       /* Not "Run N" — this page's own runs are numbered too. */
-      against: "the run it started from",
+      against: "the agent before the change, on the same scenarios",
     };
-  }, [kept, chartRuns, tableRows, startRun, metrics]);
+  }, [lead, kept, chartRuns, tableRows]); // eslint-disable-line react-hooks/exhaustive-deps
   /* Run · Status · Pass · Duration · Tokens · Cost · Said, not done · Return,
      then a column per grader — the Runs table's columns. */
   const template = `40px minmax(220px, 380px) 150px ${[...Array(6).fill(124), ...evals.map(() => 128)].map((c) => `minmax(${c}px, 1fr)`).join(" ")}`;
@@ -122,6 +183,18 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
   const openRun = (r) => navigate(paths.dashboard.simulate.simulationRun(env.id, r.runId));
 
   const statusOf = (r) => {
+    if (running) {
+      if (r.why) {
+        return (
+          <Tooltip arrow title={`Not eligible — ${r.why}`}>
+            <Typography noWrap sx={{ typography: "s2", color: RED }}>Rejected</Typography>
+          </Tooltip>
+        );
+      }
+      return r.n === bestSoFarN
+        ? <Typography noWrap sx={{ typography: "s2", fontWeight: 700 }}>Best so far</Typography>
+        : <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>No better</Typography>;
+    }
     if (r.n === keptN) {
       return (
         <Tooltip arrow title={r.n === searchWinner ? "The search kept this run — verified on the held-back scenarios." : needsVerify ? "Chosen by you — not yet run on the held-back scenarios. Verify it before review." : "Chosen by you and run on the full suite."}>
@@ -156,24 +229,40 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
           <Box flex={1} minWidth={0}>
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography noWrap sx={{ typography: "m3", fontWeight: 700 }}>{row?.name || record.name}</Typography>
-              <StatusPill ending={row?.status} headline={row?.headline} />
+              {running
+                ? <StatusPill ending={{ key: "running", label: STAGE_LABEL[progress.stage] || IMPROVEMENT_PHASES.searching }} />
+                : <StatusPill ending={row?.status} headline={row?.headline} />}
             </Stack>
-            {/* Where it ran and what started it; the version pair and id on hover. */}
-            <Tooltip arrow placement="bottom-start" title={[row?.identity, record.id].filter(Boolean).join(" · ")}>
+            {/* The version pair, shown the same way on every screen (RSI PRD),
+                then where it ran and what started it; the id on hover. */}
+            <Tooltip arrow placement="bottom-start" title={record.id}>
               <Typography noWrap sx={{ typography: "s2", color: "text.subtitle", mt: 0.25, width: "fit-content", maxWidth: "100%" }}>
-                {[env.name, record.trigger?.issueId || row?.trigger?.label].filter(Boolean).join(" · ")}
+                {[row?.identity, env.name, record.trigger?.issueId || row?.trigger?.label].filter(Boolean).join(" · ")}
               </Typography>
             </Tooltip>
           </Box>
-          <Button
-            size="small" variant="outlined" onClick={onOpenSearch}
-            startIcon={<Iconify icon="solar:shield-check-linear" width={15} />}
-            sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
-          >
-            How it was decided
-          </Button>
-          {kept && (needsVerify ? (
-            <Tooltip arrow title="Runs it on the full suite, held-back scenarios included — the check the search's own pick already passed.">
+          {!running && (
+            <Button
+              size="small" variant="outlined" onClick={onOpenSearch}
+              startIcon={<Iconify icon="solar:shield-check-linear" width={15} />}
+              sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
+            >
+              How it was decided
+            </Button>
+          )}
+          {kept && (
+            <Button
+              size="small" variant="outlined" onClick={() => openRun(kept)}
+              endIcon={<Iconify icon="solar:arrow-right-linear" width={14} />}
+              sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
+            >
+              {`Review ${kept.name}`}
+            </Button>
+          )}
+          {/* Only a verified change ships: a run chosen over the search's
+              pick is verified first. */}
+          {kept && shippable && (needsVerify ? (
+            <Tooltip arrow title="Runs it on the full suite, held-back and must-pass scenarios included — the check the search's own pick already passed. Only a verified change can ship.">
               <Button
                 size="small" variant="contained" color="primary" onClick={onVerify}
                 startIcon={<Iconify icon="solar:play-bold" width={14} />}
@@ -182,32 +271,62 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
                 {`Verify ${kept.name}`}
               </Button>
             </Tooltip>
-          ) : (
+          ) : onShip ? (
             <Button
-              size="small" variant="contained" color="primary" onClick={() => openRun(kept)}
-              endIcon={<Iconify icon="solar:arrow-right-linear" width={14} />}
+              size="small" variant="contained" color="primary" onClick={onShip}
+              startIcon={<Iconify icon="solar:upload-minimalistic-linear" width={14} />}
               sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}
             >
-              {`Review ${kept.name}`}
+              {row?.output ? "Hand-over" : "Ship"}
             </Button>
-          ))}
+          ) : null)}
         </Stack>
       </Box>
 
-      <Box sx={{ mb: 2, flexShrink: 0 }}>
-        <RunsOverview runs={chartRuns} evals={[]} headline={headline} onOpenRun={(r) => navigate(paths.dashboard.simulate.simulationRun(env.id, r.id))} />
-      </Box>
+      {/* The verdict first: what it found, the held-back figure, the
+          constraints. While it runs, the stage it's in takes that place. */}
+      {running
+        ? <ImprovementStages record={record} envState={envState} progress={progress} model={agentModel} onOpenIssue={onOpenIssue} onOpenRun={onOpenStartRun} />
+        : <Verdict outcome={outcome} result={result} targetNow={kept?.score ?? null} />}
 
+      {tabbed && (
+        <Tabs
+          value={view} onChange={(_, v) => setTab(v)}
+          sx={{ minHeight: 40, mb: 2, flexShrink: 0, borderBottom: "1px solid", borderColor: "divider" }}
+        >
+          <Tab value="runs" label={`Runs (${runs.length})`} sx={{ minHeight: 40 }} />
+          <Tab value="changes" label="Changes" sx={{ minHeight: 40 }} />
+          <Tab value="scenarios" label="Per scenario" sx={{ minHeight: 40 }} />
+        </Tabs>
+      )}
+
+      {view !== "runs" && (
+        <Box sx={{ flexShrink: 0, border: "1px solid", borderColor: "divider", borderRadius: 1.5, bgcolor: "background.paper" }}>
+          {view === "changes"
+            ? <WinnerChanges env={env} winner={shipped} record={record} members={members} />
+            : <ScenarioOutcomes result={result} winner={result.winner || null} />}
+        </Box>
+      )}
+
+      {view === "runs" && chartRuns.length > 0 && (
+        <Box sx={{ mb: 2, flexShrink: 0 }}>
+          <RunsOverview runs={chartRuns} evals={[]} headline={headline} onOpenRun={(r) => navigate(paths.dashboard.simulate.simulationRun(env.id, r.id))} />
+        </Box>
+      )}
+
+      {view === "runs" && (
+      <>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.25, flexShrink: 0 }}>
-        <Typography sx={{ typography: "s1", fontWeight: 700 }}>{`Runs (${runs.length})`}</Typography>
+        {/* Finished, the Runs tab names them; running, the heading does. */}
+        {running && <Typography sx={{ typography: "s1", fontWeight: 700 }}>{`Runs (${runs.length} of ${progress.runsTotal})`}</Typography>}
         <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>
-          {selected.length ? `${selected.length} selected` : baselineRow ? (
+          {running && progress.stage === "reproduce" ? "Each run is a full simulation on this environment — open one to see its conversations" : selected.length ? `${selected.length} selected` : baselineRow ? (
             <>
               Measured against{" "}
               <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>{baselineRow.name || `Run ${baselineRow.n}`}</Box>
               {" "}— rates in points, everything else in percent
             </>
-          ) : `Select two or more to compare them scenario by scenario${startRun ? ` · changes are against the run it started from, ${env.name} Run ${startRun.ordinal}` : ""}`}
+          ) : `Select two or more to compare them scenario by scenario · pass rates are on the target scenarios, against ${result?.base ?? "—"}% before the change${startRun ? `; other columns against ${env.name} Run ${startRun.ordinal}` : ""}`}
         </Typography>
         {selected.length > 0 && (
           <Button size="small" onClick={() => setSelected([])} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", minWidth: 0 }}>Clear</Button>
@@ -239,10 +358,10 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
         >
           Compare
         </Button>
-        <Tooltip arrow title={field.length < 2 ? "Fewer than two runs passed the checks — there's nothing to choose between." : ""} disableHoverListener={field.length >= 2}>
+        <Tooltip arrow title={running ? "Once every run has finished and been checked." : field.length < 2 ? "Fewer than two runs passed the checks — there's nothing to choose between." : ""} disableHoverListener={!running && field.length >= 2}>
           <Box component="span">
             <Button
-              size="small" variant="outlined" disabled={field.length < 2} onClick={() => setPicking(true)}
+              size="small" variant="outlined" disabled={running || field.length < 2} onClick={() => setPicking(true)}
               startIcon={<Iconify icon="solar:cup-star-bold" width={15} />}
               sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
             >
@@ -258,12 +377,12 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
             <Box />
             <Head>Run</Head>
             <Head>Status</Head>
-            <Head right title="Scenarios this run passed, on the training scenarios it was scored on">Pass</Head>
+            <Head right title="Scenarios this run passed, on the target scenarios it was scored on">Pass</Head>
             <Head right title="Average duration per task">Duration</Head>
             <Head right>Tokens</Head>
             <Head right>Cost</Head>
             <Head right title="Tasks where the agent said it was done but the world shows it wasn't">Said, not done</Head>
-            <Head right title="Mean return — the environment's reward, averaged over tasks">Return</Head>
+            <Head right title="Average score the environment gave each conversation">Return</Head>
             {evals.map((e, i) => (
               <Head key={e.id} right divider={i === 0} last={i === evals.length - 1} title={e.name} wrap>
                 {e.name.replace(/_/g, "_\u200b")}
@@ -331,10 +450,10 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
                     </Box>
                   </Stack>
                   <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, pr: 1 }}>{statusOf(r)}</Box>
-                  <MetricCell anchor deltaWidth={DELTA} text={`${m?.passRate ?? r.score}%`} delta={m && deltaAgainst(metrics.passRate, m, baseline)} />
+                  <MetricCell anchor deltaWidth={DELTA} text={`${m?.passRate ?? r.score}%`} delta={baselineRow ? m && deltaAgainst(metrics.passRate, m, baselineRow.s) : targetDelta(m?.passRate ?? r.score)} />
                   <MetricCell quiet deltaWidth={DELTA} text={m ? `${(m.avgDurationMs / 1000).toFixed(1)}s` : "—"} delta={m && deltaAgainst(metrics.duration, m, baseline)} />
                   <MetricCell quiet deltaWidth={DELTA} text={m ? compactTokens(m.tokens) : "—"} delta={m && deltaAgainst(metrics.tokens, m, baseline)} />
-                  <MetricCell quiet deltaWidth={DELTA} text={m ? `$${m.cost.toFixed(2)}` : "—"} delta={m && deltaAgainst(metrics.cost, m, baseline)} />
+                  <MetricCell quiet deltaWidth={DELTA} text={m ? creditsText(m.cost) : "—"} delta={m && deltaAgainst(metrics.cost, m, baseline)} />
                   <MetricCell quiet={!m?.saidNotDone} deltaWidth={DELTA} text={m ? `${m.saidNotDone}` : "—"} delta={m && deltaAgainst(metrics.saidNotDone, m, baseline)} />
                   <MetricCell anchor deltaWidth={DELTA} text={m?.meanReturn == null ? "—" : m.meanReturn.toFixed(2)} delta={m && deltaAgainst(metrics.meanReturn, m, baseline)} />
                   {evals.map((e, i) => (
@@ -350,9 +469,38 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
                 </Box>
               );
             })}
+            {pendingN && (
+              <Box sx={{ display: "grid", gridTemplateColumns: template, alignItems: "center", pl: 2.5, minHeight: 49 }}>
+                <Box />
+                <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0, pr: 1.5 }}>
+                  <Box sx={{ minWidth: 30, height: 22, px: 0.75, borderRadius: 0.75, display: "grid", placeItems: "center", typography: "s3", fontWeight: 700, color: "text.disabled", bgcolor: "background.neutral", fontVariantNumeric: "tabular-nums" }}>
+                    {`R${pendingN}`}
+                  </Box>
+                  <Typography noWrap sx={{ typography: "s2", fontWeight: 600, color: "text.subtitle" }}>{`Run ${pendingN}`}</Typography>
+                </Stack>
+                <Stack direction="row" alignItems="center" spacing={0.75}>
+                  <Box
+                    sx={{
+                      width: 10, height: 10, borderRadius: "50%", border: "1.5px solid", borderColor: "primary.main", borderTopColor: "transparent",
+                      animation: "runs-spin 0.7s linear infinite", "@keyframes runs-spin": { to: { transform: "rotate(360deg)" } },
+                    }}
+                  />
+                  <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>Running</Typography>
+                </Stack>
+              </Box>
+            )}
+            {running && !runs.length && !pendingN && (
+              <Typography sx={{ px: 2.5, py: 2, typography: "s2", color: "text.subtitle" }}>
+                {progress.stage === "reproduce"
+                  ? "Runs appear here as they finish. First it checks the failure happens on today's version."
+                  : "Runs appear here as they finish."}
+              </Typography>
+            )}
           </Stack>
         </Box>
       </Box>
+      </>
+      )}
 
       <WinnerDrawer
         open={picking}
@@ -370,6 +518,65 @@ export default function ImprovementRunsView({ env, envState, record, patch, onBa
   );
 }
 
+/*
+  The improvement's verdict above its chart (RSI PRD, Flow 5): the sentence,
+  then the numbers — held-back change, target change, overfit gap, cost and
+  latency — then each constraint, passed or not, with what was measured.
+  Colour only on the change and on a broken constraint.
+*/
+const signedPct = (n) => `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(Math.round(n * 10) / 10)}%`;
+function Verdict({ outcome, result, targetNow }) {
+  if (!result?.winner && !outcome.headline) return null;
+  const thin = !!result?.split?.thin;
+  const heldNow = outcome.heldScore ?? result?.heldScore;
+  const lift = heldNow != null && result?.heldBase != null ? heldNow - result.heldBase : null;
+  const targetLift = targetNow != null && result?.base != null ? targetNow - result.base : null;
+  const checks = outcome.checks || [];
+  const projected = !!outcome.chosen?.projected;
+  const effect = outcome.effect || null;
+  const rows = [
+    result?.winner && ["Held back", thin ? "Too few held back to measure" : `${result.heldBase}% → ${heldNow}%${projected ? " · projected" : ""}`, thin || !lift ? null : lift],
+    result?.winner && targetLift != null && ["Target", `${result.base}% → ${targetNow}% on the scenarios it was tuned on`, targetLift || null],
+    result?.winner && outcome.gap != null && !thin && ["Overfit gap", `${outcome.gap} pts between target and held back`, null],
+    result?.winner && effect && ["Cost and latency", `${outcome.costKnown === false ? "Cost not measured" : `Cost per conversation ${signedPct(effect.cost)}`} · latency ${signedPct(effect.latency)}`, null],
+  ].filter(Boolean);
+  return (
+    <Box sx={{ mb: 2, flexShrink: 0, border: "1px solid", borderColor: "divider", borderRadius: 1.5, bgcolor: "background.paper" }}>
+      <Typography sx={{ px: 2, py: 1.25, typography: "s1", fontWeight: 600, lineHeight: 1.45 }}>{outcome.headline}</Typography>
+      {rows.map(([k, v, pts]) => (
+        <Stack key={k} direction="row" alignItems="center" spacing={2} sx={{ px: 2, py: 0.875, borderTop: "1px solid", borderColor: "divider" }}>
+          <Typography sx={{ typography: "s2", color: "text.subtitle", width: 140, flexShrink: 0 }}>{k}</Typography>
+          <Typography sx={{ typography: "s2", fontWeight: 600, flex: 1, minWidth: 0, fontVariantNumeric: "tabular-nums" }}>{v}</Typography>
+          {!!pts && (
+            <Typography sx={{ typography: "s3", fontWeight: 600, fontVariantNumeric: "tabular-nums", color: pts > 0 ? "#16A34A" : RED }}>
+              {`${pts > 0 ? "▲" : "▼"} ${Math.abs(pts)} pts`}
+            </Typography>
+          )}
+        </Stack>
+      ))}
+      {/* Each constraint, passed or not — the checklist, not a count. */}
+      {checks.length > 0 && (
+        <Stack direction="row" alignItems="flex-start" spacing={2} sx={{ px: 2, py: 0.875, borderTop: "1px solid", borderColor: "divider" }}>
+          <Typography sx={{ typography: "s2", color: "text.subtitle", width: 140, flexShrink: 0 }}>Constraints</Typography>
+          <Box sx={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" }, columnGap: 3, rowGap: 0.5 }}>
+            {checks.map((c) => (
+              <Stack key={c.id} direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+                <Iconify
+                  icon={c.pass === null ? "solar:question-circle-linear" : c.pass ? "solar:check-circle-linear" : "solar:close-circle-bold"}
+                  width={14} sx={{ color: c.pass === false ? RED : c.pass === null ? "text.disabled" : "text.secondary", flexShrink: 0 }}
+                />
+                <Typography noWrap sx={{ typography: "s2", fontWeight: 600, color: c.pass === false ? RED : "text.primary", flexShrink: 0 }}>{c.label}</Typography>
+                <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", minWidth: 0 }}>{c.actual}</Typography>
+              </Stack>
+            ))}
+          </Box>
+        </Stack>
+      )}
+    </Box>
+  );
+}
+Verdict.propTypes = { outcome: PropTypes.object.isRequired, result: PropTypes.object, targetNow: PropTypes.number };
+
 ImprovementRunsView.propTypes = {
   env: PropTypes.object.isRequired,
   envState: PropTypes.object,
@@ -380,4 +587,11 @@ ImprovementRunsView.propTypes = {
   onOpenSearch: PropTypes.func,
   /* Runs the chosen winner on the full suite. */
   onVerify: PropTypes.func,
+  /* Opens the hand-over for a verified winner. */
+  onShip: PropTypes.func,
+  /* Running: from improvementProgressOf — the stage and runs finished so far. */
+  progress: PropTypes.object,
+  onOpenIssue: PropTypes.func,
+  /* The run it started from, when it started from one. */
+  onOpenStartRun: PropTypes.func,
 };

@@ -35,8 +35,10 @@ import { subTasksFor } from "./contract";
 import { hashSeed, envTurnLimitOf } from "./runStream";
 import { toolEnvPin, toolEnvSummary, toolFaultsOf } from "./toolEnv";
 import { scenarioVersionsPin } from "./scenarioVersion";
+import { envLineage, holdsInEnv } from "./versions";
 import { replicationOf } from "./replication";
 import { proofKindOf } from "./rsiModel";
+import { secretsUsedOf } from "./envConfig";
 
 const short = (s) => hashSeed(String(s || "")).toString(36).slice(0, 4);
 const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40);
@@ -50,7 +52,10 @@ const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").re
  * the new wording.
  */
 export const rulesOf = (env, envState) => {
-  const changes = envState?.ruleChanges || [];
+  /* Only changes made in this version's line hold — a rollback's parent is
+     the version it rolled back to, so what was changed in between doesn't. */
+  const lineage = envLineage(env, envState);
+  const changes = (envState?.ruleChanges || []).filter((c) => holdsInEnv(lineage, c.envVersion));
   const retired = new Set(changes.filter((c) => c.kind === "removed").map((c) => c.id));
   const base = (env?.rules || []).map((text, i) => {
     const id = `R${i + 1}`;
@@ -129,7 +134,8 @@ const count = (n) => Math.max(1, n);
 
 /** The suite's version: one per batch of scenarios added, edited or retired. */
 export const suiteVersionOf = (envState) => {
-  const rows = envState?.scenarios || [];
+  /* A proposal isn't in the set until someone adds it — it moves nothing. */
+  const rows = (envState?.scenarios || []).filter((r) => !r.proposed);
   const batches = new Set(rows.map((r) => r.batchId).filter(Boolean)).size;
   /* Each retire and each restore moves the suite on, so undoing one never
      hands back an old suite number. */
@@ -139,6 +145,7 @@ export const suiteVersionOf = (envState) => {
      suite reads whichever is further along. Read directly: suiteLog imports
      this module. */
   const logged = (envState?.suiteVersions || [])
+    .filter((l) => !/waiting to be added$/.test(String(l.summary || "")))
     .reduce((m, l) => Math.max(m, parseInt(String(l.label || "").replace(/\D/g, ""), 10) || 0), 0);
   return `s${Math.max(count(batches + edits), logged)}`;
 };
@@ -214,6 +221,8 @@ export const runPinsOf = (run, env, envState) => ({
   surface: run?.surface || env?.surface || null,
   fidelity: run?.runFidelity || runFidelityOf(env, envState),
   trials: run?.trials || run?.repeats || 1,
+  /* Recorded, not compared: a new key isn't a new test. */
+  secrets: run?.secrets ? Object.keys(run.secrets).length : null,
 });
 
 /**
@@ -242,10 +251,9 @@ export const pinsForNewRun = (env, envState, { trials, seed, rules = false } = {
   }),
   /* Judged by every admission gate there is now (coverage.js). */
   admissionGates: 3,
-  /* Checked for cheating (§4.10.10) — off-limits tools and canary scenarios.
-     Runs without this replay without the checks (treated as 0). */
-  cheatChecks: 1,
   scenarioVersions: scenarioVersionsPin(envState),
+  /* The secret references it resolved — references only. */
+  secrets: secretsUsedOf(envState),
   surface: env?.surface || null,
   runFidelity: runFidelityOf(env, envState),
   ...(trials != null && { trials }),

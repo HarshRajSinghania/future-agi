@@ -5,10 +5,17 @@
     ISS-4536 → Airline rebooking agent (repo) — a code change, Ready for
                review, its draft PR one click away
     ISS-4402 → Customer Support Line (Vapi squad) — a prompt change shipped
-               as a Vapi copy to swap in
+               as a Vapi copy, released, and seen again: Reopened, so Fix
+               again is the next step
+    ISS-4366 → Customer Support Line — released over 30 days ago and not
+               seen since: Resolved
+    ISS-4431 → Customer Support Line — released a few days ago: Watching
     ISS-4529 → Guest booking line (Retell, live numbers pinned) — shipped as
                a Retell draft version
     ISS-4478 → Customer Support Line — No safe improvement, and says why
+
+  The three Customer Support Line releases are numbered and dated in the
+  same order (Resolved's first), so its version history reads true.
 
   Each record is written exactly as Start fix writes one (issueFixRecord),
   with the seeded `compatCheck: 0` and a fixed search seed, so it replays
@@ -19,10 +26,11 @@ import { getEnvironment } from "./environments";
 import { DEFAULT_LIMITS, OPT_STATUS, improvementOutcome } from "./optimizationRuns";
 import { budgetsWithin } from "./improvementStart";
 import { envAgentKey } from "./agentRegistry";
-import { agentVersions, currentAgentVersion } from "./versions";
+import { agentPinPatch, agentVersions, currentAgentVersion } from "./versions";
 import { improvementRunName } from "./optimizer";
 import { issueFixRecord, issueScenarioDrafts } from "../errorFeed/issueFixModel";
-import { draftVersionRecord } from "../agents/versionRelease";
+import { draftVersionRecord, draftVersionOf } from "../agents/versionRelease";
+import { releasePatch } from "./releaseFix";
 
 const hoursAgo = (n) => new Date(Date.now() - n * 3600000).toISOString();
 
@@ -37,7 +45,17 @@ export const SEEDED_FIX_ISSUES = {
   "ISS-4402": {
     cluster_id: "ISS-4402", project_id: "customer-support-line-agent", severity: "high", evidence_state: "confirmed", trace_count: 84, fix_layer: "prompt",
     error: { name: "Cancellation flow proceeds without reading policy exceptions", type: "PolicyBypassError" },
-    why_shown: "Release 41 shipped a fix on Sep 1; no qualifying occurrences observed for 6 days of eligible traffic. Keeping under Monitoring.",
+    why_shown: "84 calls where the agent confirmed a cancellation straight away without reading the policy exceptions — notice periods, kept benefits, price-match promises — and in most no cancel_order call followed. Matched cancellations check the exceptions before calling cancel_order.",
+  },
+  "ISS-4366": {
+    cluster_id: "ISS-4366", project_id: "customer-support-line-agent", severity: "high", evidence_state: "confirmed", trace_count: 26, fix_layer: "prompt",
+    error: { name: "Refund issued without checking return eligibility", type: "SkippedVerification" },
+    why_shown: "26 calls where issue_refund ran with no check_return_eligibility call before it; 9 of those orders were outside the return window. Matched refunds check eligibility first.",
+  },
+  "ISS-4431": {
+    cluster_id: "ISS-4431", project_id: "customer-support-line-agent", severity: "high", evidence_state: "confirmed", trace_count: 33, fix_layer: "prompt",
+    error: { name: "New delivery address confirmed after the parcel was dispatched", type: "UnsupportedClaim" },
+    why_shown: "33 calls where the agent confirmed a new delivery address although shipment_status already showed the parcel dispatched; update_shipping_address failed and the caller was never told. Matched calls check shipment_status first.",
   },
   "ISS-4529": {
     cluster_id: "ISS-4529", project_id: "guest-booking-line", severity: "high", evidence_state: "confirmed", trace_count: 92, fix_layer: "orchestration",
@@ -59,11 +77,15 @@ export const SEEDED_FIX_ISSUES = {
 /*
   Which fix, where, and how it shipped. `seed` is the search's seed — fixed,
   so the record is the same on every load; `expect` is the ending it was
-  chosen for, checked when the seed is built.
+  chosen for, checked when the seed is built. `releasedAfter` (hours after
+  it finished) is when a person marked the shipped draft released — the
+  Error Feed's watch runs from then. `at` is hours ago.
 */
 export const SEEDED_FIXES = [
   { as: "ef-code", issueId: "ISS-4536", envId: "env-chat-travel", seed: "ef-ISS-4536-20-11", expect: "ready", at: 20, minutes: 52 },
-  { as: "ef-prompt", issueId: "ISS-4402", envId: "env-voice-support", seed: "ef-ISS-4402-19-6", expect: "ready", at: 30, minutes: 47, also: ["env-voice-after-hours"], ship: { where: "Vapi", kind: "copy" } },
+  { as: "ef-resolved", issueId: "ISS-4366", envId: "env-voice-support", seed: "ef-ISS-4366", expect: "ready", at: 34 * 24, minutes: 46, ship: { where: "Vapi", kind: "copy" }, releasedAfter: 20 },
+  { as: "ef-watching", issueId: "ISS-4431", envId: "env-voice-support", seed: "ef-ISS-4431", expect: "ready", at: 4 * 24 + 6, minutes: 41, ship: { where: "Vapi", kind: "copy" }, releasedAfter: 22 },
+  { as: "ef-prompt", issueId: "ISS-4402", envId: "env-voice-support", seed: "ef-ISS-4402-19-6", expect: "ready", at: 30, minutes: 47, also: ["env-voice-after-hours"], ship: { where: "Vapi", kind: "copy" }, releasedAfter: 1 },
   { as: "ef-retell", issueId: "ISS-4529", envId: "env-guest-booking", seed: "ef-ISS-4529-20", expect: "ready", at: 26, minutes: 44, ship: { where: "Retell", kind: "draft" } },
   { as: "ef-no-safe", issueId: "ISS-4478", envId: "env-voice-support", seed: "ef-ISS-4478-19", expect: "no-fix", at: 14, minutes: 51 },
 ];
@@ -148,6 +170,7 @@ const withDraftVersion = (byEnv, key, version) => {
 export const withErrorFeedFixes = (state, envs) => {
   if (!state?.byEnv) return state;
   const byEnv = { ...state.byEnv };
+  const added = [];
   SEEDED_FIXES.forEach((cfg) => {
     const es = byEnv[cfg.envId];
     const env = getEnvironment(cfg.envId) || (envs || []).find((e) => e.id === cfg.envId);
@@ -163,10 +186,74 @@ export const withErrorFeedFixes = (state, envs) => {
         ...(seeded.draft && { handoffDrafts: { ...(es.handoffDrafts || {}), [seeded.record.id]: seeded.draft } }),
       };
       if (seeded.version) withDraftVersion(byEnv, envAgentKey(es.agent, cfg.envId), seeded.version);
+      added.push(cfg);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("[store] seeded fix skipped", cfg.issueId, err);
     }
   });
+  /* Released only after every fix is built, so each was searched against
+     the production version it really started from. */
+  added.filter((cfg) => cfg.releasedAfter != null).forEach((cfg) => withSeededRelease(byEnv, cfg));
   return { ...state, byEnv };
+};
+
+/*
+  A person marked a seeded fix's draft released: it lands as its Draft
+  version, the release is recorded (with the confirmation run of its
+  targets, as Mark as released records it), and the version is released
+  for the agent everywhere it is tested — production from then on.
+*/
+const withSeededRelease = (byEnv, cfg) => {
+  const es = byEnv[cfg.envId];
+  const record = (es?.optimizations || []).find((o) => o.seededAs === cfg.as);
+  const version = record && draftVersionOf(es, record.id);
+  if (!record || !version || es.handoffLandings?.[record.id]) return;
+  const at = new Date(Date.parse(record.completedAt) + cfg.releasedAfter * 3600000).toISOString();
+  const { patch } = releasePatch(es, { version: version.label, optId: record.id, at });
+  byEnv[cfg.envId] = {
+    ...es,
+    ...patch,
+    releases: [...patch.releases].sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0)),
+    handoffLandings: { ...(es.handoffLandings || {}), [record.id]: version.label },
+  };
+  const key = envAgentKey(es.agent, cfg.envId);
+  Object.keys(byEnv).forEach((id) => {
+    const other = byEnv[id];
+    if (!other?.agent || envAgentKey(other.agent, id) !== key) return;
+    const next = {
+      ...other,
+      agentVersions: agentVersions(other).map((v) => (v.label === version.label ? { ...v, status: "released", landedAt: at, releasedAt: at } : v)),
+    };
+    byEnv[id] = next.agentVersionPinned ? next : { ...next, ...agentPinPatch(next, null) };
+  });
+};
+
+/*
+  Seed 28: the Error Feed's watch shown end to end on Customer Support Line —
+  Resolved, Watching and Reopened. A stored ISS-4402 fix nobody has touched
+  (not landed, released or followed by another fix) goes, with its draft and
+  Draft version, so it comes back after the two older releases and the
+  versions stay in date order. Anything someone did themselves stays.
+*/
+export const withWatchedFixes = (state, envs) => {
+  if (!state?.byEnv) return state;
+  const byEnv = { ...state.byEnv };
+  const es = byEnv["env-voice-support"];
+  const records = es?.optimizations || [];
+  const old = records.find((o) => o.seededAs === "ef-prompt");
+  const untouched = old && !es.handoffLandings?.[old.id] && !es.handoffCanary?.[old.id]
+    && !(es.releases || []).some((r) => r.optId === old.id)
+    && !records.some((o) => o.id !== old.id && o.trigger?.issueId === old.trigger?.issueId)
+    && !records.some((o) => o.seededAs === "ef-resolved" || o.seededAs === "ef-watching");
+  if (untouched) {
+    const { [old.id]: _drop, ...drafts } = es.handoffDrafts || {};
+    byEnv["env-voice-support"] = { ...es, optimizations: records.filter((o) => o.id !== old.id), handoffDrafts: drafts };
+    Object.keys(byEnv).forEach((id) => {
+      const list = byEnv[id]?.agentVersions;
+      if (!list?.some((v) => v.status === "draft" && v.draftOf?.optId === old.id && v.draftOf?.envId === "env-voice-support")) return;
+      byEnv[id] = { ...byEnv[id], agentVersions: list.filter((v) => !(v.status === "draft" && v.draftOf?.optId === old.id && v.draftOf?.envId === "env-voice-support")) };
+    });
+  }
+  return withErrorFeedFixes({ ...state, byEnv }, envs);
 };

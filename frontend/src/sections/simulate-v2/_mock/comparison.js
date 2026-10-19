@@ -24,6 +24,7 @@ import { checklistSteps } from "./callDetail";
 import { ensureProvenance } from "./scenarioProvenance";
 import { pinnedScenarios } from "./decoupled";
 import { improvementRunName } from "./optimizer";
+import { scenarioTitle } from "./scenarios";
 
 /**
  * Colours for run identity.
@@ -55,8 +56,10 @@ export const runScenarios = (envState, run) => {
   const all = pinnedScenarios(envState?.scenarios || [], run);
   if (!run?.scenarioIds?.length) return { scenarios: all, dropped: 0 };
   const byId = new Map(all.map((sc) => [sc.id, sc]));
-  const scenarios = run.scenarioIds.map((id) => byId.get(id)).filter(Boolean);
-  return { scenarios, dropped: run.scenarioIds.length - scenarios.length };
+  /* Rows of the removed cheat checks aren't "dropped" — they're gone by design. */
+  const ids = run.scenarioIds.filter((id) => !/-canary-\d+$/.test(String(id)));
+  const scenarios = ids.map((id) => byId.get(id)).filter(Boolean);
+  return { scenarios, dropped: ids.length - scenarios.length };
 };
 
 /** The tasks a stored run produced, rebuilt from its id and the pairing it
@@ -72,8 +75,6 @@ export const rebuildRun = (env, envState, run) => {
     toolFaults: run.toolFaults || null,
     /* Runs from before the extra admission gates replay under the first three. */
     admissionGates: run.admissionGates || 1,
-    /* Cheat checks replay only on runs that pinned them. */
-    cheatChecks: run.cheatChecks || 0,
     /* The updated RSI PRD's run rules replay only on runs that pinned them. */
     outcomes: run.outcomes || 0,
     requiredEvals: run.requiredEvals || 0,
@@ -186,7 +187,9 @@ export const runSummary = (env, envState, run, index) => {
       ? Math.round(tasks.reduce((a, t) => a + (t.durationMs || 0), 0) / tasks.length)
       : 0,
     tokens: tasks.reduce((a, t) => a + (t.tokens || 0), 0),
-    cost: tasks.reduce((a, t) => a + (t.cost || 0), 0),
+    /* Only costs the agent's side reported; unverified ones are counted, never summed. */
+    cost: tasks.filter((t) => !t.costUnverified).reduce((a, t) => a + (t.cost || 0), 0),
+    costUnverified: tasks.filter((t) => t.costUnverified && isMeasured(t)).length,
     /* Claims the call log did not support — the failure a transcript hides. */
     saidNotDone: tasks.filter((t) => t.callLog?.unsupportedClaim).length,
     scores,
@@ -353,6 +356,15 @@ export const trialSummaries = (env, envState) => {
            over cells) route through buildComparison; consumers that
            only need aggregates read the summary fields above. */
         tasks: [],
+        /* The trial's own per-scenario outcome, light enough for the Runs
+           table's counts (runStatsOf reads it when `tasks` is empty). */
+        trialTasks: trialIds.map((sid) => {
+          const state = trial.perScenario[sid];
+          const status = state === "fixed" || state === "same" ? "passed"
+            : state === "flaky" ? "flaky"
+              : state === "inconclusive" ? "unmeasured" : "failed";
+          return { id: sid, scenarioId: sid, status, passShare: status === "passed" ? 1 : status === "flaky" ? 2 / 3 : 0 };
+        }),
         domains: {},
       });
     });
@@ -681,7 +693,9 @@ export const buildComparison = (env, envState, runIds, { foreign } = {}) => {
         deciding: decidingMoment(task),
         durationMs: task?.durationMs || 0,
         tokens: task?.tokens || 0,
-        cost: task?.cost || 0,
+        /* An unverified cost is no number at all — said as "unverified". */
+        cost: task?.costUnverified ? null : task?.cost || 0,
+        costUnverified: !!task?.costUnverified,
         /* Deltas are against the baseline, and the baseline has none. Neither
            has a cell whose run never touched this scenario — there is no
            number to subtract, and subtracting anyway printed NaN%. */
@@ -700,7 +714,8 @@ export const buildComparison = (env, envState, runIds, { foreign } = {}) => {
     const moved = cells.some((c) => c.significant);
     return {
       id: base.id,
-      title: base.title,
+      /* As the Scenarios table names it — old generated titles reworded on read. */
+      title: scenarioTitle(base.title),
       task: base.task,
       persona: base.persona,
       critical: base.critical,

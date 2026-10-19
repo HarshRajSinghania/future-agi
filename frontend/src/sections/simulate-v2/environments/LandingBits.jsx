@@ -88,22 +88,29 @@ export function SectionHead({ title, subtitle, action }) {
 }
 SectionHead.propTypes = { title: PropTypes.node, subtitle: PropTypes.node, action: PropTypes.node };
 
-/** One prebuilt world: name, type, what it is, what's inside. */
-export function WorldCard({ world, onOpen, selected = false }) {
+/**
+ * One prebuilt world: name, type, what it is, what's inside. A world for an
+ * agent type that's Coming soon (computer use) is shown, named, and inert.
+ */
+export function WorldCard({ world, onOpen, selected = false, soon = false }) {
   return (
     <ButtonBase
-      onClick={() => onOpen(world)}
-      aria-pressed={selected}
+      onClick={soon ? undefined : () => onOpen(world)}
+      disabled={soon}
+      aria-pressed={soon ? undefined : selected}
+      aria-disabled={soon || undefined}
       sx={{
         ...PANEL_SX, p: 2.25, display: "flex", flexDirection: "column", alignItems: "stretch", textAlign: "left",
-        borderColor: (t) => (selected ? alpha(t.palette.text.primary, 0.5) : t.palette.divider),
+        borderColor: (t) => (selected && !soon ? alpha(t.palette.text.primary, 0.5) : t.palette.divider),
         transition: "border-color .12s ease",
-        "&:hover": { borderColor: (t) => alpha(t.palette.text.primary, 0.3) },
+        "&:hover": soon ? {} : { borderColor: (t) => alpha(t.palette.text.primary, 0.3) },
         "&.Mui-focusVisible": focusRing,
+        "&.Mui-disabled": { cursor: "default", pointerEvents: "auto" },
       }}
     >
       <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
-        <Typography noWrap sx={{ typography: "s1", fontWeight: 700, flex: 1, minWidth: 0 }}>{world.name}</Typography>
+        <Typography noWrap sx={{ typography: "s1", fontWeight: 700, flex: 1, minWidth: 0, color: soon ? "text.secondary" : "text.primary" }}>{world.name}</Typography>
+        {soon && <QuietTag>Coming soon</QuietTag>}
         <QuietTag>{world.typeLabel}</QuietTag>
       </Stack>
       <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, mb: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
@@ -118,4 +125,4 @@ export function WorldCard({ world, onOpen, selected = false }) {
     </ButtonBase>
   );
 }
-WorldCard.propTypes = { world: PropTypes.object.isRequired, onOpen: PropTypes.func.isRequired, selected: PropTypes.bool };
+WorldCard.propTypes = { world: PropTypes.object.isRequired, onOpen: PropTypes.func.isRequired, selected: PropTypes.bool, soon: PropTypes.bool };

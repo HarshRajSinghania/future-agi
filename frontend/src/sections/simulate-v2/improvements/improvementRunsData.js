@@ -2,6 +2,7 @@
   Improvements level 2 — the runs one improvement tried, as rows and as
   points on its pass-rate chart.
 */
+import { triedLabelOf } from "../_mock/optimizer";
 
 /** Each run (trial) the search scored, oldest first — the order it tried them in. */
 export const trialRowsFor = (env, envState, record, candidates = []) => {
@@ -15,7 +16,8 @@ export const trialRowsFor = (env, envState, record, candidates = []) => {
       runId: `${record.id}-t${t.n}`,
       n: t.n,
       name: `Run ${t.n}`,
-      tried: t.tried ? `${t.tried.charAt(0).toUpperCase()}${t.tried.slice(1)}` : null,
+      tried: triedLabelOf(t, r.trials),
+      improved: !!t.improved,
       score: Math.round(t.score),
       fixed: t.fixed || 0,
       broke: t.broke || 0,
@@ -28,14 +30,14 @@ export const trialRowsFor = (env, envState, record, candidates = []) => {
 };
 
 /**
- * A run as the pass-rate chart reads one: its training scenarios, with as
+ * A run as the pass-rate chart reads one: its target scenarios, with as
  * many passing as its score says. Every run tried a candidate on the same
  * version, so they share one version label.
  */
 export const chartRunOf = (row, record) => {
   const t = (record?.result?.trials || []).find((x) => x.n === row.n);
   const ids = Object.keys(t?.perScenario || {});
-  /* Scored on the training scenarios — as many as the search measured. */
+  /* Scored on the target scenarios — as many as the search measured. */
   const total = record?.result?.trainMeasured || ids.length || 10;
   const passed = Math.round((row.score / 100) * total);
   const base = record?.baseAgentVersion || null;

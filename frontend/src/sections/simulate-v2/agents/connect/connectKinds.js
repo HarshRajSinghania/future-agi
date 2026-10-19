@@ -14,15 +14,15 @@ export const CONNECT_KINDS = [
     title: "Hosted platform",
     icon: "solar:cloud-linear",
     blurb: "An assistant on a managed voice or chat platform. Add the API key, pick the agent from your account and its config comes in as v1.",
-    preview: ["Vapi", "Retell", "Bland", "ElevenLabs", "LiveKit"],
+    preview: ["Vapi", "Retell", "ElevenLabs", "Bland", "Google CX", "Agentforce"],
   },
   {
     id: "repo",
     title: "Repository",
     icon: "solar:code-linear",
     blurb: "Code in a git repository. Pick the branch and folder — we read the entry point, prompts, tools and model, and you confirm what we found.",
-    /* GitHub today; GitLab and Bitbucket are Coming soon. */
-    preview: ["GitHub", "GitLab · Coming soon", "Bitbucket · Coming soon"],
+    /* The git host is a setting on the agent — each one a connection. */
+    preview: ["GitHub", "GitLab", "Bitbucket"],
   },
   {
     id: "builtin",
@@ -42,3 +42,7 @@ export const MORE_WAYS = [
   { id: "upload", title: "Code upload", icon: "solar:cloud-upload-linear", hint: "Read once from a folder or zip" },
   { id: "phone", title: "Phone number", icon: "solar:phone-linear", hint: "Test only — ends in a suggested fix" },
 ];
+
+/* Sierra, Decagon, Intercom Fin, Zendesk — reached by phone, chat or their
+   conversation API; their own flow, not an environment builder panel. */
+export const CLOSED_WAY = { id: "closed", title: "Closed platform", icon: "solar:chat-round-dots-linear", hint: "Test only — by phone, chat or conversation API" };

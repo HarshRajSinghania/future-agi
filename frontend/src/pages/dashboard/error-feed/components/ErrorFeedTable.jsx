@@ -1,4 +1,3 @@
-import IssueAgentCell from "src/sections/simulate-v2/errorFeed/IssueAgentCell";
 import { useAgentImprovementFlag } from "src/sections/simulate-v2/_mock/featureFlags";
 import React, { useCallback, useMemo } from "react";
 import {
@@ -26,6 +25,7 @@ import { useNavigate } from "react-router-dom";
 import { formatDistanceToNowStrict } from "date-fns";
 import Iconify from "src/components/iconify";
 import IssueStatusChip from "./IssueStatusChip";
+import ErrorStatusChip from "./ErrorStatusChip";
 import ErrorSeverityBadge from "./ErrorSeverityBadge";
 import ErrorTrendSparkline from "./ErrorTrendSparkline";
 import { useErrorFeedList } from "src/api/errorFeed/mockAdapter";
@@ -55,6 +55,7 @@ function ErrorTypeTag({ type, isDark }) {
     .replace(/([A-Z])/g, " $1")
     .trim();
   return (
+    <Tooltip arrow title={`Error type: ${shortType}`}>
     <Chip
       label={shortType}
       size="small"
@@ -70,6 +71,7 @@ function ErrorTypeTag({ type, isDark }) {
         overflow: "hidden",
       }}
     />
+    </Tooltip>
   );
 }
 
@@ -79,13 +81,14 @@ ErrorTypeTag.propTypes = {
 };
 
 // ── Fix layer chip ──────────────────────────────────────────────────────────
+/* Where the fix most likely belongs. */
 const FIX_LAYER_CONFIG = {
-  prompt: { label: "Prompt" },
-  orchestration: { label: "Orchestration" },
-  tools: { label: "Tools" },
-  guardrails: { label: "Guardrails" },
-  data: { label: "Data" },
-  memory: { label: "Memory" },
+  prompt: { label: "Prompt", tip: "Most likely fixed in the agent's prompt or instructions." },
+  orchestration: { label: "Orchestration", tip: "Most likely fixed in how the agent's steps and tool calls are wired together." },
+  tools: { label: "Tools", tip: "Most likely fixed in a tool, or in how the agent calls it." },
+  guardrails: { label: "Guardrails", tip: "Most likely fixed in a check or guardrail around the agent." },
+  data: { label: "Data", tip: "Most likely fixed in the data the agent reads." },
+  memory: { label: "Memory", tip: "Most likely fixed in what the agent keeps between turns or hands over." },
 };
 
 function FixLayerChip({ layer }) {
@@ -94,6 +97,7 @@ function FixLayerChip({ layer }) {
   const cfg = FIX_LAYER_CONFIG[layer];
   if (!cfg) return <span style={{ color: "#71717a", fontSize: 11 }}>—</span>;
   return (
+    <Tooltip arrow title={cfg.tip}>
     <Box
       sx={{
         display: "inline-flex",
@@ -119,6 +123,7 @@ function FixLayerChip({ layer }) {
         {cfg.label}
       </Typography>
     </Box>
+    </Tooltip>
   );
 }
 FixLayerChip.propTypes = { layer: PropTypes.string };
@@ -139,9 +144,10 @@ const COLUMNS = [
   { id: "trends", label: "Trend (14d)", sortable: false, width: 130 },
   { id: "lastSeen", label: "Last seen", sortable: true, width: 120 },
 ];
-/* With agent improvement on: which agent each issue belongs to, beside its status. */
-const AGENT_COLUMN = { id: "agent", label: "Agent", sortable: false, width: 170 };
-const WITH_AGENT = [...COLUMNS.slice(0, 3), AGENT_COLUMN, ...COLUMNS.slice(3)];
+/* With agent improvement on: the fix-status chip, in its own column beside
+   the issue's triage status (RSI PRD: "a fix-status chip on the list"). */
+const FIX_COLUMN = { id: "fix", label: "Fix", sortable: false, width: 170 };
+const WITH_AGENT = [...COLUMNS.slice(0, 3), FIX_COLUMN, ...COLUMNS.slice(3)];
 
 function SortIcon({ active, dir }) {
   if (!active)
@@ -465,6 +471,14 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
                           </Typography>
                         </Tooltip>
                         <Stack direction="row" alignItems="center" gap={0.75}>
+                          {/* The issue's id — how people find and refer to it. */}
+                          <Typography
+                            typography="s3"
+                            color="text.secondary"
+                            sx={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontFeatureSettings: "'tnum'" }}
+                          >
+                            {row.cluster_id}
+                          </Typography>
                           <ErrorTypeTag type={row.error.type} isDark={isDark} />
                           {row.eval_score != null && (
                             <Typography
@@ -486,14 +500,14 @@ export default function ErrorFeedTable({ selected, onSelect, onSelectAll }) {
 
                     {/* Status */}
                     <TableCell onClick={(e) => e.stopPropagation()}>
-                      {/* One status: the fix's once there is one, else the issue's own. */}
-                      <IssueStatusChip issue={row} />
+                      <ErrorStatusChip status={row.status} />
                     </TableCell>
 
-                    {/* Agent */}
+                    {/* Fix */}
                     {improving && (
                       <TableCell>
-                        <IssueAgentCell issue={row} />
+                        {/* Opening the fix stops the row click itself; an empty cell opens the issue. */}
+                        <IssueStatusChip issue={row} variant="text" />
                       </TableCell>
                     )}
 

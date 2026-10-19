@@ -5,14 +5,15 @@
  * this flattens them into what the Improvements list and an agent's
  * Improvements tab both read, so the two can't drift.
  */
-import { mockCluster } from "src/api/errorFeed/mockAdapter";
 import { envAgentKey, repairAgentRecord } from "../_mock/agentRegistry";
-import { improvementOutcome, improvementSpend, searchMinutes, REPEATS, improvementPhaseOf } from "../_mock/optimizationRuns";
+import { improvementOutcome, improvementTotalSpend, searchMinutes, searchSpend, REPEATS, improvementPhaseOf } from "../_mock/optimizationRuns";
+import { attemptsOf } from "../_mock/improverAttempts";
+import { improverSessionFor } from "../_mock/integrations";
 import { improvementRunName, depthOf } from "../_mock/optimizer";
 import { creditsForUsd } from "../_mock/metering";
 import { runIdentityOf } from "../_mock/runIdentity";
 import { snapshotOfImprovement } from "../_mock/envSnapshot";
-import { fixStatusOf } from "../errorFeed/issueFix";
+import { shippedStateOf } from "../errorFeed/issueFix";
 import { improvementPath } from "./improvementNav";
 
 /**
@@ -32,46 +33,38 @@ export const improvementIdentityOf = (record, env, es) => {
 };
 
 /*
-  What a shipped improvement became, read with the Error Feed's own fix
-  lifecycle (`fixStatusOf`) on this one record: Draft shipped (PR #n, a Vapi
-  copy, a Retell draft, a prompt version) → Released → Watching (n days
-  left) → Resolved, or Reopened. A goal improvement is watched the same way;
-  only an issue fix can come back as its issue.
+  What a shipped improvement became, in the Error Feed's own words
+  (`shippedStateOf`, the same reading the issue's fix chip uses): In review
+  (PR #n, a Vapi copy, a Retell draft, a draft version) → Watching
+  (n days left) → Resolved, or Reopened. A goal improvement is watched the
+  same way; only an issue fix can come back as its issue.
 */
-/* Vapi has no drafts — a change ships as a copy of the assistant (RSI PRD). */
-const draftLabel = (d) => `${d.where} ${d.kind || (/vapi/i.test(d.where || "") ? "copy" : "draft")}`;
-
 /* The run's status once its change has left Future AGI. */
 const SHIPPED_STATUS = {
-  draft: { key: "shipped", label: "Draft shipped" },
-  pr: { key: "shipped", label: "Draft shipped" },
-  version: { key: "shipped", label: "Awaiting release" },
+  draft: { key: "shipped", label: "In review" },
+  pr: { key: "shipped", label: "In review" },
+  version: { key: "shipped", label: "In review" },
   watching: { key: "released", label: "Watching" },
   resolved: { key: "released", label: "Resolved" },
   reopened: { key: "failed", label: "Reopened" },
 };
 
 const lifecycleOf = (record, env, es, prs, now) => {
-  const key = record.trigger?.issueId || `improvement:${record.id}`;
-  const narrowed = {
-    myEnvironments: [env],
-    byEnv: { [env.id]: { ...es, optimizations: [{ ...record, trigger: { ...(record.trigger || {}), issueId: key } }] } },
-  };
-  const issue = { cluster_id: key, recurs_after_fix: !!(record.trigger?.issueId && mockCluster(record.trigger.issueId)?.recurs_after_fix) };
+  /* shippedStateOf reads the issue's recurrence itself — the Error Feed and
+     this list always agree. */
   let st = null;
-  try { st = fixStatusOf(issue, narrowed, prs, now); } catch (e) { st = null; }
+  try { st = shippedStateOf(record, es, prs, { now }); } catch (e) { st = null; }
   if (!st) return null;
   const landed = es?.handoffLandings?.[record.id] || null;
   const pr = prs.find((p) => (p.handoffKey || p.meta?.handoffKey) === record.id && p.status !== "closed");
-  const draft = es?.handoffDrafts?.[record.id];
-  const via = pr ? `PR #${pr.number}` : draft ? draftLabel(draft) : null;
-  if (st.key === "watching") return { kind: "watching", label: `Released · watching, ${st.detail}`, version: landed };
-  if (st.key === "resolved") return { kind: "resolved", label: `Resolved · ${landed}`, version: landed };
-  if (st.key === "reopened") return { kind: "reopened", label: `Reopened · ${landed}`, version: landed };
-  if (st.key === "review" && landed) return { kind: "version", label: `${landed} · awaiting release`, version: landed };
-  if (st.key === "review" && pr) return { kind: "pr", label: `Draft shipped · PR #${pr.number}`, merged: pr.status === "merged" };
-  if (st.key === "review" && via) return { kind: "draft", label: /Canary/.test(st.label) ? st.label : `Draft shipped · ${via}` };
-  return null;
+  const kind = st.key === "review" ? (landed ? "version" : pr ? "pr" : "draft") : st.key;
+  return {
+    kind,
+    /* Verbatim: "Fix in review · PR #12", "Watching · 23 days left". */
+    label: st.key === "review" ? st.label : `${st.label}${st.detail ? ` · ${st.detail}` : ""}`,
+    version: st.version || landed,
+    ...(pr && { merged: pr.status === "merged" }),
+  };
 };
 
 /*
@@ -98,17 +91,26 @@ const triggerOnly = (trigger) => {
   if (trigger?.kind === "run") return { kind: "run", group: "Debug failures", label: "Debug failures" };
   /* Started on its own, by the agent's automatic-improvement schedule. */
   if (trigger?.kind === "schedule") {
-    return { kind: "schedule", group: "Scheduled", label: `Scheduled · ${trigger.cadence === "new-issue" ? "new issue" : "weekly"}` };
+    return { kind: "schedule", group: "Scheduled", label: "Scheduled · weekly" };
   }
-  return { kind: "manual", group: "Manual", label: "Manual" };
+  /* Run now on the agent's Constraints tab: a person started it. */
+  return { kind: "manual", group: "Manual", label: trigger?.by ? `Started by ${trigger.by}` : "Manual" };
 };
 
-/** The held-back set in short: "Fixed 3 of 4 · broke 0". */
+/*
+  The held-back set in short: "Fixed 3 of 4 held back · broke 0". A run
+  that kept no change says so — never the rejected run's gains — and a run
+  chosen over the search's pick shows its projected figure until verified.
+*/
 export const heldShortOf = (outcome) => {
   const h = outcome?.held;
   if (!h) return null;
+  if (outcome.ending?.key === "no-fix") return { text: "No change kept", broke: null };
+  if (outcome.chosen) {
+    return { text: `${outcome.chosen.projected ? "≈" : ""}${outcome.chosen.held}% held back`, broke: null, note: outcome.chosen.verified ? `Run ${outcome.chosen.n}, your pick` : `Run ${outcome.chosen.n} · not verified` };
+  }
   return {
-    text: h.failingBefore ? `Fixed ${h.fixed} of ${h.failingBefore}` : "Already passing",
+    text: h.failingBefore ? `Fixed ${h.fixed} of ${h.failingBefore} held back` : "Held back already passing",
     broke: h.broke,
   };
 };
@@ -130,7 +132,9 @@ const agentKeyAt = (es, envId, createdAt, agents) => {
 };
 
 /** Every improvement run in the workspace, newest first. */
-export const improvementRowsOf = ({ state, agents = [], prs = [], now = Date.now() }) => {
+export const improvementRowsOf = (args) => improvementRowsRaw(args);
+
+const improvementRowsRaw = ({ state, agents = [], prs = [], now = Date.now() }) => {
   const byKey = new Map(agents.map((a) => [a.key, a]));
   const envName = (id) => (state?.myEnvironments || []).find((e) => e.id === id)?.name;
   return (state?.myEnvironments || []).flatMap((env) => {
@@ -143,12 +147,15 @@ export const improvementRowsOf = ({ state, agents = [], prs = [], now = Date.now
       /* The other environments it was proven in, besides the one it ran in. */
       const others = (record.regressionEnvIds || []).filter((id) => id !== env.id);
       const landed = es?.handoffLandings?.[record.id];
-      const pr = landed ? null : prs.find((p) => (p.handoffKey || p.meta?.handoffKey) === record.id && p.status !== "closed");
-      const draft = landed || pr ? null : es?.handoffDrafts?.[record.id];
-      const released = !!landed && (es?.releases || []).some((r) => r.version === landed);
       const running = outcome.ending.key === "running";
-      /* A run that failed for infrastructure reasons isn't charged. */
-      const spend = !running && record.result && outcome.ending.key !== "failed" ? improvementSpend(record, env.surface) : null;
+      /*
+        Everything it spent: reproducing, the search, and any coding
+        agent's attempts — the figure the improvement page shows too. One
+        that stopped before searching still spent what measuring it cost.
+      */
+      const session = improverSessionFor(env.id, record.id);
+      const attempts = session && record.result ? attemptsOf(record, session, { now, surface: env.surface, budgetLeft: (record.budget || Infinity) - searchSpend(record.result, env.surface) }) : [];
+      const spend = running ? null : improvementTotalSpend(record, env.surface, { attempts });
       /* Fix to proposal, from what the run had to simulate — reproducing,
          every trial, the held-back check. */
       const r = record.result;
@@ -180,19 +187,13 @@ export const improvementRowsOf = ({ state, agents = [], prs = [], now = Date.now
         status: phase ? { key: "running", label: phase.label, phase: phase.key } : (lifecycle && SHIPPED_STATUS[lifecycle.kind]) || outcome.ending,
         headline: outcome.headline || "",
         held: running ? null : heldShortOf(outcome),
-        output: lifecycle || (landed
-          ? { kind: "version", label: released ? `${landed} · released` : landed }
-          : pr
-            ? { kind: "pr", label: `PR #${pr.number}`, merged: pr.status === "merged" }
-            : draft
-              ? { kind: "draft", label: draftLabel(draft) }
-              : null),
+        output: lifecycle,
         identity: improvementIdentityOf(record, env, es),
         href: improvementPath(env.id, record.id),
         changeKind,
-        scenarios: r ? r.trainMeasured + r.heldMeasured : null,
+        scenarios: r ? r.trainMeasured + r.heldMeasured + (r.mustPassMeasured || 0) : null,
         /* What the run used, in the workspace's unit — AI credits. */
-        credits: spend ? creditsForUsd(spend) : null,
+        credits: spend != null ? creditsForUsd(spend) : null,
         minutes,
         issueId: record.trigger?.issueId || null,
         releasedAt: release?.at || null,

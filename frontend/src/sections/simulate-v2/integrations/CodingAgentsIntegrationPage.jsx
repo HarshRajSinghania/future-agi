@@ -2,21 +2,21 @@ import PropTypes from "prop-types";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSnackbar } from "notistack";
-import { Box, Button, Card, Chip, Menu, MenuItem, Stack, Switch, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Card, Chip, Menu, MenuItem, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import {
-  CLOUD_CODING_AGENTS, CODING_AGENTS, IMPROVER_SCOPES, IMPROVER_TOOLS, codingAgentById, codingAgentsAllowed,
+  CLOUD_CODING_AGENTS, CODING_AGENTS, IMPROVER_SCOPES, IMPROVER_TOOLS, codingAgentById,
   connectedCloudAgents, connectedCodingAgent, disconnectCloudAgent, disconnectCodingAgent, heldBackHiddenFrom, improverTokenLabel,
-  myCodingAgents, rotateImproverToken, setCodingAgentsAllowed, useIntegrations,
+  myCodingAgents, rotateImproverToken, useIntegrations,
 } from "../_mock/integrations";
 import { ago } from "../agents/agentViewUtils";
 import BrandMark from "./BrandMark";
 import CodingAgentConnectDialog from "./CodingAgentConnectDialog";
+import CloudAgentConnectDialog from "./CloudAgentConnectDialog";
 import { StatusPill } from "./GithubIntegrationPage";
 import { GUARDRAILS, INTEGRITY_NOTE, WAYS, targetLabel } from "./codingAgentSetup";
 import { CANDIDATE_ROUTES } from "../_mock/candidateRoute";
-import { QuietTag } from "../agents/AgentBits";
 
 const MONO = "ui-monospace, Menlo, monospace";
 const CONNECTED = ["Connected", "Not connected"];
@@ -31,12 +31,12 @@ export default function CodingAgentsIntegrationPage() {
   const { enqueueSnackbar } = useSnackbar();
   const integrations = useIntegrations();
   const { codingAgents = {}, briefHandoffs = [] } = integrations;
-  const allowed = codingAgentsAllowed(integrations);
   const primary = connectedCodingAgent(integrations);
   const mine = myCodingAgents(integrations);
   const clouds = connectedCloudAgents(integrations);
   const nConnected = mine.length;
   const [cloudMenu, setCloudMenu] = useState(null); // { el, id }
+  const [cloudDialog, setCloudDialog] = useState({ id: null, open: false });
   /* Kept apart so the dialog can fade out with its agent still set. */
   const [dialog, setDialog] = useState({ id: null, open: false });
   const [menu, setMenu] = useState(null); // { el, id }
@@ -60,11 +60,11 @@ export default function CodingAgentsIntegrationPage() {
               <Typography sx={{ typography: "m2", fontWeight: "fontWeightSemiBold" }}>Coding agents</Typography>
             </Stack>
             <Typography sx={{ typography: "s1", color: "text.secondary" }}>
-              {!allowed
-                ? "Off for this workspace — Copy for coding agent still copies the brief."
-                : primary
-                  ? `Yours: ${primary.label} · ${WAYS[primary.via]?.short || primary.via}${clouds.length ? ` · workspace: ${clouds.map((c) => c.label).join(", ")}` : ""}`
-                  : "Let Claude Code, Codex or Cursor fix issues — Future AGI checks every change."}
+              {primary
+                ? `Yours: ${primary.label} · ${WAYS[primary.via]?.short || primary.via}${clouds.length ? ` · workspace: ${clouds.map((c) => c.label).join(", ")}` : ""}`
+                : clouds.length
+                  ? `Workspace: ${clouds.map((c) => c.label).join(", ")} · connect your own below`
+                  : "Let Claude Code, Codex, Cursor or a cloud agent fix issues — Future AGI checks every change."}
             </Typography>
             <Stack direction="row" spacing={0.75} sx={{ mt: 1 }} flexWrap="wrap" rowGap={0.75}>
               {["Briefs", "Candidates", "Verdicts", "MCP"].map((t) => (
@@ -77,30 +77,13 @@ export default function CodingAgentsIntegrationPage() {
       </Card>
 
       <Stack spacing={3}>
-        {/* The workspace decides whether coding agents are allowed at all. */}
-        <Card>
-          <Stack direction="row" alignItems="center" spacing={2} sx={{ px: 3, py: 2 }}>
-            <Box flex={1} minWidth={0}>
-              <Typography sx={{ typography: "s1", fontWeight: 700 }}>Allow coding agents in this workspace</Typography>
-              <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-                {allowed
-                  ? "Anyone can connect their own; admins connect cloud agents. Every change is checked by Future AGI."
-                  : "Off — nobody can connect or send to one. Copy for coding agent still copies the brief."}
-              </Typography>
-            </Box>
-            <Tooltip arrow title="Workspace admins only">
-              <Switch checked={allowed} onChange={(e) => setCodingAgentsAllowed(e.target.checked)} />
-            </Tooltip>
-          </Stack>
-        </Card>
-
         {/* Editor agents run on one person's machine — connected per person. */}
         <Card>
           <SectionHead
             title="Your coding agent"
             sub={primary
-              ? `Connected for you. Copy for coding agent reads Hand to ${primary.label} for you — teammates connect their own.`
-              : "For you only — the one you code with. Copy for coding agent then reads Hand to it for you; teammates connect their own."}
+              ? `Connected for you. Copy for coding agent reads Open in ${primary.label} for you — teammates connect their own.`
+              : "For you only — the one you code with. Copy for coding agent then reads Open in it for you; teammates connect their own."}
           />
           {CODING_AGENTS.map((a, i) => {
             const c = mine.find((m) => m.id === a.id) ? codingAgents[a.id] : null;
@@ -112,7 +95,7 @@ export default function CodingAgentsIntegrationPage() {
                     <Typography sx={{ typography: "s2", fontWeight: 600 }}>{a.label}</Typography>
                     <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
                       {c
-                        ? `Connected for you via ${WAYS[c.via]?.short || c.via} · ${ago(c.connectedAt)}${nConnected > 1 && primary?.id === a.id ? " · used for Hand to" : ""}`
+                        ? `Connected for you via ${WAYS[c.via]?.short || c.via} · ${ago(c.connectedAt)}${nConnected > 1 && primary?.id === a.id ? " · used for Open in" : ""}`
                         : `${a.vendor} · ${a.ways.map((w) => WAYS[w].short).join(" or ")}${a.ways.includes("plugin") ? "" : " + instructions file"}`}
                     </Typography>
                   </Box>
@@ -122,7 +105,7 @@ export default function CodingAgentsIntegrationPage() {
                     </Button>
                   ) : (
                     <Button
-                      size="small" variant="outlined" disabled={!allowed} onClick={() => setDialog({ id: a.id, open: true })}
+                      size="small" variant="outlined" onClick={() => setDialog({ id: a.id, open: true })}
                       sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", minWidth: 84 }}
                     >
                       Connect
@@ -150,41 +133,47 @@ export default function CodingAgentsIntegrationPage() {
           </Menu>
         </Card>
 
-        {/* Cloud agents work in their own sandbox and open a PR — one
-            account for the workspace, connected by an admin. */}
+        {/* Cloud agents work in their own sandbox against the agent's
+            repository — one account for the workspace, its key held as a
+            secret-manager reference. Dispatch to … hands them a brief. */}
         <Card>
           <SectionHead
             title="Cloud agents"
-            tag="Coming soon"
-            sub="Connected once for the workspace, to hand an issue to a cloud agent in one click — it works in its own sandbox against the agent's repository and opens a PR, checked against the same must-pass scenarios."
+            sub={clouds.length
+              ? `Copy for coding agent offers Dispatch to ${clouds.map((c) => c.short || c.label).join(" or ")} for everyone. It works in its own sandbox against the agent's repository; its change comes back as a candidate Future AGI checks.`
+              : "Connected once for the workspace. Dispatch an issue to one in one click — it works in its own sandbox against the agent's repository, and its change comes back as a candidate Future AGI checks."}
           />
           {CLOUD_CODING_AGENTS.map((a, i) => {
             const c = clouds.find((x) => x.id === a.id);
             return (
-              <Stack key={a.id} direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, py: 1.25, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
-                <BrandMark brand={a.id} size={30} />
-                <Box flex={1} minWidth={0}>
-                  <Typography sx={{ typography: "s2", fontWeight: 600 }}>{a.label}</Typography>
-                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                    {c ? `Connected for the workspace · by ${c.connectedBy} · ${ago(c.connectedAt)}` : `${a.vendor} · signs in with ${a.vendor} · needs the agent's repository`}
-                  </Typography>
-                </Box>
-                {c ? (
-                  <Button size="small" aria-label="More actions" onClick={(e) => setCloudMenu({ el: e.currentTarget, id: a.id })} sx={{ minWidth: 0, color: "text.secondary" }}>
-                    <Iconify icon="solar:menu-dots-bold" />
-                  </Button>
-                ) : (
-                  <Button
-                    size="small" variant="outlined" disabled
-                    sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", minWidth: 84 }}
-                  >
-                    Connect
-                  </Button>
-                )}
-              </Stack>
+              <Box key={a.id} sx={{ borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+                <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, py: 1.25 }}>
+                  <BrandMark brand={a.id} size={30} />
+                  <Box flex={1} minWidth={0}>
+                    <Typography sx={{ typography: "s2", fontWeight: 600 }}>{a.label}</Typography>
+                    <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                      {c ? `Connected for the workspace · by ${c.connectedBy} · ${ago(c.connectedAt)}` : `${a.vendor} · API key by secret reference · works on the agent's repository`}
+                    </Typography>
+                  </Box>
+                  {c ? (
+                    <Button size="small" aria-label="More actions" onClick={(e) => setCloudMenu({ el: e.currentTarget, id: a.id })} sx={{ minWidth: 0, color: "text.secondary" }}>
+                      <Iconify icon="solar:menu-dots-bold" />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small" variant="outlined" onClick={() => setCloudDialog({ id: a.id, open: true })}
+                      sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", minWidth: 84 }}
+                    >
+                      Connect
+                    </Button>
+                  )}
+                </Stack>
+                {c && <CloudKeyRow conn={c} />}
+              </Box>
             );
           })}
           <Menu anchorEl={cloudMenu?.el} open={!!cloudMenu} onClose={() => setCloudMenu(null)}>
+            <MenuItem onClick={() => { setCloudDialog({ id: cloudMenu.id, open: true }); setCloudMenu(null); }} sx={{ typography: "s2" }}>Change key reference</MenuItem>
             <MenuItem onClick={() => { disconnectCloudAgent(cloudMenu.id); setCloudMenu(null); }} sx={{ color: "error.main", typography: "s2" }}>Disconnect</MenuItem>
           </Menu>
         </Card>
@@ -270,19 +259,23 @@ export default function CodingAgentsIntegrationPage() {
           </Stack>
         </Card>
 
-        {nConnected > 0 && (
+        {(nConnected > 0 || clouds.length > 0) && (
           <Card>
-            <SectionHead title="Recent hand-offs" sub="Briefs you handed over with Hand to. Your agent pulls each one with get_brief." />
+            <SectionHead title="Recent hand-offs" sub="Briefs handed to your agent, which pulls each one with get_brief, and dispatches to cloud agents." />
             {briefHandoffs.length === 0 ? (
               <Typography sx={{ px: 3, pb: 2.5, typography: "s2", color: "text.subtitle" }}>
-                None yet — open an Error Feed issue or a run&apos;s diagnosis and use Hand to.
+                None yet — open an Error Feed issue or a run&apos;s diagnosis and hand it over.
               </Typography>
             ) : briefHandoffs.slice(0, 8).map((h, i) => (
               <Stack key={h.id} direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, py: 1.25, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
                 <BrandMark brand={codingAgentById(h.agentId)?.id || "coding-agents"} size={22} tile={false} />
                 <Box flex={1} minWidth={0}>
                   <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{h.title}</Typography>
-                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{`${targetLabel(h.target)} · to ${codingAgentById(h.agentId)?.label || "coding agent"}`}</Typography>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                    {h.dispatch
+                      ? `${targetLabel(h.target)} · dispatched to ${codingAgentById(h.agentId)?.label || "cloud agent"} · its candidate is checked by Future AGI`
+                      : `${targetLabel(h.target)} · to ${codingAgentById(h.agentId)?.label || "coding agent"}`}
+                  </Typography>
                 </Box>
                 <Typography sx={{ typography: "s3", color: "text.subtitle", whiteSpace: "nowrap" }}>{ago(h.at)}</Typography>
               </Stack>
@@ -295,22 +288,40 @@ export default function CodingAgentsIntegrationPage() {
         open={dialog.open} onClose={() => setDialog((d) => ({ ...d, open: false }))}
         agent={dialog.id ? codingAgentById(dialog.id) : null}
       />
+      <CloudAgentConnectDialog
+        open={cloudDialog.open} onClose={() => setCloudDialog((d) => ({ ...d, open: false }))}
+        agent={cloudDialog.id ? codingAgentById(cloudDialog.id) : null}
+      />
     </Box>
   );
 }
 
-function SectionHead({ title, sub, tag }) {
+function SectionHead({ title, sub }) {
   return (
     <Box sx={{ px: 3, pt: 2.5, pb: 1.5 }}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Typography sx={{ typography: "s1", fontWeight: 700 }}>{title}</Typography>
-        {tag && <QuietTag>{tag}</QuietTag>}
-      </Stack>
+      <Typography sx={{ typography: "s1", fontWeight: 700 }}>{title}</Typography>
       <Typography sx={{ typography: "s2", color: "text.secondary" }}>{sub}</Typography>
     </Box>
   );
 }
-SectionHead.propTypes = { title: PropTypes.string, sub: PropTypes.string, tag: PropTypes.string };
+SectionHead.propTypes = { title: PropTypes.string, sub: PropTypes.string };
+
+/* A cloud agent's key — a secret-manager reference, never the value — and
+   the scoped improver token its dispatches carry. */
+function CloudKeyRow({ conn }) {
+  return (
+    <Stack direction="row" alignItems="center" spacing={1} sx={{ pl: UNDER_NAME, pr: 3, pb: 1.25, mt: -0.5 }}>
+      <Iconify icon="solar:lock-keyhole-minimalistic-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+      <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>
+        <Box component="span" sx={{ fontFamily: MONO, color: "text.secondary" }}>{conn.keyRef || "no key reference"}</Box>
+        {conn.token ? " · " : ""}
+        {conn.token && <Box component="span" sx={{ fontFamily: MONO, color: "text.secondary" }}>{improverTokenLabel(conn.token)}</Box>}
+        {conn.token ? " · scoped · held-back scenarios hidden" : ""}
+      </Typography>
+    </Stack>
+  );
+}
+CloudKeyRow.propTypes = { conn: PropTypes.object };
 
 /* The agent's improver token — or, for a connection made before tokens were
    scoped, the workspace key it still uses and the way off it. */

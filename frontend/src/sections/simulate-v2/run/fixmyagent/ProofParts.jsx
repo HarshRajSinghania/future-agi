@@ -1,9 +1,9 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
-import { Box, Button, Dialog, IconButton, Stack, Typography } from "@mui/material";
+import { Box, Button, Dialog, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { ladderOf, protectedLabel } from "../../_mock/optimizationRuns";
-import { receiptOf } from "./receipt";
+import { receiptOf, receiptSealOf, shortSeal } from "./receipt";
 import { CONFIG_AREAS } from "../../_mock/rsiModel";
 
 const MONO = "ui-monospace, Menlo, monospace";
@@ -86,17 +86,19 @@ export function FrozenInputs({ record, model, identity = null, envSnapshot = nul
       ["Must keep passing", `${snap.mustKeepPassing} scenarios that pass today`],
     ] : []),
     ...(f ? [
-      ["Scenario set", `${f.scenarios} scenarios · ${f.held} held back, never shown while searching`],
+      f.mustPassSet != null
+        ? ["Scenario sets", `${f.targets} target, seen in full · ${f.held} held back, never shown while searching · ${f.mustPassSet} must-pass, pass or fail only, run for finalists`]
+        : ["Scenario set", `${f.scenarios} scenarios · ${f.held} held back, never shown while searching`],
       ["Evaluations", (f.evaluations || []).join(", ") || "—"],
       ["Must-pass", f.mustPassParts
-        ? `${f.mustPass} scenarios · ${[f.mustPassParts.marked ? `${f.mustPassParts.marked} marked` : null, f.mustPassParts.remembered ? `${f.mustPassParts.remembered} regression memory` : null, `${f.mustPassParts.passing} passing every repeat today`].filter(Boolean).join(", ")}${f.anchors ? ` · ${f.anchors} anchor core` : ""}`
-        : `${f.mustPass} critical scenarios${f.anchors ? ` · ${f.anchors} anchor core` : ""}`],
+        ? `${f.mustPass} scenarios · ${[f.mustPassParts.marked ? `${f.mustPassParts.marked} marked` : null, f.mustPassParts.remembered ? `${f.mustPassParts.remembered} regression memory` : null, `${f.mustPassParts.passing} passing every repeat today`].filter(Boolean).join(", ")}`
+        : `${f.mustPass} critical scenarios`],
       ...(f.compat ? [["Sealed environment", `${envSnapshot ? `environment ${envSnapshot}` : f.compat.envVersion || "this version"} · entry point ${f.compat.entry} — a code change that moves it, changes the build or the start command doesn't fit`]] : []),
       ...(f.repoTests ? [["Repository tests", `${f.repoTests} — every code change must still pass`]] : []),
       ...(record.targetMember ? [["Target member", record.targetMember]] : []),
       ...((f.protectedMembers || []).length ? [["Protected members", `${f.protectedMembers.join(", ")} — never changed`]] : []),
       ...(f.repeats ? [["Repeats", `each scenario ${f.repeats}× — from the environment's run defaults${f.voiceCap ? ` · voice: ${f.voiceCap.scenarios} of ${f.voiceCap.of} scenarios, up to ${f.voiceCap.trials} runs` : ""}`]] : []),
-      ...(record.calibration ? [["Baseline twice", `${record.calibration.disagreed} of ${record.calibration.scenarios} scenarios disagreed with themselves · noise ±${f.calibrationNoise ?? record.result?.noise ?? "—"} pts`]] : []),
+      ...(record.calibration ? [["Run-to-run noise", `baseline run twice: ${record.calibration.disagreed} of ${record.calibration.scenarios} scenarios disagreed with themselves · ±${f.calibrationNoise ?? record.result?.noise ?? "—"} pts`]] : []),
       ...(f.areas ? [["Configuration areas", (() => {
         const off = Object.entries(f.areas).filter(([, on]) => !on).map(([id]) => CONFIG_AREAS.find((a) => a.id === id)?.label || id);
         return off.length ? `switched off: ${off.join(", ")} — a change there stops at Static checks` : "every area on";
@@ -139,12 +141,19 @@ FrozenInputs.propTypes = { record: PropTypes.object, model: PropTypes.string, id
 /** The receipt, one click from the header. */
 export function ReceiptButton({ record, outcome, attempts, identity = null, envSnapshot = null }) {
   const [open, setOpen] = useState(false);
+  /* The seal as the receipt was written, and what Verify found. */
+  const [sealed, setSealed] = useState(null);
+  const [check, setCheck] = useState(null);
   const entries = receiptOf(record, outcome, { attempts: attempts || [], identity, envSnapshot });
   if (!entries.length) return null;
+  const seal = sealed || receiptSealOf(record, entries);
+  const openReceipt = () => { setSealed(receiptSealOf(record, entries)); setCheck(null); setOpen(true); };
+  /* Recomputed from the record as it is now, not from what's on screen. */
+  const verify = () => setCheck(receiptSealOf(record, receiptOf(record, outcome, { attempts: attempts || [], identity, envSnapshot })) === seal ? "match" : "changed");
   return (
     <>
       <Button
-        size="small" variant="outlined" onClick={() => setOpen(true)}
+        size="small" variant="outlined" onClick={openReceipt}
         startIcon={<Iconify icon="solar:document-text-linear" width={14} />}
         sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", height: 26, flexShrink: 0 }}
       >
@@ -155,8 +164,26 @@ export function ReceiptButton({ record, outcome, attempts, identity = null, envS
           <Box flex={1}>
             <Typography sx={{ typography: "s1", fontWeight: 700 }}>{`Receipt · ${record.id}`}</Typography>
             <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-              Every check, in order. Each entry is hashed with the one before it, so none can be changed or dropped afterwards — and the model writing changes never writes to it.
+              Every check this improvement made, in order. Written by Future AGI — the model proposing the changes never writes to it.
             </Typography>
+            {/* Sealed: a fingerprint of every entry — any edit breaks it. */}
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.75 }}>
+              <Iconify icon="solar:shield-check-linear" width={14} sx={{ color: "text.secondary", flexShrink: 0 }} />
+              <Tooltip arrow title={`Fingerprint of every entry: ${seal}`}>
+                <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                  {"Sealed · "}
+                  <Box component="span" sx={{ fontFamily: MONO }}>{shortSeal(seal)}</Box>
+                </Typography>
+              </Tooltip>
+              <Button size="small" onClick={verify} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0, px: 0.75, py: 0, height: 22 }}>
+                Verify
+              </Button>
+              {check && (
+                <Typography sx={{ typography: "s3", color: check === "match" ? "text.secondary" : "#DC2626" }}>
+                  {check === "match" ? "Matches — nothing changed since it was written." : "Doesn't match — the receipt changed since it was written."}
+                </Typography>
+              )}
+            </Stack>
           </Box>
           <IconButton size="small" onClick={() => setOpen(false)}><Iconify icon="eva:close-fill" width={17} /></IconButton>
         </Stack>
@@ -168,7 +195,6 @@ export function ReceiptButton({ record, outcome, attempts, identity = null, envS
                 <Typography sx={{ typography: "s2", fontWeight: 600 }}>{e.step}</Typography>
                 <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{e.detail}</Typography>
               </Box>
-              <Typography sx={{ typography: "s3", color: "text.disabled", fontFamily: MONO, flexShrink: 0 }}>{e.hash.slice(0, 12)}</Typography>
             </Stack>
           ))}
         </Box>

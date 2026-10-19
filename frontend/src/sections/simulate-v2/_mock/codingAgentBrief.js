@@ -10,7 +10,7 @@
  */
 import { submitStepOf } from "./candidateRoute";
 import { KIND_SURFACE } from "./optimizer";
-import { limitRows } from "./optimizationRuns";
+import { limitRows, ceilingLabel, costCeilingLabel } from "./optimizationRuns";
 import { changeFileFor } from "./optimize";
 import { scrubPersonalData } from "./rsiModel";
 
@@ -34,19 +34,55 @@ const isProtected = (path, list = []) => !!path && list.some((p) => path === p |
  */
 export const fixScope = (proposal, { env, limits } = {}) => {
   if (ENV_KINDS.includes(proposal?.kind)) {
-    return { surface: "environment", environment: true, ok: true, label: "Changes the environment's checks, not the agent" };
+    return { surface: "environment", environment: true, ok: true, checks: [], label: "Changes the environment's checks, not the agent" };
   }
   const surface = KIND_SURFACE[proposal?.kind] || "code";
   const path = changeFileFor(env, proposal)?.path || null;
-  const allowed = (limits?.allowed || []).includes(surface);
   const locked = isProtected(path, limits?.protected);
+  /* A model switch — a Model fix, or a setting that rewrites the model line —
+     is held to the model lock, not to the allowed kinds of change: it's
+     tried only when the lock names an approved list that has the model. */
+  const switchTo = proposal?.model
+    || (proposal?.diff || []).find((d) => d.type === "add" && /^model:/.test(d.text))?.text.replace(/^model:\s*/, "")
+    || null;
+  const switches = surface === "model" || !!switchTo;
+  const approved = switches && limits?.model?.mode === "approved" && (limits.model.approved || []).includes(switchTo);
+  const allowed = surface === "model" ? approved : (limits?.allowed || []).includes(surface);
+
+  /* Each constraint the fix touches, as "Constraint: what it does — verdict".
+     `blocked` rules the fix out; "checked when it runs" is measured, not
+     guessed, so it never blocks. */
+  const checks = [];
+  if (surface !== "model") {
+    checks.push({ id: "changes", constraint: "Allowed changes", says: SURFACE_WORDS[surface] || surface, verdict: allowed ? "allowed" : "not allowed", blocked: !allowed });
+  }
+  if (locked) checks.push({ id: "protected", constraint: "Protected parts", says: "edits", path, verdict: "not allowed", blocked: true });
+  if (switches) {
+    checks.push({
+      id: "model", constraint: "Model lock",
+      says: switchTo ? `switches the model to ${switchTo}` : "switches the model",
+      verdict: approved ? "on the approved list" : "not allowed", blocked: !approved,
+    });
+  }
+  /* What a model or setting change may cost or slow down is only known once
+     it runs; the ceiling it's held to is the agent's own. */
+  if (switches) {
+    checks.push({ id: "cost", constraint: "Cost ceiling", ceiling: costCeilingLabel(limits).toLowerCase(), says: "likely adds cost", verdict: "checked when it runs" });
+  } else if (surface === "settings" && proposal?.step === "turn_taking") {
+    checks.push({ id: "latency", constraint: "Latency ceiling", ceiling: ceilingLabel(limits?.latencyCeiling ?? 0).toLowerCase(), says: "waits longer before answering", verdict: "checked when it runs" });
+  } else if (surface === "settings") {
+    /* Any other setting (temperature, retrieval) leaves the model alone. */
+    checks.push({ id: "model", constraint: "Model lock", says: "keeps the model", verdict: "allowed" });
+  }
   return {
     surface,
     path,
     allowed,
     protected: locked,
-    ok: allowed && !locked,
-    label: `Changes ${SURFACE_WORDS[surface] || surface}`,
+    model: switches ? { to: switchTo, approved } : null,
+    checks,
+    ok: !checks.some((c) => c.blocked),
+    label: switches && surface === "model" ? "Switches the model" : `Changes ${SURFACE_WORDS[surface] || surface}`,
   };
 };
 
@@ -54,9 +90,11 @@ export const fixScope = (proposal, { env, limits } = {}) => {
 const scopeNote = (s) => {
   if (!s) return "";
   if (s.environment) return `${s.label.toLowerCase()} — not yours to make; Future AGI applies it`;
+  if (s.model && !s.model.approved) return `${s.label.toLowerCase()} — this agent's model is locked; do not change the model`;
   if (!s.allowed) return `${s.label.toLowerCase()} — not allowed for this agent; do not make this change`;
   if (s.protected) return `${s.label.toLowerCase()} — edits ${s.path}, which this agent protects; do not edit it`;
-  return `${s.label.toLowerCase()} — allowed`;
+  const ceiling = (s.checks || []).find((c) => c.id === "cost" || c.id === "latency");
+  return `${s.label.toLowerCase()} — allowed${ceiling ? `; ${ceiling.constraint.toLowerCase()} ${ceiling.ceiling}` : ""}`;
 };
 
 const asText = (x) => (typeof x === "string" ? x : x?.title || x?.text || "");
@@ -77,10 +115,10 @@ const bullets = (list) => list.map((x) => `- ${x}`);
  *   runId            optional — the run the evidence came from
  *   proof            optional — { label, tierLabel } from proofKindOf
  *   members          optional — the members the change touches, by name
- *   names            optional — real names to replace in the evidence
+ *   names            optional — names the caller already knows (a caller or persona); others are caught by the scrubber itself
  *
  * Evidence comes from production: every excerpt goes through
- * scrubPersonalData before it is copied or handed to a coding agent — names,
+ * scrubPersonalData before it is copied or handed to a coding agent (so do the root cause and scenario titles) — names,
  * numbers and addresses become realistic fake values — and the brief says so.
  */
 export const codingAgentBrief = ({
@@ -100,15 +138,17 @@ export const codingAgentBrief = ({
     ])
     : [suggestedFix || "No fix proposed yet — start from the root cause."];
 
-  /* The problem, not the person. */
+  /* The problem, not the person — evidence, the root cause and the scenario
+     titles all come from production, so all of them are scrubbed. */
   let replaced = 0;
-  const excerpts = evidence.slice(0, 5).map((e) => {
-    const raw = typeof e === "string" ? e : `${e.source ? `${e.source}: ` : ""}${e.text}`;
+  const scrub = (raw) => {
     const clean = scrubPersonalData(raw, { names });
     replaced += clean.count;
     return clean.text;
-  });
-  const scenarios = failingScenarios.map(asText).filter(Boolean);
+  };
+  const excerpts = evidence.slice(0, 5).map((e) => scrub(typeof e === "string" ? e : `${e.source ? `${e.source}: ` : ""}${e.text}`));
+  const cause = rootCause ? scrub(rootCause) : null;
+  const scenarios = failingScenarios.map(asText).filter(Boolean).map(scrub);
   const more = scenarios.length > 12 ? scenarios.length - 12 : 0;
 
   return [
@@ -122,12 +162,13 @@ export const codingAgentBrief = ({
       runId && `Run: ${runId}`,
       /* "agent v3 × env v7" — the environment version stays fixed; only the agent changes. */
       pairing && `Measured on: ${pairing}`,
-      proof && `Proof: ${proof.label} · ${proof.tierLabel}${proof.kind === "live" ? " — tools reached your real systems" : ""}`,
+      /* Every proof names where the candidate ran — the line every surface shows. */
+      proof && `Proof: ${proof.line || `${proof.label} · ${proof.tierLabel}${proof.kind === "live" ? " — tools reached your real systems" : ""}`}`,
       members?.length && `Changes: ${members.join(", ")}`,
     ].filter(Boolean).join("  \n"),
     "",
     "## Root cause",
-    rootCause || "Not analysed yet.",
+    cause || "Not analysed yet.",
     "",
     "## Suggested fix",
     ...fixLines,

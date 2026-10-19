@@ -1,7 +1,7 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Button, Checkbox, Radio, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Checkbox, IconButton, Radio, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { PROVIDER_LABELS } from "../_mock/agentRegistry";
 import { PLATFORM_TESTING, proofKindOf, retellPinStateOf } from "../_mock/rsiModel";
@@ -13,8 +13,8 @@ import { MONO, ago } from "./agentViewUtils";
 const copiesLabelFor = (provider) => `Create test copies or drafts in my ${provider === "your" ? "" : `${provider} `}account`;
 const TOOLS_SAFE_LABEL = "Safe to call";
 const TOOLS_REPLAY_LABEL = "Stubbed on the replay flag";
-const NOT_READY_COPIES = "Tick the first box";
-const NOT_READY_TOOLS = "Say how its tools are handled";
+const NOT_READY_COPIES = "Agree to test copies first";
+const NOT_READY_TOOLS = "Choose how its tools are handled";
 const SAFE_HINT = "They reach staging systems, or what they do is fine in a test.";
 
 const selectedBg = (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.06 : 0.03);
@@ -41,7 +41,12 @@ function Choice({ on, title, body, hint, onClick, children, radio }) {
         : <Checkbox size="small" checked={on} tabIndex={-1} sx={{ p: 0, mt: "1px" }} />}
       <Box flex={1} minWidth={0}>
         <Typography sx={{ typography: "s2", fontWeight: 600 }}>{title}</Typography>
-        {(body || hint) && <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{body}<InfoTip text={hint} /></Typography>}
+        {(body || hint) && (
+          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+            {body || hint}
+            {body && <InfoTip text={hint} />}
+          </Typography>
+        )}
         {children}
       </Box>
     </Stack>
@@ -61,7 +66,7 @@ Choice.propTypes = { on: PropTypes.bool, title: PropTypes.node, body: PropTypes.
  * `oneLine` (with `bare`) puts the choices and the button on one row, the
  * lead left to whatever holds it.
  */
-export function LiveConsentCard({ agent, env, onSave, bare = false, oneLine = false }) {
+export function LiveConsentCard({ agent, env, onSave, bare = false, oneLine = false, onCancel = null }) {
   const r = replicationOf(agent, env);
   const proof = proofKindOf(agent);
   const given = agent.values?.liveTestConsent || null;
@@ -163,6 +168,58 @@ export function LiveConsentCard({ agent, env, onSave, bare = false, oneLine = fa
     );
   }
 
+  /* The choices, the same in the card and the dialog. */
+  const choices = (
+    <Stack spacing={0.75}>
+      {copies && (
+        <Choice on={copiesOk} onClick={() => setCopiesOk((x) => !x)} title={copiesLabel} hint={copiesHint} />
+      )}
+      <Typography sx={{ typography: "s2", fontWeight: 600, pt: 0.75 }}>Its tools</Typography>
+      <Choice radio on={tools === "safe"} onClick={() => setTools("safe")} title={TOOLS_SAFE_LABEL} hint={SAFE_HINT} />
+      <Choice
+        radio on={tools === "replay"} onClick={() => setTools("replay")}
+        title={TOOLS_REPLAY_LABEL}
+        hint="Tools that write data or call outside services return a canned answer when the flag is set."
+      >
+        {tools === "replay" && (
+          <Box sx={{ mt: 0.75, px: 1, py: 0.5, borderRadius: 0.75, bgcolor: "background.neutral", width: "fit-content" }}>
+            <Typography sx={{ typography: "s3", fontFamily: MONO }}>metadata.fagi_replay = true</Typography>
+          </Box>
+        )}
+      </Choice>
+    </Stack>
+  );
+
+  /* In a dialog: its own title, a close icon, and the actions in the footer. */
+  if (onCancel) {
+    return (
+      <>
+        <Stack direction="row" alignItems="flex-start" spacing={2} sx={{ px: 2.5, pt: 2, pb: 1.5 }}>
+          <Box flex={1} minWidth={0}>
+            <Typography sx={{ typography: "m2", fontWeight: 700 }}>Allow test calls</Typography>
+            <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5 }}>
+              {lead}
+              <InfoTip text={`${proof.label} proof — ${proof.note}`} />
+            </Typography>
+          </Box>
+          <IconButton size="small" onClick={onCancel} aria-label="Close" sx={{ mt: -0.25 }}>
+            <Iconify icon="solar:close-circle-linear" width={18} sx={{ color: "text.subtitle" }} />
+          </IconButton>
+        </Stack>
+        <Box sx={{ px: 2.5, pb: 2 }}>{choices}</Box>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+          <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>
+            {ready ? "Needed once, before the first run." : notReady}
+          </Typography>
+          <Button size="small" onClick={onCancel} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
+          <Button size="small" variant="contained" color="primary" disabled={!ready} onClick={give} sx={{ typography: "s2", fontWeight: 700 }}>
+            Give consent
+          </Button>
+        </Stack>
+      </>
+    );
+  }
+
   return (
     <PanelCard title="Consent" note="Needed before the first run" sx={{ borderColor: (t) => alpha(t.palette.text.primary, 0.32) }}>
       <Box sx={{ px: 2, py: 1.5 }}>
@@ -170,35 +227,7 @@ export function LiveConsentCard({ agent, env, onSave, bare = false, oneLine = fa
           {lead}
           <InfoTip text={`${proof.label} proof — ${proof.note}`} />
         </Typography>
-        <Stack spacing={0.75} sx={{ mt: 1.25 }}>
-          {copies && (
-            <Choice
-              on={copiesOk}
-              onClick={() => setCopiesOk((x) => !x)}
-              title={copiesLabel}
-              hint={copiesHint}
-            />
-          )}
-          <Typography sx={{ typography: "s2", fontWeight: 600, pt: 0.5 }}>
-            Its tools
-          </Typography>
-          <Choice
-            radio on={tools === "safe"} onClick={() => setTools("safe")}
-            title={TOOLS_SAFE_LABEL}
-            hint={SAFE_HINT}
-          />
-          <Choice
-            radio on={tools === "replay"} onClick={() => setTools("replay")}
-            title={TOOLS_REPLAY_LABEL}
-            hint="Every simulated call carries the flag below. Tools that write data or call outside services return a canned answer when it's set."
-          >
-            {tools === "replay" && (
-              <Box sx={{ mt: 0.75, px: 1, py: 0.5, borderRadius: 0.75, bgcolor: "background.neutral", width: "fit-content" }}>
-                <Typography sx={{ typography: "s3", fontFamily: MONO }}>metadata.fagi_replay = true</Typography>
-              </Box>
-            )}
-          </Choice>
-        </Stack>
+        <Box sx={{ mt: 1.25 }}>{choices}</Box>
         <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mt: 1.5 }}>
           <Button
             size="small" variant="contained" color="primary" disabled={!ready}
@@ -217,7 +246,7 @@ export function LiveConsentCard({ agent, env, onSave, bare = false, oneLine = fa
     </PanelCard>
   );
 }
-LiveConsentCard.propTypes = { agent: PropTypes.object.isRequired, env: PropTypes.object, onSave: PropTypes.func.isRequired, bare: PropTypes.bool, oneLine: PropTypes.bool };
+LiveConsentCard.propTypes = { agent: PropTypes.object.isRequired, env: PropTypes.object, onSave: PropTypes.func.isRequired, bare: PropTypes.bool, oneLine: PropTypes.bool, onCancel: PropTypes.func };
 
 /* One plain checkbox or radio with its label — no box around it; the longer note behind an ⓘ. */
 function Pick({ control, on, onClick, label, hint }) {

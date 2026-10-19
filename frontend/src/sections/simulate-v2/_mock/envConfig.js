@@ -31,7 +31,8 @@ export const envVarsOf = (envState) => migrateEnvVars(envState?.envVars) || DEFA
 
 /**
  * Point a secret variable at a new reference. Re-runs the access check and
- * nothing else — no rebuild, no environment version.
+ * makes the next credential-set version (credentialSetPatch) — never an
+ * environment or agent version.
  */
 export const envVarRefPatch = (envState, key, ref) => ({
   envVars: envVarsOf(envState).map((v) => (v.key === key ? { key: v.key, secret: true, usedBy: v.usedBy, ref } : v)),
@@ -41,10 +42,85 @@ export const envVarRefPatch = (envState, key, ref) => ({
 /** The last access check for a variable, if one has run. */
 export const envVarCheckOf = (envState, key) => envState?.secretChecks?.[`env:${key}`] || null;
 
-export const DEFAULT_BUILD_ARGS = [
-  { key: "BASE_IMAGE", value: "python:3.12-slim" },
-  { key: "INSTALL_DEV", value: "false" },
-];
+/*
+  Credentials are versioned as ONE set — every secret variable's reference and
+  every agent credential reference together. Changing any of them makes the
+  next credential version (v1, v2 …), which is neither an environment nor an
+  agent version. Each run records the set it used, so a result can say which
+  credentials it ran with — references only, never values.
+*/
+export const secretsUsedOf = (envState) => ({
+  ...Object.fromEntries(envVarsOf(envState).filter((v) => v.secret && v.ref).map((v) => [v.key, v.ref])),
+  ...(envState?.credentialRefs || {}),
+});
+
+const sameRefs = (a = {}, b = {}) => {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+};
+
+/* "STRIPE_KEY re-pointed · SLACK_TOKEN added" — what moved between two sets, by key. */
+const refChanges = (before, after) => {
+  if (!before) return [`First set · ${Object.keys(after).length} reference${Object.keys(after).length === 1 ? "" : "s"}`];
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+  return keys.flatMap((k) => {
+    if (!(k in before)) return [`${k} added`];
+    if (!(k in after)) return [`${k} removed`];
+    return before[k] !== after[k] ? [`${k} re-pointed`] : [];
+  });
+};
+
+/**
+ * Every credential-set version, oldest first: `{ label, at, refs, changes }`.
+ * The stored ones, plus — when the references have moved since the last
+ * stored one — the next one (no `at` yet: the next run or edit records it).
+ */
+export const credentialSetsOf = (envState) => {
+  const stored = envState?.credentialSets || [];
+  const refs = secretsUsedOf(envState);
+  const last = stored[stored.length - 1];
+  if (last && sameRefs(last.refs, refs)) return stored;
+  return [...stored, { label: `v${stored.length + 1}`, at: null, refs, changes: refChanges(last?.refs, refs) }];
+};
+
+/** The credential set the next run uses. */
+export const currentCredentialSet = (envState) => credentialSetsOf(envState).slice(-1)[0];
+
+const recorded = (sets, at) => sets.map((s) => (s.at ? s : { ...s, at }));
+
+/** `{ credentialSets }` with the current set recorded — what a run stamps against. */
+export const recordCredentialSets = (envState, at = new Date().toISOString()) => ({
+  credentialSets: recorded(credentialSetsOf(envState), at),
+});
+
+/**
+ * Wrap a patch that may move a reference: the set as it stood is recorded
+ * first, then the set after the patch — the next version when it differs.
+ */
+export const credentialSetPatch = (envState, next) => {
+  const at = new Date().toISOString();
+  const before = recordCredentialSets(envState, at).credentialSets;
+  const after = credentialSetsOf({ ...envState, ...next, credentialSets: before });
+  return { ...next, credentialSets: recorded(after, at) };
+};
+
+/** Access checks that failed on a secret still in use — said before a run, never blocking it. */
+export const failedSecretChecksOf = (envState) => {
+  const vars = new Set(envVarsOf(envState).filter((v) => v.secret).map((v) => `env:${v.key}`));
+  return Object.entries(envState?.secretChecks || {})
+    .filter(([id, c]) => c && c.ok === false && (!id.startsWith("env:") || vars.has(id)))
+    .map(([id, c]) => ({ id: id.replace(/^env:/, ""), ref: c.ref, line: c.line }));
+};
+
+/*
+  Model ids, feature flags and prompts change how the agent behaves, so they
+  belong to the agent — a change there is a new agent version, and a run
+  says which one it tested. Set here, they'd change the agent's behaviour
+  without any version saying so.
+*/
+const AGENT_BEHAVIOUR_KEY = /(^|_)(MODEL|MODEL_ID|MODEL_NAME|TEMPERATURE|TOP_P|SYSTEM_PROMPT|PROMPT)($|_)|^(FEATURE|FLAG|FF|ENABLE|DISABLE|USE)_|_(FLAG|ENABLED)$/i;
+export const isAgentBehaviourKey = (key) => AGENT_BEHAVIOUR_KEY.test(String(key || "").trim());
+export const AGENT_BEHAVIOUR_MESSAGE = "That changes how the agent behaves — set it on the agent, where a change makes a new agent version, so every run says which one it tested.";
 
 /** Runtime defaults every run inherits unless the run overrides them. */
 export const DEFAULT_RUNTIME = {
@@ -57,24 +133,6 @@ export const DEFAULT_RUNTIME = {
   recordVideo: true,
   region: "us-east-1",
 };
-
-export const ISOLATION_OPTIONS = [
-  {
-    value: "per_task",
-    label: "Fresh copy per task",
-    desc: "Every task starts from the same snapshot. Slowest, and the only setting that makes results comparable.",
-  },
-  {
-    value: "per_run",
-    label: "Fresh copy per run",
-    desc: "Tasks share one instance. Faster, but earlier tasks can contaminate later ones.",
-  },
-  {
-    value: "persistent",
-    label: "Persistent",
-    desc: "State carries across runs. For debugging only — never for scoring.",
-  },
-];
 
 /* ── lineage ──────────────────────────────────────────────────────────────
  *

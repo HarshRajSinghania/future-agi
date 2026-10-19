@@ -21,7 +21,7 @@ import { faultReason } from "./failures";
 import { getEval } from "./evals";
 import { isConnectOnly } from "./envModel";
 import { envVarsOf } from "./envConfig";
-import { openNudgesOf, NUDGE_KINDS } from "./decoupled";
+import { scenarioStepOf, versionCardOf } from "./versionCard";
 import { sideEffectOf } from "./toolEnv";
 import { toolArgsOf, contractUseCasesOf } from "./rlContract";
 
@@ -358,9 +358,14 @@ export const missingAnswer = (env, envState) => {
   const gaps = sortGaps(setupGaps(env, envState));
   const open = gaps.filter((g) => g.status === "blocking" || g.status === "optional");
   const creds = missingCredentials(env, envState);
-  /* Open nudges are listed, never answered from here — each links to its
-     card in Needs input (AC-15.4b). They don't block a run. */
-  const nudges = openNudgesOf(envState).map((n) => ({ id: n.id, title: n.title, area: `${NUDGE_KINDS[n.kind]?.short || "Suggestion"} · yours to answer` }));
+  /* An agent change is one card, listed — never answered from here — and
+     linked to Needs input (AC-15.4b). It doesn't block a run. */
+  const card = versionCardOf(envState);
+  const step = scenarioStepOf(envState);
+  const nudges = [
+    card?.status === "open" && { id: "nudges", title: `Agent ${card.newest} changed`, area: "Review · rebuild or skip" },
+    step?.status === "open" && { id: "nudges", title: "Scenarios to update", area: "Review · after the rebuild" },
+  ].filter(Boolean);
   return {
     ready: readiness.ready,
     reason: readiness.reason,

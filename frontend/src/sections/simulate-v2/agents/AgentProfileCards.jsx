@@ -166,7 +166,7 @@ export function SourceCard({ agent, source, onSave }) {
         label="Git host"
         hint={`${repo
           ? `Improvements open draft pull requests on ${repo.replace(/^https?:\/\//, "")}.`
-          : "Where improvements open draft pull requests once the agent's code or config is in a repository."} GitLab and Bitbucket arrive later.`}
+          : "Where improvements open draft pull requests once the agent's code or config is in a repository."}`}
       >
         <ToggleButtonGroup
           size="small" exclusive value={host.id}

@@ -1,10 +1,12 @@
 import PropTypes from "prop-types";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { alpha, keyframes } from "@mui/material/styles";
 import {
   Box, Stack, Typography, IconButton, Tooltip, Button,
 } from "@mui/material";
+import { useNavigate } from "react-router-dom";
 import Iconify from "src/components/iconify";
+import { paths } from "src/routes/paths";
 import { SectionCard } from "../components/primitives";
 import AssistantConsole from "../assistant/AssistantConsole";
 import TwinLogo from "../components/TwinLogo";
@@ -19,10 +21,10 @@ const SUCCESS = "#16A34A";
   the real system would stream progress as each hits.
 */
 const PHASES = [
-  { key: "provision", title: "Provisioning clone services", subtitle: "Spinning up the sandbox instance for each service", dwell: 1500 },
-  { key: "seed", title: "Seeding starting state", subtitle: "Resolving the seed prompt into concrete service state", dwell: 1200 },
-  { key: "rotate", title: "Rotating per-run credentials", subtitle: "Minting fresh service tokens for this environment", dwell: 900 },
-  { key: "probe", title: "Streaming first probe", subtitle: "Confirming each service responds", dwell: 1100 },
+  { key: "provision", title: "Setting up the sandboxes", subtitle: "One sandbox for each app you picked", dwell: 1500 },
+  { key: "seed", title: "Seeding the starting state", subtitle: "Turning your description into each app's starting data", dwell: 1200 },
+  { key: "rotate", title: "Creating test sign-ins", subtitle: "Each run signs in to the sandboxes with a fresh test account", dwell: 900 },
+  { key: "probe", title: "Checking each app answers", subtitle: "A first request to every sandbox", dwell: 1100 },
 ];
 
 const glow = keyframes`
@@ -94,22 +96,22 @@ function logLinesFor(phase, twinName) {
   const t = twinName || "service";
   return ({
     provision: [
-      `boot ${t.toLowerCase()}-sandbox-${randHex(6)}`,
-      `mount /var/twin/${t.toLowerCase()}`,
-      `attach network sandbox-net`,
-      `health: 200 OK`,
+      `start the ${t} sandbox`,
+      `load ${t}'s data model`,
+      `connect it to this environment`,
+      `ready`,
     ],
     seed: [
-      `parse seed prompt · 42 tokens`,
-      `plan · 3 collections · 12 entities`,
-      `insert users(4) channels(3) messages(11)`,
-      `commit · fsync · verified`,
+      `read your description`,
+      `plan 3 collections, 12 records`,
+      `add users (4), channels (3), messages (11)`,
+      `saved`,
     ],
     rotate: [
-      `mint access_token · ttl=60m`,
-      `mint refresh_token · rotate on use`,
-      `bind session ${randHex(8)}`,
-      `sealed with kms-v3`,
+      `create a test account`,
+      `sign it in to ${t}`,
+      `keep it by reference only`,
+      `ready for the first run`,
     ],
     probe: [
       `→ GET /health`,
@@ -118,13 +120,6 @@ function logLinesFor(phase, twinName) {
       `← 200 · 18ms · verified`,
     ],
   })[phase] || [];
-}
-
-function randHex(n) {
-  const s = "0123456789abcdef";
-  let r = "";
-  for (let i = 0; i < n; i += 1) r += s[Math.floor((i * 7 + n) % 16)];
-  return r;
 }
 
 /**
@@ -142,6 +137,7 @@ function randHex(n) {
  * for the real review layout.
  */
 export default function TwinProvisioningView({ env, envState, onDone }) {
+  const navigate = useNavigate();
   const services = envState?.twinBacking?.services || [];
   const [phaseIdx, setPhaseIdx] = useState(0);
   const [turns, setTurns] = useState([]);
@@ -182,7 +178,7 @@ export default function TwinProvisioningView({ env, envState, onDone }) {
     if (!phase) {
       setTurns((prev) => [...prev, {
         id: "done", role: "builder", title: "Sandbox ready",
-        steps: [{ kind: "note", text: `All ${services.length} services are up and responding to probes. Handoff to the review layout in a moment.` }],
+        steps: [{ kind: "note", text: `All ${services.length} app${services.length === 1 ? "" : "s"} answered. Opening the environment for review in a moment.` }],
       }]);
       return;
     }
@@ -193,10 +189,10 @@ export default function TwinProvisioningView({ env, envState, onDone }) {
         ...services.map((sId) => {
           const twin = twinById(sId);
           const noteByPhase = {
-            provision: `Instance spun up for ${twin?.name || sId}`,
-            seed: `Seeded ${twin?.name || sId} from the starting-state prompt`,
-            rotate: `Fresh per-run token minted for ${twin?.name || sId}`,
-            probe: `${twin?.name || sId} responded to first probe in ${40 + ((sId?.length || 4) * 7) % 90}ms`,
+            provision: `Sandbox ready for ${twin?.name || sId}`,
+            seed: `Seeded ${twin?.name || sId} from your description`,
+            rotate: `Test account signed in to ${twin?.name || sId}`,
+            probe: `${twin?.name || sId} answered in ${40 + ((sId?.length || 4) * 7) % 90}ms`,
           };
           return { kind: "note", text: noteByPhase[phase.key] || `${twin?.name || sId} — ok` };
         }),
@@ -204,7 +200,6 @@ export default function TwinProvisioningView({ env, envState, onDone }) {
     }]);
   }, [phaseIdx, services]);
 
-  const chips = useMemo(() => ["What is being provisioned?", "Skip animation", "Cancel and restart"], []);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -213,14 +208,14 @@ export default function TwinProvisioningView({ env, envState, onDone }) {
         px: 3, py: 1.75, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0,
       }}>
         <Tooltip arrow title="Back to environments">
-          <IconButton size="small">
+          <IconButton size="small" onClick={() => navigate(paths.dashboard.simulate.environments)} aria-label="Back to environments">
             <Iconify icon="solar:alt-arrow-left-linear" width={17} />
           </IconButton>
         </Tooltip>
         <Box flex={1} minWidth={0}>
           <Typography noWrap sx={{ typography: "s1_2", fontWeight: 700 }}>{env?.name}</Typography>
           <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>
-            Spinning up {services.length} clone sandbox{services.length === 1 ? "" : "es"} — wire the agent as this lands
+            {`Setting up ${services.length} sandbox${services.length === 1 ? "" : "es"}${envState?.agent?.name ? ` for ${envState.agent.name}` : ""}`}
           </Typography>
         </Box>
         <Stack direction="row" alignItems="center" spacing={0.75} sx={{
@@ -235,7 +230,7 @@ export default function TwinProvisioningView({ env, envState, onDone }) {
             animation: `${beamPulse} 1.4s ease-in-out infinite`,
           }} />
           <Typography sx={{ typography: "s3", fontWeight: 700, letterSpacing: 0.3 }}>
-            PROVISIONING
+            SETTING UP
           </Typography>
         </Stack>
       </Stack>
@@ -250,9 +245,11 @@ export default function TwinProvisioningView({ env, envState, onDone }) {
           <AssistantConsole
             turns={turns}
             running={phaseIdx < PHASES.length}
-            chips={phaseIdx < PHASES.length ? chips : []}
+            chips={[]}
             onSend={() => {}}
             onChip={() => {}}
+            frozen
+            frozenReason="The sandboxes are still being set up"
           />
         </SectionCard>
 
@@ -287,13 +284,13 @@ function SandboxSpinup({ services, phaseIdx }) {
           animation: `${beamPulse} 1.4s ease-in-out infinite`,
         }} />
         <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4 }}>
-          Sandbox — {services.length} service{services.length === 1 ? "" : "s"} spinning up
+          Sandbox — {services.length} app{services.length === 1 ? "" : "s"} setting up
         </Typography>
         <Box flex={1} />
         <Typography sx={{
           typography: "s3", color: "text.subtitle", fontFamily: "ui-monospace, Menlo, monospace",
         }}>
-          clone-runtime · {phaseKey}
+          {PHASES.find((p) => p.key === phaseKey)?.title || "Ready"}
         </Typography>
       </Stack>
       <Box sx={{
@@ -370,7 +367,7 @@ function ControlHub({ phaseIdx }) {
         typography: "s3", fontWeight: 700, color: "text.subtitle",
         textTransform: "uppercase", letterSpacing: 0.4,
       }}>
-        Runtime
+        Sandbox
       </Typography>
       {/* status pill */}
       <Box sx={{
@@ -381,7 +378,7 @@ function ControlHub({ phaseIdx }) {
           ? alpha(SUCCESS, t.palette.mode === "dark" ? 0.16 : 0.09)
           : alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.1 : 0.06),
       }}>
-        {done ? "IDLE" : "STREAMING"}
+        {done ? "READY" : "WORKING"}
       </Box>
     </Box>
   );
@@ -399,8 +396,8 @@ function ServiceCard({ serviceId, phaseIdx, orderIndex }) {
   const counterTargets = {
     provision: { label: "instances", value: 1 },
     seed: { label: "rows seeded", value: 18 + (serviceId.length * 3) % 40 },
-    rotate: { label: "tokens minted", value: 2 },
-    probe: { label: "probe ms", value: 40 + (serviceId.length * 7) % 90 },
+    rotate: { label: "test sign-ins", value: 1 },
+    probe: { label: "ms to answer", value: 40 + (serviceId.length * 7) % 90 },
   };
   const ct = counterTargets[phaseKey] || { label: "ready", value: 100 };
   const n = useTicker(ct.value, active, 750);
@@ -571,7 +568,7 @@ function PhaseTimeline({ phaseIdx, services }) {
     <Box>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
         <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4 }}>
-          Setup — spinning up the sandbox
+          Setup — the sandboxes
         </Typography>
         <Box flex={1} />
         <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>

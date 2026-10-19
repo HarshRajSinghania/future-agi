@@ -9,14 +9,11 @@ import ScriptUpload from "./ScriptUpload";
 import ErrorFeedImport from "./ErrorFeedImport";
 import FailingCasesImport from "./FailingCasesImport";
 import ChatSource from "./ChatSource";
-import TwinScenarioPicker from "./TwinScenarioPicker";
 import GenerateScenarios from "./GenerateScenarios";
-import LibraryPersonaPicker from "./LibraryPersonaPicker";
 import ProductionReplayImport from "./ProductionReplayImport";
 import { ChatThumb, ProductionThumb, GenerateThumb, FailingCasesThumb } from "./RouteThumbs";
 import { injectComposerScaffold } from "../../_mock/composerScaffoldBus";
 import { openBuilderChat } from "../../_mock/builderPromptBus";
-import { usesPersonaLibrary } from "../../_mock/personaScenarios";
 import { productionScenariosOn, PRODUCTION_OFF_REASON } from "../../_mock/rsiModel";
 import { useWorkspaceSettings } from "../../store";
 import { clickable, focusRing } from "../../components/clickable";
@@ -40,9 +37,9 @@ const ADD_IN_CHAT = {
  *
  * Four sources lead: generate more, build them from an Error Feed issue,
  * reproduce the cases that failed in this environment's runs, or describe
- * them in chat. Twin services, a dataset, a script and the persona library
- * are still here, behind More sources — real routes, but not where most
- * scenarios come from.
+ * them in chat. Production conversations word for word, a dataset and a
+ * script are still here, behind More sources — real routes, but not where
+ * most scenarios come from.
  *
  * Behind a button, and in a drawer, so the page leads with the scenarios you
  * have and the routes stay one click away.
@@ -78,10 +75,8 @@ const ROUTES = [
 const MORE_ROUTES = [
   /* Phase 2 — a production conversation's caller turns, replayed verbatim. */
   { id: "replay", label: "Production, word for word", icon: "solar:server-linear", hint: "Replay a production conversation's caller turns exactly as they were said" },
-  { id: "twin", label: "Twin services", icon: "solar:server-square-linear", hint: "Scenarios that span more than one service" },
   { id: "dataset", label: "A dataset", icon: "solar:database-linear", hint: "Turn a dataset's rows into tasks" },
   { id: "script", label: "A script", icon: "solar:document-text-linear", hint: "Pull scenarios out of a call script, SOP or runbook" },
-  { id: "personas", label: "Persona library", icon: "solar:users-group-rounded-linear", hint: "This environment's tasks for personas your team keeps" },
 ];
 
 /* `?add=production` predates the Error Feed source — same place now. */
@@ -90,17 +85,7 @@ const ROUTE_ALIASES = { production: "error-feed" };
 export default function AddScenariosDrawer({ open, onClose, env, envState, selected, onAdd, onBuilderPrompt, initialRoute }) {
   const first = ROUTE_ALIASES[initialRoute] || initialRoute || null;
   const [route, setRoute] = useState(first);
-  /*
-    Extra routes depend on the env's shape. The twin route only shows when
-    the env has a twin backing — the picker's suggestions are generated from
-    the twin services and make no sense otherwise. Library personas are
-    callers — only for agents with someone on the other end of the line.
-  */
-  const more = MORE_ROUTES.filter((r) => {
-    if (r.id === "twin" && !envState?.twinBacking) return false;
-    if (r.id === "personas" && !usesPersonaLibrary(env)) return false;
-    return true;
-  });
+  const more = MORE_ROUTES;
   const [moreOpen, setMoreOpen] = useState(() => more.some((r) => r.id === first));
   /* Production-derived sources follow the workspace-admin switch in Settings. */
   const { settings: workspaceSettings } = useWorkspaceSettings();
@@ -224,8 +209,6 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
             {route === "replay" && !offRoute && <ProductionReplayImport env={env} envState={envState} onAdd={add} selected={selected} />}
             {route === "failing" && <FailingCasesImport env={env} envState={envState} onAdd={add} selected={selected} />}
             {route === "chat" && <ChatSource onSend={sendToChat} onOpenChat={openChat} />}
-            {route === "personas" && <LibraryPersonaPicker env={env} envState={envState} onAdd={add} />}
-            {route === "twin" && <TwinScenarioPicker env={env} envState={envState} onAdd={add} selected={selected} />}
             {route === "dataset" && <DatasetImport env={env} onAdd={add} selected={selected} />}
             {route === "script" && <ScriptUpload env={env} onAdd={add} selected={selected} />}
           </Box>

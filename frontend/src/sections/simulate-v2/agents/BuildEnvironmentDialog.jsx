@@ -2,6 +2,8 @@ import PropTypes from "prop-types";
 import { useEffect, useState } from "react";
 import { Box, Button, Dialog, MenuItem, Select, Stack, TextField, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { useOptionalSimStore } from "../store";
+import { uniqueEnvName } from "../_mock/envNames";
 
 const MONO = "ui-monospace, Menlo, monospace";
 /* Quick picks; any count from 10 to 1,000 can be typed. */
@@ -16,6 +18,7 @@ const MAX_SCENARIOS = 1000;
  */
 export default function BuildEnvironmentDialog({ open, onClose, agent, defaultVersion, onBuild, channel = null }) {
   const [name, setName] = useState("");
+  const envs = useOptionalSimStore()?.state?.myEnvironments || [];
   const [version, setVersion] = useState(defaultVersion);
   /* Held as typed, so a half-typed number isn't snapped mid-edit. */
   const [countText, setCountText] = useState("10");
@@ -25,8 +28,11 @@ export default function BuildEnvironmentDialog({ open, onClose, agent, defaultVe
 
   useEffect(() => {
     if (!open) return;
-    setName(`${agent.name.replace(/\s+agent$/i, "")} environment`);
-    setVersion(defaultVersion || agent.latest);
+    /* Numbered if taken — the name it will have, not one the store changes later. */
+    setName(uniqueEnvName(`${agent.name.replace(/\s+agent$/i, "")} environment`, envs));
+    /* A draft is never what an environment tests — start from production. */
+    const pick = agent.versions.find((v) => v.label === (defaultVersion || agent.latest));
+    setVersion(pick && !pick.pendingDraft ? pick.label : agent.production || agent.latest);
     setCountText("10");
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -51,10 +57,10 @@ export default function BuildEnvironmentDialog({ open, onClose, agent, defaultVe
             <Label>Built from version</Label>
             <Select size="small" fullWidth value={version} onChange={(e) => setVersion(e.target.value)} sx={{ typography: "s2" }}>
               {[...agent.versions].reverse().map((v) => (
-                <MenuItem key={v.label} value={v.label} sx={{ typography: "s2" }}>
+                <MenuItem key={v.label} value={v.label} disabled={!!v.pendingDraft} sx={{ typography: "s2" }}>
                   <Box component="span" sx={{ fontFamily: MONO, fontWeight: 600, mr: 1 }}>{v.label}</Box>
                   <Box component="span" sx={{ color: "text.subtitle" }}>
-                    {v.pendingDraft ? "draft" : v.label === agent.production ? "in production" : ""}
+                    {v.pendingDraft ? "draft — release it first" : v.label === agent.production ? "in production" : ""}
                   </Box>
                 </MenuItem>
               ))}

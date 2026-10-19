@@ -1,6 +1,7 @@
 import PropTypes from "prop-types";
 import { Stack, Chip } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 /**
  * The scenarios behind a number, so the number can be opened.
@@ -19,7 +20,7 @@ export default function TaskLinks({ ids, tasks, step, onOpen }) {
         <Chip
           key={t.id}
           size="small"
-          label={t.title}
+          label={scenarioTitle(t.title)}
           /* Inside an analyzer row, which is itself a toggle — without this,
              opening the evidence also collapses the finding you opened it from. */
           onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(t, step); } : undefined}

@@ -9,6 +9,8 @@ import { codingAgentById, heldBackHiddenFrom, openPr, useIntegrations } from "..
 import { definitionOf } from "../../_mock/agentRegistry";
 import { candidateRouteOf } from "../../_mock/candidateRoute";
 import { creditsForUsd, creditsLabel } from "../../_mock/metering";
+import { improvementTotalSpend } from "../../_mock/optimizationRuns";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 const MONO = "ui-monospace, Menlo, monospace";
 const OUTCOME = { fixed: "Fixed", broke: "Broke", same: "Unchanged", "still-failing": "Still failing", flaky: "Flaky", "not-run": "Not run" };
@@ -27,7 +29,9 @@ export default function ImproverAttempts({ record, env, envState, session, name,
   const [now, setNow] = useState(Date.now());
   const [open, setOpen] = useState(null);
   const budgetLeft = (record.budget || Infinity) - (searchSpent || 0);
-  const attempts = useMemo(() => attemptsOf(record, session, { now, surface: env?.surface, budgetLeft }), [record, session, now, env, budgetLeft]);
+  /* Where its candidates can run follows how the agent came in. */
+  const tier = candidateRouteOf(envState?.agent).tier;
+  const attempts = useMemo(() => attemptsOf(record, session, { now, surface: env?.surface, budgetLeft, tier }), [record, session, now, env, budgetLeft, tier]);
   const status = sessionState(session, attempts);
   const { prs } = useIntegrations();
 
@@ -55,13 +59,19 @@ export default function ImproverAttempts({ record, env, envState, session, name,
       body: attemptProof(record, accepted, name),
       /* The verify check re-runs everything on the PR's commit — visible,
          held-back and must-pass, not just what the agent could see. */
-      check: { scenarios: accepted.visible.length + accepted.mustPass.total + (record.result?.heldMeasured || 0) },
+      check: {
+        scenarios: accepted.visible.length + accepted.mustPass.total + (record.result?.heldMeasured || 0),
+        /* Today's agent and the accepted attempt, on the visible scenarios. */
+        before: accepted.before,
+        after: accepted.score,
+      },
     });
   }, [accepted, repo, pr, record, name]);
 
   if (!session) return null;
-  const spent = attempts.reduce((a, x) => a + x.spend, 0);
-  const total = Math.round((searchSpent || 0) + spent);
+  /* Everything the improvement spent — reproducing, the search and these
+     attempts — the same figure the Improvements list shows. */
+  const total = improvementTotalSpend(record, env?.surface, { attempts });
   const improver = codingAgentById(session.agentId)?.label || "Your coding agent";
   /* What it submits and how we test it — the same for any agent, worded
      for where this one lives. */
@@ -111,7 +121,6 @@ export default function ImproverAttempts({ record, env, envState, session, name,
       <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />} sx={{ borderBottom: attempts.length ? "1px solid" : "none", borderColor: "divider" }}>
         {attempts.map((a) => {
           const isOpen = open === a.n;
-          const fixed = a.visible.filter((x) => x.outcome === "fixed").length;
           /* Laid out like our own trials: score, change, what it tried, the
              held-back figure we never sent, the verdict and who proposed it. */
           const scored = typeof a.score === "number";
@@ -123,16 +132,10 @@ export default function ImproverAttempts({ record, env, envState, session, name,
                 sx={{ px: 2, py: 1.25, cursor: "pointer", "&:hover": { bgcolor: "action.hover" }, ...focusRing }}
               >
                 <Typography sx={{ typography: "s3", color: "text.disabled", width: 26, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{`A${a.n}`}</Typography>
-                {scored || a.gate ? (
-                  <>
-                    <Typography sx={{ typography: "s2", fontWeight: 700, width: 44, flexShrink: 0, fontVariantNumeric: "tabular-nums", color: a.gate ? "text.disabled" : "text.primary" }}>{a.gate ? "—" : `${a.score}%`}</Typography>
-                    <Typography sx={{ typography: "s3", width: 40, flexShrink: 0, fontVariantNumeric: "tabular-nums", color: a.gate ? "text.disabled" : a.delta > 0 ? "#16A34A" : a.delta < 0 ? "#DC2626" : "text.disabled" }}>
-                      {a.gate ? "not run" : a.delta > 0 ? `+${a.delta}` : a.delta}
-                    </Typography>
-                  </>
-                ) : (
-                  <Typography sx={{ typography: "s3", color: "text.secondary", width: 90, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{`fixed ${fixed}`}</Typography>
-                )}
+                <Typography sx={{ typography: "s2", fontWeight: 700, width: 44, flexShrink: 0, fontVariantNumeric: "tabular-nums", color: scored ? "text.primary" : "text.disabled" }}>{scored ? `${a.score}%` : "—"}</Typography>
+                <Typography sx={{ typography: "s3", width: 40, flexShrink: 0, fontVariantNumeric: "tabular-nums", color: !scored ? "text.disabled" : a.delta > 0 ? "#16A34A" : a.delta < 0 ? "#DC2626" : "text.disabled" }}>
+                  {!scored ? "not run" : a.delta > 0 ? `+${a.delta}` : a.delta}
+                </Typography>
                 <Typography noWrap sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 0 }}>{a.title}</Typography>
                 {scored && (
                   <Tooltip arrow title="Scored here on the held-back set — never sent to the agent">
@@ -215,7 +218,7 @@ function AttemptVerdict({ attempt: a, previous, record, name, session }) {
           <Box sx={{ maxHeight: 180, overflowY: "auto", borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
             {a.visible.map((x) => (
               <Stack key={x.id} direction="row" spacing={1.25} sx={{ px: 1.5, pl: 4, py: 0.375 }}>
-                <Typography noWrap sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>{x.title}</Typography>
+                <Typography noWrap sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>{scenarioTitle(x.title)}</Typography>
                 <Typography sx={{ typography: "s3", width: 90, flexShrink: 0, fontWeight: 600, color: x.outcome === "fixed" ? "#16A34A" : x.outcome === "broke" ? "#DC2626" : "text.subtitle" }}>
                   {OUTCOME[x.outcome] || x.outcome}
                 </Typography>
@@ -262,7 +265,7 @@ function AttemptVerdict({ attempt: a, previous, record, name, session }) {
             {attemptProof(record, a, name)}
           </Box>
           <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
-            Later, a Future AGI check on the PR re-verifies its exact commit before merge.
+            A Future AGI check on the PR re-verifies this exact commit before merge.
           </Typography>
         </Box>
       )}

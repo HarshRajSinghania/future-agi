@@ -1,29 +1,33 @@
 import PropTypes from "prop-types";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { alpha, useTheme } from "@mui/material/styles";
-import { Box, Stack, Typography, Button, Chip, Tooltip, IconButton, Tabs, Tab } from "@mui/material";
+import { Box, Stack, Typography, Button, Chip, Tooltip, IconButton, Tabs, Tab, Dialog, Checkbox, TextField, Select, MenuItem } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { clickable, focusRing } from "../../components/clickable";
 import { RunTraceLog } from "../../components/RunTrace";
 import ImprovementProgress from "./ImprovementProgress";
-import { searchTrace, blockingVerdict, KIND_SURFACE, rejectedFor, compatFailed, staticFailed, diagnosisSummaryOf, paretoPool, goalWords } from "../../_mock/optimizer";
-import { staleSince, optimizationVerdict, OPTIMIZER_MODELS, OPT_STATUS, DEFAULT_LIMITS, improvementOutcome, issueLine, limitRows, searchSpend, judgeFor, ladderOf, improvementPhaseOf, repeatsOf, TRACE_STEP_MS } from "../../_mock/optimizationRuns";
+import { searchTrace, blockingVerdict, KIND_SURFACE, rejectedFor, compatFailed, staticFailed, diagnosisSummaryOf, paretoPool, goalWords, triedLabelOf } from "../../_mock/optimizer";
+import { staleSince, optimizationVerdict, OPTIMIZER_MODELS, OPT_STATUS, DEFAULT_LIMITS, improvementOutcome, improvementTotalSpend, issueLine, limitRows, searchSpend, judgeFor, ladderOf, improvementPhaseOf, TRACE_STEP_MS, statusOf, settlePending, reproduceStepsOf, reproduceMsOf } from "../../_mock/optimizationRuns";
 import { proofKindOf, fixDepthOf } from "../../_mock/rsiModel";
 import { membersChanged, proposalMembers, uncheckedChannelNotes } from "../../_mock/improvementPolicy";
 import { improvementScenariosNotIn, addImprovementScenariosPatch } from "../../_mock/improvementScenarios";
 import { currentEnvVersion } from "../../_mock/versions";
-import { useSimStore } from "../../store";
-import { FinalistsTable, MustPassNote, ContractNotice, IssueScenariosNotice, ChangeScope, UnfitNotice, OtherEnvironments, CodePlan, StaticNotice } from "./ImprovementPanels";
+import { useConnectedAgents, useSimStore } from "../../store";
+import { FinalistsTable, MustPassNote, ContractNotice, IssueScenariosNotice, ChangeScope, UnfitNotice, OtherEnvironments, StaticNotice } from "./ImprovementPanels";
 import { improvementIdentityOf } from "../../improvements/improvementRows";
 import { proofDisplay } from "./proofBlock";
 import { snapshotOfImprovement } from "../../_mock/envSnapshot";
 import { envLabelOf } from "../../_mock/envVersionKinds";
-import { briefEvidenceOf, contractApprovalPatch, methodLabelOf, nextContractVersion, visibleFailingOf } from "./improvementView";
-import { agentDefinitionOf, agentSourceOf } from "../../_mock/agentRegistry";
+import { briefEvidenceOf, contractApprovalPatch, issueDraftsOf, methodLabelOf, nextContractVersion, reproduceAgainPatch, visibleFailingOf } from "./improvementView";
+import { agentDefinitionOf, agentSourceOf, envAgentKey } from "../../_mock/agentRegistry";
+import { budgetsWithin } from "../../_mock/improvementStart";
+import { limitsOf } from "../../agents/agentLimits";
+import { connectedAgentPath } from "../../improvements/improvementNav";
 import { useNavigate } from "react-router-dom";
 import { paths } from "src/routes/paths";
 import { changeFileFor } from "../../_mock/optimize";
-import TrialHeatmap from "./TrialHeatmap";
+import WinnerChanges from "./WinnerChanges";
+import ScenarioOutcomes from "./ScenarioOutcomes";
 import OmegaHandoff from "../OmegaHandoff";
 import TaskLinks from "./TaskLinks";
 import CopyBriefButton from "../../components/CopyBriefButton";
@@ -31,13 +35,14 @@ import { codingAgentBrief } from "../../_mock/codingAgentBrief";
 import { proofMarkdown } from "./proofBlock";
 import ImproverAttempts from "./ImproverAttempts";
 import TradeoffView from "./TradeoffView";
-import { shippedCandidate } from "./tradeoffs";
+import { shippedCandidate, chosenVerified } from "./tradeoffs";
 import { CheckGroup, FrozenInputs, ReceiptButton, VerificationLadder } from "./ProofParts";
 import { codingAgentById, connectedCodingAgent, improverSessionFor, startImproverSession, useIntegrations } from "../../_mock/integrations";
 import { shippedStateOf } from "../../errorFeed/issueFixModel";
 import { attemptsOf, sessionState } from "../../_mock/improverAttempts";
 import { candidateSourceOf, takesSnapshot } from "../../_mock/candidateSource";
 import CandidateSourcePicker from "../CandidateSourcePicker";
+import NotReproducedBody from "./NotReproducedBody";
 import { creditsLabel } from "../../_mock/metering";
 
 /**
@@ -79,14 +84,22 @@ export default function OptimizationRunView({
   const [openTrial, setOpenTrial] = useState(null);
   /* Running for over a day without finishing means it was timed out — the
      same reading the Improvements list and the Error Feed chip use. */
-  const timedOut = record.status === "running" && staleSince(record);
-  const running = record.status === "running" && !timedOut;
+  /* An ending decided before searching reads as running until its
+     Reproduce has played, then as that ending (statusOf). */
+  const status = statusOf(record);
+  const timedOut = status === "running" && staleSince(record);
+  const running = status === "running" && !timedOut;
   /* Started from an Error Feed issue whose failure didn't happen — stops here. */
-  const notReproduced = record.status === OPT_STATUS.NOT_REPRODUCED;
-  const failedToRun = record.status === OPT_STATUS.FAILED || timedOut;
+  const notReproduced = status === OPT_STATUS.NOT_REPRODUCED;
+  const failedToRun = status === OPT_STATUS.FAILED || timedOut;
   /* A new goal improvement where nothing fell short of the goal. */
-  const nothing = record.status === OPT_STATUS.NOTHING;
+  const nothing = status === OPT_STATUS.NOTHING;
+  /* Checking the finalists alone would have gone over the budget. */
+  const overBudget = status === OPT_STATUS.OVER_BUDGET;
+  const [editingScenarios, setEditingScenarios] = useState(false);
   const result = record.result;
+  /* Reproducing on the way to an ending already known — no search to show. */
+  const pending = running && !result && !!record.pendingEnding;
   /* Where a running improvement is — Reproducing, Searching, Verifying —
      re-read while the trace plays. */
   const [phaseNow, setPhaseNow] = useState(Date.now());
@@ -118,8 +131,10 @@ export default function OptimizationRunView({
   const caution = shippable ? (blockingVerdict(result) || (outcome.issue?.fixed && soft?.tone === "#DC2626" ? null : soft)) : null;
   const blockedBy = shippable ? null : outcome.headline;
   const model = OPTIMIZER_MODELS.find((m) => m.id === record.model);
-  /* What ships — the search's pick, or another trade-off someone chose. */
+  /* What ships — the search's pick, or another trade-off someone chose.
+     Only a verified change ships: a chosen run is verified first. */
   const shipped = shippedCandidate(record);
+  const verified = chosenVerified(record);
   const choose = (n) => patch({
     optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id ? { ...o, preferredTrial: n || undefined } : o)),
   });
@@ -156,7 +171,7 @@ export default function OptimizationRunView({
 
   /* The customer's coding agent on this improvement, if one was handed it. */
   const integrations = useIntegrations();
-  /* Once the winner ships, the page follows it: Draft shipped → Released →
+  /* Once the winner ships, the page follows it: Fix in review → Released →
      Watching → Resolved or Reopened (RSI PRD, Part 3) — the same reading the
      Error Feed's chip uses. */
   const lifecycle = shippedStateOf(record, envState, integrations.prs || []);
@@ -197,7 +212,11 @@ export default function OptimizationRunView({
       issue: record.trigger?.kind === "error-feed" || record.trigger?.source === "run-insights"
         ? { id: record.trigger.issueId, title: record.trigger.issueTitle, severity: record.trigger.severity }
         : record.trigger?.goal ? `Raise ${record.trigger.goal.label || "the pass rate"}` : name || record.name,
-      rootCause: outcome.headline || record.trigger?.issueRoot?.subGoal || null,
+      /* The cause, not the verdict — what the search found is its own line. */
+      rootCause: [
+        record.snapshot?.rootCause || diag?.cause || (record.diagnosis || [])[0]?.headline || record.trigger?.issueRoot?.subGoal || null,
+        outcome.headline ? `What the search found: ${outcome.headline}` : null,
+      ].filter(Boolean).join("\n\n") || null,
       suggestedFix: (outcome.suggestion || proposals).slice(0, 4),
       /* Production-derived: scrubbed of personal data inside the brief. */
       evidence: briefEvidenceOf({ record, result, winner, tasks }),
@@ -209,13 +228,25 @@ export default function OptimizationRunView({
     });
   };
 
+  /* Searches anyway — or tries a failed run again — from now. */
+  const continueAnyway = () => patch({
+    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id
+      ? { ...o, status: OPT_STATUS.RUNNING, startedAt: new Date().toISOString(), result: o.result || o.pendingResult, pendingResult: undefined, pendingEnding: undefined, ...(notReproduced && { reproduce: { ...o.reproduce, overridden: true } }) }
+      : o)),
+  });
+
+  /* Reproduce has played: the ending it was heading for is saved. */
+  const settleNow = () => patch?.({
+    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id && o.status === OPT_STATUS.RUNNING && o.pendingEnding ? settlePending(o) : o)),
+  });
+
   /* A finished run that hasn't shipped reads quietly: no stepper (the status
      chip says how it ended), the trigger folded into the subtitle. */
   const quietHeader = !running && !lifecycle && !!result && !notReproduced && !failedToRun;
   const startedFrom = record.trigger?.kind === "error-feed"
     ? `from ${record.trigger.issueId}`
     : fromRun ? `from Run ${fromRun.ordinal || ""}`.trim()
-      : record.trigger?.kind === "schedule" ? "scheduled" : record.trigger?.kind === "goal" ? "from a goal" : "from Debug failures";
+      : record.trigger?.kind === "schedule" ? "scheduled" : record.trigger?.kind === "manual" ? `started by ${record.trigger.by || "you"}` : record.trigger?.kind === "goal" ? "from a goal" : "from Debug failures";
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
@@ -255,11 +286,13 @@ export default function OptimizationRunView({
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
             {identity ? `${identity} · ` : ""}
             {/* Finished and ready: just where it came from — counts and ids are in the Receipt. */}
-            {quietHeader ? startedFrom : notReproduced || failedToRun || !result
-              ? `${record.id} · stopped before searching`
+            {quietHeader ? startedFrom : pending
+              ? "reproducing on today's version first"
+              : notReproduced || failedToRun || overBudget || !result
+              ? "stopped before searching"
               : suggestion
-                ? `${record.id} · ${record.reproduce?.total ? `reproduced on ${record.reproduce.reproduced || 0} of ${record.reproduce.total} scenarios` : `${result.trainMeasured + result.heldMeasured} scenarios measured`} · no change tried`
-                : `${record.id} · ${record.stoppedAtBudget ? `${result.trials.length} of ${record.stoppedAtBudget.of}` : result.trials.length} runs × ${result.trainMeasured} training scenarios${result.stoppedEarly ? ` · stopped early, no gain in the last four` : ""}`}
+                ? `${record.reproduce?.total ? `Reproduced on ${record.reproduce.reproduced || 0} of ${record.reproduce.total} scenarios` : `${result.trainMeasured + result.heldMeasured} scenarios measured`} · no change tried`
+                : `${record.stoppedAtBudget ? `${result.trials.length} of ${record.stoppedAtBudget.of}` : result.trials.length} runs × ${result.trainMeasured} target ${result.trainMeasured === 1 ? "scenario" : "scenarios"}${result.stoppedEarly && !running ? ` · stopped early, no gain in the last four` : ""}`}
           </Typography>
         </Box>
         {!running && result && <ReceiptButton record={record} outcome={outcome} attempts={attemptsNow} identity={identity} envSnapshot={frozenOn} />}
@@ -299,40 +332,65 @@ export default function OptimizationRunView({
         </Box>
       )}
 
-      {(notReproduced || failedToRun) && (
+      {overBudget && (
+        <OverBudgetBody record={record} outcome={outcome} env={env} envState={envState} patch={patch} onClose={onClose} />
+      )}
+
+      {/* Could not reproduce: each scenario and its repeats, and what to do. */}
+      {notReproduced && (
+        <>
+          <NotReproducedBody
+            record={record}
+            envName={env?.name}
+            spent={creditsLabel(improvementTotalSpend(record, env?.surface))}
+            onEdit={issueDraftsOf(record).length > 0 ? () => setEditingScenarios(true) : undefined}
+            onContinue={continueAnyway}
+            onOpenIssue={record.trigger?.issueId ? () => { navigate(paths.dashboard.errorFeed.detail(record.trigger.issueId)); onClose?.(); } : undefined}
+          />
+          <IssueScenarioEditor
+            open={editingScenarios}
+            drafts={issueDraftsOf(record)}
+            perScenario={record.reproduce?.perScenario}
+            onClose={() => setEditingScenarios(false)}
+            onReproduce={(edits) => {
+              const next = reproduceAgainPatch({ record, env, envState, state: simState, edits });
+              if (next) patch(next);
+              setEditingScenarios(false);
+            }}
+          />
+        </>
+      )}
+
+      {failedToRun && !notReproduced && (
         <Box sx={{ flex: 1, overflowY: "auto", px: 2.5, py: 2.5 }}>
           <Typography sx={{ typography: "s1", fontWeight: 700 }}>{outcome.ending.label}</Typography>
-          <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, maxWidth: 640 }}>
-            {notReproduced
-              ? `None of the ${record.reproduce?.total || 0} scenarios built from ${record.trigger?.issueId} failed reliably on ${record.baseAgentVersion || "today's agent"}${record.reproduce?.inconclusive ? ` — ${record.reproduce.inconclusive} failed once in ${repeatsOf(record)} tries, which is inconclusive, not a reproduction` : ""}. The failure may depend on something they don't capture — a caller detail, live data, or timing. Searching for a fix to a failure that doesn't happen would only prove nothing.`
-              : outcome.headline}
-          </Typography>
+          <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, maxWidth: 640 }}>{outcome.headline}</Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-            {notReproduced && (
-              <Button
-                size="small" variant="outlined"
-                onClick={() => { navigate(paths.dashboard.simulate.environmentStep(env.id, "scenarios")); onClose?.(); }}
-                sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
-              >
-                Edit scenarios
-              </Button>
-            )}
-            <Button
-              size="small"
-              onClick={() => patch({
-                optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id
-                  ? { ...o, status: OPT_STATUS.RUNNING, result: o.result || o.pendingResult, pendingResult: undefined, ...(notReproduced && { reproduce: { ...o.reproduce, overridden: true } }) }
-                  : o)),
-              })}
-              sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}
-            >
-              {notReproduced ? "Continue anyway" : "Try again"}
+            <Button size="small" onClick={continueAnyway} sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}>
+              Try again
             </Button>
           </Stack>
         </Box>
       )}
 
-      {running && (
+      {/* Reproducing first, on the way to an ending already known. */}
+      {pending && (
+        <Box sx={{ flex: 1, overflowY: "auto" }}>
+          <RunningConstraints record={record} model={agentModel} />
+          <ImprovementProgress
+            title="Reproducing"
+            subtitle={record.reproduce?.total
+              ? `${record.reproduce.total} scenarios from ${record.trigger?.issueId || "the issue"} on ${record.baseAgentVersion || "today's version"}`
+              : `The environment's scenarios on ${record.baseAgentVersion || "today's version"}`}
+            steps={reproduceStepsOf(record)}
+            trials={[]}
+            stepMs={TRACE_STEP_MS}
+            onDone={settleNow}
+          />
+        </Box>
+      )}
+
+      {running && result && (
         <Box sx={{ flex: 1, overflowY: "auto" }}>
           {/* What every candidate is held to, visible while they're tried. */}
           <RunningConstraints record={record} model={agentModel} />
@@ -342,7 +400,7 @@ export default function OptimizationRunView({
             title={phase?.label || (record.fixDepth === "suggestion" ? "Reproducing" : "Searching")}
             subtitle={record.fixDepth === "suggestion"
               ? `${result.trainMeasured + result.heldMeasured} scenarios on the agent as it runs today`
-              : `${result.trials.length} runs × ${result.trainMeasured} training scenarios${result.textSearch ? " in text" : ""}`}
+              : `${result.trials.length} runs × ${result.trainMeasured} target ${result.trainMeasured === 1 ? "scenario" : "scenarios"}${result.textSearch ? " in text" : ""}`}
             steps={searchTrace(result, record)}
             trials={record.fixDepth === "suggestion" ? [] : result.trials}
             stepMs={TRACE_STEP_MS}
@@ -359,15 +417,16 @@ export default function OptimizationRunView({
         />
       )}
 
-      {!running && !suggestion && !notReproduced && !failedToRun && result && (
+      {!running && !suggestion && !notReproduced && !failedToRun && !nothing && !overBudget && result && (
         <Box sx={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
           {/* ── the verdict, in plain words, first ── */}
           <Box sx={{ px: 2.5, pt: 2.25 }}>
             <Stack direction="row" alignItems="flex-start" spacing={1.25}>
+              {/* A run someone chose is unproven until it's verified — no green check yet. */}
               <Iconify
-                icon={ending === "ready" ? "solar:check-circle-bold" : ending === "budget" ? "solar:pause-circle-linear" : "solar:close-circle-linear"}
+                icon={ending === "ready" && !(outcome.chosen && !outcome.chosen.verified) ? "solar:check-circle-bold" : ending === "budget" ? "solar:pause-circle-linear" : ending === "ready" ? "solar:clock-circle-linear" : "solar:close-circle-linear"}
                 width={20}
-                sx={{ color: ending === "ready" ? "#16A34A" : "text.secondary", flexShrink: 0, mt: "2px" }}
+                sx={{ color: ending === "ready" && !(outcome.chosen && !outcome.chosen.verified) ? "#16A34A" : "text.secondary", flexShrink: 0, mt: "2px" }}
               />
               <Typography sx={{ typography: "m3", fontWeight: 600, lineHeight: 1.35 }}>{outcome.headline}</Typography>
             </Stack>
@@ -377,6 +436,8 @@ export default function OptimizationRunView({
                 diag?.surface && ["Changed", `${diag.surface.label.charAt(0).toUpperCase()}${diag.surface.label.slice(1)}`],
                 issueLine(outcome.issue, outcome.held, { thin: outcome.thin }) && ["Issue scenarios", issueLine(outcome.issue, outcome.held, { thin: outcome.thin })],
                 ["Proof", proof ? proofDisplay(proof).line : "Run by Future AGI"],
+                /* Everything it spent — reproducing, the search, a coding agent's attempts. */
+                ["Spent", `${creditsLabel(improvementTotalSpend(record, env?.surface, { attempts: attemptsNow }))}${record.budget ? ` of ${creditsLabel(record.budget)}` : ""}`],
               ]}
             />
             {/* A fix also answers for the issue it was started for. */}
@@ -392,7 +453,7 @@ export default function OptimizationRunView({
                 {...clickable(() => setTab("tradeoffs"))}
                 sx={{ typography: "s2", color: "text.secondary", mt: 0.5, pl: 4, cursor: "pointer", "&:hover": { color: "text.primary" }, ...focusRing }}
               >
-                {`You chose Run ${shipped.n} over the search's pick (Run ${winner.n}): ${winner.score - shipped.score} pts lower on training, cost ${shipped.cost > 0 ? "+" : ""}${shipped.cost}% instead of ${outcome.effect.cost > 0 ? "+" : ""}${outcome.effect.cost}%, about ${shipped.held}% held back. It ships instead — see Trade-offs.`}
+                {`You chose Run ${shipped.n} over the search's pick (Run ${winner.n}): ${winner.score > shipped.score ? `${winner.score - shipped.score} pts lower` : winner.score < shipped.score ? `${shipped.score - winner.score} pts higher` : "the same score"} on the target scenarios, ${shipped.projected ? "a projected " : ""}${shipped.held}% held back. ${verified ? "Verified on the full suite — it ships instead." : "It ships instead once it's verified on the full suite."} See Trade-offs.`}
               </Typography>
             )}
             {/* The coding agent's progress, one click from its attempts. */}
@@ -446,15 +507,24 @@ export default function OptimizationRunView({
                 "& > *": { px: 1.75, py: 1.25, borderLeft: "1px solid", borderColor: "divider", ml: "-1px" },
               }}
             >
+              {/* The numbers of what ships — the search's pick, or the run
+                  someone chose (its held-back figure projected until verified). */}
               <Metric
-                label="Held back" value={result.split?.thin ? "Thin" : `${signedPts(result.heldScore - result.heldBase)}`}
-                tone={result.split?.thin ? undefined : result.heldScore < result.heldBase ? "#DC2626" : result.heldScore > result.heldBase ? "#16A34A" : undefined}
+                label={shipped?.projected ? "Held back · projected" : "Held back"} value={result.split?.thin ? "Thin" : `${signedPts(outcome.heldScore - result.heldBase)}`}
+                tone={result.split?.thin ? undefined : outcome.heldScore < result.heldBase ? "#DC2626" : outcome.heldScore > result.heldBase ? "#16A34A" : undefined}
                 sub={result.split?.thin
                   ? "too few groups reproduced to hold any back"
-                  : `${result.heldBase}% → ${result.heldScore}%${result.noise ? ` · noise ±${result.noise}` : ""}`}
-                hint={`Scenarios the search never saw — ${result.heldMeasured} here${result.split?.kind === "issue" ? `: ${result.split.held} of ${result.split.reproducing} reproducing groups + ${result.split.fresh} fresh` : ""}. This is the number worth quoting; the training score is what the search was allowed to fit to. Noise is what two runs of the same agent differ by; a gain has to clear it.`}
+                  : `${result.heldBase}% → ${outcome.heldScore}%${result.noise ? ` · noise ±${result.noise}` : ""}`}
+                hint={`Scenarios the search never saw — ${result.heldMeasured} here${result.split?.kind === "issue" ? `: ${result.split.held} of ${result.split.reproducing} reproducing groups + ${result.split.fresh} fresh` : ""}. This is the number worth quoting; the target score is what the search was allowed to fit to. Noise is what two runs of the same agent differ by; a gain has to clear it.`}
               />
-              <Metric label="Training" value={signedPts(winner.score - result.base)} sub={`${result.base}% → ${winner.score}%`} />
+              <Metric label="Target" value={signedPts((shipped || winner).score - result.base)} sub={`${result.base}% → ${(shipped || winner).score}%`} hint={`The ${result.trainMeasured} scenarios the search tuned on and saw in full.`} />
+              <Metric
+                label="Overfit gap"
+                value={result.split?.thin || outcome.gap == null ? "—" : `${outcome.gap} pts`}
+                tone={!result.split?.thin && outcome.gap > 12 ? "#DC2626" : undefined}
+                sub="target minus held back"
+                hint="How much more the change gained on the scenarios it was tuned on than on ones it never saw. A large gap means it fitted those scenarios rather than the task."
+              />
               <Metric
                 label="Cost per conversation"
                 value={outcome.costKnown ? signedPct(outcome.effect.cost) : "—"}
@@ -475,7 +545,7 @@ export default function OptimizationRunView({
           {winner && shippable && (
             <WinnerBar
               winner={shipped || winner} files={winnerFiles} blockedBy={blockedBy} onRun={onRunWinner}
-              agent={envState?.agent} agentVersion={record.baseAgentVersion}
+              agent={envState?.agent} agentVersion={record.baseAgentVersion} needsVerify={!verified}
             />
           )}
 
@@ -551,11 +621,11 @@ export default function OptimizationRunView({
               {/* Before it ships: nothing is applied — it goes out as a draft.
                   After: say where it is, never "nothing applied". */}
               <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-                {!lifecycle ? "Hand the winner over" : lifecycle.key === "review" ? "Shipped as a draft" : "Released"}
+                {!lifecycle ? (verified ? "Hand the winner over" : "Verify it before it ships") : lifecycle.key === "review" ? "Shipped as a draft" : "Released"}
               </Typography>
               <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1.5 }}>
                 {lifecycle?.key === "review"
-                  ? lifecycle.label === "Awaiting release"
+                  ? lifecycle.awaitingRelease
                     ? `Landed as ${lifecycle.detail}. Mark it released once it's live — the Error Feed then watches for the issue.`
                     : `${lifecycle.via || "The draft"} is waiting for someone to deploy it. Once it's live, mark it released below — the Error Feed then watches for the issue.`
                   : lifecycle?.key === "watching"
@@ -564,10 +634,21 @@ export default function OptimizationRunView({
                       ? `Released as ${lifecycle.version} — it held through the watch window.`
                       : lifecycle?.key === "reopened"
                         ? `Released, but the issue was ${lifecycle.detail}. Fix again from the issue starts a new fix, linked to this one.`
-                        : ending === "budget"
+                        : !verified
+                          ? `You chose Run ${shipped?.n} over the search's pick. Only a passing verdict can mark a change verified, so it runs on the full suite — held-back and must-pass scenarios included — before it can be handed over.`
+                          : ending === "budget"
                           ? `The best of a partial search — it stopped at the budget after ${record.stoppedAtBudget.trials} of ${record.stoppedAtBudget.of} runs. It passed every check; a bigger budget might find a better change. Nothing has been applied yet — it ships as a draft for someone to approve.`
                           : "Nothing has been applied yet — it ships as a draft for someone to approve."}
               </Typography>
+              {!verified && !lifecycle ? (
+                <Button
+                  size="small" variant="contained" color="primary" onClick={() => onRunWinner?.(null)} disabled={!onRunWinner}
+                  startIcon={<Iconify icon="solar:play-bold" width={14} />}
+                  sx={{ typography: "s2", fontWeight: 700 }}
+                >
+                  {`Verify Run ${shipped?.n}`}
+                </Button>
+              ) : (
               <OmegaHandoff
                 env={env}
                 envState={envState}
@@ -586,6 +667,7 @@ export default function OptimizationRunView({
                 briefTarget={briefTarget}
                 proof={proofMarkdown({ record, outcome, name, agent, members: scope.names, channelNotes: scope.shared || !scope.hasMembers ? channelNotes : [], identity })}
               />
+              )}
             </Box>
           )}
 
@@ -689,6 +771,154 @@ SuggestionBody.propTypes = {
   handoff: PropTypes.object, brief: PropTypes.func, briefTarget: PropTypes.object, agentModel: PropTypes.string, identity: PropTypes.string, frozenOn: PropTypes.string,
 };
 
+/*
+  Stopped at budget before searching: checking the finalists alone would
+  have cost more than the budget, so no change was tried. The way on is a
+  bigger budget — picked here, within the agent's run budget, and the same
+  improvement searches again (Reproduce already ran, so it isn't repeated).
+  Past the agent's run budget, or over the time cap, it's a change on the
+  agent's Constraints tab.
+*/
+function OverBudgetBody({ record, outcome, env, envState, patch, onClose }) {
+  const navigate = useNavigate();
+  const { agents, state } = useConnectedAgents();
+  const key = envAgentKey(envState?.agent, env?.id);
+  const agent = agents.find((a) => a.key === key) || null;
+  const s = record.stoppedAtBudget || {};
+  const plan = record.pendingResult || null;
+  /* The whole search, plus what measuring today already spent. */
+  const needed = plan ? Math.ceil(searchSpend(plan, env?.surface) + (record.spentFirst || 0)) : null;
+  const ceiling = limitsOf(state, key)?.budget?.dollars || record.budget || 0;
+  const timeOk = !(record.minutes > (record.limits?.budget?.minutes || Infinity));
+  const choices = s.by !== "time" && timeOk && needed != null
+    ? budgetsWithin(ceiling).filter((b) => b > (record.budget || 0) && b >= needed)
+    : [];
+  const [pick, setPick] = useState(null);
+  const budget = pick ?? choices[0] ?? null;
+  const openConstraints = agent ? () => { navigate(connectedAgentPath(agent.id, "constraints")); onClose?.(); } : null;
+  const restart = () => patch?.({
+    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id ? {
+      ...o,
+      status: OPT_STATUS.RUNNING,
+      budget,
+      /* Reproduce already ran — the search picks up after it. */
+      startedAt: new Date(Date.now() - reproduceMsOf(o)).toISOString(),
+      result: o.pendingResult,
+      pendingResult: undefined,
+      pendingEnding: undefined,
+      stoppedAtBudget: undefined,
+      completedAt: undefined,
+    } : o)),
+  });
+  const why = s.by === "time"
+    ? `Raise the time cap on the agent's Constraints tab, or improve towards a narrower goal.`
+    : !timeOk
+      ? "A bigger budget isn't enough — the search would also run past the time cap. Raise both on the agent's Constraints tab."
+      : choices.length
+        ? `The whole search needs about ${creditsLabel(needed)}. Pick a bigger budget and the same improvement searches again.`
+        : `The whole search needs about ${creditsLabel(needed || 0)}, more than this agent's run budget of ${creditsLabel(ceiling)}. Raise it on the agent's Constraints tab, or improve towards a narrower goal.`;
+  return (
+    <Box sx={{ flex: 1, overflowY: "auto", px: 2.5, py: 2.5 }}>
+      <Typography sx={{ typography: "s1", fontWeight: 700 }}>{outcome.ending.label}</Typography>
+      <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.5, maxWidth: 640 }}>
+        {`${outcome.headline} Nothing ran past the budget and no change was found. ${why}`}
+      </Typography>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 2 }}>
+        {choices.length > 0 && (
+          <>
+            <Select
+              size="small" value={budget} onChange={(e) => setPick(e.target.value)}
+              inputProps={{ "aria-label": "New budget" }}
+              sx={{ height: 32, width: 160, typography: "s2", "& .MuiSelect-select": { typography: "s2", py: 0.75 } }}
+            >
+              {choices.map((b) => <MenuItem key={b} value={b} sx={{ typography: "s2" }}>{creditsLabel(b)}</MenuItem>)}
+            </Select>
+            <Button
+              size="small" variant="contained" color="primary" onClick={restart} disabled={!patch}
+              startIcon={<Iconify icon="solar:play-bold" width={14} />}
+              sx={{ typography: "s2", fontWeight: 700 }}
+            >
+              Raise the budget and try again
+            </Button>
+          </>
+        )}
+        {openConstraints && (
+          <Button
+            size="small" variant={choices.length ? "text" : "outlined"} onClick={openConstraints}
+            sx={{ typography: "s2", fontWeight: 700, color: choices.length ? "text.secondary" : "text.primary", ...(!choices.length && { borderColor: "divider" }) }}
+          >
+            {s.by === "time" || !timeOk ? "Raise the time cap" : choices.length ? "Change the agent's run budget" : "Raise the agent's run budget"}
+          </Button>
+        )}
+      </Stack>
+    </Box>
+  );
+}
+OverBudgetBody.propTypes = {
+  record: PropTypes.object, outcome: PropTypes.object, env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func, onClose: PropTypes.func,
+};
+
+/*
+  The scenarios a fix built from its issue, edited in place: rename one, or
+  leave it out, then reproduce again on the same improvement.
+*/
+const REPRO_WORD = { reproduced: "Reproduced", inconclusive: "Inconclusive", passed: "Not reproduced" };
+function IssueScenarioEditor({ open, drafts, perScenario, onClose, onReproduce }) {
+  const [edits, setEdits] = useState({});
+  useEffect(() => { if (open) setEdits({}); }, [open]);
+  const set = (id, patchIn) => setEdits((e) => ({ ...e, [id]: { ...e[id], ...patchIn } }));
+  const included = drafts.filter((d) => edits[d.id]?.include !== false).length;
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 1.5, backgroundImage: "none" } }}>
+      <Box sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider" }}>
+        <Typography sx={{ typography: "s1", fontWeight: 700 }}>Edit this fix&apos;s scenarios</Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          Built from the issue&apos;s traces. They stay with this improvement — the environment&apos;s own scenarios don&apos;t change.
+        </Typography>
+      </Box>
+      <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />} sx={{ maxHeight: "56vh", overflowY: "auto" }}>
+        {drafts.map((d) => {
+          const on = edits[d.id]?.include !== false;
+          const state = perScenario?.[d.id]?.state;
+          return (
+            <Stack key={d.id} direction="row" alignItems="center" spacing={1.25} sx={{ px: 2, py: 1 }}>
+              <Checkbox
+                size="small" checked={on} onChange={(e) => set(d.id, { include: e.target.checked })}
+                inputProps={{ "aria-label": `Include ${d.title}` }} sx={{ p: 0.5 }}
+              />
+              <TextField
+                size="small" fullWidth disabled={!on}
+                value={edits[d.id]?.title ?? d.title ?? ""}
+                onChange={(e) => set(d.id, { title: e.target.value })}
+                inputProps={{ "aria-label": "Scenario title" }}
+                sx={{ "& .MuiInputBase-input": { typography: "s2" } }}
+              />
+              <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", width: 104, flexShrink: 0, textAlign: "right" }}>
+                {REPRO_WORD[state] || "—"}
+              </Typography>
+            </Stack>
+          );
+        })}
+      </Stack>
+      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 1.75, borderTop: "1px solid", borderColor: "divider" }}>
+        <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1 }}>
+          {`${included} of ${drafts.length} included · each runs ${REPEATS_WORD} on the agent as it runs today`}
+        </Typography>
+        <Button onClick={onClose} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
+        <Button
+          variant="contained" color="primary" disabled={!included} onClick={() => onReproduce(edits)}
+          startIcon={<Iconify icon="solar:play-bold" width={14} />}
+          sx={{ typography: "s2", fontWeight: 700 }}
+        >
+          Reproduce again
+        </Button>
+      </Stack>
+    </Dialog>
+  );
+}
+IssueScenarioEditor.propTypes = { open: PropTypes.bool, drafts: PropTypes.array, perScenario: PropTypes.object, onClose: PropTypes.func, onReproduce: PropTypes.func };
+const REPEATS_WORD = "three times";
+
 /* Label and value rows under the verdict — the reasons, not a paragraph of them. */
 function Facts({ rows }) {
   const list = rows.filter(Boolean);
@@ -753,7 +983,7 @@ function Growth({ trials, base, theme, winner }) {
   */
   const running = trials.reduce((acc, t, i) => {
     const prev = i === 0 ? base : acc[i - 1];
-    /* A trial that broke a critical scenario or cheated is rejected — it
+    /* A trial that broke a must-pass scenario is rejected — it
        can't raise the best-so-far line, otherwise the peak (and the winner's
        on-chart value) would show a score no shippable candidate reached. */
     acc.push(t.brokeBlocker || t.cheats || compatFailed(t) || staticFailed(t) || t.overLimit ? prev : Math.max(prev, t.score));
@@ -901,11 +1131,13 @@ Growth.propTypes = {
 /**
  * The winner, and the one thing to do with it next.
  *
- * Trials were scored on the training split, so the winner's number is a
- * training number. Before anything is handed over, it runs on the full
- * scenario set — and not at all when the held-out verdict is red.
+ * The search's own pick was already checked on the held-back set and every
+ * must-pass scenario, so a full-suite run is optional — a run to keep in
+ * the environment's history, not a gate. A run someone chose over it hasn't
+ * been checked, so verifying it is the one thing to do. Neither runs when
+ * the held-out verdict is red.
  */
-function WinnerBar({ winner, files, blockedBy, onRun, agent, agentVersion }) {
+function WinnerBar({ winner, files, blockedBy, onRun, agent, agentVersion, needsVerify = false }) {
   const fileCount = new Set(files).size;
   /* A code agent's winner can also run from a snapshot: the commit the
      change was pushed as, or an uploaded archive of it. */
@@ -923,19 +1155,19 @@ function WinnerBar({ winner, files, blockedBy, onRun, agent, agentVersion }) {
             {`Run ${winner.n} wins · ${files.length} ${files.length === 1 ? "change" : "changes"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}`}
           </Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            Run it on the full suite before handing it over.
+            {needsVerify ? "Chosen over the search's pick — verify it on the full suite before it can ship." : "Verified on the held-back and must-pass scenarios. A full-suite run is optional."}
           </Typography>
         </Box>
         <Tooltip arrow title={blockedBy ? `Blocked — ${blockedBy}` : ""}>
           <Box component="span">
             <Button
-              variant="contained" color="primary" size="small"
+              variant={needsVerify ? "contained" : "outlined"} color={needsVerify ? "primary" : "inherit"} size="small"
               disabled={!!blockedBy}
               onClick={() => onRun?.(snapshot?.param || null)}
               startIcon={<Iconify icon="solar:play-bold" width={14} />}
-              sx={{ typography: "s2", fontWeight: 700 }}
+              sx={{ typography: "s2", fontWeight: 700, ...(!needsVerify && { color: "text.primary", borderColor: "divider" }) }}
             >
-              Run winner on full suite
+              {needsVerify ? "Verify it" : "Run on full suite"}
             </Button>
           </Box>
         </Tooltip>
@@ -950,7 +1182,7 @@ function WinnerBar({ winner, files, blockedBy, onRun, agent, agentVersion }) {
 
 WinnerBar.propTypes = {
   winner: PropTypes.object, files: PropTypes.array, blockedBy: PropTypes.string, onRun: PropTypes.func,
-  agent: PropTypes.object, agentVersion: PropTypes.string,
+  agent: PropTypes.object, agentVersion: PropTypes.string, needsVerify: PropTypes.bool,
 };
 
 const signedPts = (n) => `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n)} pts`;
@@ -966,48 +1198,48 @@ function ImprovementSteps({ record, fromRun, running, phase, diag, outcome, onOp
   const r = record.reproduce || {};
   const ending = outcome.ending.key;
   const notReproduced = ending === "not-reproduced";
-  const stopped = notReproduced || ending === "failed" || ending === "nothing";
+  /* Stopped before searching: not reproduced, failed, nothing to improve, or over the budget. */
+  const beforeSearch = !!outcome.beforeSearch;
+  const stopped = notReproduced || ending === "failed" || ending === "nothing" || beforeSearch;
   const finalIcon = { ready: "solar:check-circle-linear", budget: "solar:pause-circle-linear", "no-fix": "solar:close-circle-linear", failed: "solar:close-circle-linear", suggestion: "solar:lightbulb-linear", nothing: "solar:check-circle-linear" }[ending];
   /* While it runs, each step reads done, now or to do from the phase the
      trace has reached. */
-  const ORDER = ["reproducing", "diagnosing", "searching", "verifying"];
+  const ORDER = ["reproducing", "searching", "verifying"];
   const live = (stepPhase, fallback) => {
     if (!running || !phase) return fallback;
     const a = ORDER.indexOf(stepPhase);
-    const b = ORDER.indexOf(phase.key);
+    const b = ORDER.indexOf(phase.key === "diagnosing" ? "searching" : phase.key);
     return a < b ? "done" : a === b ? "now" : "todo";
   };
-  /* Re-read at the start, so the baseline matches production. */
-  const reread = record.reread
-    ? { label: "Synced", sub: record.reread.changed ? `changed outside Future AGI → ${record.reread.version || "new version"}` : "no outside change", state: "done" }
-    : null;
-  const reproduced = r.total
-    ? { label: r.overridden && !r.reproduced ? "Reproduce" : `Reproduced on ${r.reproduced || 0} of ${r.total} scenarios`, sub: [r.overridden && !r.reproduced ? "continued anyway" : null, r.inconclusive ? `${r.inconclusive} inconclusive` : null].filter(Boolean).join(" · ") || null }
-    : { label: "Reproduce", sub: null };
-  /* Newer records: the baseline run twice, and the Diagnose step. */
+  /* The PRD's stages — Reproduce, Search, Verify, Ready for review. The
+     engine's own steps (re-reading the agent, the baseline twice, the
+     diagnosis) are what each stage did, on hover — not stages of their own. */
   const cal = record.calibration || record.result?.calibration || null;
-  const calibrated = cal
-    ? { label: "Baseline twice", sub: `${cal.disagreed} of ${cal.scenarios} disagreed`, state: stopped && !running ? "done" : live("reproducing", "done") }
-    : null;
-  const diagnose = record.frozen?.diagnoseStep && !stopped
-    ? { label: "Diagnose", sub: diag?.surface ? `smallest surface: ${diag.surface.label}` : null, state: live("diagnosing", "done") }
-    : null;
+  const reproduceSub = [
+    record.reread ? (record.reread.changed ? `changed outside Future AGI → ${record.reread.version || "new version"}` : "agent unchanged since the last run") : null,
+    r.overridden && !r.reproduced ? "continued anyway" : null,
+    r.inconclusive ? `${r.inconclusive} inconclusive` : null,
+    cal ? `measured twice for noise · ${cal.disagreed} of ${cal.scenarios} disagreed` : null,
+  ].filter(Boolean).join(" · ") || null;
+  /* The count is said once Reproduce has run — never while it's running. */
+  const reproducing = running && (!phase || phase.key === "reproducing");
+  const reproduced = feed && r.total
+    ? { label: (r.overridden && !r.reproduced) || reproducing ? "Reproduce" : `Reproduced on ${r.reproduced || 0} of ${r.total} scenarios`, sub: reproducing ? null : reproduceSub }
+    : { label: "Reproduce", sub: [fromRun ? `from Run ${fromRun.ordinal || ""}`.trim() : null, reproduceSub].filter(Boolean).join(" · ") || null };
+  const searchSub = [
+    diag?.surface ? `started from the smallest change that fits: ${diag.surface.label}` : null,
+    record.stoppedAtBudget ? `${record.stoppedAtBudget.trials} of ${record.stoppedAtBudget.of} runs` : null,
+  ].filter(Boolean).join(" · ") || null;
   const suggestion = ending === "suggestion" || (running && record.fixDepth === "suggestion");
   const steps = suggestion ? [
-    ...(reread ? [reread] : []),
     { ...reproduced, state: running ? live("reproducing", "now") : "done" },
-    { label: "Diagnose", state: running ? live("diagnosing", "todo") : "done" },
+    { label: "Search", sub: "no change tried — this agent can only be called", state: running ? live("searching", "todo") : "done" },
     { label: "Suggestion only", sub: running ? null : "no change tried", state: running ? "todo" : "done", icon: finalIcon },
   ] : [
-    ...(reread ? [reread] : []),
-    feed
-      ? { ...reproduced, state: notReproduced ? "fail" : "done" }
-      : calibrated ? null : { label: "Baseline", sub: fromRun ? `Run ${fromRun.ordinal || ""}`.trim() : null, state: "done" },
-    ...(calibrated ? [calibrated] : []),
-    ...(diagnose ? [diagnose] : []),
-    { label: "Search", sub: record.stoppedAtBudget ? `${record.stoppedAtBudget.trials} of ${record.stoppedAtBudget.of} runs` : null, state: stopped ? "todo" : running ? live("searching", "now") : "done" },
-    { label: "Verify", sub: !stopped && !running ? `${record.result?.finalists?.length || 1} ${record.result?.finalists?.length === 1 ? "finalist" : "finalists"} held back + limits` : null, state: stopped || running ? (running ? live("verifying", "todo") : "todo") : "done" },
-    { label: running || (stopped && ending !== "nothing") ? "Ready for review" : outcome.ending.label, state: running || (stopped && ending !== "nothing") ? "todo" : ending === "ready" || ending === "nothing" ? "done" : ending === "budget" ? "partial" : "fail", icon: finalIcon },
+    { ...reproduced, state: notReproduced ? "fail" : running ? live("reproducing", "done") : "done" },
+    { label: "Search", sub: searchSub, state: stopped ? "todo" : running ? live("searching", "now") : "done" },
+    { label: "Verify", sub: !stopped && !running ? `${record.result?.finalists?.length || 1} ${record.result?.finalists?.length === 1 ? "finalist" : "finalists"} on held-back${record.result?.mustPassMeasured != null ? " and must-pass" : ""} + limits` : null, state: stopped || running ? (running ? live("verifying", "todo") : "todo") : "done" },
+    { label: running || (stopped && ending !== "nothing" && !beforeSearch) ? "Ready for review" : outcome.ending.label, state: running || (stopped && ending !== "nothing" && !beforeSearch) ? "todo" : ending === "ready" || ending === "nothing" ? "done" : ending === "budget" ? "partial" : "fail", icon: finalIcon },
     /* After review: where the shipped change is now. */
     ...(shipped ? [{ label: shipped.label, sub: shipped.detail || null, state: shipped.key === "reopened" ? "fail" : "done" }] : []),
   ].filter(Boolean);
@@ -1026,7 +1258,7 @@ function ImprovementSteps({ record, fromRun, running, phase, diag, outcome, onOp
             </>
           ) : (
             <>
-              {record.trigger?.kind === "goal" ? "Goal" : record.trigger?.kind === "schedule" ? `Scheduled · ${record.trigger.cadence === "new-issue" ? "new issue" : "weekly"}` : record.trigger?.source === "run-insights" ? `From run insights · ${record.trigger.issueTitle || record.trigger.issueId}` : "From Debug failures"}
+              {record.trigger?.kind === "goal" ? "Goal" : record.trigger?.kind === "schedule" ? "Scheduled · weekly" : record.trigger?.kind === "manual" ? `Started by ${record.trigger.by || "you"}` : record.trigger?.source === "run-insights" ? `From run insights · ${record.trigger.issueTitle || record.trigger.issueId}` : "From Debug failures"}
               {/* The run it started from — a link to it, not a page behind it. */}
               {fromRun && (
                 <>
@@ -1080,9 +1312,12 @@ ImprovementSteps.propTypes = {
 
 /* The constraints in force while the search runs — a candidate that breaks one is dropped. */
 function RunningConstraints({ record, model }) {
+  /* Must-pass across every environment it checks: this one's set, plus each other's. */
+  const mustPass = (record.result?.mustPass?.total ?? record.frozen?.mustPass ?? 0)
+    + (record.result?.otherEnvs || []).reduce((n, e) => n + (e.mustPass || 0), 0);
   const rows = [
-    ...limitRows(record.limits || DEFAULT_LIMITS, model),
-    ...(record.budget ? [{ id: "spend", label: "This improvement", value: creditsLabel(record.budget) }] : []),
+    ...limitRows(record.limits || DEFAULT_LIMITS, model, { mustPass }).filter((c) => !(record.budget && c.id === "budget")),
+    ...(record.budget ? [{ id: "spend", label: "Run budget", value: creditsLabel(record.budget) }] : []),
   ];
   return (
     <Stack direction="row" alignItems="baseline" flexWrap="wrap" columnGap={2} rowGap={0.5} sx={{ px: 2.5, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}>
@@ -1154,14 +1389,14 @@ function TrialList({ trials, winner, openTrial, setOpenTrial, onOpenRun, record 
               <Typography sx={{ typography: "s3", width: 40, flexShrink: 0, fontVariantNumeric: "tabular-nums", color: unfit ? "text.disabled" : t.delta > 0 ? "#16A34A" : t.delta < 0 ? "#DC2626" : "text.disabled" }}>
                 {unfit ? "not run" : t.delta > 0 ? `+${t.delta}` : t.delta}
               </Typography>
-              <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>{t.tried}</Typography>
+              <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 0 }} noWrap>{triedLabelOf(t, trials)}</Typography>
               {/* Where verification stopped it — the first tier it failed. */}
               {!win && stoppedAt(record, t) && (
                 <Typography sx={{ typography: "s3", color: "text.disabled", flexShrink: 0 }}>{`stopped at ${stoppedAt(record, t)}`}</Typography>
               )}
               {rejectedFor(t) && (
                 <Tooltip arrow title={`Rejected — ${rejectedFor(t)}`}>
-                  <Chip size="small" label={t.cheats ? "cheat" : t.brokeBlocker ? "must-pass" : stat ? "static check" : unfit ? "doesn't fit" : t.overLimit ? "over limit" : "tests"} sx={{ height: 18, borderRadius: 0.5, flexShrink: 0, color: "#DC2626", border: "1px solid", borderColor: alpha("#DC2626", 0.4), bgcolor: "transparent", "& .MuiChip-label": { px: 0.625, typography: "s3", fontWeight: 700 } }} />
+                  <Chip size="small" label={t.brokeBlocker ? "must-pass" : stat ? "static check" : unfit ? "doesn't fit" : t.overLimit ? "over limit" : "tests"} sx={{ height: 18, borderRadius: 0.5, flexShrink: 0, color: "#DC2626", border: "1px solid", borderColor: alpha("#DC2626", 0.4), bgcolor: "transparent", "& .MuiChip-label": { px: 0.625, typography: "s3", fontWeight: 700 } }} />
                 </Tooltip>
               )}
               {!win && finalists.has(t.n) && (
@@ -1228,120 +1463,6 @@ const surfaceWord = (trial, result) => {
   return SURFACE_WORD[deepest] || deepest;
 };
 
-/* What the winner changes — each file, why, and the lines. */
-function WinnerChanges({ env, winner, members, record }) {
-  const proposals = winner?.proposals || [];
-  if (!proposals.length) {
-    return <Typography sx={{ px: 2, py: 2.5, typography: "s2", color: "text.subtitle" }}>No change to show — no run qualified.</Typography>;
-  }
-  return (
-    <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-      {/* A code or structural change says its plan before its diff. */}
-      <CodePlan env={env} record={record} proposals={proposals} />
-      {proposals.map((p) => (
-        <Box key={p.id} sx={{ px: 2, py: 1.5 }}>
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
-            <Typography sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", color: "text.secondary" }}>{changeFileFor(env, p)?.path || p.kind}</Typography>
-            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{`· ${p.kind}`}</Typography>
-            {members?.[p.id] && (
-              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                {members[p.id].member ? `· changes ${members[p.id].member.name}` : "· shared by every member"}
-              </Typography>
-            )}
-          </Stack>
-          <Typography sx={{ typography: "s2", fontWeight: 700 }}>{p.title}</Typography>
-          {p.why && <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>{`Why: ${p.why}`}</Typography>}
-          {/* A settings change is a typed edit within the platform's allowed values. */}
-          {p.setting && (
-            <Typography sx={{ typography: "s3", color: p.setting.inRange ? "text.subtitle" : "#DC2626", mt: 0.25 }}>
-              {`${p.setting.label}: ${p.setting.value} · allowed ${p.setting.range}${p.setting.inRange ? "" : " — out of range, rejected at Static checks"}`}
-            </Typography>
-          )}
-          {!!p.diff?.length && (
-            <Stack spacing={0.25} sx={{ mt: 1 }}>
-              {p.diff.map((d, i) => (
-                <Stack
-                  key={`${d.type}-${i}`} direction="row" spacing={1}
-                  sx={{ px: 1.25, py: 0.5, borderRadius: 0.5, bgcolor: (th) => (d.type === "add" ? alpha("#16A34A", th.palette.mode === "dark" ? 0.1 : 0.05) : d.type === "remove" ? alpha("#DC2626", th.palette.mode === "dark" ? 0.1 : 0.05) : "transparent") }}
-                >
-                  <Typography sx={{ typography: "s2", fontWeight: 700, width: 10, flexShrink: 0, color: d.type === "add" ? "#16A34A" : d.type === "remove" ? "#DC2626" : "text.disabled" }}>
-                    {d.type === "add" ? "+" : d.type === "remove" ? "−" : " "}
-                  </Typography>
-                  <Typography sx={{ typography: "s2", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "pre-wrap", textDecoration: d.type === "remove" ? "line-through" : "none", color: d.type === "remove" ? "text.secondary" : "text.primary" }}>
-                    {d.text}
-                  </Typography>
-                </Stack>
-              ))}
-            </Stack>
-          )}
-        </Box>
-      ))}
-    </Stack>
-  );
-}
-WinnerChanges.propTypes = { env: PropTypes.object, winner: PropTypes.object, members: PropTypes.object, record: PropTypes.object };
-
-const OUTCOME = { fixed: "Fixed", broke: "Broke", "still-failing": "Still failing", flaky: "Flaky", inconclusive: "Inconclusive", same: "Unchanged" };
-const OUTCOME_ORDER = ["fixed", "broke", "still-failing", "flaky", "inconclusive", "same"];
-
-/*
-  What the winner did to each scenario — fixed, broke, still failing,
-  unchanged — on the held-back set it never saw and the training split it
-  was tuned on. Every trial against every scenario is one click further.
-*/
-function ScenarioOutcomes({ result, winner }) {
-  const [only, setOnly] = useState(null);
-  const [grid, setGrid] = useState(false);
-  const rows = [
-    ...(result.heldTasks || []).map((t) => ({ ...t, split: "Held back", outcome: result.heldPerScenario?.[t.id] || "same" })),
-    ...(result.trainMeasuredTasks || []).map((t) => ({ ...t, split: "Training", outcome: winner?.perScenario?.[t.id] || "same" })),
-  ];
-  const counts = Object.fromEntries(OUTCOME_ORDER.map((k) => [k, rows.filter((x) => x.outcome === k).length]));
-  const shown = rows
-    .filter((x) => !only || x.outcome === only)
-    .sort((a, b) => OUTCOME_ORDER.indexOf(a.outcome) - OUTCOME_ORDER.indexOf(b.outcome));
-  return (
-    <Box>
-      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 2, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }} flexWrap="wrap" rowGap={0.75}>
-        {OUTCOME_ORDER.map((k) => (
-          <Chip
-            key={k} size="small" clickable onClick={() => setOnly(only === k ? null : k)}
-            label={`${OUTCOME[k]} ${counts[k]}`}
-            sx={{ height: 24, borderRadius: 0.75, border: "1px solid", color: "text.primary", borderColor: only === k ? "text.primary" : "divider", bgcolor: only === k ? "action.selected" : "transparent", "& .MuiChip-label": { px: 1, typography: "s3", fontWeight: 600 } }}
-          />
-        ))}
-        <Box flex={1} />
-        <Button size="small" onClick={() => setGrid((g) => !g)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>
-          {grid ? "Hide every run" : "Every run"}
-        </Button>
-      </Stack>
-      {grid ? (
-        <TrialHeatmap trials={result.trials} scenarios={result.trainMeasuredTasks || []} winner={winner} />
-      ) : (
-        <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />} sx={{ maxHeight: 420, overflowY: "auto" }}>
-          {shown.map((x) => (
-            <Stack key={`${x.split}-${x.id}`} direction="row" alignItems="center" spacing={1.5} sx={{ px: 2, py: 0.875 }}>
-              <Typography noWrap sx={{ typography: "s2", flex: 1, minWidth: 0 }}>{x.title}</Typography>
-              {x.fromIssue && (
-                <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
-                  {`${x.fromIssue}${x.before === "flaky" ? " · inconclusive" : x.before === "passed" ? " · didn't reproduce" : ""}`}
-                </Typography>
-              )}
-              {x.fresh && <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>fresh variation</Typography>}
-              {x.critical && <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>must-pass</Typography>}
-              <Typography sx={{ typography: "s3", color: "text.subtitle", width: 70, flexShrink: 0 }}>{x.split}</Typography>
-              <Typography sx={{ typography: "s3", fontWeight: 600, width: 84, flexShrink: 0, color: x.outcome === "fixed" ? "#16A34A" : x.outcome === "broke" ? "#DC2626" : "text.secondary" }}>
-                {OUTCOME[x.outcome]}
-              </Typography>
-            </Stack>
-          ))}
-        </Stack>
-      )}
-    </Box>
-  );
-}
-ScenarioOutcomes.propTypes = { result: PropTypes.object, winner: PropTypes.object };
-
 /* Which optimizer and model searched, and the full trace — kept out of the way. */
 function SearchDetails({ record, result, model }) {
   const [open, setOpen] = useState(false);
@@ -1357,12 +1478,12 @@ function SearchDetails({ record, result, model }) {
       {open && (
         <Box sx={{ mt: 0.5 }}>
           <Typography sx={{ typography: "s3", color: "text.subtitle", px: 0.5 }}>
-            {`${methodLabelOf(result.optimizer?.id)} (${result.optimizer?.label}) · changes written by ${model?.label || record.model}, judged by ${judgeFor(record.model)} — a different model family, so no model grades its own work · ${result.trials.length}${result.planned && result.planned !== result.trials.length ? ` of ${result.planned}` : ""} runs · ${result.trainMeasured} training / ${result.heldMeasured} held-back scenarios${result.goal ? ` · targets: scenarios short of ${goalWords(result.goal)}` : ""}`}
+            {`${methodLabelOf(result.optimizer?.id)} search (${result.optimizer?.label}) · changes written by ${model?.label || record.model}, judged by ${judgeFor(record.model)} — a different model family, so no model grades its own work · ${result.trials.length}${result.planned && result.planned !== result.trials.length ? ` of ${result.planned}` : ""} runs · ${result.trainMeasured} target / ${result.heldMeasured} held-back${result.mustPassMeasured != null ? ` / ${result.mustPassMeasured} must-pass` : ""} scenarios${result.goal ? ` · targets: scenarios short of ${goalWords(result.goal)}` : ""}`}
           </Typography>
           {/* GEPA keeps the best candidate for each scenario, not one overall best. */}
           {result.optimizer?.id === "gepa" && <ParetoPool result={result} />}
           <Box sx={{ mx: -1 }}>
-            <RunTraceLog label={`Searched by ${result.optimizer?.label} · ${result.trials.length} runs`} steps={searchTrace(result)} />
+            <RunTraceLog label={`Searched by ${methodLabelOf(result.optimizer?.id).toLowerCase()} search (${result.optimizer?.label}) · ${result.trials.length} runs`} steps={searchTrace(result)} />
           </Box>
         </Box>
       )}

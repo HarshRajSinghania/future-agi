@@ -33,6 +33,9 @@ export const TIERS = {
 };
 
 const sha = (s) => hashSeed(s).toString(16).padStart(8, "0").slice(0, 7);
+const clampPct = (n) => Math.max(0, Math.min(100, Math.round(n)));
+/* A visible scenario today's agent already passes (older records). */
+const wasPassing = (t) => t.before === "passed" || !t.fromIssue;
 
 /* What each attempt tried, and why the verdict went the way it did. */
 const SCRIPT = [
@@ -77,6 +80,20 @@ const SCRIPT_V2 = [
   SCRIPT[1],
   SCRIPT[2],
 ];
+/*
+  Where an attempt ran — only a tier this agent actually has (candidateRoute's
+  `tier`): an endpoint or assistant we don't control is Deployed by you; a
+  cloud agent pushes commits we run; an agent connected through our SDK runs
+  on your machine; code in a repository is a pushed commit we run. Without a
+  known tier, the script's own order stands: local SDK first, then a commit.
+*/
+const whereOf = (session, agent, step, tier) => {
+  if (session.where === "deployed" || tier === "deployed") return "deployed";
+  if (agent.cloud) return "future-agi";
+  if (tier === "local" || tier === "future-agi") return tier;
+  return step.where;
+};
+
 /* The files an attempt's diff touches; the gate rejects any under scenarios/ or evals/. */
 const JUDGE_PATH = /(^|\/)(scenarios|evals)\//;
 export const gateOf = (files = []) => {
@@ -89,16 +106,19 @@ export const gateOf = (files = []) => {
  * The attempts a session has submitted so far — the ones whose time has come.
  * Stops at the first accepted one, or at the attempt budget.
  */
-export const attemptsOf = (record, session, { now = Date.now(), surface, budgetLeft = Infinity } = {}) => {
+export const attemptsOf = (record, session, { now = Date.now(), surface, budgetLeft = Infinity, tier } = {}) => {
   const r = record?.result;
   if (!session || !r) return [];
-  if (record.frozen?.staticCheck) return attemptsV2(record, session, { now, surface, budgetLeft });
+  if (record.frozen?.staticCheck) return attemptsV2(record, session, { now, surface, budgetLeft, tier });
   const started = Date.parse(session.startedAt);
   const agent = codingAgentById(session.agentId) || { label: "Your coding agent" };
   const visible = (r.trainMeasuredTasks || []).filter((t) => !t.critical);
   const mustPass = [...(r.trainMeasuredTasks || []), ...(r.heldTasks || [])].filter((t) => t.critical);
   const per = PER_CONVERSATION[surface === "voice" ? "voice" : "chat"];
-  const ceiling = record.limits?.costCeiling ?? 5;
+  const ceiling = record.limits?.costCeiling ?? 0;
+  const costLabel = ceiling <= 0 ? "Cost per conversation · no increase" : `Cost per conversation within +${ceiling}%`;
+  /* Today's agent on the visible scenarios — what every attempt's change is measured from. */
+  const before = visible.length ? clampPct((100 * visible.filter(wasPassing).length) / visible.length) : 0;
 
   const out = [];
   let spent = 0;
@@ -109,7 +129,7 @@ export const attemptsOf = (record, session, { now = Date.now(), surface, budgetL
     const key = `${record.id}:attempt:${n}`;
     /* Which visible scenarios this candidate moved. */
     const perScenario = Object.fromEntries(visible.map((t) => {
-      const was = t.before === "passed" || !t.fromIssue;
+      const was = wasPassing(t);
       const h = hashSeed(`${key}:${t.id}`) % 100;
       const fixed = !step.reject ? h < 70 : h < 40;
       return [t.id, fixed && !was ? "fixed" : was && h > 96 ? "broke" : fixed ? "fixed" : "same"];
@@ -124,8 +144,8 @@ export const attemptsOf = (record, session, { now = Date.now(), surface, budgetL
     const checks = [
       { id: "model", label: "Model unchanged", pass: true },
       costKnown
-        ? { id: "cost", label: `Cost per conversation within +${ceiling}%`, actual: `+${cost}%`, pass: cost <= ceiling }
-        : { id: "cost", label: `Cost per conversation within +${ceiling}%`, actual: "unverified — no cost data", pass: null },
+        ? { id: "cost", label: costLabel, actual: `+${cost}%`, pass: cost <= ceiling }
+        : { id: "cost", label: costLabel, actual: "unverified — no cost data", pass: null },
       { id: "latency", label: `Latency within +${latencyCeiling}%`, actual: `+${latency}%`, pass: latency <= latencyCeiling },
       { id: "protected", label: "Protected parts untouched", pass: true },
       { id: "judges", label: "No scenario or evaluation edited", pass: true },
@@ -138,6 +158,12 @@ export const attemptsOf = (record, session, { now = Date.now(), surface, budgetL
       break;
     }
     spent += spend;
+    /* Scored the same way as the newer sessions and our own trials: the pass
+       rate on the visible scenarios, its change against today's agent, and
+       the held-back figure Future AGI scored and never sent. */
+    const passingAfter = visible.filter((t) => perScenario[t.id] === "fixed" || (wasPassing(t) && perScenario[t.id] !== "broke")).length;
+    const score = visible.length ? clampPct((100 * passingAfter) / visible.length) : 0;
+    const hh = hashSeed(`${key}:held`);
     out.push({
       n,
       id: `${record.id}-a${n}`,
@@ -147,9 +173,9 @@ export const attemptsOf = (record, session, { now = Date.now(), surface, budgetL
       title: step.title,
       /* An endpoint or assistant we don't control is always "deployed by
          you"; otherwise local SDK runs first, then a pushed commit. */
-      where: session.where === "deployed" ? "deployed" : agent.cloud ? "future-agi" : step.where,
+      where: whereOf(session, agent, step, tier),
       commit: sha(key),
-      fingerprint: step.dirty ? sha(`${key}:dirty`) : null,
+      fingerprint: step.dirty && whereOf(session, agent, step, tier) === "local" ? sha(`${key}:dirty`) : null,
       perScenario,
       visible: visible.map((t) => ({ id: t.id, title: t.title, outcome: perScenario[t.id] })),
       mustPass: { total: mustPass.length, failed: mustFailed },
@@ -158,6 +184,10 @@ export const attemptsOf = (record, session, { now = Date.now(), surface, budgetL
       why: step.reject === "cost" && !costKnown
         ? "Response time rose past the ceiling — the second model call adds a round trip on every turn."
         : step.why,
+      score,
+      before,
+      delta: score - before,
+      held: clampPct((r.heldBase || 0) + (step.reject ? (hh % 7) - 3 : 8 + (hh % 10))),
       spend,
     });
     if (!step.reject) break;
@@ -168,17 +198,17 @@ export const attemptsOf = (record, session, { now = Date.now(), surface, budgetL
 /*
   The newer session: must-pass is the engine's own three-part set (marked,
   regression memory, passing every repeat today); the visible scenarios are
-  the rest of training. Each attempt carries a score on the visible set, its
+  the target scenarios. Each attempt carries a score on the visible set, its
   change against today, and the held-back figure Future AGI scored and never
   sent. An attempt that edits a judge is rejected at the gate.
 */
-const clampPct = (n) => Math.max(0, Math.min(100, Math.round(n)));
-const attemptsV2 = (record, session, { now, surface, budgetLeft }) => {
+const attemptsV2 = (record, session, { now, surface, budgetLeft, tier }) => {
   const r = record.result;
   const started = Date.parse(session.startedAt);
   const agent = codingAgentById(session.agentId) || { label: "Your coding agent" };
   const mustIds = new Set(r.mustPassIds || []);
-  const all = [...(r.trainMeasuredTasks || []), ...(r.heldTasks || [])];
+  /* Newer records keep the must-pass set apart from the targets. */
+  const all = [...(r.trainMeasuredTasks || []), ...(r.heldTasks || []), ...(r.mustPassTasks || [])];
   const mustPass = all.filter((t) => mustIds.has(t.id) || t.critical || t.remembered);
   const isMust = new Set(mustPass.map((t) => t.id));
   const visible = (r.trainMeasuredTasks || []).filter((t) => !isMust.has(t.id));
@@ -205,9 +235,9 @@ const attemptsV2 = (record, session, { now, surface, budgetLeft }) => {
       label: `${agent.label} · attempt ${n}`,
       at: new Date(at).toISOString(),
       title: step.title,
-      where: session.where === "deployed" ? "deployed" : agent.cloud ? "future-agi" : step.where,
+      where: whereOf(session, agent, step, tier),
       commit: sha(key),
-      fingerprint: step.dirty ? sha(`${key}:dirty`) : null,
+      fingerprint: step.dirty && whereOf(session, agent, step, tier) === "local" ? sha(`${key}:dirty`) : null,
       files,
     };
     if (gate) {
@@ -266,6 +296,7 @@ const attemptsV2 = (record, session, { now, surface, budgetLeft }) => {
         ? "Response time rose past the ceiling — the second model call adds a round trip on every turn."
         : step.why,
       score,
+      before,
       delta: score - before,
       /* Scored by Future AGI on the held-back set, never sent to the agent. */
       held: clampPct((r.heldBase || 0) + (step.reject ? (hh % 7) - 3 : 8 + (hh % 10))),

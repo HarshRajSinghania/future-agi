@@ -111,7 +111,7 @@ const initialParamsFor = (shape) => Object.fromEntries(shape.params.map((p) => [
  */
 export default function TwinEvalEditor({ open, envState, onClose, onSave }) {
   const services = envState?.twinBacking?.services || [];
-  const [name, setName] = useState("Clone end-state check");
+  const [name, setName] = useState("Sandbox end-state check");
   const [combinator, setCombinator] = useState("all");
   const [assertions, setAssertions] = useState(() => [seedAssertion(services)]);
 
@@ -153,7 +153,7 @@ export default function TwinEvalEditor({ open, envState, onClose, onSave }) {
   };
 
   const reset = () => {
-    setName("Clone end-state check");
+    setName("Sandbox end-state check");
     setCombinator("all");
     setAssertions([seedAssertion(services)]);
   };

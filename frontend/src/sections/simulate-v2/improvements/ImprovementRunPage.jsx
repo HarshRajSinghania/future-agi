@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { Box, Button, Typography } from "@mui/material";
@@ -8,7 +8,7 @@ import { useEnvState, useSimStore } from "../store";
 import OptimizationRunView from "../run/fixmyagent/OptimizationRunView";
 import { shippedCandidate } from "../run/fixmyagent/tradeoffs";
 import { improvementRunName } from "../_mock/optimizer";
-import { OPT_STATUS } from "../_mock/optimizationRuns";
+import { OPT_STATUS, improvementProgressOf, settlePending } from "../_mock/optimizationRuns";
 import { baseRunOf } from "../_mock/improvementStart";
 import { nextAgentVersion, currentEnvVersion } from "../_mock/versions";
 import { protoRunId } from "../_mock/executionAdapter";
@@ -30,6 +30,10 @@ import ImprovementDecision from "./ImprovementDecision";
  *
  * Opened from an Error Feed issue (Fix, View fix, the status chip), its back
  * goes to that issue — the fix is part of working the issue.
+ *
+ * While it runs it's the same runs page, filling in: the stage it's in, and
+ * each run in the table as it finishes. One clock (improvementProgressOf)
+ * drives the stage, the runs and the end, so a reload picks up where it was.
  */
 export default function ImprovementRunPage() {
   const { envId, optId } = useParams();
@@ -57,6 +61,26 @@ export default function ImprovementRunPage() {
   const here = typeof window !== "undefined" ? window.location.pathname : null;
   const close = () => { if (typeof window === "undefined" || window.location.pathname === here) back(); };
 
+  const isRunning = record?.status === OPT_STATUS.RUNNING;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isRunning) return undefined;
+    const t = setInterval(() => setNow(Date.now()), 400);
+    return () => clearInterval(t);
+  }, [isRunning]);
+  const progress = isRunning ? improvementProgressOf(record, now) : null;
+  const finished = !!progress?.done;
+  /* The last step has played: it has finished, whoever has it open. An
+     ending decided before searching settles to that ending once Reproduce
+     has played. */
+  const endOf = (o) => (o.pendingEnding ? settlePending(o) : { ...o, status: OPT_STATUS.COMPLETED, completedAt: new Date().toISOString() });
+  useEffect(() => {
+    if (!finished) return;
+    patch({
+      optimizations: (envState?.optimizations || []).map((o) => (o.id === optId && o.status === OPT_STATUS.RUNNING ? endOf(o) : o)),
+    });
+  }, [finished]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!env || !record) {
     return (
       <Box sx={{ p: 4, textAlign: "center" }}>
@@ -81,9 +105,11 @@ export default function ImprovementRunPage() {
      held-back projection beside it. */
   const land = (info = {}) => {
     const changes = shippedCandidate(record)?.proposals || record.result?.winner?.proposals || [];
+    /* A draft until it's released (see FixMyAgentDrawer). */
     const version = info.version || {
       ...nextAgentVersion(envState, { note: info.note, applied: changes, fromRunId: record.fromRunId || null, basedOnVersion: provenance.basedOnVersion }),
       origin: info.origin,
+      status: "draft",
     };
     if (!info.version) addAgentVersion?.(version);
     patch({
@@ -101,18 +127,25 @@ export default function ImprovementRunPage() {
       handoffLandings: { ...(envState?.handoffLandings || {}), [record.id]: version.label },
     });
   };
-  const newRun = () => navigate(paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36))));
+  /* The landed version by name — landing doesn't change what the environment tests. */
+  const newRun = (agent = null) => {
+    const url = paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)));
+    const v = agent || landed || record.baseAgentVersion;
+    navigate(v ? `${url}?agent=${encodeURIComponent(v)}` : url);
+  };
   const runWinner = (candidate = null) => {
     const id = protoRunId(env.id, Date.now().toString(36));
     /* Which run it verified — a winner someone chose is checked before review. */
     patch({ optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id ? { ...o, verifyRunIds: [...(o.verifyRunIds || []), id], verifiedTrial: o.preferredTrial || o.result?.winner?.n } : o)) });
+    /* The winner on the version the search started from, named. */
     const url = paths.dashboard.simulate.simulationRun(env.id, id);
-    navigate(candidate ? `${url}?candidate=${encodeURIComponent(candidate)}` : url);
+    const q = new URLSearchParams();
+    if (record.baseAgentVersion) q.set("agent", record.baseAgentVersion);
+    if (candidate) q.set("candidate", candidate);
+    navigate(q.toString() ? `${url}?${q.toString()}` : url);
   };
   const finish = () => patch({
-    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id && o.status === OPT_STATUS.RUNNING
-      ? { ...o, status: OPT_STATUS.COMPLETED, completedAt: new Date().toISOString() }
-      : o)),
+    optimizations: (envState?.optimizations || []).map((o) => (o.id === record.id && o.status === OPT_STATUS.RUNNING ? endOf(o) : o)),
   });
 
   const search = (inDrawer) => (
@@ -141,8 +174,11 @@ export default function ImprovementRunPage() {
       />
   );
 
-  /* Runs to list once the search has tried some and finished. */
-  const hasRuns = (record.result?.trials || []).length > 0 && record.status !== OPT_STATUS.RUNNING;
+  /* Runs to list once the search has tried some — as they finish while it
+     runs. A suggestion-only fix tries none, so it stays on the search view.
+     One whose ending is already known still shows Reproduce here first. */
+  const hasRuns = (!!progress?.pending && record.fixDepth !== "suggestion") || ((record.result?.trials || []).length > 0
+    && (record.status !== OPT_STATUS.RUNNING || (!!progress && record.fixDepth !== "suggestion")));
   if (hasRuns) {
     return (
       <Box sx={{ height: "100%", minHeight: 0, bgcolor: "background.paper" }}>
@@ -150,12 +186,17 @@ export default function ImprovementRunPage() {
         <ImprovementRunsView
           env={env} envState={envState} record={record} patch={patch}
           onBack={back} backLabel={backLabel} onOpenSearch={() => { setFullRecord(false); setSearchOpen(true); }}
+          progress={progress}
+          onOpenIssue={record.trigger?.issueId ? () => navigate(paths.dashboard.errorFeed.detail(record.trigger.issueId)) : undefined}
+          onOpenStartRun={sourceRun ? () => navigate(paths.dashboard.simulate.simulationRun(env.id, sourceRun.id)) : undefined}
           onVerify={() => runWinner()}
+          /* Ship opens the hand-over in the full record beside the runs. */
+          onShip={() => { setFullRecord(true); setSearchOpen(true); }}
         />
         <SideDrawer open={searchOpen} onClose={() => setSearchOpen(false)} width={fullRecord ? 1080 : 560}>
           {searchOpen && (fullRecord
             ? search(true)
-            : <ImprovementDecision record={record} envState={envState} onClose={() => setSearchOpen(false)} onFullRecord={() => setFullRecord(true)} />)}
+            : <ImprovementDecision record={record} env={env} envState={envState} onClose={() => setSearchOpen(false)} onFullRecord={() => setFullRecord(true)} />)}
         </SideDrawer>
       </Box>
     );

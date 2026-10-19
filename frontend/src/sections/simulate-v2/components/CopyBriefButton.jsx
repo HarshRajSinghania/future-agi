@@ -1,10 +1,12 @@
 import PropTypes from "prop-types";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Box, Button, ClickAwayListener, Fade, Menu, MenuItem, Paper, Popper, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Button, ClickAwayListener, Divider, Fade, Menu, MenuItem, Paper, Popper, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
-import { connectedCodingAgent, handBriefTo, startImproverSession, useIntegrations } from "../_mock/integrations";
+import {
+  connectedCloudAgents, connectedCodingAgent, dispatchToCloudAgent, handBriefTo, startImproverSession, useIntegrations,
+} from "../_mock/integrations";
 import BrandMark from "../integrations/BrandMark";
 
 /**
@@ -15,11 +17,17 @@ import BrandMark from "../integrations/BrandMark";
  * and nobody should pay for that on every re-render of a drawer.
  *
  * With your coding agent connected (Settings → Integrations → Coding agents) it
- * reads "Hand to Claude Code" instead: the click parks the brief for your
+ * reads "Open in Claude Code" instead: the click parks the brief for your
  * agent, which pulls it with get_brief the next time you ask — nothing opens
  * on its own, and nothing is copied. Copying stays one click
  * away on the caret. `target` says what the brief is about; an improvement
  * also starts an improver session, so the agent's attempts land there as trials.
+ *
+ * Cloud agents the workspace connected are one click away as "Dispatch to …":
+ * the brief goes to that agent, which works in its own sandbox and sends its
+ * change back through submit_candidate — Future AGI runs it and computes the
+ * verdict, as for any outside improver. With no editor agent of yours, the
+ * first cloud agent leads the button; the others sit on the caret.
  */
 
 /* What to tell the coding agent to pick up — the issue, the improvement or the run. */
@@ -32,8 +40,11 @@ const SIZES = {
 
 export default function CopyBriefButton({ getBrief, label = "Copy for coding agent", size = "medium", target, onOpened, disabledReason, sx }) {
   const navigate = useNavigate();
-  const agent = connectedCodingAgent(useIntegrations());
-  const [done, setDone] = useState(null); // null | "copied" | "sent"
+  const integrations = useIntegrations();
+  const agent = connectedCodingAgent(integrations);
+  const clouds = connectedCloudAgents(integrations);
+  const [done, setDone] = useState(null); // null | "copied" | "sent" | "dispatched"
+  const [cloud, setCloud] = useState(null); // the cloud agent last dispatched to
   const [menu, setMenu] = useState(null);
   const anchor = useRef(null);
   const timer = useRef(null);
@@ -63,6 +74,12 @@ export default function CopyBriefButton({ getBrief, label = "Copy for coding age
     flash("sent", 4200);
   };
 
+  const dispatch = (c) => {
+    dispatchToCloudAgent({ agentId: c.id, target, brief: getBrief() });
+    setCloud(c);
+    flash("dispatched", 5200);
+  };
+
   const s = SIZES[size] || SIZES.medium;
   const base = {
     typography: s.typography, fontWeight: 700, textTransform: "none",
@@ -88,7 +105,7 @@ export default function CopyBriefButton({ getBrief, label = "Copy for coding age
     );
   }
 
-  if (!agent) {
+  if (!agent && !clouds.length) {
     return (
       <Button
         size="small"
@@ -103,19 +120,28 @@ export default function CopyBriefButton({ getBrief, label = "Copy for coding age
   }
 
   const markSize = Math.round(s.icon / 0.55);
+  /* Your editor agent leads when you have one; otherwise a connected cloud
+     agent does — one-click dispatch — and Copy moves to the caret. */
+  const lead = !agent ? clouds[0] : null;
+  const idle = agent
+    ? { icon: <BrandMark brand={agent.id} size={markSize} tile={false} />, text: `Open in ${agent.label}`, onClick: open }
+    : { icon: <BrandMark brand={lead.id} size={markSize} tile={false} />, text: `Dispatch to ${lead.short || lead.label}`, onClick: () => dispatch(lead) };
+  const doneText = {
+    sent: agent && `Opened in ${agent.label}`,
+    copied: "Copied",
+    dispatched: cloud && `Dispatched to ${cloud.short || cloud.label}`,
+  }[done];
   return (
     <>
       <Stack ref={anchor} direction="row" sx={{ flexShrink: 0, ...sx }}>
         <Button
           size="small"
           variant="outlined"
-          onClick={open}
-          startIcon={done
-            ? <Iconify icon="solar:check-circle-bold" width={s.icon} />
-            : <BrandMark brand={agent.id} size={markSize} tile={false} />}
+          onClick={idle.onClick}
+          startIcon={done ? <Iconify icon="solar:check-circle-bold" width={s.icon} /> : idle.icon}
           sx={{ ...base, px: s.px, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
         >
-          {done === "sent" ? `Handed to ${agent.label}` : done === "copied" ? "Copied" : `Hand to ${agent.label}`}
+          {doneText || idle.text}
         </Button>
         <Button
           size="small"
@@ -136,6 +162,13 @@ export default function CopyBriefButton({ getBrief, label = "Copy for coding age
           <Iconify icon="solar:copy-linear" width={15} sx={{ mr: 1, color: "text.secondary" }} />
           Copy brief instead
         </MenuItem>
+        {clouds.filter((c) => c.id !== lead?.id).map((c) => (
+          <MenuItem key={c.id} onClick={() => { setMenu(null); dispatch(c); }} sx={{ typography: "s2" }}>
+            <Box sx={{ mr: 1, display: "inline-flex" }}><BrandMark brand={c.id} size={27} tile={false} /></Box>
+            {`Dispatch to ${c.label}`}
+          </MenuItem>
+        ))}
+        <Divider sx={{ my: 0.5 }} />
         <MenuItem onClick={() => { setMenu(null); navigate(`${paths.dashboard.settings.integrations}/coding-agents`); }} sx={{ typography: "s2", color: "text.secondary" }}>
           <Iconify icon="solar:settings-linear" width={15} sx={{ mr: 1 }} />
           Coding agent settings
@@ -143,7 +176,7 @@ export default function CopyBriefButton({ getBrief, label = "Copy for coding age
       </Menu>
 
       {/* Not a modal — the person keeps working; it fades with the sent state. */}
-      <Popper open={done === "sent"} anchorEl={anchor.current} placement="bottom-end" transition sx={{ zIndex: (t) => t.zIndex.modal + 1 }}>
+      <Popper open={done === "sent" || done === "dispatched"} anchorEl={anchor.current} placement="bottom-end" transition sx={{ zIndex: (t) => t.zIndex.modal + 1 }}>
         {({ TransitionProps }) => (
           <Fade {...TransitionProps} timeout={160}>
             <Box>
@@ -152,12 +185,21 @@ export default function CopyBriefButton({ getBrief, label = "Copy for coding age
                   variant="outlined"
                   sx={{ mt: 0.75, px: 1.5, py: 1, maxWidth: 300, bgcolor: "background.paper", backgroundImage: "none", boxShadow: (t) => t.customShadows?.z8 }}
                 >
-                  <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Ready in ${agent.label}`}</Typography>
-                  <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.25 }}>
-                    {`Ask it to "fix ${targetRef(target)}". It fetches the brief with `}
-                    <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace", color: "text.primary" }}>get_brief</Box>
-                    {" and submits each change for Future AGI to check."}
-                  </Typography>
+                  {done === "dispatched" && cloud ? (
+                    <>
+                      <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Dispatched to ${cloud.label}`}</Typography>
+                      <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.25 }}>
+                        It works in its own sandbox against the agent&apos;s repository. The change comes back as a candidate for Future AGI to check.
+                      </Typography>
+                    </>
+                  ) : agent ? (
+                    <>
+                      <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Ready in ${agent.label}`}</Typography>
+                      <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.25 }}>
+                        {`Ask it to "fix ${targetRef(target)}". It fetches the brief itself and submits each change for Future AGI to check.`}
+                      </Typography>
+                    </>
+                  ) : null}
                 </Paper>
               </ClickAwayListener>
             </Box>

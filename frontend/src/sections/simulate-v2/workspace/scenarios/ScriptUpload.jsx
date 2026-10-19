@@ -95,8 +95,8 @@ export default function ScriptUpload({ env, onAdd, selected }) {
             showDropRejection={false}
             hidePreview
             showIllustration={false}
-            heading="Upload Script"
-            description="Upload AI agent scripts for testing scenarios (TEXT/PDF)"
+            heading="Drop a script here, or browse"
+            description=".txt or .pdf"
             uploadIcon={
               <SvgColor
                 src="/assets/icons/components/ic_script.svg"
@@ -105,7 +105,7 @@ export default function ScriptUpload({ env, onAdd, selected }) {
             }
             actionButton={
               <Button size="small" variant="outlined" color="primary">
-                Browse Files
+                Browse files
               </Button>
             }
             accept={{ "text/plain": [".txt"], "application/pdf": [".pdf"] }}

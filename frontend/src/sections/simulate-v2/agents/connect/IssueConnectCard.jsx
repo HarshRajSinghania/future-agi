@@ -16,8 +16,8 @@ const mono = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
  *   call-logs → that platform's assistant, by the ID in the logs, with the
  *               key Observe's integration already holds (by reference)
  * The agent is never picked from the issue: one already in Agents is found
- * again when it's connected the same way (and gets this project), or linked
- * from its own Connections tab. "Connect another way" opens the full list.
+ * again when it's connected the same way (and this project replaces the one
+ * it had — one project per agent), or linked from its own Connections tab. "Connect another way" opens the full list.
  */
 export default function IssueConnectCard({ issueId, project, onConnectDetected, onAnotherWay, anotherWayLabel = "Connect another way", bare = false, aside = null }) {
   const navigate = useNavigate();
@@ -32,7 +32,8 @@ export default function IssueConnectCard({ issueId, project, onConnectDetected, 
     ]
     : [
       ["Sent by", `${providerLabel} call logs · ${traced.integration}`],
-      ["Assistant", traced.agentId, true],
+      ...(traced.agentName ? [["Assistant", traced.agentName]] : []),
+      [traced.agentName ? "ID" : "Assistant", traced.agentId, true],
       ["Channel", traced.agentType === "chat" ? "Chat" : "Voice"],
     ];
   const why = `Its ${traced.via === "traceai" ? "traces" : "call logs"} reach ${project.name}, but no agent in Agents is linked to it — fixing it needs the agent itself to run simulations and ship a draft. Connect it once: ${project.name} comes with it, and Fix works for every issue from it.`;
@@ -83,7 +84,7 @@ export default function IssueConnectCard({ issueId, project, onConnectDetected, 
       </Stack>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ px: 2.5, pb: 1.5 }}>
         <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>
-          Already in Agents? Connecting it the same way finds it and adds this project — or link the project from the agent&apos;s Connections tab.
+          Already in Agents? Connecting it the same way finds it and links this project instead of the one it has — each agent has one Observe project. Or change it on the agent&apos;s Connections tab.
         </Typography>
         <TextLink onClick={() => navigate(paths.dashboard.agents)}>Open Agents</TextLink>
         <TextLink onClick={onAnotherWay}>{anotherWayLabel}</TextLink>

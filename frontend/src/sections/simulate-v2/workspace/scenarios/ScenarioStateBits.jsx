@@ -1,29 +1,25 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Button, ButtonBase, CircularProgress, Divider, IconButton, InputBase, Menu, MenuItem, Popover, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Button, CircularProgress, IconButton, InputBase, Popover, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { STATE_TONE, NO_DECISION_NOTE, countsTowardNoDecision } from "../../_mock/scenarioStates";
 import { personalDataLine, personalDataDetail, REPRO_LABEL } from "../../_mock/scenarioSources";
-import { TIERS, tierOf } from "../../_mock/tiers";
-import { PRIORITIES, PRIORITY_LABEL, PRIORITY_NOTE, priorityOf } from "../../_mock/scenarioPriority";
-import { CANARY_NOTE } from "../../_mock/cheatControls";
-import { scenarioVersionOf, SCENARIO_BUMPS } from "../../_mock/decoupled";
 
 /*
-  The pieces every view of a scenario's state shares: the chip, the tier and
-  canary marks, the version, and the quiet Archive control. The chip is the
-  table's old status chip, worded to the versioning doc's states — Valid ·
-  Re-check · Outdated · Not applicable · Archived — with the detail on hover.
+  The pieces every view of a scenario's state shares: the chip, the proposed
+  mark, the version, and the quiet Archive control. The chip is the table's
+  old status chip, worded to the scenario states — Valid · Re-check ·
+  Outdated · Stale · Archived — with the detail on hover.
 */
 
 const ICON = {
   valid: "solar:check-circle-linear",
   recheck: "solar:refresh-linear",
   archived: "solar:archive-linear",
-  na: "solar:forbidden-circle-linear",
+  stale: "solar:clock-circle-linear",
 };
-const MUTED = new Set(["archived", "na", "later"]);
+const MUTED = new Set(["archived", "later"]);
 
 export function StateChip({ state }) {
   const tone = STATE_TONE[state.id] || null;
@@ -65,11 +61,10 @@ StateChip.propTypes = { state: PropTypes.object.isRequired };
 
 /*
   Archive — a hand edit, reversible with Restore. No reason to pick; a note
-  is optional. An anchor-core scenario says so first: archiving one is an
-  explicit decision, and it is logged. An icon in the table's actions
-  column, a text link in the detail.
+  is optional. An icon in the table's actions column, a text link in the
+  detail.
 */
-export function ArchiveControl({ onArchive, variant = "icon", disabled = false, anchor = false }) {
+export function ArchiveControl({ onArchive, variant = "icon", disabled = false }) {
   const [el, setEl] = useState(null);
   const open = (e) => { e.stopPropagation(); setEl(e.currentTarget); };
   return (
@@ -85,14 +80,14 @@ export function ArchiveControl({ onArchive, variant = "icon", disabled = false, 
       ) : (
         <TextAction onClick={open} disabled={disabled}>Archive</TextAction>
       )}
-      <ArchivePopover anchorEl={el} onClose={() => setEl(null)} onArchive={onArchive} anchor={anchor} />
+      <ArchivePopover anchorEl={el} onClose={() => setEl(null)} onArchive={onArchive} />
     </>
   );
 }
-ArchiveControl.propTypes = { onArchive: PropTypes.func.isRequired, variant: PropTypes.oneOf(["icon", "text"]), disabled: PropTypes.bool, anchor: PropTypes.bool };
+ArchiveControl.propTypes = { onArchive: PropTypes.func.isRequired, variant: PropTypes.oneOf(["icon", "text"]), disabled: PropTypes.bool };
 
 /* Archive's confirm, with its note — opened from a control or a menu item. */
-export function ArchivePopover({ anchorEl, onClose, onArchive, anchor = false }) {
+export function ArchivePopover({ anchorEl, onClose, onArchive }) {
   const [note, setNote] = useState("");
   const done = () => { onClose(); onArchive(note.trim()); setNote(""); };
   return (
@@ -106,12 +101,10 @@ export function ArchivePopover({ anchorEl, onClose, onArchive, anchor = false })
       slotProps={{ paper: { sx: { width: 300, p: 1.5, mt: 0.5 } } }}
     >
       <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-        {anchor ? "Archive an anchor scenario?" : "Archive this scenario?"}
+        Archive this scenario?
       </Typography>
       <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.25 }}>
-        {anchor
-          ? "It's in the anchor core — the frozen slice every agent version is compared on. Archiving it is logged. It stays listed and can be restored."
-          : "It stays listed and can be restored. It stops running and counting, and the scenario set moves to a new version."}
+        It stays listed and can be restored. It stops running and counting, and the scenario set moves to a new version.
       </Typography>
       <InputBase
         fullWidth
@@ -120,7 +113,7 @@ export function ArchivePopover({ anchorEl, onClose, onArchive, anchor = false })
         autoFocus
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder={anchor ? "Why — kept in the log" : "Note (optional)"}
+        placeholder="Note (optional)"
         sx={{ mt: 1.25, px: 1, py: 0.75, borderRadius: 1, border: "1px solid", borderColor: "divider", typography: "s2" }}
       />
       <Stack direction="row" justifyContent="flex-end" spacing={0.75} sx={{ mt: 1.25 }}>
@@ -128,13 +121,13 @@ export function ArchivePopover({ anchorEl, onClose, onArchive, anchor = false })
           Cancel
         </Button>
         <Button size="small" variant="contained" color="primary" onClick={done} sx={{ typography: "s2", fontWeight: 700 }}>
-          {anchor ? "Archive anchor" : "Archive"}
+          Archive
         </Button>
       </Stack>
     </Popover>
   );
 }
-ArchivePopover.propTypes = { anchorEl: PropTypes.any, onClose: PropTypes.func.isRequired, onArchive: PropTypes.func.isRequired, anchor: PropTypes.bool };
+ArchivePopover.propTypes = { anchorEl: PropTypes.any, onClose: PropTypes.func.isRequired, onArchive: PropTypes.func.isRequired };
 
 /* A small bordered word — the shape the table's "New · env" tag already uses. */
 function Tag({ children, strong = false, dashed = false }) {
@@ -154,55 +147,19 @@ function Tag({ children, strong = false, dashed = false }) {
 }
 Tag.propTypes = { children: PropTypes.node, strong: PropTypes.bool, dashed: PropTypes.bool };
 
-/* The scenario's tier — Anchor / Core / Exploration — named on hover. A
-   proposal not yet approved says so. */
-export function TierBadge({ row, compact = false }) {
-  const tier = tierOf(row);
-  const meta = TIERS[tier];
+/* A scenario a source proposed that isn't in the environment yet — it joins
+   once someone adds it. */
+export function ProposedBadge() {
   return (
-    <Tooltip arrow title={`${meta.long} — ${meta.note}${row?.proposed ? " Proposed — joins the set once approved." : ""}`}>
+    <Tooltip arrow title="Proposed — it joins the environment once you add it. It doesn't run until then.">
       <Box sx={{ display: "inline-flex" }}>
-        <Tag strong={tier === "anchor"} dashed={!!row?.proposed}>
-          {tier === "anchor" && <Iconify icon="solar:pin-linear" width={11} sx={{ color: "text.secondary" }} />}
-          <Typography noWrap sx={{ typography: "s3", fontWeight: tier === "anchor" ? 700 : 600, color: "inherit" }}>
-            {row?.proposed ? "Proposed" : compact ? meta.label : meta.long}
-          </Typography>
+        <Tag dashed>
+          <Typography noWrap sx={{ typography: "s3", fontWeight: 600, color: "inherit" }}>Proposed</Typography>
         </Tag>
       </Box>
     </Tooltip>
   );
 }
-TierBadge.propTypes = { row: PropTypes.object.isRequired, compact: PropTypes.bool };
-
-/* Impossible by design — a cheat check, not counted in the pass rate. */
-export function CanaryBadge() {
-  return (
-    <Tooltip arrow title={`Canary — ${CANARY_NOTE}`}>
-      <Box sx={{ display: "inline-flex" }}>
-        <Tag>
-          <Typography noWrap sx={{ typography: "s3", fontWeight: 700, color: "inherit" }}>Canary</Typography>
-        </Tag>
-      </Box>
-    </Tooltip>
-  );
-}
-
-/* "1.2.0", mono — with the last change on hover. */
-export function VersionTag({ row }) {
-  const v = scenarioVersionOf(row);
-  const last = (row?.versionLog || []).slice(-1)[0];
-  const tip = last
-    ? `${last.v} — ${last.level}: ${last.why || "edited"}. ${SCENARIO_BUMPS[last.level]?.note || ""}`
-    : "1.0.0 — as written. Every edit bumps it by kind: patch, minor or major.";
-  return (
-    <Tooltip arrow title={tip}>
-      <Typography noWrap sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11.5, color: last ? "text.primary" : "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-        {v}
-      </Typography>
-    </Tooltip>
-  );
-}
-VersionTag.propTypes = { row: PropTypes.object };
 
 /* A quiet text action — the detail's Re-prove / Rewrite / Archive / Restore. */
 export function TextAction({ onClick, disabled = false, children }) {
@@ -277,10 +234,10 @@ export function MarkToggle({ value, onChange, disabled = false }) {
 MarkToggle.propTypes = { value: PropTypes.string, onChange: PropTypes.func, disabled: PropTypes.bool };
 
 /*
-  Where a production-derived scenario came from, in the words the PRD uses:
+  Where a production-derived scenario came from, in plain words:
   "Personal data replaced · 5 values", the reproduce state of an Error Feed
-  conversation, and the Phase 2 mark on a word-for-word replay. Quiet tags —
-  the same bordered word as the tier.
+  conversation, and the mark on a word-for-word replay. Quiet tags — the
+  same bordered word as the proposed mark.
 */
 export function PersonalDataTag({ row }) {
   const line = personalDataLine(row);
@@ -318,72 +275,3 @@ export function ReproTag({ repro, target = false }) {
   );
 }
 ReproTag.propTypes = { repro: PropTypes.object, target: PropTypes.bool };
-
-
-/*
-  A scenario's priority as plain text — High reads strongest, Low quietest —
-  and, where it can change, a menu on click. A must-pass scenario is always
-  high, so it never offers one.
-*/
-export function PriorityPicker({ row, onChange, locked = false }) {
-  const [el, setEl] = useState(null);
-  const p = priorityOf(row);
-  const forced = !!row.critical;
-  const can = !!onChange && !locked && !forced && !row.archived;
-  const text = (
-    <Typography
-      sx={{
-        typography: "s2", fontWeight: p === "high" ? 600 : 500, whiteSpace: "nowrap",
-        color: p === "high" ? "text.primary" : p === "med" ? "text.secondary" : "text.subtitle",
-      }}
-    >
-      {PRIORITY_LABEL[p]}
-    </Typography>
-  );
-  if (!can) {
-    return (
-      <Tooltip arrow title={forced ? "Must-pass scenarios are always high priority" : PRIORITY_NOTE}>
-        <Box sx={{ display: "inline-flex" }}>{text}</Box>
-      </Tooltip>
-    );
-  }
-  return (
-    <>
-      <ButtonBase
-        onClick={(e) => { e.stopPropagation(); setEl(e.currentTarget); }}
-        aria-label={`Priority: ${PRIORITY_LABEL[p]} — change`}
-        sx={{
-          gap: 0.25, px: 0.625, mx: -0.625, py: 0.125, borderRadius: 0.5,
-          "&:hover": { bgcolor: "action.hover" },
-          "& .pp-caret": { opacity: el ? 1 : 0, transition: "opacity .12s ease" },
-          "&:hover .pp-caret, &.Mui-focusVisible .pp-caret": { opacity: 1 },
-        }}
-      >
-        {text}
-        <Iconify className="pp-caret" icon="solar:alt-arrow-down-linear" width={12} sx={{ color: "text.subtitle" }} />
-      </ButtonBase>
-      <Menu
-        anchorEl={el}
-        open={!!el}
-        onClose={() => setEl(null)}
-        onClick={(e) => e.stopPropagation()}
-        slotProps={{ paper: { sx: { width: 240 } } }}
-      >
-        {PRIORITIES.map((o) => (
-          <MenuItem
-            key={o.id}
-            selected={o.id === p}
-            onClick={() => { setEl(null); if (o.id !== p) onChange(o.id); }}
-            sx={{ typography: "s2", fontWeight: o.id === p ? 600 : 400 }}
-          >
-            <Box sx={{ flex: 1 }}>{o.label}</Box>
-            {o.id === p && <Iconify icon="eva:checkmark-fill" width={15} sx={{ color: "text.secondary" }} />}
-          </MenuItem>
-        ))}
-        <Divider />
-        <Typography sx={{ px: 1.5, py: 0.75, typography: "s3", color: "text.subtitle", whiteSpace: "normal" }}>{PRIORITY_NOTE}</Typography>
-      </Menu>
-    </>
-  );
-}
-PriorityPicker.propTypes = { row: PropTypes.object.isRequired, onChange: PropTypes.func, locked: PropTypes.bool };

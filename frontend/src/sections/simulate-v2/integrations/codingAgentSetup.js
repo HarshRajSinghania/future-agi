@@ -53,11 +53,11 @@ export const GUARDRAILS = [
 ];
 
 /*
-  Scoped improver tokens — the ones that can't read held-back scenarios —
-  aren't built yet. Until they are, the copy promises integrity, not secrecy:
-  an outside agent can read the held-back set, but the proof still can't be
-  faked, because scenarios, evals and thresholds are frozen and Future AGI
-  computes every verdict. (Delivery phases live in the PRD, never in the UI.)
+  Every coding-agent connection — editor or cloud — gets its own scoped
+  improver token (IMPROVER_SCOPES), so held-back scenarios stay hidden from
+  it, not just frozen. The proof can't be faked either way: scenarios, evals
+  and thresholds are frozen and Future AGI computes every verdict. An older
+  connection still on a workspace key shows "Switch to a scoped token".
 */
 export const INTEGRITY_NOTE = "An improver token can't read held-back scenarios, and the proof can't be faked — scenarios, evals and thresholds are frozen, and Future AGI computes every verdict.";
 

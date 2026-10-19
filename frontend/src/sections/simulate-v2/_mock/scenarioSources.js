@@ -17,7 +17,7 @@
   Anything built from production keeps the problem, not the person: names,
   phone numbers, emails, addresses, account and card numbers are replaced with
   fake values before it is saved (`scrubPersonalData`), and the call audio is
-  never reused. Every source arrives as a proposal in exploration (PRD v7).
+  never reused. Every source arrives as a proposal the user reviews and adds.
 
   No React, no store — the import routes and the seed both call these.
 */
@@ -37,10 +37,9 @@ const sentence = (t = "") => {
 };
 const lowerFirst = (t = "") => (t ? t.charAt(0).toLowerCase() + t.slice(1) : t);
 
-/* Every source lands as a proposal in exploration — it joins the set once approved. */
+/* Every source lands as a proposal — it joins the environment once someone adds it. */
 export const asProposal = (row, source, at = new Date().toISOString()) => ({
   ...row,
-  tier: row.tier || "exploration",
   proposed: row.proposed || { at, source },
 });
 
@@ -266,7 +265,11 @@ const STREETS = ["1452 Oak Street", "88 Harbor Avenue", "301 Pine Road", "27 Wil
  */
 export const productionConversationsOf = (env) => {
   if (!env) return [];
-  const tools = (env.tools || []).map((t) => t.name);
+  /* What callers chase is what the tools act on — not the checks around it
+     (verifying who's calling, codes, handing over). */
+  const all = (env.tools || []).map((t) => t.name);
+  const acting = all.filter((n) => !/^(verify|send_otp|check_otp|find_record|escalate)/.test(n));
+  const tools = acting.length ? acting : all;
   const noun = (n) => String(n || "order").replace(/^[a-z]+_/, "").replace(/_/g, " ");
   const voice = env.surface === "voice";
   const day = 24 * 60 * 60 * 1000;

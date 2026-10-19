@@ -2,21 +2,24 @@ import PropTypes from "prop-types";
 import { Box, CircularProgress, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { clickable, focusRing } from "../components/clickable";
+import { useDemoMode } from "../agents/demoMode";
 
 const MONO = "ui-monospace, Menlo, monospace";
 
 /**
  * The page inside a provider window (/proto/github-install, /proto/slack-
  * authorize). In the product this is GitHub's or Slack's own page; here it's
- * a stand-in, and the bar on top says so — with the address it would have.
+ * a stand-in, with the address it would have on top — said as a stand-in
+ * only in demo mode (?demo=1).
  */
 export default function StandInWindow({ site, url, children, footer }) {
+  const demo = useDemoMode();
   return (
     <Box sx={{ minHeight: "100vh", display: "flex", flexDirection: "column", bgcolor: "background.default" }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2, py: 1, bgcolor: "background.neutral", borderBottom: "1px solid", borderColor: "divider" }}>
         <Iconify icon="solar:lock-keyhole-minimalistic-linear" width={13} sx={{ color: "text.subtitle", flexShrink: 0 }} />
         <Typography noWrap sx={{ typography: "s3", fontFamily: MONO, color: "text.secondary", flex: 1, minWidth: 0 }}>{url}</Typography>
-        <Typography sx={{ typography: "s3", color: "text.subtitle", whiteSpace: "nowrap" }}>{`Prototype stand-in for ${site}'s page`}</Typography>
+        {demo && <Typography sx={{ typography: "s3", color: "text.subtitle", whiteSpace: "nowrap" }}>{`Demo · stand-in for ${site}'s page`}</Typography>}
       </Stack>
       <Box sx={{ flex: 1, overflowY: "auto", display: "flex", justifyContent: "center", px: 2, py: 4 }}>
         <Box sx={{ width: "100%", maxWidth: 560 }}>{children}</Box>

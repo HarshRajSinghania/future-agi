@@ -13,12 +13,13 @@
     values.channels       ["voice", "chat"]                     (agentLifecycle.js)
     values.retellKind     "single_prompt" | "conversation_flow"
     values.fagiPrompts    [{ promptId, name, version }]
-    values.gitHost        "github" (GitLab and Bitbucket later)
+    values.gitHost        "github" | "gitlab" | "bitbucket" — a connection, not a kind of agent
     values.activeVersion  { label, at, by } — a built-in agent's released version
 */
 import { currentUser } from "../_mock/scenarioProvenance";
 import { PROVIDER_LABELS, definitionOf, sourceKindOf } from "../_mock/agentRegistry";
 import { agentChannelsOf } from "../_mock/agentLifecycle";
+import { gitHostOfUrl, reviewNounOf } from "../_mock/integrations";
 
 const hash = (s) => {
   let h = 0;
@@ -52,8 +53,15 @@ export const identityOf = (agent) => {
 };
 
 /** "English, Spanish" — or "English +2" when space is short. */
+/* Some sources record a code ("en", "es-MX") — shown by name, like the rest. */
+const LANGUAGE_NAMES = typeof Intl !== "undefined" && Intl.DisplayNames ? new Intl.DisplayNames(["en"], { type: "language" }) : null;
+export const languageName = (l) => {
+  if (!LANGUAGE_NAMES || !/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(l)) return l;
+  try { return LANGUAGE_NAMES.of(l) || l; } catch { return l; }
+};
+
 export const languagesLabel = (languages, max = 3) => {
-  const list = languages || [];
+  const list = (languages || []).map(languageName);
   return list.length > max ? `${list.slice(0, max).join(", ")} +${list.length - max}` : list.join(", ");
 };
 
@@ -113,6 +121,42 @@ export const reachPatch = (agent, patch) => {
 
 export const turnLimitLabel = (n) => (n ? `${n} turns` : "No limit");
 
+/*
+  The phone numbers a voice agent answers on, as { countryCode, number }.
+  Saved as `contact.numbers` (Connections); `contact.number` stays the first
+  one — the one simulations dial — so older readers keep working. Older
+  saves read their single number, and a number connected as the agent
+  itself (`phoneNumber`, `phoneNumbers`) counts too, marked `connected` —
+  it's how the agent is reached, not a setting to remove here.
+*/
+export const contactNumbersOf = (agent) => {
+  const v = agent?.values || {};
+  const c = v.contact || {};
+  const saved = Array.isArray(c.numbers) && c.numbers.length ? c.numbers
+    : c.number ? [{ countryCode: c.countryCode || "", number: c.number }] : [];
+  const legacy = [v.phoneNumber, ...(Array.isArray(v.phoneNumbers) ? v.phoneNumbers : [])]
+    .filter(Boolean)
+    .map((n) => ({ ...(typeof n === "string" ? { countryCode: v.countryCode || "", number: n } : n), connected: true }));
+  const seen = new Set();
+  return [...saved, ...legacy].filter((n) => {
+    const id = `${n.countryCode || ""}${n.number}`.replace(/[^\d+]/g, "");
+    if (!n.number || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+};
+
+/** "+1 415 555 0182" — one number, said the same way everywhere. */
+export const phoneLabelOf = (n) => [n?.countryCode, n?.number].filter(Boolean).join(" ");
+
+/** The contact patch that saves `numbers` as the list, the first as `number`. */
+export const contactNumbersPatch = (contact, numbers) => ({
+  ...(contact || {}),
+  numbers,
+  number: numbers[0]?.number || "",
+  countryCode: numbers[0]?.countryCode || contact?.countryCode || "+1",
+});
+
 /* ── Retell kind ──────────────────────────────────────────────────────────── */
 
 export const RETELL_KINDS = {
@@ -161,15 +205,19 @@ export const fagiPromptsPatch = (agent, { add, remove }) => {
 
 export const GIT_HOSTS = [
   { id: "github", label: "GitHub", icon: "mdi:github" },
-  { id: "gitlab", label: "GitLab", icon: "mdi:gitlab", later: true },
-  { id: "bitbucket", label: "Bitbucket", icon: "mdi:bitbucket", later: true },
+  { id: "gitlab", label: "GitLab", icon: "mdi:gitlab" },
+  { id: "bitbucket", label: "Bitbucket", icon: "mdi:bitbucket" },
 ];
 
-/** The repository host improvements open pull requests on. GitHub only in Phase 1. */
+/**
+ * The repository host improvements open draft merge requests (GitLab) or
+ * pull requests (GitHub, Bitbucket) on: the one recorded on the agent,
+ * else the one its repository URL names, else GitHub.
+ */
 export const gitHostOf = (agent) => {
-  const id = agent?.values?.gitHost;
-  const host = GIT_HOSTS.find((h) => h.id === id && !h.later) || GIT_HOSTS[0];
-  return { ...host, recorded: !!id };
+  const id = agent?.values?.gitHost || gitHostOfUrl(codeRepoOf(agent));
+  const host = GIT_HOSTS.find((h) => h.id === id) || GIT_HOSTS[0];
+  return { ...host, recorded: !!agent?.values?.gitHost, review: reviewNounOf(host.id) };
 };
 
 /** Where its code lives, when it has some — its own repository or one linked to it. */
@@ -177,7 +225,7 @@ export const codeRepoOf = (agent) => definitionOf(agent).repoUrl || agent?.value
 
 /* ── platform key scope ───────────────────────────────────────────────────── */
 
-export const PLATFORM_KEY_SCOPE = "This key reads your agent, creates test copies or drafts and places test calls. We never edit, publish or delete your live agent.";
+export const PLATFORM_KEY_SCOPE = "Stored encrypted and used only by Future AGI — to read your agent, create test copies or drafts and place test calls. It never reaches the improver, outside coding agents or scenarios, and we never edit, publish or delete your live agent.";
 
 /** A hosted platform we hold a key for (not a pasted prompt run directly). */
 export const isHostedPlatform = (agent) => sourceKindOf(agent) === "platform" && agent?.values?.provider !== "other";

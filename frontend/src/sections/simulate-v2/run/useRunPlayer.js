@@ -25,8 +25,6 @@ export default function useRunPlayer({
   /* Which generation of admission gates judges this run — pinned, so a
      finished run isn't re-judged by gates added later. */
   admissionGates = 3,
-  /* Cheat checks the run pinned (null: none — see runInputs). */
-  cheatChecks = null,
   /* The updated RSI PRD's run rules the run pinned (0: none — see runInputs). */
   outcomes = 0, requiredEvals = 0,
   /* Sub-goals deciding and the turn limit, as the run pinned them (0: none). */
@@ -39,8 +37,8 @@ export default function useRunPlayer({
   clarify = true,
 }) {
   const run = useMemo(
-    () => buildRun({ seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion, toolFaults, admissionGates, cheatChecks, outcomes, requiredEvals, gradingRule, turnLimits, ...(turnLimit != null && { turnLimit }) }),
-    [seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion, toolFaults, admissionGates, cheatChecks, outcomes, requiredEvals, gradingRule, turnLimits, turnLimit],
+    () => buildRun({ seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion, toolFaults, admissionGates, outcomes, requiredEvals, gradingRule, turnLimits, ...(turnLimit != null && { turnLimit }) }),
+    [seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion, toolFaults, admissionGates, outcomes, requiredEvals, gradingRule, turnLimits, turnLimit],
   );
 
   const [phase, setPhase] = useState("booting"); // booting | running | done

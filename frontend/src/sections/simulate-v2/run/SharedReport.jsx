@@ -1,4 +1,5 @@
 import PropTypes from "prop-types";
+import { SHOW_INSIGHTS } from "../_mock/featureFlags";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useSearchParams } from "react-router-dom";
@@ -21,11 +22,13 @@ import { envLabelOf } from "../_mock/envVersionKinds";
 import { runIdentityOf } from "../_mock/runIdentity";
 import { isShareTokenFor, shareTokenOf, sharedUrlOf } from "../_mock/runShare";
 import { getIntegrations } from "../_mock/integrations";
-import { SectionCard, StatusDot, EmptyState } from "../components/primitives";
+import { SectionCard, StatusDot, EmptyState, Verdict } from "../components/primitives";
+import { RunSummaryBlock } from "./RunSummaryChip";
 import SideDrawer from "../components/SideDrawer";
 import InsightsTab from "./InsightsTab";
 import { TraceSheet } from "./TraceWaterfall";
 import { deriveUseCaseLabel } from "./traceTableHelpers";
+import { scenarioTitle } from "../_mock/scenarios";
 
 const colHead = {
   typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4,
@@ -34,8 +37,9 @@ const colHead = {
 /**
  * The shareable report (PRD v6 · AC-20.9).
  *
- * What a link recipient sees: the run's Insights — brief, scoreboard, issues,
- * evidence — under a provenance header that names every version the run held
+ * What a link recipient sees: the run summary — pass rate and every
+ * scenario's result (plus Insights' issues and evidence where Insights is
+ * shown) — under a provenance header that names every version the run held
  * fixed. Read-only: no Fix, no re-run, no eval edits. Evidence links still
  * open: a claim lists its scenarios and a call opens its trace, here.
  *
@@ -164,7 +168,9 @@ export function ReportBody({ env, envState, identity, report, token, hrefFor, on
     ["Environment", `${env.name} · ${named.env ? `environment ${named.env}` : envLabelOf(env, envState, pins.env) || "—"}`],
     ["Agent", pins.agent || "—"],
     ["Simulated caller", pins.simulator],
-    ["Tool dial", pins.toolEnv || "—"],
+    /* What the tools did, in words — never the dial's fingerprint. */
+    ["Tools", pins.toolEnvSummary || "—"],
+    ...(pins.secrets ? [["Secrets", `${pins.secrets} reference${pins.secrets === 1 ? "" : "s"}, as set when it ran`]] : []),
     /* Sealed · Live · Prompt only, and who ran it. */
     ["Proof", report.summary?.proofKind ? [report.summary.proofKind.kind === "live" ? "Live · tools reached real systems" : report.summary.proofKind.label, report.summary.proofKind.tierLabel].filter(Boolean).join(" · ") : "—"],
     ["Ran", ranAt ? new Date(ranAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"],
@@ -209,6 +215,15 @@ export function ReportBody({ env, envState, identity, report, token, hrefFor, on
         </Typography>
       </SectionCard>
 
+      {/* The results themselves — pass rate and every scenario's outcome —
+          are in every report. Insights adds issues and evidence on top
+          where it's shown. */}
+      {!SHOW_INSIGHTS && (
+        <RunSummaryBlock summary={report.summary} onFilter={onFilter} envId={env.id} readOnly>
+          <ScenarioResults tasks={report.run.tasks} onOpen={onOpenTrace} />
+        </RunSummaryBlock>
+      )}
+      {SHOW_INSIGHTS && (
       <InsightsTab
         env={env}
         envState={envState}
@@ -224,6 +239,7 @@ export function ReportBody({ env, envState, identity, report, token, hrefFor, on
         onFix={() => {}}
         onOpenFix={() => {}}
       />
+      )}
 
       <Typography sx={{ typography: "s3", color: "text.subtitle", textAlign: "center", pt: 1, pb: 2 }}>
         {`Future AGI · simulation report · ${token}`}
@@ -236,6 +252,49 @@ ReportBody.propTypes = {
   env: PropTypes.object, envState: PropTypes.object, identity: PropTypes.object, report: PropTypes.object,
   token: PropTypes.string, hrefFor: PropTypes.func, onFilter: PropTypes.func, onOpenTrace: PropTypes.func,
 };
+
+/* Every scenario's outcome, failures first — each opens its trace on screen. */
+const RESULT_ORDER = { failed: 0, error: 1, flaky: 2, inconclusive: 3, invalid: 4, unmeasured: 5, passed: 6 };
+function ScenarioResults({ tasks, onOpen = null }) {
+  const rows = [...tasks].sort((a, b) => (RESULT_ORDER[a.status] ?? 5) - (RESULT_ORDER[b.status] ?? 5));
+  if (!rows.length) return null;
+  return (
+    <Box sx={{ breakInside: "auto" }}>
+      <Stack direction="row" spacing={2} sx={{ px: 2, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+        <Typography sx={{ ...colHead, flex: 1 }}>Scenario</Typography>
+        <Typography sx={{ ...colHead, width: 140, flexShrink: 0 }}>Result</Typography>
+      </Stack>
+      {rows.map((t) => (
+        <Stack
+          key={t.id}
+          direction="row" alignItems="center" spacing={2}
+          {...(onOpen ? {
+            role: "button", tabIndex: 0, onClick: () => onOpen(t),
+            onKeyDown: (e) => { if (e.key === "Enter") onOpen(t); },
+          } : {})}
+          sx={{
+            px: 2, py: 0.875, borderBottom: "1px solid", borderColor: "divider", breakInside: "avoid",
+            ...(onOpen && { cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }),
+          }}
+        >
+          <Box flex={1} minWidth={0}>
+            <Typography noWrap sx={{ typography: "s2", fontWeight: 500 }}>{scenarioTitle(t.title) || t.name || t.id}</Typography>
+            {(t.persona?.name || t.critical || t.regressionMemory) && (
+              <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
+                {[t.persona?.name, t.critical || t.regressionMemory ? "must-pass" : null].filter(Boolean).join(" · ")}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ width: 140, flexShrink: 0 }}>
+            {/* Anything that isn't a pass, fail or flaky verdict reads "Not measured". */}
+            <Verdict status={["passed", "failed", "flaky"].includes(t.status) ? t.status : "unmeasured"} passes={t.passes} repeats={t.repeats} />
+          </Box>
+        </Stack>
+      ))}
+    </Box>
+  );
+}
+ScenarioResults.propTypes = { tasks: PropTypes.array, onOpen: PropTypes.func };
 
 /* A claim's scenarios, listed — each opens its trace. */
 function ScenarioList({ label, tasks, onClose, onOpen }) {
@@ -262,7 +321,7 @@ function ScenarioList({ label, tasks, onClose, onOpen }) {
           >
             <StatusDot status={t.status === "error" ? "failed" : t.status} size={6} />
             <Box flex={1} minWidth={0}>
-              <Typography noWrap sx={{ typography: "s2", fontWeight: 500 }}>{t.title || t.name || t.id}</Typography>
+              <Typography noWrap sx={{ typography: "s2", fontWeight: 500 }}>{scenarioTitle(t.title) || t.name || t.id}</Typography>
               <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
                 {[t.persona?.name, t.repeats > 1 ? `${t.passes}/${t.repeats} passed` : null].filter(Boolean).join(" · ")}
               </Typography>

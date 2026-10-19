@@ -124,7 +124,8 @@ export const suiteGateOf = (env, envState) => {
   const verdicts = rows.map((r) => ({ row: r, adm: admissionOf(r, env) }));
   const admittedRows = verdicts.filter((v) => v.adm.admitted).map((v) => v.row);
   const quarantined = verdicts.filter((v) => !v.adm.admitted).map((v) => ({
-    id: v.row.id, name: v.row.name || v.row.title || v.row.id, reason: v.adm.reason, gate: v.adm.gate || null,
+    id: v.row.id, name: v.row.name || v.row.title || v.row.id, title: v.row.title || null, summary: v.row.summary || null,
+    reason: v.adm.reason, gate: v.adm.gate || null,
   }));
 
   /* Coverage: every rule has an admitted scenario testing it. A canary

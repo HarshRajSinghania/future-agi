@@ -4,7 +4,7 @@
  * Installed once at the workspace level (Settings → Integrations) and used
  * everywhere afterwards: Connect agent picks repositories from the GitHub
  * install, fixes open as pull requests, and Slack carries notifications and
- * approvals. A tiny external store rather than the simulation store, because
+ * alerts. A tiny external store rather than the simulation store, because
  * Settings, Agents and Simulate all read it and only some of them sit under
  * the simulation provider.
  */
@@ -14,14 +14,27 @@ const KEY = "fagi.proto.integrations.v1";
 const EMPTY = {
   github: null, githubRequests: [], githubRemoved: [],
   slack: null, slackRequest: null, slackRemoved: null,
+  /* `approvals` stays an empty list: there is no approval step of ours — the
+     team's own GitHub reviewers and branch protection decide. Kept only so
+     older readers that look it up find nothing. */
   prs: [], slackLog: [], approvals: [], tracing: {}, syncOnPush: {}, scans: {},
-  codingAgents: {}, cloudAgents: {}, codingAgentPolicy: { allowed: true }, improverSessions: [], briefHandoffs: [],
+  codingAgents: {}, cloudAgents: {}, improverSessions: [], briefHandoffs: [],
   demoShares: {},
+  /* GitLab and Bitbucket — one connection per host: { account, tokenRef,
+     access: "read" | "write", connectedAt }. */
+  gitHosts: {},
 };
 
 /* Earlier saves held one GitHub install as { account, access, repos }. */
 const migrate = (s) => {
   let next = s;
+  /* Saves from when a fix could wait for a Slack approval: no step of ours
+     sits before a PR any more, so pending asks and the setting go. */
+  if (next.approvals?.length || next.slack?.approvals || next.codingAgentPolicy) {
+    const { approvals: _a, ...slack } = next.slack || {};
+    const { codingAgentPolicy: _p, ...rest } = next;
+    next = { ...rest, approvals: [], slack: next.slack ? slack : null };
+  }
   if (next.github && !next.github.installations) {
     next = { ...next, github: { installations: [{ id: "inst_1", kind: "Organization", ...next.github }] } };
   }
@@ -141,7 +154,178 @@ export const GITHUB_REPOS = [
       { id: "rebooking", name: "Airline Rebooking Assistant", framework: "OpenAI Agents SDK", entry: "agent/main.py", prompts: ["agent/prompts/rebooking.md"], tools: 6 },
     ],
   },
+  {
+    /* No framework: the code calls the model APIs directly, so the person
+       names where a conversation starts (the entry point). */
+    name: "acme-inc/faq-assistant", language: "Python", private: true, updated: "3 days ago",
+    agents: [
+      { id: "faq", name: "Help-centre FAQ assistant", framework: "Direct API calls", sdk: "OpenAI SDK", entry: "app/chat.py:handle_message", prompts: ["app/prompts/faq_system.txt"], tools: 2, model: "gpt-4.1" },
+      { id: "summary", name: "Ticket summariser", framework: "Direct API calls", sdk: "Anthropic SDK", entry: "app/summarise.py:summarise_ticket", prompts: ["app/prompts/summary.txt"], tools: 1, model: "claude-sonnet-4" },
+    ],
+  },
+  {
+    /* A voice pipeline and a Google ADK agent side by side. */
+    name: "acme-inc/concierge-agents", language: "Python", private: true, updated: "8 hours ago",
+    agents: [
+      { id: "concierge-voice", name: "Hotel concierge (voice)", framework: "Pipecat", entry: "voice/bot.py", prompts: ["voice/prompts/concierge.md", "voice/flows/concierge_flow.json"], tools: 4 },
+      { id: "concierge-adk", name: "Concierge planner", framework: "Google ADK", entry: "planner/agent.py:root_agent", prompts: ["planner/root_agent.yaml"], tools: 5, model: "gemini-2.5-pro" },
+      { id: "claims-crew", name: "Claims review crew", framework: "CrewAI", entry: "claims/crew.py:ClaimsCrew", prompts: ["claims/config/agents.yaml", "claims/config/tasks.yaml"], tools: 3 },
+    ],
+  },
+  {
+    /* The TypeScript-first frameworks. */
+    name: "acme-inc/storefront-agents", language: "TypeScript", private: true, updated: "yesterday",
+    agents: [
+      { id: "orders-mastra", name: "Order help (Mastra)", framework: "Mastra", entry: "src/mastra/agents/orders.ts", prompts: ["src/mastra/agents/orders.instructions.md"], tools: 4 },
+      { id: "returns-ai-sdk", name: "Returns chat (AI SDK)", framework: "Vercel AI SDK", entry: "app/api/chat/route.ts", prompts: ["lib/prompts/returns.ts"], tools: 3 },
+    ],
+  },
+  {
+    /* One agent per framework the platform team is trying out. */
+    name: "acme-labs/agent-frameworks", language: "Python", private: true, updated: "2 days ago",
+    agents: [
+      { id: "strands", name: "Billing helper (Strands)", framework: "AWS Strands", entry: "strands_agent/agent.py", prompts: ["strands_agent/agent.yaml"], tools: 3 },
+      { id: "pydantic", name: "Refund checker (Pydantic AI)", framework: "Pydantic AI", entry: "pydantic_agent/agent.py:refund_agent", prompts: ["pydantic_agent/instructions.md"], tools: 3 },
+      { id: "claude", name: "Support agent (Claude Agent SDK)", framework: "Claude Agent SDK", entry: "claude_agent/main.py", prompts: ["claude_agent/CLAUDE.md", "claude_agent/.claude/agents/refunds.md"], tools: 4, model: "claude-sonnet-4" },
+      { id: "agno", name: "Research team (Agno)", framework: "Agno", entry: "agno_team/team.py:support_team", prompts: ["agno_team/instructions.md"], tools: 3 },
+      { id: "haystack", name: "Policy Q&A (Haystack)", framework: "Haystack", entry: "haystack_agent/pipeline.py", prompts: ["haystack_agent/prompts/answer.jinja"], tools: 2 },
+      { id: "llamaindex", name: "Docs agent (LlamaIndex)", framework: "LlamaIndex", entry: "llama_agent/workflow.py:DocsAgent", prompts: ["llama_agent/prompts/system.md"], tools: 3 },
+      { id: "smol", name: "Order lookup (smolagents)", framework: "smolagents", entry: "smol_agent/agent.py", prompts: ["smol_agent/system_prompt.yaml"], tools: 3 },
+      { id: "dspy", name: "Intent router (DSPy)", framework: "DSPy", entry: "dspy_program/router.py:IntentRouter", prompts: ["dspy_program/compiled/router.json"], tools: 2 },
+      { id: "maf", name: "Escalation desk (Microsoft Agent Framework)", framework: "Microsoft Agent Framework", entry: "maf_agent/app.py", prompts: ["maf_agent/instructions.md"], tools: 3 },
+    ],
+  },
 ];
+
+/* ── GitLab and Bitbucket ─────────────────────────────────────────────────── */
+
+/*
+  The git host is one setting on the agent, so GitLab or Bitbucket is a
+  connection, not a new kind of agent. Each is connected once for the
+  workspace — the group or workspace, and an access token by reference
+  (never the token) — read only at first; write is asked for at the first
+  draft merge request (GitLab) or pull request (Bitbucket), as with GitHub.
+*/
+export const GIT_HOST_LABELS = { github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
+export const GIT_HOST_META = {
+  gitlab: {
+    label: "GitLab", icon: "mdi:gitlab", base: "https://gitlab.com", account: "Group", accountPlaceholder: "acme-inc",
+    accounts: ["acme-inc", "acme-labs"],
+    token: "Group access token", tokenSlot: "vault://acme/sim/gitlab_token",
+    readScopes: [
+      { scope: "read_repository", access: "Read", why: "Read the agent's code: prompts, tools, config and the entry point." },
+      { scope: "read_api", access: "Read", why: "List the group's projects and branches." },
+    ],
+    writeScopes: [
+      { scope: "write_repository", access: "Read & write", why: "Push to a new branch we create (future-agi/…). Never to your release branch or anyone's branch." },
+      { scope: "api", access: "Read & write", why: "Open draft merge requests from that branch, with the proof in the description. We never merge." },
+    ],
+  },
+  bitbucket: {
+    label: "Bitbucket", icon: "mdi:bitbucket", base: "https://bitbucket.org", account: "Workspace", accountPlaceholder: "acme",
+    accounts: ["acme", "acme-labs"],
+    token: "Workspace access token", tokenSlot: "vault://acme/sim/bitbucket_token",
+    readScopes: [
+      { scope: "repository", access: "Read", why: "Read the agent's code: prompts, tools, config and the entry point." },
+      { scope: "account", access: "Read", why: "List the workspace's repositories." },
+    ],
+    writeScopes: [
+      { scope: "repository:write", access: "Read & write", why: "Push to a new branch we create (future-agi/…). Never to your release branch or anyone's branch." },
+      { scope: "pullrequest:write", access: "Read & write", why: "Open draft pull requests from that branch, with the proof in the description. We never merge." },
+    ],
+  },
+};
+
+/** What a scan of each GitLab project and Bitbucket repository finds. */
+export const GIT_HOST_REPOS = {
+  gitlab: [
+    {
+      name: "acme-inc/claims-voice", language: "Python", private: true, updated: "4 hours ago",
+      agents: [
+        { id: "fnol", name: "First notice of loss line", framework: "LiveKit Agents", entry: "agents/fnol/agent.py", prompts: ["agents/fnol/prompts/system.md"], tools: 5 },
+      ],
+    },
+    {
+      name: "acme-inc/platform/support-graph", language: "Python", private: true, updated: "yesterday",
+      agents: [
+        { id: "support-graph", name: "Support router", framework: "LangGraph", entry: "app/graph.py:graph", prompts: ["prompts/router.md", "prompts/refunds.md"], tools: 6 },
+        { id: "support-dspy", name: "Ticket classifier (DSPy)", framework: "DSPy", entry: "classifier/program.py:Classifier", prompts: ["classifier/compiled.json"], tools: 1 },
+      ],
+    },
+    { name: "acme-inc/infra-terraform", language: "HCL", private: true, updated: "last week", agents: [] },
+    {
+      name: "acme-labs/haystack-rag", language: "Python", private: true, updated: "5 days ago",
+      agents: [
+        { id: "rag", name: "Benefits Q&A", framework: "Haystack", entry: "pipelines/qa.py", prompts: ["pipelines/templates/answer.jinja"], tools: 2 },
+      ],
+    },
+  ],
+  bitbucket: [
+    {
+      name: "acme/banking-assistant", language: "Python", private: true, updated: "2 hours ago",
+      agents: [
+        { id: "banking", name: "Card services assistant", framework: "Pydantic AI", entry: "assistant/agent.py:card_agent", prompts: ["assistant/instructions.md"], tools: 6 },
+      ],
+    },
+    {
+      name: "acme/web-chat", language: "TypeScript", private: true, updated: "yesterday",
+      agents: [
+        { id: "webchat", name: "Website chat", framework: "Vercel AI SDK", entry: "app/api/chat/route.ts", prompts: ["lib/system-prompt.ts"], tools: 4 },
+      ],
+    },
+    {
+      name: "acme-labs/smol-experiments", language: "Python", private: true, updated: "last week",
+      agents: [
+        { id: "smol", name: "Shipping tracker", framework: "smolagents", entry: "agent.py", prompts: ["prompts.yaml"], tools: 3 },
+      ],
+    },
+  ],
+};
+
+/** "github" | "gitlab" | "bitbucket" for a repository URL; null when it names none. */
+export const gitHostOfUrl = (url) => {
+  const u = String(url || "").toLowerCase();
+  if (/(^|\/\/|@)(www\.)?gitlab\.com[/:]/.test(u)) return "gitlab";
+  if (/(^|\/\/|@)(www\.)?bitbucket\.org[/:]/.test(u)) return "bitbucket";
+  if (/(^|\/\/|@)(www\.)?github\.com[/:]/.test(u)) return "github";
+  return null;
+};
+/** A repository's URL on its host. */
+export const hostRepoUrlOf = (host, name) => (host === "gitlab" || host === "bitbucket" ? `${GIT_HOST_META[host].base}/${name}` : repoUrlOf(name));
+/** "acme/repo" from any host's URL. */
+export const hostRepoNameOf = (url) => String(url || "").replace(/^https?:\/\/(www\.)?(github\.com|gitlab\.com|bitbucket\.org)\//i, "").replace(/\.git$|\/+$/g, "");
+
+export const gitHostConnection = (host, s = state) => s.gitHosts?.[host] || null;
+/** Repositories the connection to `host` can see — the connected group or workspace's. */
+export const gitHostRepos = (host, s = state) => {
+  const c = gitHostConnection(host, s);
+  return c ? (GIT_HOST_REPOS[host] || []).filter((r) => r.name.startsWith(`${c.account}/`)) : [];
+};
+/** Whether the workspace's connection to that host can see this repository. */
+export const hostRepoVisible = (url, s = state) => {
+  const host = gitHostOfUrl(url);
+  if (host !== "gitlab" && host !== "bitbucket") return false;
+  const name = hostRepoNameOf(url).toLowerCase();
+  return gitHostRepos(host, s).some((r) => r.name.toLowerCase() === name);
+};
+/** Connected with a token reference — read only until the first draft MR or PR. */
+export const connectGitHost = (host, { account, tokenRef }) => set({
+  gitHosts: { ...state.gitHosts, [host]: { account, tokenRef, access: "read", connectedAt: now() } },
+  scans: { ...state.scans, ...Object.fromEntries((GIT_HOST_REPOS[host] || []).filter((r) => r.name.startsWith(`${account}/`)).map((r) => [`${host}:${r.name}`, now()])) },
+});
+export const disconnectGitHost = (host) => {
+  const { [host]: _gone, ...rest } = state.gitHosts || {};
+  set({ gitHosts: rest });
+};
+/** The person widened the token to write at the first draft MR or PR. */
+export const grantGitHostWrite = (host) => {
+  const c = gitHostConnection(host);
+  if (c) set({ gitHosts: { ...state.gitHosts, [host]: { ...c, access: "write", writeGrantedAt: now() } } });
+};
+/** What the host calls a proposed change: GitLab's merge request, everyone else's pull request. */
+export const reviewNounOf = (host) => (host === "gitlab"
+  ? { long: "merge request", short: "MR", ref: "!" }
+  : { long: "pull request", short: "PR", ref: "#" });
 
 /*
   The install asks for read only — enough to scan for agents, sync on push
@@ -276,8 +460,19 @@ export const grantGithubWrite = (name) => {
  * simulation result we post on it — the reviewer sees the evidence where
  * they review, not only in our product.
  */
+/*
+  The simulation check in a line: "12 scenarios · 40% → 85%". The before →
+  after part shows only when both rates are known — a check opened before its
+  scores are in says how many scenarios it runs and no more.
+*/
+export const prCheckSummary = (check) => {
+  if (!check) return "";
+  const rates = typeof check.before === "number" && typeof check.after === "number" ? `${check.before}% → ${check.after}%` : "";
+  return [check.scenarios ? `${check.scenarios} scenarios` : "", rates].filter(Boolean).join(" · ");
+};
+
 /* What the PR is, in a word, for Slack and the cards. */
-export const prNoun = (pr) => (pr?.kind === "telemetry" ? "Tracing PR" : "Fix PR");
+export const prNoun = (pr) => `${pr?.kind === "telemetry" ? "Tracing" : "Fix"} ${reviewNounOf(pr?.host).short}`;
 
 export const openPr = (pr) => {
   const number = 140 + state.prs.length + 1;
@@ -285,9 +480,9 @@ export const openPr = (pr) => {
   set({ prs: [record, ...state.prs] });
   postSlack({
     event: "pr",
-    title: `${prNoun(pr)} opened · ${pr.repo} #${number}`,
-    lines: [pr.title, `${pr.files.length} file${pr.files.length === 1 ? "" : "s"} · ${pr.check ? `simulation ${pr.check.before}% → ${pr.check.after}%` : "simulation pending"}`],
-    actions: ["View pull request", "Open run"],
+    title: `${prNoun(pr)} opened · ${pr.repo} ${reviewNounOf(pr.host).ref}${number}`,
+    lines: [pr.title, `${pr.files.length} file${pr.files.length === 1 ? "" : "s"} · ${prCheckSummary(pr.check) ? `simulation ${prCheckSummary(pr.check)}` : "simulation pending"}`],
+    actions: [`View ${reviewNounOf(pr.host).long}`, "Open run"],
     links: pr.envId ? { "Open run": pr.fromRunId ? `/dashboard/simulate/environments/${pr.envId}/runs/${pr.fromRunId}` : `/dashboard/simulate/environments/${pr.envId}/runs` } : {},
   });
   return record;
@@ -344,7 +539,7 @@ export const SLACK_EVENTS = [
 
 export const SLACK_PERMISSIONS = [
   "Post messages to channels Future AGI is added to",
-  "Add buttons to messages (open run, approve a fix)",
+  "Add buttons to messages that open the run, issue or pull request",
   "Read the channel list so you can pick where things go",
 ];
 
@@ -354,10 +549,6 @@ export const installSlack = ({ workspace, defaultChannel }) => set({
   slack: {
     workspace, defaultChannel, installedAt: now(), installedBy: "you",
     rules: Object.fromEntries(SLACK_EVENTS.map((e) => [e.id, e.on ? defaultChannel : null])),
-    /* Phase 1 has no approval step of ours: asking in Slack before a PR
-       opens is the team's own rule, off until they turn it on. Saved
-       installs keep whatever they chose. */
-    approvals: { enabled: false, channel: defaultChannel, who: "channel" },
   },
 });
 export const updateSlack = (patch) => set({ slack: { ...state.slack, ...patch } });
@@ -375,56 +566,19 @@ export const cancelSlackRequest = () => set({ slackRequest: null });
 /** Post to whichever channel the workspace routes this event to. No-op without Slack, or with the event turned off. */
 /* `links` maps an action's label to the in-app route it opens — a message's
    buttons lead back to the run, issue or agent it's about. */
-export const postSlack = ({ event, title, lines = [], actions = [], links = {}, approvalId, channel }) => {
+export const postSlack = ({ event, title, lines = [], actions = [], links = {}, channel }) => {
   const slack = state.slack;
   if (!slack) return null;
   /* An event added after Slack was installed follows its default. */
   const rules = slack.rules || {};
   const to = channel || (event in rules ? rules[event] : (SLACK_EVENTS.find((e) => e.id === event)?.on ? slack.defaultChannel : null));
   if (!to) return null;
-  /* Only buttons that lead somewhere go out: an approval's Approve and
-     Decline, and any action with a link. A button with nothing behind it
-     isn't posted. */
-  const live = actions.filter((a) => links[a] || (approvalId && (a.startsWith("Approve") || a === "Decline")));
-  const msg = { id: uid("msg"), event, channel: to, title, lines, actions: live, links, approvalId, at: now() };
+  /* Only buttons that lead somewhere go out. A button with nothing behind
+     it isn't posted. */
+  const live = actions.filter((a) => links[a]);
+  const msg = { id: uid("msg"), event, channel: to, title, lines, actions: live, links, at: now() };
   set({ slackLog: [msg, ...state.slackLog].slice(0, 40) });
   return msg;
-};
-
-/* ── approvals ────────────────────────────────────────────────────────────── */
-
-/**
- * A fix waiting for someone to say yes before the PR opens. Asked in Slack
- * so the reviewer doesn't have to come to us; answered in either place.
- */
-export const requestApproval = ({ pr, summary }) => {
-  const id = uid("apr");
-  const channel = state.slack?.approvals?.channel || state.slack?.defaultChannel;
-  set({ approvals: [{ id, status: "pending", requestedAt: now(), channel, pr, summary }, ...state.approvals] });
-  postSlack({
-    event: "approval",
-    channel,
-    title: pr.kind === "telemetry" ? `Approve adding tracing to ${pr.agentName}?` : `Approve a fix for ${pr.agentName}?`,
-    lines: [summary, `${pr.files.length} file${pr.files.length === 1 ? "" : "s"} in ${pr.repo}`],
-    actions: ["Approve & open PR", "Decline", "Review in Future AGI"],
-    /* Review where the fix came from — its issue, else the run it fixes. */
-    links: {
-      "Review in Future AGI": pr.clusterId ? `/dashboard/error-feed/${pr.clusterId}`
-        : pr.envId ? `/dashboard/simulate/environments/${pr.envId}/runs${pr.fromRunId ? `/${pr.fromRunId}` : ""}`
-          : undefined,
-    },
-    approvalId: id,
-  });
-  return id;
-};
-
-export const resolveApproval = (id, decision, by = "you") => {
-  const a = state.approvals.find((x) => x.id === id);
-  if (!a || a.status !== "pending") return null;
-  let pr = null;
-  if (decision === "approved") pr = openPr({ ...a.pr, approvedBy: by, approvedIn: a.channel });
-  set({ approvals: state.approvals.map((x) => (x.id === id ? { ...x, status: decision, resolvedAt: now(), by, prId: pr?.id } : x)) });
-  return pr;
 };
 
 /* ── tracing (traceAI) ────────────────────────────────────────────────────── */
@@ -451,7 +605,6 @@ export const telemetryDraft = ({ agent, repo }) => {
     ...t,
     branch: "future-agi/add-traceai",
     title: `Add traceAI tracing to ${agent?.name || "the agent"}`,
-    approvalLine: `Add traceAI tracing to ${agent?.name || "the agent"} (${t.framework})`,
     body: [
       "## Why",
       "Sends this agent's production traces to Future AGI, so Error Feed can find failures in real conversations and simulations can be built from them.",
@@ -555,7 +708,6 @@ export const errorFeedDraft = ({ issue, fixText }) => {
     files,
     branch: `future-agi/fix-error-feed-${short}`,
     title: `Fix: ${title}`.slice(0, 110),
-    approvalLine: `${title} — ${issue?.trace_count?.toLocaleString?.() || "several"} production traces in Error Feed`,
     body: [
       "## What this fixes",
       `Production issue "${title}" — ${issue?.trace_count?.toLocaleString?.() || "several"} traces in Error Feed (fix layer: ${layer}).`,
@@ -592,11 +744,12 @@ export const setSyncOnPush = (key, on) => set({ syncOnPush: { ...state.syncOnPus
   - An editor agent (Claude Code, Codex, Cursor) runs on one developer's
     machine, in their checkout — so it's connected per person. "Send to …"
     follows the person looking at the page; a teammate without one sees Copy.
-  - A cloud agent (Claude Code on the web, Codex cloud, Devin) works in its
-    own sandbox against the agent's repository and opens a PR — an account
-    the workspace connects once, by an admin.
-  - The workspace decides whether coding agents are allowed at all, and with
-    what token scope.
+  - A cloud agent (Claude Code on the web, Codex cloud, Cursor background
+    agents, Devin) works in its own sandbox against the agent's repository —
+    an account the workspace connects once. Its key is stored only as a
+    secret-manager reference. "Dispatch to …" hands it a brief in one click.
+  - Every connection gets a scoped improver token. Coding agents are always
+    allowed; the token's scope is what limits them.
 */
 export const CODING_AGENTS = [
   { id: "claude_code", label: "Claude Code", vendor: "Anthropic", ways: ["plugin", "mcp"] },
@@ -612,8 +765,11 @@ export const CODING_AGENTS = [
 export const CLOUD_CODING_AGENTS = [
   { id: "claude_code_web", label: "Claude Code on the web", vendor: "Anthropic", cloud: true },
   { id: "codex_cloud", label: "Codex cloud", vendor: "OpenAI", cloud: true },
+  { id: "cursor_background", label: "Cursor background agents", short: "Cursor", vendor: "Anysphere", cloud: true },
   { id: "devin", label: "Devin", vendor: "Cognition", cloud: true },
 ];
+/** The vendor key's default slot in the secret manager — never the key itself. */
+export const cloudKeySlotOf = (id) => `vault://acme/coding-agents/${id}_api_key`;
 export const codingAgentById = (id) => [...CODING_AGENTS, ...CLOUD_CODING_AGENTS].find((a) => a.id === id) || null;
 
 /* The three tools an improver connection gets — and nothing else. */
@@ -650,7 +806,14 @@ export const connectCodingAgent = (id, via) => set({
   codingAgents: { ...state.codingAgents, [id]: { via, connectedAt: now(), connectedBy: "you", userId: ME, token: scopedToken() } },
 });
 
-/* A cloud agent: connected once for the workspace (sign in with its vendor). */
+/*
+  A cloud agent: connected once for the workspace. The vendor's API key is
+  recorded as a secret-manager reference only; dispatches carry a scoped
+  improver token of their own, so held-back scenarios stay hidden.
+*/
+export const connectCloudAgent = (id, { keyRef, repos = "agent" }) => set({
+  cloudAgents: { ...(state.cloudAgents || {}), [id]: { keyRef, repos, connectedAt: now(), connectedBy: ME, token: scopedToken() } },
+});
 export const disconnectCloudAgent = (id) => {
   const { [id]: _gone, ...rest } = state.cloudAgents || {};
   set({ cloudAgents: rest });
@@ -660,9 +823,6 @@ export const connectedCloudAgents = (s = state) => CLOUD_CODING_AGENTS
   .filter((a) => s.cloudAgents?.[a.id])
   .map((a) => ({ ...a, ...s.cloudAgents[a.id] }));
 
-/* The workspace switch: off, nobody can connect or send to a coding agent. */
-export const setCodingAgentsAllowed = (allowed) => set({ codingAgentPolicy: { ...(state.codingAgentPolicy || {}), allowed } });
-export const codingAgentsAllowed = (s = state) => s.codingAgentPolicy?.allowed !== false;
 /** A new token for a connected agent; the old one stops working at once. Also upgrades a connection made with a workspace key. */
 export const rotateImproverToken = (id) => {
   const c = state.codingAgents?.[id];
@@ -691,8 +851,8 @@ const isMine = (c) => !c?.userId || c.userId === ME;
 export const myCodingAgents = (s = state) => CODING_AGENTS
   .filter((a) => s.codingAgents?.[a.id] && isMine(s.codingAgents[a.id]))
   .map((a) => ({ ...a, ...s.codingAgents[a.id] }));
-/* The coding agent "Send to …" hands to: your first one, when the workspace allows it. */
-export const connectedCodingAgent = (s = state) => (codingAgentsAllowed(s) ? myCodingAgents(s)[0] || null : null);
+/* The coding agent "Send to …" hands to: your first one. */
+export const connectedCodingAgent = (s = state) => myCodingAgents(s)[0] || null;
 
 /*
   A coding agent working on one improvement — started by Send to Claude Code
@@ -712,9 +872,25 @@ export const improverSessionFor = (envId, optId, s = state) => (s.improverSessio
   Send to Claude Code: the brief is parked for your agent, which pulls it
   with get_brief the next time you ask it to. Kept short — the settings page lists the latest.
 */
-export const handBriefTo = ({ agentId, target = null, brief = "" }) => {
+export const handBriefTo = ({ agentId, target = null, brief = "", dispatch = false }) => {
   const id = uid("brief");
   const title = (String(brief).split("\n").find((l) => l.startsWith("# ")) || "").slice(2).trim() || "Brief";
-  set({ briefHandoffs: [{ id, agentId, target, title, brief, at: now() }, ...(state.briefHandoffs || [])].slice(0, 20) });
+  set({ briefHandoffs: [{ id, agentId, target, title, brief, at: now(), ...(dispatch && { dispatch: true }) }, ...(state.briefHandoffs || [])].slice(0, 20) });
+  return id;
+};
+
+/*
+  One-click dispatch to a cloud agent: the brief goes to the vendor's API
+  with the agent's repository and a scoped improver token. The agent works
+  in its own sandbox and comes back through submit_candidate like any other
+  improver — Future AGI runs the candidate and computes the verdict. An
+  improvement target also starts an improver session, so its attempts land
+  there as trials.
+*/
+export const dispatchToCloudAgent = ({ agentId, target = null, brief = "" }) => {
+  const id = handBriefTo({ agentId, target, brief, dispatch: true });
+  if (target?.kind === "improvement") {
+    startImproverSession({ agentId, envId: target.envId, optId: target.optId, where: "future-agi" });
+  }
   return id;
 };

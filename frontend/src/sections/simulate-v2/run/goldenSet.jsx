@@ -5,6 +5,7 @@ import { Box, Stack, Typography, Button, Chip, Tooltip, IconButton } from "@mui/
 import Iconify from "src/components/iconify";
 import { deriveGoalOutcome } from "./goalOutcome";
 import { useGoldenSet } from "./goldenSetState";
+import { goalLabel } from "../_mock/scenarios";
 
 /**
  * Golden set + divergence analytics — the manager-flagged core ask
@@ -319,7 +320,7 @@ export function PitchBreakThemes({ tasks, env }) {
           {themes.map((row) => (
             <Box key={row.rank} sx={{ display: "contents" }}>
               <Typography sx={{ fontSize: 11, color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>#{row.rank}</Typography>
-              <Typography noWrap sx={{ fontSize: 13, fontWeight: 600, color: "text.primary" }}>{row.useCase || "—"}</Typography>
+              <Typography noWrap sx={{ fontSize: 13, fontWeight: 600, color: "text.primary" }}>{goalLabel(row.useCase) || "—"}</Typography>
               <Typography noWrap sx={{ fontSize: 12.5, color: "text.secondary" }}>{row.persona || "—"}</Typography>
               <Typography sx={{ fontSize: 12.5, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{row.count}</Typography>
               <Typography sx={{ fontSize: 12.5, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: row.share >= 20 ? "#DC2626" : "text.primary" }}>{row.share}%</Typography>

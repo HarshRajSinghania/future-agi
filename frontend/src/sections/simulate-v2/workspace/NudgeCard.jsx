@@ -12,10 +12,13 @@ import { currentEnvSnapshot, nextSnapshotLabel } from "../_mock/envSnapshot";
 import { envLabelOf } from "../_mock/envVersionKinds";
 import {
   ANSWERS, answerRulePatch, approveRewritesPatch, approveAddPatch, approveRemovePatch, approveBehaviourPatch,
-  dismissPatch, reopenPatch, forkFromNudge, draftSubGoalOf, runPrice, generationPrice, referenceOf, rerunHref,
+  dismissPatch, reopenPatch, forkFromNudge, draftSubGoalOf, runPrice, generationPrice, rerunHref,
   likelyFixLine, channelLabel, plural,
 } from "../_mock/nudgeEffects";
 import { clickable, focusRing } from "../components/clickable";
+import AgentVersionCard, { NewEnvironmentActions, ScenarioStepCard } from "./AgentVersionCard";
+import { scenarioStepOf, versionCardOf } from "../_mock/versionCard";
+import { scenarioTitle } from "../_mock/scenarios";
 
 const MONO = "ui-monospace, Menlo, monospace";
 const MAX_LISTED = 5;
@@ -29,45 +32,50 @@ const KIND_ICON = {
 };
 
 /**
- * The nudges a new agent version raised in this environment — the top of
- * "Needs your input" (PRD v7 §4.10.5–4.10.6). An agent change never moves the
- * environment (E) or the scenario set (S) on its own; each card proposes what
- * would, with a diff, the E and S changes and their price, and waits for
- * Approve / Edit / Dismiss. Answered and dismissed ones stay listed below so
- * an answer can be changed later.
+ * What a new agent version raised in this environment — the top of "Needs
+ * your input". One card for the agent's changes (Rebuild applies the world's
+ * part as one version; each changed rule needs an answer), then the scenario
+ * step. An agent change never moves the environment or the scenarios on its
+ * own. Answered ones stay listed below so an answer can be changed later.
  */
 export function NudgesSection({ env, envState, patch, focusId = null, onNavigate }) {
   const all = envState?.nudges || [];
   const open = openNudgesOf(envState);
-  const done = all.filter((n) => n.status !== "open");
+  /* Settled ones only: skipped ones are the card's (or scenario step's)
+     "Review again" row, and a change a newer version superseded isn't history. */
+  const done = all.filter((n) => n.status !== "open" && !n.skippedAs && !n.scenarioSkipped && !n.supersededBy);
+  const card = versionCardOf(envState);
+  const step = scenarioStepOf(envState);
   const latest = envState?.agentVersions?.[envState.agentVersions.length - 1]?.label;
   const fixes = (envState?.likelyFixes || []).filter((f) => !latest || f.agentVersion === latest);
   const [showDone, setShowDone] = useState(false);
-  if (!all.length && !fixes.length) return null;
+  if (!all.length && !fixes.length && !step) return null;
   const focusNudge = focusId && focusId !== "nudges" ? focusId : null;
   const cardProps = { env, envState, patch, onNavigate };
 
   return (
     <Box sx={{ borderBottom: "1px solid", borderColor: "divider" }}>
       <Stack direction="row" alignItems="baseline" spacing={0.75} sx={{ px: 2.5, py: 1, bgcolor: "background.neutral" }}>
-        <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
-          {`Suggestions · ${open.length}`}
+        <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>
+          Agent changes
         </Typography>
         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>
-          a new agent version asks — the environment and scenarios change only if you approve
+          the environment and scenarios change only when you rebuild them
         </Typography>
       </Stack>
       <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />} sx={{ borderTop: "1px solid", borderColor: "divider" }}>
-        {open.map((n, i) => (
-          <NudgeCard
-            key={n.id} nudge={n} {...cardProps}
-            focused={n.id === focusNudge}
-            defaultOpen={n.id === focusNudge || (!focusNudge && i === 0)}
+        {card && (
+          <AgentVersionCard
+            env={env} envState={envState} patch={patch}
+            renderNudge={(n, first) => (
+              <NudgeCard nudge={n} {...cardProps} focused={n.id === focusNudge} defaultOpen={n.id === focusNudge || (!focusNudge && first)} />
+            )}
           />
-        ))}
-        {!open.length && (
+        )}
+        {step && <ScenarioStepCard env={env} envState={envState} patch={patch} />}
+        {!open.length && !card && !step && (
           <Typography sx={{ px: 2.5, py: 1.25, typography: "s3", color: "text.subtitle" }}>
-            Nothing waiting. Every nudge is answered or dismissed.
+            Nothing waiting. Every agent change is answered or set aside.
           </Typography>
         )}
         {fixes.map((f) => (
@@ -113,8 +121,9 @@ NudgesSection.propTypes = {
 
 const statusLine = (n) => {
   if (n.status === "open") return "waiting on you";
-  if (n.status === "dismissed") return "dismissed — E and S stay pinned";
+  if (n.status === "dismissed") return "dismissed — the environment and scenarios stay as they are";
   if (n.kind === "rule") return `answered · ${ANSWERS[n.answer]?.label.toLowerCase() || "answered"}`;
+  if (n.kind === "remove") return "acknowledged";
   return "approved";
 };
 
@@ -166,36 +175,35 @@ NudgeCard.propTypes = {
 
 /* ── the fix-or-policy question (§4.10.6) ────────────────────────────────── */
 
-const ANSWER_BODY = (n, sgNext) => ({
-  policy: `${n.ruleId} now reads the way ${n.agentVersion} behaves. ${sgNext} is drafted for you to review; ${plural((n.callerIds || []).length, "scenario")} whose caller depends on the old rule go outdated with drafted rewrites. The scenario set gets a new version; the environment doesn't. Compare shows this sub-goal as criteria changed.`,
+const ANSWER_BODY = (n, sgNext, nextE) => ({
+  policy: `${n.ruleId} now reads the way ${n.agentVersion} behaves. ${sgNext} is drafted for you to review; ${plural((n.callerIds || []).length, "scenario")} whose caller depends on the old rule go outdated with drafted rewrites. Publishing it makes environment ${nextE}. Compare shows this sub-goal as criteria changed.`,
   "not-intended": `${n.agentVersion} wasn't meant to behave this way. Nothing changes — if it fails the sub-goal, that's a regression, listed first in Compare.`,
-  unsure: `Keep @1 as the baseline and record ${sgNext} as a draft shadow. The next run is graded both ways, with a reminder to decide.`,
 });
 
 function RuleQuestion({ nudge, env, envState, patch, onNavigate }) {
   const { enqueueSnackbar } = useSnackbar();
-  const isOpen = nudge.status === "open";
+  /* An answer the question no longer offers (a stored "unsure") reads as unanswered. */
+  const known = (a) => (a && ANSWERS[a] ? a : null);
+  const isOpen = nudge.status === "open" || (nudge.status !== "dismissed" && !known(nudge.answer));
   const draft0 = useMemo(() => draftSubGoalOf(envState, nudge), [envState, nudge]);
-  const [choice, setChoice] = useState(nudge.answer || nudge.prefill?.answer || null);
+  const [choice, setChoice] = useState(known(nudge.answer) || known(nudge.prefill?.answer));
   const [name, setName] = useState(draft0.name);
   const [criterion, setCriterion] = useState(draft0.criterion);
   const [editing, setEditing] = useState(false);
   const rows = (nudge.scenarioIds || []).map((id) => (envState.scenarios || []).find((s) => s.id === id)).filter(Boolean);
   const callers = new Set(nudge.callerIds || []);
-  const sgNext = `${draft0.id}${draft0.version}`;
-  const body = ANSWER_BODY(nudge, sgNext);
+  const sgNext = `${draft0.id} ${String(draft0.version || "").replace("@", "v")}`.trim();
   const E = currentEnvSnapshot(env, envState)?.label;
   const nextE = nextSnapshotLabel(env, envState);
+  const body = ANSWER_BODY(nudge, sgNext, nextE);
 
   const record = () => {
     if (!patch || !choice) return;
     patch(answerRulePatch(env, envState, nudge, choice, { draft: { ...draft0, name: name.trim() || draft0.name, criterion: criterion.trim() || draft0.criterion } }));
     enqueueSnackbar(
       choice === "policy"
-        ? `${sgNext} published — ${plural(callers.size, "scenario")} outdated, rewrites drafted. E stays ${E}.`
-        : choice === "unsure"
-          ? `${nudge.ruleId}: @1 stays the baseline, ${sgNext} kept as a shadow`
-          : `${nudge.ruleId}: nothing changes — a failure on it is a regression`,
+        ? `${sgNext} published as environment ${nextE} — ${plural(callers.size, "scenario")} outdated, rewrites drafted.`
+        : `${nudge.ruleId}: nothing changes — a failure on it is a regression`,
       { variant: "success", autoHideDuration: 4000 },
     );
   };
@@ -203,7 +211,7 @@ function RuleQuestion({ nudge, env, envState, patch, onNavigate }) {
   return (
     <Stack spacing={1.25}>
       <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-        {`${nudge.agentVersion} changed how the agent handles ${nudge.ruleId}. An agent that follows the new wording could fail the sub-goal written for the old one — a policy change, not intended, or unsure?`}
+        {`${nudge.agentVersion} changed how the agent handles ${nudge.ruleId}. An agent that follows the new wording could fail the sub-goal written for the old one — a policy change, or not intended?`}
       </Typography>
 
       <Diff lines={[
@@ -213,7 +221,7 @@ function RuleQuestion({ nudge, env, envState, patch, onNavigate }) {
 
       {isOpen ? (
         <>
-          {nudge.prefill && (
+          {known(nudge.prefill?.answer) && (
             <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
               {`Pre-filled from the change note: “${nudge.prefill.from}”`}
             </Typography>
@@ -224,12 +232,12 @@ function RuleQuestion({ nudge, env, envState, patch, onNavigate }) {
             ))}
           </Stack>
 
-          {(choice === "policy" || choice === "unsure") && (
+          {choice === "policy" && (
             <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.25, overflow: "hidden" }}>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.5, py: 0.875, bgcolor: "background.neutral" }}>
                 <Typography sx={{ typography: "s3", fontWeight: 700, flex: 1 }}>
                   <Box component="span" sx={{ fontFamily: MONO }}>{sgNext}</Box>
-                  {choice === "unsure" ? " · draft shadow" : " · drafted for you to review"}
+                  {" · drafted for you to review"}
                 </Typography>
                 {patch && (
                   <Button size="small" onClick={() => setEditing((e) => !e)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0, py: 0 }}>
@@ -256,13 +264,13 @@ function RuleQuestion({ nudge, env, envState, patch, onNavigate }) {
           <Effects rows={[
             ["Environment", choice === "policy" ? `${E} → ${nextE} · the sub-goal and the scenarios that test it change` : `stays ${E}`],
             ["Scenario set", choice === "policy" ? `${plural(callers.size, "scenario")} outdated until rewritten` : "unchanged"],
-            ["Sub-goal", choice === "policy" ? `${sgNext} published; @1 stays on every past run` : choice === "unsure" ? `@1 baseline · ${sgNext} shadow` : "unchanged"],
+            ["Sub-goal", choice === "policy" ? `${sgNext} published; v1 stays on every past run` : "unchanged"],
             ["Price", "Free to answer. A bridge run is offered after rewrites, priced, never started for you"],
           ]} />
 
+          {/* No Dismiss: a changed rule a test checks always gets an answer. */}
           {patch && (
             <Stack direction="row" spacing={0.75} justifyContent="flex-end">
-              <Button size="small" onClick={() => patch(dismissPatch(envState, nudge))} sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}>Dismiss</Button>
               <Button size="small" variant="contained" color="primary" disabled={!choice} onClick={record} sx={{ typography: "s2", fontWeight: 700 }}>
                 {!choice ? "Pick an answer" : choice === "policy" ? `Publish ${sgNext}` : `Record · ${ANSWERS[choice].label.toLowerCase()}`}
               </Button>
@@ -282,7 +290,6 @@ function RuleOutcome({ nudge, env, envState, patch, onNavigate }) {
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
   const rw = nudge.rewrites;
-  const ref = referenceOf(envState);
   const go = (href) => { onNavigate?.(); navigate(href); };
   const rewritten = rw?.status === "approved" ? rw.ids : [];
 
@@ -290,20 +297,19 @@ function RuleOutcome({ nudge, env, envState, patch, onNavigate }) {
     <Stack spacing={1}>
       {nudge.status === "dismissed" ? (
         <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-          Dismissed. The sub-goal and scenarios stay as they were; the new version is graded against the old rule, and the drift badge stays.
+          Dismissed earlier. The sub-goal and scenarios stay as they were; the new version is graded against the old rule.
         </Typography>
       ) : (
         <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-          {nudge.answer === "policy" && `${nudge.published} published as a policy change from agent ${nudge.agentVersion}. Compare reports it as criteria changed: ${nudge.prevVersion || "the old version"} under @1, ${nudge.agentVersion} under the new one.`}
+          {nudge.answer === "policy" && `${nudge.published} published as a policy change from agent ${nudge.agentVersion}. Compare reports it as criteria changed: ${nudge.prevVersion || "the old version"} under v1, ${nudge.agentVersion} under the new one.`}
           {nudge.answer === "not-intended" && `Not intended — nothing changed. If ${nudge.agentVersion} fails the sub-goal, Compare lists it first as a regression.`}
-          {nudge.answer === "unsure" && `Unsure — @1 stays the baseline; the drafted criteria are kept as a shadow and graded alongside.`}
         </Typography>
       )}
 
       {nudge.answer === "policy" && rw?.drafts?.length > 0 && (
         <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.25, overflow: "hidden" }}>
           <Typography sx={{ px: 1.5, py: 0.75, typography: "s3", fontWeight: 700, bgcolor: "background.neutral" }}>
-            {rw.status === "approved" ? `${plural(rw.drafts.length, "rewrite")} approved · major version each` : `${plural(rw.drafts.length, "drafted rewrite")} · outdated until approved`}
+            {rw.status === "approved" ? `${plural(rw.drafts.length, "rewrite")} approved · past results need a re-run` : `${plural(rw.drafts.length, "drafted rewrite")} · outdated until approved`}
           </Typography>
           {rw.drafts.slice(0, MAX_LISTED).map((d) => (
             <Box key={d.id} sx={{ px: 1.5, py: 0.75, borderTop: "1px solid", borderColor: "divider" }}>
@@ -318,7 +324,7 @@ function RuleOutcome({ nudge, env, envState, patch, onNavigate }) {
             <Stack direction="row" justifyContent="flex-end" sx={{ px: 1.5, py: 0.75, borderTop: "1px solid", borderColor: "divider" }}>
               <Button
                 size="small" variant="outlined"
-                onClick={() => { patch(approveRewritesPatch(envState, nudge)); enqueueSnackbar(`${plural(rw.drafts.length, "scenario")} rewritten — each a new major version`, { variant: "success" }); }}
+                onClick={() => { patch(approveRewritesPatch(envState, nudge)); enqueueSnackbar(`${plural(rw.drafts.length, "scenario")} rewritten — their past results need a re-run`, { variant: "success" }); }}
                 sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
               >
                 {`Approve ${plural(rw.drafts.length, "rewrite")}`}
@@ -328,21 +334,15 @@ function RuleOutcome({ nudge, env, envState, patch, onNavigate }) {
         </Box>
       )}
 
-      {/* New S version → bridge and reference re-runs, priced, started only on a click. */}
+      {/* Rewritten scenarios: the previous agent version re-run on them, so the
+          two versions compare on the same scenarios — priced, started only on a click. */}
       {rewritten.length > 0 && (
         <Offers>
           {nudge.prevVersion && (
             <Offer
-              label={`Bridge: run ${nudge.prevVersion} on the ${plural(rewritten.length, "rewritten scenario")}`}
+              label={`Run ${nudge.prevVersion} on the ${plural(rewritten.length, "rewritten scenario")}`}
               price={runPrice(env, rewritten.length).line}
               onClick={() => go(rerunHref(env.id, { agent: nudge.prevVersion, only: rewritten }))}
-            />
-          )}
-          {ref && ref.label !== nudge.prevVersion && (
-            <Offer
-              label={`Re-run reference ${ref.label} on them`}
-              price={runPrice(env, rewritten.length).line}
-              onClick={() => go(rerunHref(env.id, { agent: ref.label, only: rewritten }))}
             />
           )}
         </Offers>
@@ -368,10 +368,10 @@ function TestedBy({ nudge, rows, callers, choice }) {
         {`Tested by · ${plural((nudge.subGoals || []).length, "sub-goal")} · ${plural(rows.length, "scenario")}`}
       </Typography>
       {(nudge.subGoals || []).map((g) => (
-        <Row key={g.id} icon="solar:checklist-minimalistic-linear" text={g.name} right={choice === "policy" ? "new version" : choice === "unsure" ? "@1 + shadow" : "unchanged"} />
+        <Row key={g.id} icon="solar:checklist-minimalistic-linear" text={g.name} right={choice === "policy" ? "new version" : "unchanged"} />
       ))}
       {rows.slice(0, MAX_LISTED).map((s) => (
-        <Row key={s.id} icon="solar:layers-minimalistic-linear" text={s.name || s.title || s.id} right={choice === "policy" && callers.has(s.id) ? "outdated · caller depends on it" : "unchanged"} />
+        <Row key={s.id} icon="solar:layers-minimalistic-linear" text={scenarioTitle(s.title) || s.name || s.id} right={choice === "policy" && callers.has(s.id) ? "outdated · caller depends on it" : "unchanged"} />
       ))}
       {rows.length > MAX_LISTED && (
         <Typography sx={{ px: 1.5, py: 0.75, borderTop: "1px solid", borderColor: "divider", typography: "s3", color: "text.subtitle" }}>{`and ${rows.length - MAX_LISTED} more`}</Typography>
@@ -389,12 +389,10 @@ function ChangeProposal({ nudge, env, envState, patch, onNavigate }) {
   const { dispatch } = useSimStore();
   const [editing, setEditing] = useState(false);
   const [count, setCount] = useState(3);
-  const [picked, setPicked] = useState(() => new Set(nudge.scenarioIds || []));
   const [forkName, setForkName] = useState(`${env.name} · ${channelLabel(nudge.channel?.to)}`);
   const isOpen = nudge.status === "open";
   const E = currentEnvSnapshot(env, envState)?.label;
   const nextE = nextSnapshotLabel(env, envState);
-  const ref = referenceOf(envState);
   const rows = (nudge.scenarioIds || []).map((id) => (envState.scenarios || []).find((s) => s.id === id)).filter(Boolean);
   const go = (href) => { onNavigate?.(); navigate(href); };
 
@@ -403,10 +401,10 @@ function ChangeProposal({ nudge, env, envState, patch, onNavigate }) {
     if (nudge.kind === "add") {
       const { patch: p, ids } = approveAddPatch(env, envState, nudge, { count });
       patch(p);
-      enqueueSnackbar(`Environment ${nextE} has a ${nudge.capability} handler · ${plural(ids.length, "exploration scenario")} added`, { variant: "success" });
+      enqueueSnackbar(`Environment ${nextE} has a ${nudge.capability} handler · ${plural(ids.length, "new scenario")} added`, { variant: "success" });
     } else if (nudge.kind === "remove") {
-      patch(approveRemovePatch(envState, { ...nudge, scenarioIds: [...picked] }));
-      enqueueSnackbar(`${plural(picked.size, "scenario")} not applicable to versions without ${nudge.capability} — kept in the set`, { variant: "success" });
+      patch(approveRemovePatch(envState, nudge));
+      enqueueSnackbar(`${plural(rows.length, "scenario")} stale on versions without ${nudge.capability} — update or archive them`, { variant: "success" });
     } else if (nudge.kind === "behaviour") {
       patch(approveBehaviourPatch(env, envState, nudge));
       enqueueSnackbar(`Environment ${nextE}: ${nudge.capability} handler updated`, { variant: "success" });
@@ -430,18 +428,18 @@ function ChangeProposal({ nudge, env, envState, patch, onNavigate }) {
     ],
   }[nudge.kind] || [];
 
-  const n = nudge.kind === "remove" ? picked.size : rows.length;
+  const n = rows.length;
   const effects = {
     add: [
-      ["Environment", `${E} → ${nextE} · adds a ${nudge.capability} handler and ${plural(count, "exploration scenario")}`],
-      ["Scenario set", `+${plural(count, "exploration scenario")} in a New band`],
+      ["Environment", `${E} → ${nextE} · adds a ${nudge.capability} handler and ${plural(count, "new scenario")}`],
+      ["Scenario set", `+${plural(count, "new scenario")} in a New band`],
       ["Price", `Generating ${count} · ${generationPrice(count).line}. Backfill is offered after, priced`],
     ],
     remove: [
-      ["Environment", `${E} → ${nextE} · the scenario set changes, the world doesn't`],
-      ["Scenario set", `${plural(n, "scenario")} not applicable to versions without ${nudge.capability}, kept`],
-      ["Price", "Free · they aren't run or charged for versions without it"],
-      ["If dismissed", `they keep running and score fail · capability-missing, counted`],
+      ["Environment", `stays ${E}`],
+      ["Scenario set", `${plural(n, "scenario")} stale on versions without ${nudge.capability} · kept`],
+      ["Runs", "they still run, but count toward no decision"],
+      ["Clears when", `you update one so it no longer needs ${nudge.capability}, or archive it`],
     ],
     behaviour: [
       ["Environment", `${E} → ${nextE} · handler follows the agent`],
@@ -451,28 +449,30 @@ function ChangeProposal({ nudge, env, envState, patch, onNavigate }) {
     core: [
       ["Environment", `new environment, forked from ${env.name}, environment ${envLabelOf(env, envState, nudge.envVersion)}`],
       ["Scenario set", `${nudge.scenarioIds.length} of ${nudge.total} carried with their ids · the rest stay here`],
-      ["Price", `Free to fork. A reference re-run is offered after (${runPrice({ surface: nudge.channel?.to }, nudge.scenarioIds.length, 1).line} at 1 repeat)`],
+      ["Price", `Free. A first run in the new environment is offered after (${runPrice({ surface: nudge.channel?.to }, nudge.scenarioIds.length, 1).line} at 1 repeat)`],
       ["This environment", `stays ${E}`],
     ],
   }[nudge.kind] || [];
 
   return (
     <Stack spacing={1.25}>
-      <Typography sx={{ typography: "s2", color: "text.secondary" }}>{nudge.ask}</Typography>
-      <Diff lines={diff} caption={nudge.detail} />
+      {/* A removed tool's scenarios are stale — read fresh, so a card saved
+          with older wording says the same. */}
+      <Typography sx={{ typography: "s2", color: "text.secondary" }}>
+        {nudge.kind === "remove"
+          ? `${plural(rows.length, "scenario")} ${rows.length === 1 ? "needs" : "need"} ${nudge.capability}, which ${nudge.agentVersion} doesn't have, so ${rows.length === 1 ? "it is" : "they are"} stale on ${nudge.agentVersion}.`
+          : nudge.ask}
+      </Typography>
+      <Diff lines={diff} caption={nudge.kind === "remove" ? "Stale scenarios still run, but count toward no decision until you update or archive them. Nothing is retired." : nudge.detail} />
 
       {isOpen ? (
         <>
           {nudge.kind === "remove" && rows.length > 0 && (
             <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.25, overflow: "hidden" }}>
-              {(editing ? rows : rows.slice(0, MAX_LISTED)).map((s) => (
-                <Row
-                  key={s.id} icon={picked.has(s.id) ? "solar:check-square-linear" : "solar:stop-linear"} text={s.name || s.title || s.id}
-                  right={picked.has(s.id) ? "not applicable" : "keeps running"}
-                  onClick={editing ? () => setPicked((p) => { const x = new Set(p); if (x.has(s.id)) x.delete(s.id); else x.add(s.id); return x; }) : undefined}
-                />
+              {rows.slice(0, MAX_LISTED).map((s) => (
+                <Row key={s.id} icon="solar:layers-minimalistic-linear" text={scenarioTitle(s.title) || s.name || s.id} right="stale" />
               ))}
-              {!editing && rows.length > MAX_LISTED && (
+              {rows.length > MAX_LISTED && (
                 <Typography sx={{ px: 1.5, py: 0.75, borderTop: "1px solid", borderColor: "divider", typography: "s3", color: "text.subtitle" }}>{`and ${rows.length - MAX_LISTED} more`}</Typography>
               )}
             </Box>
@@ -493,15 +493,22 @@ function ChangeProposal({ nudge, env, envState, patch, onNavigate }) {
 
           {patch && (
             <Stack direction="row" spacing={0.75} justifyContent="flex-end">
-              <Button size="small" onClick={() => patch(dismissPatch(envState, nudge))} sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}>Dismiss</Button>
-              {nudge.kind !== "behaviour" && (
+              {/* Stale is what a removed tool does to its scenarios — there's nothing to dismiss. */}
+              {nudge.kind !== "remove" && (
+                <Button size="small" onClick={() => patch(dismissPatch(envState, nudge))} sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}>Dismiss</Button>
+              )}
+              {nudge.kind !== "behaviour" && nudge.kind !== "remove" && (
                 <Button size="small" variant="outlined" onClick={() => setEditing((e) => !e)} sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
                   {editing ? "Done" : "Edit"}
                 </Button>
               )}
-              <Button size="small" variant="contained" color="primary" onClick={approve} disabled={nudge.kind === "remove" && !picked.size} sx={{ typography: "s2", fontWeight: 700 }}>
-                {nudge.kind === "core" ? "Approve · fork" : "Approve"}
-              </Button>
+              {nudge.kind === "core" ? (
+                <NewEnvironmentActions env={env} envState={envState} version={nudge.agentVersion} onForMe={approve} forMeContained />
+              ) : (
+                <Button size="small" variant="contained" color="primary" onClick={approve} sx={{ typography: "s2", fontWeight: 700 }}>
+                  {nudge.kind === "remove" ? "Got it" : "Approve"}
+                </Button>
+              )}
             </Stack>
           )}
         </>
@@ -509,52 +516,38 @@ function ChangeProposal({ nudge, env, envState, patch, onNavigate }) {
         <Stack spacing={1}>
           <Typography sx={{ typography: "s3", color: "text.secondary" }}>
             {nudge.status === "dismissed" && (nudge.kind === "remove"
-              ? `Dismissed. The ${plural(nudge.scenarioIds.length, "scenario")} keep running and score fail · capability-missing on versions without ${nudge.capability}.`
-              : "Dismissed. The environment stays pinned; the drift badge stays so nothing is hidden.")}
-            {nudge.status === "approved" && nudge.kind === "add" && `Approved · environment ${envLabelOf(env, envState, nudge.envVersion)} has the handler · ${plural((nudge.addedIds || []).length, "exploration scenario")} added, in the New band until backfilled.`}
-            {nudge.status === "approved" && nudge.kind === "remove" && `Approved · not applicable to agent versions without ${nudge.capability}. Nothing retired — they come back if ${nudge.capability} does.`}
+              ? `The ${plural(rows.length, "scenario")} ${rows.length === 1 ? "is" : "are"} stale on versions without ${nudge.capability} — they still run, but count toward no decision until updated or archived.`
+              : "Dismissed earlier — the environment stays as it is.")}
+            {nudge.status === "approved" && nudge.kind === "add" && (nudge.rebuilt
+              ? `Rebuilt · environment ${envLabelOf(env, envState, nudge.envVersion)} answers ${nudge.capability}${(nudge.addedIds || []).length ? ` · ${plural(nudge.addedIds.length, "new scenario")} added` : " · its scenarios are the scenario step"}.`
+              : `Approved · environment ${envLabelOf(env, envState, nudge.envVersion)} has the handler · ${plural((nudge.addedIds || []).length, "new scenario")} added, in the New band until backfilled.`)}
+            {nudge.status === "approved" && nudge.kind === "remove" && `Stale on agent versions without ${nudge.capability} — they still run, but count toward no decision until you update or archive them. Nothing retired.`}
             {nudge.status === "approved" && nudge.kind === "behaviour" && `Approved · environment ${envLabelOf(env, envState, nudge.envVersion)} follows the new ${nudge.capability} behaviour.`}
-            {nudge.status === "approved" && nudge.kind === "core" && `Approved · forked as ${nudge.forkName}. This environment stays as it was.`}
+            {nudge.status === "approved" && nudge.kind === "core" && `Created ${nudge.forkName}. This environment stays as it was.`}
           </Typography>
 
           {nudge.status === "approved" && nudge.kind === "add" && (nudge.addedIds || []).length > 0 && (
             <Offers>
               {nudge.prevVersion && (
                 <Offer
-                  label={`Backfill: run ${nudge.prevVersion} on the ${plural(nudge.addedIds.length, "new scenario")}`}
+                  label={`Run ${nudge.prevVersion} on the ${plural(nudge.addedIds.length, "new scenario")}`}
                   price={runPrice(env, nudge.addedIds.length).line}
                   onClick={() => go(rerunHref(env.id, { agent: nudge.prevVersion, only: nudge.addedIds }))}
                 />
               )}
-              {ref && ref.label !== nudge.prevVersion && (
-                <Offer
-                  label={`Re-run reference ${ref.label} on them`}
-                  price={runPrice(env, nudge.addedIds.length).line}
-                  onClick={() => go(rerunHref(env.id, { agent: ref.label, only: nudge.addedIds }))}
-                />
-              )}
-            </Offers>
-          )}
-          {nudge.status === "approved" && nudge.kind === "remove" && ref && (
-            <Offers>
-              <Offer
-                label={`Re-run reference ${ref.label} on the new scenario set`}
-                price={runPrice(env, Math.max(0, (envState.scenarios || []).filter((r) => !r.archived && !r.retired).length - nudge.scenarioIds.length), 1).line}
-                onClick={() => go(rerunHref(env.id, { agent: ref.label, trials: 1 }))}
-              />
             </Offers>
           )}
           {nudge.status === "approved" && nudge.kind === "core" && nudge.forkId && (
             <Offers>
               <Offer label={`Open ${nudge.forkName}`} onClick={() => go(paths.dashboard.simulate.environmentDetail(nudge.forkId))} />
               <Offer
-                label={`Re-run reference ${nudge.agentVersion} in the fork to re-anchor`}
+                label={`Run ${nudge.agentVersion} in ${nudge.forkName}`}
                 price={runPrice({ surface: nudge.channel?.to }, nudge.scenarioIds.length, 1).line}
                 onClick={() => go(rerunHref(nudge.forkId, { agent: nudge.agentVersion, trials: 1 }))}
               />
             </Offers>
           )}
-          {patch && nudge.status === "dismissed" && (
+          {patch && nudge.status === "dismissed" && nudge.kind !== "remove" && (
             <Box>
               <Button size="small" onClick={() => patch(reopenPatch(envState, nudge))} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0, px: 0 }}>Reopen</Button>
             </Box>
@@ -671,7 +664,8 @@ function Offer({ label, price, onClick }) {
 Offer.propTypes = { label: PropTypes.string, price: PropTypes.string, onClick: PropTypes.func };
 
 function History({ nudge }) {
-  const answers = nudge.answers || [];
+  /* Only the answers the question still offers. */
+  const answers = (nudge.answers || []).filter((a) => ANSWERS[a.answer]);
   if (answers.length < 2) return null;
   return (
     <Typography sx={{ typography: "s3", color: "text.subtitle" }}>

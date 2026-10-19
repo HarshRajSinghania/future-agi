@@ -69,7 +69,7 @@ const cluster = ({ failing }) => {
     if (missing.length) missing.forEach((m) => add(`missing:${m}`, `never called ${m}`, t, m));
     else if (t.callLog?.unsupportedClaim) add("claim", "claimed something the call log does not support", t, "closing");
     else if (t.critical) add("rule", "broke a rule the environment enforces", t, "policy_check");
-    else add("other", "failed a grader with no tool evidence either way", t);
+    else add("other", "failed a check with no tool evidence either way", t);
   });
 
   const rows = [...groups.values()]
@@ -80,7 +80,7 @@ const cluster = ({ failing }) => {
     severity: rows[0]?.value > 1 ? "medium" : "low",
     headline: `${failing.length} failures, ${rows.length} distinct ${rows.length === 1 ? "cause" : "causes"}`,
     detail: rows[0]?.value > 1
-      ? `The largest cluster is ${rows[0].value} tasks that all ${rows[0].label}. One change addresses all of them — which is why the count of failures matters less than the count of causes.`
+      ? `The largest group is ${rows[0].value} conversations that all ${rows[0].label}. One change addresses all of them — which is why the count of failures matters less than the count of causes.`
       : "Each failure has its own cause; there is no single change that fixes several at once.",
     rows,
   };
@@ -110,7 +110,7 @@ const gaming = ({ tasks, measured, env, baseline }) => {
       id: "unsupported-claim",
       label: "Claimed an outcome with no tool call behind it",
       count: claims.length,
-      why: "Every grader that reads words scores these as successes. The world says nothing happened.",
+      why: "Every judge that reads only the words scores these as successes. The world says nothing happened.",
       tasks: claims.map((t) => t.id),
       step: "closing",
     });
@@ -169,7 +169,7 @@ const gaming = ({ tasks, measured, env, baseline }) => {
       severity: "low",
       clear: true,
       headline: "No gaming signals",
-      detail: "Every passing episode is supported by tool evidence, and no reward term paid out for doing less. This analyzer runs on every run and cannot be switched off.",
+      detail: "Every passing conversation is supported by tool evidence, and no part of the score paid out for doing less. This analyzer runs on every run and cannot be switched off.",
       rows: [],
     };
   }
@@ -227,17 +227,17 @@ const graderTrust = ({ tasks, measured }) => {
     }
     /* A grader that passes episodes with no tool evidence is reading words. */
     if (e.passed > 0 && e.withEvidence === 0) {
-      rows.push({ label: `${e.name} passed with no tool evidence`, value: null, note: "Every pass came from an episode that called nothing." });
+      rows.push({ label: `${e.name} passed with no tool evidence`, value: null, note: "Every pass came from a conversation that called nothing." });
     }
   });
 
   return {
     severity: rows.length ? "medium" : "low",
     clear: !rows.length,
-    headline: rows.length ? `${rows.length} ${rows.length === 1 ? "grader needs" : "graders need"} a second look` : "Graders discriminate",
+    headline: rows.length ? `${rows.length} ${rows.length === 1 ? "judge needs" : "judges need"} a second look` : "Every judge both passed and failed",
     detail: rows.length
-      ? "A check that cannot fail, or that passes an episode which did nothing, is not evidence. Fix the check before reading the score."
-      : "Each grader both passed and failed episodes in this run, which is the minimum evidence that it measures something.",
+      ? "A check that cannot fail, or that passes a conversation which did nothing, is not evidence. Fix the check before reading the score."
+      : "Each judge both passed and failed conversations in this run, which is the minimum evidence that it measures something.",
     rows,
   };
 };
@@ -268,22 +268,25 @@ const difficulty = ({ measured }) => {
     severity: weak ? "high" : "low",
     clear: !weak,
     headline: weak
-      ? "Fails hardest on the scenarios that block a release"
+      ? "Fails hardest on its must-pass scenarios"
       : "No category is disproportionately weak",
-    detail: "Where an agent fails matters more than how often. A suite that passes routine work and fails its blockers is worse than a lower rate spread evenly.",
+    detail: "Where an agent fails matters more than how often. A suite that passes routine work and fails its must-pass scenarios is worse than a lower rate spread evenly.",
     rows,
   };
 };
 
 /* ── the panel ───────────────────────────────────────────────────────────── */
 
+/* Visible names stay plain: "Gaming the checks" is reward hacking, "Can the
+   judges be trusted" is grader trust. `none` is what an analyzer with nothing
+   to read says — it stays on the panel, so the drawer always lists six. */
 export const ANALYZERS = [
-  { id: "classification", label: "Failure classification", reads: "the five failure domains", run: classify },
-  { id: "cluster", label: "Root-cause clustering", reads: "call logs, claims, rules, graders", run: cluster },
-  { id: "gaming", label: "Reward hacking", reads: "claims vs tool evidence, reward terms, the baseline", run: gaming, always: true },
-  { id: "alignment", label: "Prompt alignment", reads: "environment rules vs what failed", run: alignment },
-  { id: "graders", label: "Grader trust", reads: "each check's pass/fail spread and its evidence", run: graderTrust },
-  { id: "difficulty", label: "Difficulty calibration", reads: "blockers against routine scenarios", run: difficulty },
+  { id: "classification", label: "Failure classification", reads: "the five failure domains", run: classify, none: "No failures to classify in this run." },
+  { id: "cluster", label: "Root-cause clustering", reads: "call logs, claims, rules, judges", run: cluster, none: "Nothing failed, so there are no causes to group." },
+  { id: "gaming", label: "Gaming the checks", reads: "claims vs tool evidence, how the score is made up, the baseline", run: gaming, always: true },
+  { id: "alignment", label: "Prompt alignment", reads: "environment rules vs what failed", run: alignment, none: "This environment has no written rules to check the prompt against." },
+  { id: "graders", label: "Can the judges be trusted", reads: "each check's pass/fail spread and its evidence", run: graderTrust },
+  { id: "difficulty", label: "Must-pass vs routine", reads: "must-pass against routine scenarios", run: difficulty, none: "No scenario in this run could be measured." },
 ];
 
 /**
@@ -302,11 +305,14 @@ export const omegaReport = ({ env, summary, baseline }) => {
     || (t.status === "flaky" && flakySource(t) !== "simulator"));
   const ctx = { env, tasks, measured, failing, baseline, summary };
 
+  /* An analyzer with nothing to read still reports — "Nothing found", last —
+     rather than dropping off the panel. */
   return ANALYZERS.map((a) => {
     const result = a.run(ctx);
-    return result ? { ...a, ...result, rank: SEV[result.severity] || 0 } : null;
+    return result
+      ? { ...a, ...result, rank: SEV[result.severity] || 0 }
+      : { ...a, severity: "low", clear: true, nothing: true, headline: "Nothing found", detail: a.none || null, rows: [], rank: -1 };
   })
-    .filter(Boolean)
     .sort((a, b) => b.rank - a.rank);
 };
 
@@ -343,10 +349,10 @@ export const diagnosisTrace = ({ report, tasks, proposals = [], checks = [] }) =
     label: "Reading the run's evidence",
     result: `${measured.length} of ${tasks.length} measurable`,
     lines: [
-      `${tasks.length} episodes · ${steps} steps · ${calls} tool calls`,
+      `${tasks.length} conversations · ${steps} steps · ${calls} tool calls`,
       claims ? `${claims} closing statements with no tool call behind them` : "every closing statement has a tool call behind it",
       tasks.length - measured.length
-        ? `${tasks.length - measured.length} episodes left out — nothing could be measured on them`
+        ? `${tasks.length - measured.length} conversations left out — nothing could be measured on them`
         : "nothing was lost to the builder",
     ],
   };
@@ -366,7 +372,7 @@ export const diagnosisTrace = ({ report, tasks, proposals = [], checks = [] }) =
     label: "Drafting changes and projecting each one",
     result: `${proposals.length + checks.length} ${proposals.length + checks.length === 1 ? "change" : "changes"}`,
     lines: [
-      ...(checks.length ? [`${checks.length} to the measurement, because the gaming analyzer fired`] : []),
+      ...(checks.length ? [`${checks.length} to the measurement, because Gaming the checks found something`] : []),
       ...[...new Set(proposals.map((p) => p.kind))].map(
         (kind) => `${proposals.filter((p) => p.kind === kind).length} × ${kind.toLowerCase()}`,
       ),

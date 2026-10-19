@@ -190,7 +190,7 @@ export function FaultsControl({ setting, onApply }) {
             <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{setting.name}</Box>
           </Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            This share of its calls fails this way in every run. A world edit — the next run is on a new minor version.
+            This share of its calls fails this way in every run. A world edit, saved as the next environment version.
           </Typography>
         </Box>
         <Stack spacing={1.5} sx={{ p: 2 }}>

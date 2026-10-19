@@ -5,34 +5,41 @@
   the change where they review it.
 */
 import { REPEATS } from "../../_mock/optimizationRuns";
-import { proofKindOf } from "../../_mock/rsiModel";
+import { TRUST_TIERS, proofKindOf } from "../../_mock/rsiModel";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 const OUTCOME = { fixed: "Fixed", broke: "Broke", "still-failing": "Still failing", same: "Unchanged" };
 
 /* "Sealed · Run by Future AGI", from the record, else from the agent. */
-const proofOf = (record, agent) => record?.proof || (agent ? (() => { const p = proofKindOf(agent); return { kind: p.kind, label: p.label, tierLabel: p.tierLabel }; })() : null);
+const proofOf = (record, agent) => record?.proof || (agent ? (() => { const p = proofKindOf(agent); return { kind: p.kind, tier: p.tier, label: p.label, tierLabel: p.tierLabel }; })() : null);
 
 /*
   A prompt-only candidate — an agent built in Future AGI, run as its prompt
-  on our platform model — is named for what it is: high trust (we ran it),
-  lower fidelity (none of its tools ran).
+  on our platform model — names its trust tier first (we ran it), then what
+  it was: a prompt simulation, with none of the agent's tools.
 */
-export const PROMPT_SIMULATION = { label: "Prompt simulation", tierLabel: "high trust, lower fidelity", note: "runs the prompt without your tools" };
+export const PROMPT_SIMULATION = { label: "Prompt simulation", tierLabel: TRUST_TIERS.ours.label, note: "the prompt runs without your tools" };
+
+/* What each proof adds after its label: where its tools ran, or — on your
+   machine — who reported the code identity. */
+const tailOf = (proof) => (proof.tier === "local" || proof.tierLabel === TRUST_TIERS.local.label
+  ? " — the code identity is reported by your agent"
+  : proof.kind === "live" ? " — tools reached your real systems" : "");
 
 /** The proof as every surface names it: `{ ...proof, label, tierLabel, line }`. */
 export const proofDisplay = (proof) => {
   if (!proof) return null;
   if (proof.kind === "prompt-only") {
-    return { ...proof, label: PROMPT_SIMULATION.label, tierLabel: PROMPT_SIMULATION.tierLabel, line: `${PROMPT_SIMULATION.label} · ${PROMPT_SIMULATION.tierLabel} — ${PROMPT_SIMULATION.note}` };
+    return { ...proof, label: PROMPT_SIMULATION.label, tierLabel: PROMPT_SIMULATION.tierLabel, line: `${PROMPT_SIMULATION.tierLabel} · ${PROMPT_SIMULATION.label.toLowerCase()} — ${PROMPT_SIMULATION.note}` };
   }
-  return { ...proof, line: `${proof.label} · ${proof.tierLabel}${proof.kind === "live" ? " — tools reached your real systems" : ""}` };
+  return { ...proof, line: `${proof.label} · ${proof.tierLabel}${tailOf(proof)}` };
 };
 
 /** The proof label in one line — and a Live proof says its tools reached real systems. */
 export const proofLabelLine = (proof) => (proof
   ? proof.kind === "prompt-only"
     ? proofDisplay(proof).line
-    : `${proof.label} · ${proof.tierLabel}${proof.kind === "live" ? " — tools reached your real systems" : proof.kind === "sealed" ? " — tools answered by the seeded world" : " — the agent's own tools weren't part of it"}`
+    : `${proof.label} · ${proof.tierLabel}${proof.kind === "sealed" ? " — tools answered by the seeded world" : tailOf(proof) || " — the agent's own tools weren't part of it"}`
   : null);
 
 export const proofMarkdown = ({ record, outcome, name, agent, members, channelNotes = [], identity = null }) => {
@@ -44,7 +51,7 @@ export const proofMarkdown = ({ record, outcome, name, agent, members, channelNo
     ...(r.trainMeasuredTasks || []).map((t) => ({ ...t, outcome: winner?.perScenario?.[t.id] || "same", held: false })),
   ];
   const count = (k, held) => rows.filter((x) => x.outcome === k && (held === undefined || x.held === held)).length;
-  const line = (held) => `| ${held ? "Held back" : "Training"} | ${["fixed", "broke", "still-failing", "same"].map((k) => count(k, held)).join(" | ")} |`;
+  const line = (held) => `| ${held ? "Held back" : "Target"} | ${["fixed", "broke", "still-failing", "same"].map((k) => count(k, held)).join(" | ")} |`;
 
   /* One request, before and after — the issue's own scenario when there is
      one, preferring one the search never saw. */
@@ -61,7 +68,8 @@ export const proofMarkdown = ({ record, outcome, name, agent, members, channelNo
     "",
     `**${outcome.headline}**`,
     "",
-    `Held back, never seen by the search: ${r.heldBase}% → ${r.heldScore}% on ${r.heldMeasured} scenarios. Training: ${r.base}% → ${winner?.score ?? r.base}%.`,
+    /* The numbers of what ships — the search's pick, or a chosen run once verified. */
+    `Held back, never seen by the search: ${r.heldBase}% → ${outcome.heldScore ?? r.heldScore}% on ${r.heldMeasured} scenarios. Target: ${r.base}% → ${outcome.train?.to ?? winner?.score ?? r.base}%.${outcome.gap != null ? ` Overfit gap: ${outcome.gap} pts.` : ""}`,
     "",
     `Proof: ${proofLabelLine(proofOf(record, agent)) || "Run by Future AGI"}.`,
     ...(identity ? [`Measured on ${identity} — the environment version held fixed, only the agent changed.`] : []),
@@ -69,15 +77,15 @@ export const proofMarkdown = ({ record, outcome, name, agent, members, channelNo
     ...(r.split?.kind === "issue"
       ? [r.split.thin
         ? "Held-back check is thin: too few of the issue's scenario groups reproduced to hold any back."
-        : `Held back: ${r.split.held} of ${r.split.reproducing} reproducing scenario groups plus ${r.split.fresh} fresh ${r.split.fresh === 1 ? "variation" : "variations"} — whole groups, so no near-copy was seen in training.`]
+        : `Held back: ${r.split.held} of ${r.split.reproducing} reproducing scenario groups plus ${r.split.fresh} fresh ${r.split.fresh === 1 ? "variation" : "variations"} — whole groups, so no near-copy was among the targets.`]
       : r.split?.kind === "goal"
         ? [r.split.thin
           ? "Held-back check is thin: too few scenario groups fail the goal to hold any back."
-          : `Held back: ${r.split.held} of ${r.split.reproducing} scenario groups failing the goal plus ${r.split.fresh} fresh ${r.split.fresh === 1 ? "variation" : "variations"} — whole groups, so no near-copy was seen in training.`]
+          : `Held back: ${r.split.held} of ${r.split.reproducing} scenario groups failing the goal plus ${r.split.fresh} fresh ${r.split.fresh === 1 ? "variation" : "variations"} — whole groups, so no near-copy was among the targets.`]
         : []),
     ...((r.finalists || []).length ? [`Finalists scored once on the held-back set: ${r.finalists.map((f) => `Run ${f.n} ${f.heldScore}%${f.winner ? " (winner)" : f.accepted ? "" : ` (${f.why})`}`).join(", ")}.`] : []),
     /* Newer records: what deeper proof a code change got, and the noise it had to clear. */
-    ...(r.calibration ? [`Baseline twice: ${record.baseAgentVersion || "the current version"} ran against itself — ${r.calibration.disagreed} of ${r.calibration.scenarios} scenarios disagreed, so a gain had to clear ±${r.noise} pts and a flip on those had to repeat.`] : []),
+    ...(r.calibration ? [`Run-to-run noise: ${record.baseAgentVersion || "the current version"} ran twice against itself — ${r.calibration.disagreed} of ${r.calibration.scenarios} scenarios disagreed, so a gain had to clear ±${r.noise} pts and a flip on those had to repeat.`] : []),
     ...((r.finalists || []).find((f) => f.winner)?.fullRegression ? [`Code change → ${(r.finalists || []).find((f) => f.winner).repeats} repeats per finalist and the full regression set${winner?.repoTests ? `, and ${winner.repoTests.command} passed` : ""}.`] : []),
     ...((r.finalists || []).find((f) => f.winner)?.envs?.length ? [`Also ran once in ${(r.finalists || []).find((f) => f.winner).envs.map((e) => `${e.name} (${e.held ? `${e.mustPass} must-pass held` : `“${e.broke.title}” failed twice`})`).join(", ")}.`] : []),
     ...(r.mustPass ? [`Must-pass: ${r.mustPass.total} scenarios — ${[r.mustPass.marked ? `${r.mustPass.marked} marked` : null, r.mustPass.remembered ? `${r.mustPass.remembered} regression memory` : null, `${r.mustPass.passing} passing every repeat today`].filter(Boolean).join(", ")}. A failure counts only when it repeats on a re-run.${(r.flakyToday || []).length ? ` ${r.flakyToday.length} flaky today, shown but not counted.` : ""}`] : []),
@@ -100,7 +108,7 @@ export const proofMarkdown = ({ record, outcome, name, agent, members, channelNo
     "",
     ...(count("broke") ? [
       "Broke:",
-      ...rows.filter((x) => x.outcome === "broke").map((x) => `- ${x.title}${x.held ? " _(held back)_" : ""}`),
+      ...rows.filter((x) => x.outcome === "broke").map((x) => `- ${scenarioTitle(x.title)}${x.held ? " _(held back)_" : ""}`),
       "",
     ] : []),
     /* A structural change ships with its reasoning, for stricter review. */

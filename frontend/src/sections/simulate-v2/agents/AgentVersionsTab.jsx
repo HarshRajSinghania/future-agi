@@ -1,16 +1,19 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
-import { Box, Button, Menu, MenuItem, Select, Stack, Tooltip, Typography } from "@mui/material";
+import { useSnackbar } from "notistack";
+import { Box, Button, Dialog, Menu, MenuItem, Select, Stack, Tooltip, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { diffLines, fileChanges } from "../_mock/agentFiles";
 import { MONO, ORIGIN_LABEL, ago, parentLabel } from "./agentViewUtils";
 import { clickable, focusRing } from "../components/clickable";
-import { useSimStore } from "../store";
-import { versionReleaseOf } from "./versionRelease";
+import { useConnectedAgents, useSimStore } from "../store";
+import { RELEASE_WHEN, draftReleaseOf, releasedNote, rollbackVersionRecord, versionReleaseOf } from "./versionRelease";
 import { pinsDiff, versionPinsOf } from "../_mock/versionPins";
+import { versionNumber } from "../_mock/versions";
 import { OUTSIDE_CHANGE_LABEL, isOutsideChange } from "../_mock/agentSync";
 import { MAKE_ACTIVE_ADMIN_ONLY, activeVersionOf, currentWorkspaceRole } from "./agentProfile";
+
 
 const TONE = { added: "#16A34A", changed: "text.secondary", removed: "#DC2626" };
 
@@ -22,11 +25,10 @@ const TONE = { added: "#16A34A", changed: "text.secondary", removed: "#DC2626" }
 export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, statsOf, scopeName, onView, onRunIn, onMakeActive }) {
   const ordered = [...agent.versions].reverse();
   const { state, dispatch } = useSimStore();
-  /* The reference agent (PRD v7 AC-13.14): kept runnable, offered as a
-     priced re-run whenever a nudge creates a new scenario set or a fork.
-     Stored per environment; marking it here marks it everywhere it runs. */
-  const referenceIn = (label) => agent.usedIn.filter((u) => state.byEnv?.[u.envId]?.referenceAgentVersion === label);
-  const markReference = (label) => agent.usedIn.forEach((u) => dispatch({ type: "patchEnvState", envId: u.envId, patch: { referenceAgentVersion: label } }));
+  const { recordAgentVersion } = useConnectedAgents();
+  const { enqueueSnackbar } = useSnackbar();
+  /* "Roll back to vN" — asked first, then a new version is minted. */
+  const [rollbackTo, setRollbackTo] = useState(null);
   const release = useMemo(() => versionReleaseOf(agent, state), [agent, state]);
   /* A built-in Future AGI agent runs here, so "released" is ours to say: a
      workspace admin makes a draft version active, and that's the release. */
@@ -35,7 +37,7 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
   const activeAt = builtin ? agent.versions.findIndex((x) => x.label === active) : -1;
   const isAdmin = currentWorkspaceRole() === "admin";
   /* What each version pins — commit / platform config / prompt revision, and
-     a fingerprint of its tool definitions. */
+     its tool definitions. */
   const pins = useMemo(() => versionPinsOf({ agent, source, toolsOf }), [agent, source, toolsOf]);
   const labels = agent.versions.map((v) => v.label);
   const latest = labels[labels.length - 1];
@@ -62,6 +64,28 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
   const changed = Object.entries(compare.changes);
   const [open, setOpen] = useState({});
 
+  /* A new version with the older one's snapshot — a draft until released. */
+  const rollBack = (label) => {
+    const v = rollbackVersionRecord(agent, label, { toolsOf });
+    recordAgentVersion(agent.key, v);
+    setRollbackTo(null);
+    enqueueSnackbar(
+      `Saved as ${v.label}, rolled back to ${label} — a draft. Production stays on ${agent.production} until it's released.`,
+      { variant: "success" },
+    );
+  };
+  /* A draft — a roll back or an improvement's — is released by the person
+     who shipped it: the user marks a version released. Released, it's the
+     new baseline; an improvement's release is recorded where it was
+     verified, so its issue moves on to Watching. Built-in agents use Make
+     active instead. */
+  const markReleased = (label) => {
+    dispatch({ type: "updateAgentVersion", key: agent.key, label, patch: { status: "released", releasedAt: new Date().toISOString() } });
+    const home = draftReleaseOf(agent, state, label);
+    if (home) dispatch({ type: "patchEnvState", envId: home.envId, patch: home.patch });
+    enqueueSnackbar(`${label} is released — the new baseline. Environments following production test it on their next run; pinned ones stay put.`, { variant: "success" });
+  };
+
   return (
     <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "minmax(340px, 420px) 1fr" }, alignItems: "start" }}>
       {/* ── timeline ── */}
@@ -78,6 +102,8 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
             /* Built-in: newer than the active version, or made by an improvement and not released. */
             const draft = builtin && v.label !== active
               && (agent.versions.findIndex((x) => x.label === v.label) > activeAt || (release[v.label]?.from && !release[v.label]?.released));
+            /* A draft is never what an environment tests, and never rolled back to. */
+            const unreleased = draft || !!v.pendingDraft || (!!release[v.label]?.from && !release[v.label]?.released && !(builtin && v.label === active));
             return (
               <Stack key={v.label} direction="row" spacing={1.5} sx={{ pb: i === ordered.length - 1 ? 0 : 2.25 }}>
                 <Stack alignItems="center" sx={{ flexShrink: 0, pt: 0.25 }}>
@@ -96,18 +122,13 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
                     {v.label === agent.production && !release[v.label]?.live && !(builtin && v.label === active) && (
                       <Chip label="In production" tone="neutral" />
                     )}
-                    {referenceIn(v.label).length > 0 && (
-                      <Tooltip arrow title={`The reference in ${referenceIn(v.label).map((u) => u.envName).join(", ")} — every suggestion that makes a new scenario set or a fork offers a priced re-run of it.`}>
-                        <Box component="span"><Chip label="Reference" tone="neutral" /></Box>
-                      </Tooltip>
-                    )}
                     {/* From an improvement: a draft until someone releases it. */}
                     {(release[v.label]?.live || (builtin && v.label === active)) && (
                       <Tooltip arrow title={builtin && agent.values?.activeVersion?.label === v.label ? `Made active by ${agent.values.activeVersion.by || "a workspace admin"} ${ago(agent.values.activeVersion.at)}` : ""}>
                         <Box component="span"><Chip label={builtin ? "In production" : "Released"} tone="neutral" /></Box>
                       </Tooltip>
                     )}
-                    {draft && !release[v.label]?.from && <Chip label="Draft" tone="neutral" />}
+                    {(draft || (v.pendingDraft && !builtin)) && !release[v.label]?.from && <Chip label="Draft" tone="neutral" />}
                     {release[v.label]?.from && !release[v.label]?.released && !(builtin && v.label === active) && (
                       <Chip label={`Draft · ${release[v.label].from}`} tone="neutral" />
                     )}
@@ -122,7 +143,7 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
                     )}
                     <Box flex={1} />
                     {draft && onMakeActive && (
-                      <Tooltip arrow title={isAdmin ? "Release this version — it becomes the one the agent runs. Environments keep the version they test." : MAKE_ACTIVE_ADMIN_ONLY}>
+                      <Tooltip arrow title={isAdmin ? "Release this version — it becomes the one the agent runs, and environments following production test it next. Pinned ones stay put." : MAKE_ACTIVE_ADMIN_ONLY}>
                         <span>
                           <Button
                             size="small" variant="outlined" disabled={!isAdmin} onClick={() => onMakeActive(v.label)}
@@ -133,21 +154,16 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
                         </span>
                       </Tooltip>
                     )}
-                    {!isLatest && onRunIn && others.length > 0 && (
-                      <Button size="small" onClick={(e) => runIn(e, v.label, others)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0 }}>
-                        {others.length === 1 ? `Switch ${others[0].envName} to ${v.label}…` : `Switch an environment to ${v.label}…`}
-                      </Button>
-                    )}
-                    {agent.usedIn.length > 0 && referenceIn(v.label).length < agent.usedIn.length && (
-                      <Tooltip arrow title="Keep this version runnable as the reference. New scenario sets and forks offer a priced re-run of it — never started for you.">
-                        <Button size="small" onClick={() => markReference(v.label)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0 }}>
-                          Mark as reference
+                    {!builtin && (v.pendingDraft || (release[v.label]?.from && !release[v.label]?.released)) && (
+                      <Tooltip arrow title={`Mark it released ${RELEASE_WHEN[v.draftOf?.source] || "once it's live"}. It becomes the new baseline every improvement is measured against.`}>
+                        <Button
+                          size="small" variant="outlined" onClick={() => markReleased(v.label)}
+                          sx={{ typography: "s3", fontWeight: 700, height: 24, minWidth: 0, color: "text.primary", borderColor: "divider" }}
+                        >
+                          Mark released
                         </Button>
                       </Tooltip>
                     )}
-                    <Button size="small" onClick={() => onView(v.label)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0 }}>
-                      View files
-                    </Button>
                   </Stack>
                   <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
                     {`${ORIGIN_LABEL(v, source)} · ${ago(v.createdAt || v.connectedAt)}`}
@@ -169,15 +185,54 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
                     </Tooltip>
                   )}
                   {/* The version's own note says why; Compare shows exactly what. */}
-                  {(v.note ? [v.note] : (v.changes || []).map((c) => c.title)).map((t) => (
+                  {(v.note ? [releasedNote(v)] : (v.changes || []).map((c) => c.title)).map((t) => (
                     <Typography key={t} sx={{ typography: "s3", color: "text.secondary", mt: 0.375 }}>{t}</Typography>
                   ))}
+                  {/* One row of actions under every version, so they line up down the list. */}
+                  <Stack direction="row" alignItems="center" spacing={0.5} flexWrap="wrap" sx={{ mt: 0.5, ml: -0.75, "& .MuiButton-root": { px: 0.75, height: 24 } }}>
+                    <Button size="small" onClick={() => onView(v.label)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0 }}>
+                      View definition
+                    </Button>
+                    {!isLatest && !unreleased && onRunIn && others.length > 0 && (
+                      <Button size="small" onClick={(e) => runIn(e, v.label, others)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0 }}>
+                        {others.length === 1 ? `Test ${v.label} in ${others[0].envName}…` : `Test ${v.label} in an environment…`}
+                      </Button>
+                    )}
+                    {!isLatest && !unreleased && (
+                      <Button size="small" onClick={() => setRollbackTo(v.label)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0 }}>
+                        {`Roll back to ${v.label}`}
+                      </Button>
+                    )}
+                  </Stack>
                 </Box>
               </Stack>
             );
           })}
         </Box>
       </Box>
+
+      <Dialog
+        open={!!rollbackTo} onClose={() => setRollbackTo(null)}
+        PaperProps={{ sx: { borderRadius: 2, maxWidth: 440, width: "100%", bgcolor: "background.paper", backgroundImage: "none", border: "1px solid", borderColor: "divider" } }}
+      >
+        <Box sx={{ px: 3, pt: 2.5, pb: 1 }}>
+          <Typography sx={{ typography: "m3", fontWeight: 700 }}>{`Roll back to ${rollbackTo}?`}</Typography>
+        </Box>
+        <Stack spacing={1} sx={{ px: 3, pb: 2 }}>
+          <Typography sx={{ typography: "s2", color: "text.secondary" }}>
+            {`This saves a new version, v${Math.max(0, ...labels.map(versionNumber)) + 1}, with ${rollbackTo}'s ${source.kind === "repo" || source.kind === "framework" ? "commit" : source.kind === "upload" ? "bundle" : "configuration"}, prompts and tools. History stays as it is.`}
+          </Typography>
+          <Typography sx={{ typography: "s2", color: "text.secondary" }}>
+            {`It doesn't change what's in production until it's released — production stays on ${agent.production}.`}
+          </Typography>
+        </Stack>
+        <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ px: 3, pb: 2.5 }}>
+          <Button size="small" onClick={() => setRollbackTo(null)} sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}>Cancel</Button>
+          <Button size="small" variant="contained" color="primary" onClick={() => rollBack(rollbackTo)} sx={{ typography: "s2", fontWeight: 700 }}>
+            {`Roll back to ${rollbackTo}`}
+          </Button>
+        </Stack>
+      </Dialog>
 
       <Menu
         anchorEl={runPick?.anchor} open={!!runPick} onClose={() => setRunPick(null)}
@@ -214,9 +269,12 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
               <Box component="span" key={d.id}>
                 {i > 0 && " · "}
                 {`${d.label} `}
-                {d.changed ? (
-                  <Box component="span" sx={{ color: "text.secondary" }}>{`${d.from || "—"} → ${d.to}`}</Box>
-                ) : `${d.to} unchanged`}
+                {d.id === "tools"
+                  /* Tools are compared by their definitions, said in words. */
+                  ? (d.changed ? <Box component="span" sx={{ color: "text.secondary" }}>changed</Box> : "unchanged")
+                  : d.changed ? (
+                    <Box component="span" sx={{ color: "text.secondary" }}>{`${d.from || "—"} → ${d.to}`}</Box>
+                  ) : `${d.to} unchanged`}
               </Box>
             ))}
           </Typography>

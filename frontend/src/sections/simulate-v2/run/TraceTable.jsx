@@ -16,6 +16,7 @@ import {
   csatOf, latencyOf, TRACE_COLUMNS, HIDDEN_EVAL, visibleEvals, defaultTraceColumns, GROUPINGS, humanize, deriveUseCaseLabel,
 } from "./traceTableHelpers";
 import { clickable, focusRing } from "../components/clickable";
+import { scenarioTitle } from "../_mock/scenarios";
 
 /**
  * The traces, as a table with optional grouping.
@@ -29,7 +30,7 @@ import { clickable, focusRing } from "../components/clickable";
  *   - None            → flat list (default)
  *   - Use case        → task.useCase (fallback: derive from id / title)
  *   - Failure pattern → Passed / Critical / Said-not-done /
- *                       Grader failed / Errored / Not measured
+ *                       Grader failed / Error / Not measured
  *   - Status          → the coarser Passed / Failed / Not measured cut
  *
  * Each group header shows: chevron · label · task count · pass-rate
@@ -276,7 +277,7 @@ const groupOfTask = (t, mode, env) => {
   }
   if (mode === "pattern") {
     if (t.status === "passed" || t.status === "unmeasured") return null;
-    if (t.status === "error") return "Errored";
+    if (t.status === "error") return "Error";
     if (t.critical) return "Critical rule broken";
     if (t.callLog?.unsupportedClaim) return "Said, not done";
     if ((t.evalResults || []).some((r) => !r.passed)) return "Evaluation failed";
@@ -285,13 +286,12 @@ const groupOfTask = (t, mode, env) => {
   if (mode === "cause") {
     const v = t.verdictCause;
     if (!v) return t.status === "passed" ? "Passed" : t.status === "unmeasured" ? notCountedLabel(t) : "Failed";
-    return v.na ? "N/A" : v.label;
+    return v.label;
   }
   if (mode === "status") {
-    if (t.verdictCause?.pulled) return "Pulled for review";
     if (t.status === "passed") return "Passed";
     if (t.status === "unmeasured") return notCountedLabel(t);
-    if (t.status === "error") return "Errored";
+    if (t.status === "error") return "Error";
     return "Failed";
   }
   if (mode === "persona") {
@@ -351,7 +351,7 @@ const groupOfTask = (t, mode, env) => {
     /* Task groups rows by scenario title so trials of the same
        scenario cluster together. Falls back to the scenario id when a
        row hasn't materialised a title yet. */
-    return t.title || t.name || t.id || "Untitled task";
+    return scenarioTitle(t.title) || t.name || t.id || "Untitled task";
   }
   if (mode === "none") {
     /* Flat view — every row lands in the same group. The group header
@@ -363,14 +363,14 @@ const groupOfTask = (t, mode, env) => {
 };
 
 const GROUP_SORT_ORDER = {
-  pattern: ["Critical rule broken", "Said, not done", "Evaluation failed", "Errored", "Other failure"],
-  status:  ["Failed", "Errored", "Inconclusive", "Test invalid", "Error", "Passed", "Pulled for review"],
+  pattern: ["Critical rule broken", "Said, not done", "Evaluation failed", "Error", "Other failure"],
+  status:  ["Failed", "Inconclusive", "Test invalid", "Error", "Passed"],
   cause: [
-    VERDICT_CAUSES["fail-cheat"].label, VERDICT_CAUSES["fail-required"].label, VERDICT_CAUSES["fail-capability"].label, VERDICT_CAUSES["fail-agent"].label,
+    VERDICT_CAUSES["fail-required"].label, VERDICT_CAUSES["fail-agent"].label,
     VERDICT_CAUSES["inc-evidence"].label,
     VERDICT_CAUSES["inc-simulator"].label, VERDICT_CAUSES["inc-setup"].label, VERDICT_CAUSES["inc-judge"].label,
     VERDICT_CAUSES["inc-infra"].label, VERDICT_CAUSES["inc-transport"].label,
-    VERDICT_CAUSES.pass.label, "canary · held", "canary · not checked", "Pulled for review", "N/A",
+    VERDICT_CAUSES.pass.label, "Pulled for review",
   ],
 };
 
@@ -1382,34 +1382,24 @@ function unmeasuredWhy(t) {
 
 /*
   The row's verdict with its cause (PRD v7 §4.10.10, updated RSI PRD):
-  "Failed · capability-missing", "Test invalid · simulator", "Error ·
-  connection", "N/A". A retry, a monitor's suspicion, a stale scenario and a
-  re-grade trail it, quietly — none changes the verdict on its own.
+  "Failed · agent", "Test invalid · simulator", "Error · connection". A
+  retry, a stale scenario and a re-grade trail it, quietly — none changes the
+  verdict on its own.
 */
 function VerdictLabel({ task, outcome }) {
   const v = task.verdictCause;
   let label = outcome.label;
   let color = outcome.color;
   let tip = "";
-  if (v?.na) {
-    label = "N/A";
-    color = "text.subtitle";
-    tip = `${v.naReason}. Outside every count.`;
-  } else if (v?.canary) {
-    label = v.checked ? "Canary · held" : "Canary";
-    color = "text.subtitle";
-    tip = verdictLineOf(v);
-  } else if (v?.pulled) {
+  if (v?.pulled) {
     label = "Pulled for review";
     color = "text.subtitle";
     tip = `${v.reason} Outside every count.`;
   } else if (v?.cause && v.cause !== "pass") {
     const inc = v.cause.startsWith("inc-");
     label = `${inc ? OUTCOMES[v.outcome || outcomeOfCause(v.cause)].label : outcome.label} · ${causeShort(v.cause)}`;
-    tip = v.cause === "fail-cheat" ? v.cheat?.evidence || VERDICT_CAUSES[v.cause].note
-      : v.cause === "fail-capability" ? `Needs ${v.missing.join(", ")}, which this agent version doesn't have. Counted in the score.`
-        : v.cause === "fail-required" ? `${verdictLineOf(v)}. ${VERDICT_CAUSES[v.cause].note}`
-          : VERDICT_CAUSES[v.cause]?.note || "";
+    tip = v.cause === "fail-required" ? `${verdictLineOf(v)}. ${VERDICT_CAUSES[v.cause].note}`
+      : VERDICT_CAUSES[v.cause]?.note || "";
   }
   return (
     <>
@@ -1425,18 +1415,13 @@ function VerdictLabel({ task, outcome }) {
         );
       })()}
       {v?.stale && (
-        <Tooltip arrow title={`${STALE_LABEL[v.stale]} when the run started — it ran, but counts toward no decision until it's updated or archived.`}>
-          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{`· ${STALE_LABEL[v.stale].toLowerCase()} · not counted`}</Typography>
+        <Tooltip arrow title={`${STALE_LABEL[v.stale] || "Stale"} when the run started — it ran, but counts toward no decision until it's updated or archived.`}>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{`· ${(STALE_LABEL[v.stale] || "Stale").toLowerCase()} · not counted`}</Typography>
         </Tooltip>
       )}
       {v?.exploration && (
-        <Tooltip arrow title={v.candidate ? "A proposed scenario — it ran, and joins the set only on approval. Shown separately from the run's rates." : "Exploration tier — its results show separately from the run's rates."}>
-          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{v.candidate ? "· proposed" : "· exploration"}</Typography>
-        </Tooltip>
-      )}
-      {task.suspected && !task.cheat && (
-        <Tooltip arrow title={task.suspected.evidence}>
-          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>· suspected</Typography>
+        <Tooltip arrow title="A proposed scenario, not yet added to the environment. Shown separately from the run's rates.">
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>· proposed</Typography>
         </Tooltip>
       )}
       {task.regraded?.changed && (
@@ -1455,8 +1440,8 @@ function runOutcome(status, task) {
   switch (status) {
     case "passed": return { label: "Passed", color: "#16A34A" };
     case "failed": return { label: "Failed", color: "#DC2626" };
-    case "flaky": return { label: "Mixed", color: "text.primary" };
-    case "error": return { label: "Errored", color: "#DC2626" };
+    case "flaky": return { label: "Flaky", color: "text.primary" };
+    case "error": return { label: "Error", color: "#DC2626" };
     /* Inconclusive, test invalid or error — none counts for or against the agent. */
     default: return { label: task ? notCountedLabel(task) : "Inconclusive", color: "#94A3B8" };
   }

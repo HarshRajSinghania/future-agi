@@ -17,7 +17,8 @@
 import { subGoalResultsOf } from "./scenarioSubGoals";
 import { hashSeed } from "./runStream";
 import { VERDICT_CAUSES, causeOf } from "./decoupled";
-import { CAUSE_ORDER, CHEAT_SIGNALS, taskVerdictsOf } from "./runCauses";
+import { CAUSE_ORDER, taskVerdictsOf } from "./runCauses";
+import { goalLabel } from "./scenarios";
 
 /* Below this many measured scenarios a share is noise — panels say so. */
 export const MIN_MEASURED = 5;
@@ -55,9 +56,6 @@ const topCount = (values) => {
 const FAULT_SAID = { timeout: "times out", error: "returns an error", rate_limited: "is rate-limited", malformed: "returns a malformed response", slow: "is slow" };
 
 const rootOf = (t, sub) => {
-  /* A confirmed cheat is its own issue kind (§4.10.10) — whatever else the
-     scenario missed, the shortcut is what to read first. */
-  if (t.cheat) return { key: `cheat:${t.cheat.signal}${t.cheat.tool ? `:${t.cheat.tool}` : ""}`, kind: "cheat", signal: t.cheat.signal, tool: t.cheat.tool || null };
   /* Lost to an injected fault: the fault is the trigger, not recovering is
      the agent's failure — the root, ahead of whatever sub-goal it took down. */
   if (t.faultFailed) {
@@ -84,11 +82,6 @@ const an = (w) => `${/^[aeiou]/i.test(w) ? "an" : "a"} ${w}`;
 
 /* What broke, said the way someone would report it. */
 const titleOf = (root) => {
-  if (root.kind === "cheat") {
-    if (root.signal === "forbidden-tool") return `Takes a forbidden shortcut — calls ${root.tool}`;
-    if (root.signal === "canary") return "Reaches the goal on an impossible scenario";
-    return `Games the setup — ${(CHEAT_SIGNALS[root.signal] || "shortcut").toLowerCase()}`;
-  }
   if (root.kind === "subgoal") {
     const x = root.subGoal.text.replace(/\.$/, "");
     if (/^verify who/i.test(x)) return "Skips the identity check";
@@ -118,14 +111,6 @@ const titleOf = (root) => {
 
 /* The root failure in a line, for the issue's header. */
 const rootLineOf = (root) => {
-  if (root.kind === "cheat") {
-    return {
-      label: root.signal === "forbidden-tool"
-        ? `${root.tool} is off-limits in this environment, and the agent called it`
-        : root.signal === "canary" ? "The goal state was reached where no legitimate path exists" : CHEAT_SIGNALS[root.signal] || "A shortcut confirmed by evidence",
-      note: "fail · cheat — confirmed by evidence, scored 0",
-    };
-  }
   if (root.kind === "subgoal") return { label: root.subGoal.text, mark: root.subGoal.mark, note: "First critical sub-goal missed" };
   if (root.kind === "tool") return { label: `${root.tool} was needed and never called`, note: "No critical sub-goal recorded the miss" };
   if (root.kind === "fault") return { label: `${root.tool} ${FAULT_SAID[root.fault] || "failed"} (injected) and the agent didn't retry or escalate`, note: "Injected fault — the World tab's fault dial" };
@@ -137,11 +122,6 @@ const rootLineOf = (root) => {
 
 /* A high-level fix, and the layer it lives in. */
 const fixOf = (root) => {
-  if (root.kind === "cheat") {
-    return root.signal === "forbidden-tool"
-      ? { text: `Take ${root.tool} out of the agent's tool list, or say in its description that it is never for customer requests.`, layer: "Tool description" }
-      : { text: "When the world says the goal can't be met, tell the caller so and offer what can be done — never report it done.", layer: "Prompt" };
-  }
   if (root.kind === "subgoal") {
     const x = root.subGoal.text;
     if (/^verify who/i.test(x)) return { text: "Make the identity check a gate: no account tool runs until the caller is verified, and pushback doesn't skip it.", layer: "Prompt + flow" };
@@ -175,7 +155,7 @@ const focusOf = (root) => {
     if (/^refuse/i.test(x)) return "refuse";
     return "step";
   }
-  return { tool: "tool", fault: "fault", claim: "claim", eval: "eval", cheat: "claim" }[root.kind] || "other";
+  return { tool: "tool", fault: "fault", claim: "claim", eval: "eval" }[root.kind] || "other";
 };
 
 /**
@@ -221,20 +201,19 @@ const symptomsOf = (members, root, subs) => {
   return [...out.values()].sort((a, b) => b.ids.length - a.ids.length);
 };
 
-const impactOf = (t) => (1 - (t.cheat ? 0 : shareOf(t))) * (t.critical ? 2 : 1);
+const impactOf = (t) => (1 - shareOf(t)) * (t.critical ? 2 : 1);
 
 /**
  * Everything the Insights tab shows, for one run.
  * `goalOf(task)` names a scenario's goal the way the Scenarios table does.
  */
-export const runInsightsOf = ({ tasks: allTasks = [], env, envState, run = null, goalOf = (t) => t.useCase || "Other" }) => {
-  /* Each scenario's verdict cause (§4.10.10). N/A scenarios (not applicable
-     to this agent version) and canaries sit outside every number here. */
+export const runInsightsOf = ({ tasks: allTasks = [], env, envState, run = null, goalOf = (t) => goalLabel(t.useCase) || "Other" }) => {
+  /* Each scenario's verdict cause. */
   const verdicts = taskVerdictsOf({ env, envState, run, tasks: allTasks });
-  /* Exploration scenarios and proposed candidates show separately (§4.10.9). */
-  /* So are scenarios pulled after testing invalid twice, and Outdated /
-     Re-check scenarios, which ran but count toward no decision. */
-  const tasks = allTasks.filter((t) => { const v = verdicts.get(t.id); return v && !v.na && !v.canary && !v.exploration && !v.pulled && !v.stale; });
+  /* Proposed candidates show separately. So are scenarios pulled after
+     testing invalid twice, and Outdated / Re-check / Stale scenarios, which
+     ran but count toward no decision. */
+  const tasks = allTasks.filter((t) => { const v = verdicts.get(t.id); return v && !v.exploration && !v.pulled && !v.stale; });
   const outside = (key) => allTasks.filter((t) => verdicts.get(t.id)?.[key]).map((t) => t.id);
   const measured = tasks.filter(isMeasured);
   const unmeasured = tasks.filter((t) => !isMeasured(t));
@@ -276,9 +255,8 @@ export const runInsightsOf = ({ tasks: allTasks = [], env, envState, run = null,
     /* Critical scenarios that failed — counted, never a gate. */
     const blockers = members.filter((t) => t.critical && isFail(t)).length;
     const failedN = members.filter(isFail).length;
-    /* Severity from critical sub-goal failures and counts. A confirmed cheat
-       is critical: the score it would have earned was gamed. */
-    const severity = root.kind === "cheat" || (critFails >= 2 && failedN >= 2) || (critFails >= 1 && failedN >= 4)
+    /* Severity from critical sub-goal failures and counts. */
+    const severity = (critFails >= 2 && failedN >= 2) || (critFails >= 1 && failedN >= 4)
       ? "critical"
       : critFails >= 1 || failedN >= 3 ? "high" : failedN ? "medium" : "low";
     const title = `${titleOf(root)}${pushback ? " under pushback" : ""}`;
@@ -302,9 +280,8 @@ export const runInsightsOf = ({ tasks: allTasks = [], env, envState, run = null,
   };
 
   const all = [...groups.values()].map(toIssue);
-  /* A cause seen once isn't a pattern — unless it failed a critical scenario
-     or it is a confirmed cheat. */
-  const issues = all.filter((i) => i.members.length >= 2 || i.blockers > 0 || i.root.kind === "cheat")
+  /* A cause seen once isn't a pattern — unless it failed a critical scenario. */
+  const issues = all.filter((i) => i.members.length >= 2 || i.blockers > 0)
     .sort((a, b) => b.impact - a.impact || b.members.length - a.members.length);
   const unclustered = all.filter((i) => !issues.includes(i)).flatMap((i) => i.members);
   const SEV = ["critical", "high", "medium", "low"];
@@ -315,7 +292,6 @@ export const runInsightsOf = ({ tasks: allTasks = [], env, envState, run = null,
     i.headline = [
       `${i.members.length} of ${measured.length} scenarios`,
       i.critFails ? plural(i.critFails, "critical sub-goal failure") : null,
-      i.root.kind === "cheat" ? "fail · cheat, scored 0" : null,
       i.personas ? `personas: ${i.personas.temperament} × ${i.personas.count}` : null,
     ].filter(Boolean);
     i.severityRank = SEV.indexOf(i.severity);
@@ -403,20 +379,16 @@ export const runInsightsOf = ({ tasks: allTasks = [], env, envState, run = null,
     lowVolume,
     notMeasured,
     causes,
-    notApplicable: { count: outside("na").length, ids: outside("na") },
-    canaries: { count: outside("canary").length, ids: outside("canary") },
     exploration: { count: outside("exploration").length, ids: outside("exploration") },
     pulled: { count: outside("pulled").length, ids: outside("pulled") },
     stale: { count: outside("stale").length, ids: outside("stale") },
-    cheats: tasks.filter((t) => t.cheat).map((t) => t.id),
-    suspected: { count: tasks.filter((t) => t.suspected && !t.cheat).length, ids: tasks.filter((t) => t.suspected && !t.cheat).map((t) => t.id) },
     issues,
     unclustered: { count: unclustered.length, ids: unclustered.map((t) => t.id) },
     goals,
     subGoals,
     brief: briefOf({
       run, measured, passed, failed, mixed, notMeasured, issues, lowVolume, unclustered, causes,
-      na: outside("na"), canaries: outside("canary"), exploration: outside("exploration"), pulled: outside("pulled"), stale: outside("stale"), suspected: tasks.filter((t) => t.suspected && !t.cheat).map((t) => t.id),
+      exploration: outside("exploration"), pulled: outside("pulled"), stale: outside("stale"),
     }),
   };
 };
@@ -445,7 +417,7 @@ function factorsOf(failing, pass, issue) {
   text, or a link that filters the Scenarios tab ({ text, ids, label }) or
   jumps to an issue ({ text, issue }).
 */
-function briefOf({ run, measured, passed, failed, mixed, notMeasured, issues, lowVolume, unclustered, causes = [], na = [], canaries = [], exploration = [], pulled = [], stale = [], suspected = [] }) {
+function briefOf({ run, measured, passed, failed, mixed, notMeasured, issues, lowVolume, unclustered, causes = [], exploration = [], pulled = [], stale = [] }) {
   const runName = run?.ordinal ? `Run ${run.ordinal}` : "This run";
   const agent = run?.agentVersion ? ` put agent ${run.agentVersion} through` : " ran";
   const repeats = run?.repeats > 1 ? ` × ${run.repeats} repeats` : "";
@@ -459,7 +431,7 @@ function briefOf({ run, measured, passed, failed, mixed, notMeasured, issues, lo
     if (mixed.length) { happened.push({ text: ", " }); happened.push({ text: `${mixed.length} ${mixed.length === 1 ? "was" : "were"} mixed`, ids: mixed.map((t) => t.id), label: "Mixed" }); }
     happened.push({ text: "." });
   }
-  /* The fails, by cause — capability-missing and cheat counted with their own numbers. */
+  /* The fails, by cause. */
   const fails = causes.filter((c) => c.id.startsWith("fail-"));
   if (fails.length && (fails.length > 1 || fails[0].id !== "fail-agent")) {
     happened.push({ text: " By cause: " });
@@ -474,19 +446,9 @@ function briefOf({ run, measured, passed, failed, mixed, notMeasured, issues, lo
     happened.push({ text: `${notMeasured.count} didn't count`, ids: notMeasured.ids, label: "Not counted" });
     happened.push({ text: ` (${notMeasured.causes.map((c) => `${c.label} ${c.ids.length}`).join(", ")}) — neither for nor against the agent, left out of the rate.` });
   }
-  if (na.length) {
-    happened.push({ text: " " });
-    happened.push({ text: `${na.length} ${na.length === 1 ? "scenario doesn't" : "scenarios don't"} apply`, ids: na, label: "N/A" });
-    happened.push({ text: " to this agent version (N/A) and sit outside every count." });
-  }
-  if (canaries.length) {
-    happened.push({ text: " " });
-    happened.push({ text: `${canaries.length} ${canaries.length === 1 ? "canary" : "canaries"}`, ids: canaries, label: "Canaries" });
-    happened.push({ text: " held — impossible scenarios count only as a cheat check." });
-  }
   if (exploration.length) {
     happened.push({ text: " " });
-    happened.push({ text: `${exploration.length} exploration ${exploration.length === 1 ? "scenario" : "scenarios"}`, ids: exploration, label: "Exploration" });
+    happened.push({ text: `${exploration.length} proposed ${exploration.length === 1 ? "scenario" : "scenarios"}`, ids: exploration, label: "Proposed" });
     happened.push({ text: " ran too — their results show separately in the run summary, outside these numbers." });
   }
   if (pulled.length) {
@@ -496,13 +458,8 @@ function briefOf({ run, measured, passed, failed, mixed, notMeasured, issues, lo
   }
   if (stale.length) {
     happened.push({ text: " " });
-    happened.push({ text: `${stale.length} outdated or re-check ${stale.length === 1 ? "scenario" : "scenarios"}`, ids: stale, label: "Outdated or re-check" });
+    happened.push({ text: `${stale.length} outdated, re-check or stale ${stale.length === 1 ? "scenario" : "scenarios"}`, ids: stale, label: "Outdated, re-check or stale" });
     happened.push({ text: " ran but count toward no decision until updated or archived." });
-  }
-  if (suspected.length) {
-    happened.push({ text: " The trajectory monitor flagged " });
-    happened.push({ text: `${suspected.length} passing ${suspected.length === 1 ? "scenario" : "scenarios"}`, ids: suspected, label: "Suspected shortcut" });
-    happened.push({ text: " for review — suspected only, still scored as passed." });
   }
   if (issues.length) {
     const covered = issues.reduce((a, i) => a + i.members.length, 0);

@@ -6,7 +6,7 @@ import Iconify from "src/components/iconify";
 import { CopyField } from "../../components/primitives";
 import {
   FIDELITY_ICONS, MODE_ICONS, RUN_LOCATIONS, WEBHOOK_PROVIDERS,
-  replicationOf, recommendedRunLocation, runLocationReason,
+  replicationOf, runLocationReason,
 } from "../../_mock/replication";
 
 /*
@@ -134,40 +134,41 @@ export function HowWeCopyIt({ agent, env, title = "How we'll test it", aside }) 
 HowWeCopyIt.propTypes = { agent: PropTypes.object, env: PropTypes.object, title: PropTypes.string, aside: PropTypes.node };
 
 /**
- * Where a code agent runs (Story 6): locally through the SDK, or in our
- * hosted sandbox. The recommended one is marked; the cost note is part of
- * each option because it is part of the choice.
+ * Where a code agent runs (Story 6): our hosted sandbox, where we build it
+ * fresh from its code, or your own machine through our SDK. Running on your
+ * machine is set up by connecting through the SDK — the agent checks in from
+ * there — so it shows here only for an agent that did; code we build offers
+ * the hosted sandbox. The cost note is part of each option because it is
+ * part of the choice.
  */
 /* Each option's note, cut to one line — the full note sits behind the ⓘ. */
-const RUN_LOCATION_SHORT = { sdk: "In-process · nothing metered", hosted: "Real tools, isolated · metered by the minute" };
+const RUN_LOCATION_SHORT = { hosted: "Built from your code · metered by the minute", sdk: "Local code through our SDK · identified by commit" };
 
-export function RunLocationChoice({ agent, env, value, onChange, dense }) {
-  const rec = recommendedRunLocation(agent, env);
+export function RunLocationChoice({ value = "hosted", onChange, dense }) {
   return (
     <Box>
-      <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
-        {["sdk", "hosted"].map((id) => {
-          const on = value === id;
+      <Box sx={{ display: "grid", gap: 1 }}>
+        {[value === "sdk" ? "sdk" : "hosted"].map((id) => {
           const loc = RUN_LOCATIONS[id];
+          const on = value === id;
+          const pick = () => { if (value !== id) onChange?.(id); };
           return (
             <Stack
               key={id}
               direction="row" spacing={1.25} alignItems="flex-start"
               role="radio" aria-checked={on} tabIndex={0}
-              onClick={() => onChange(id)}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange(id); } }}
+              onClick={pick}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }}
               sx={{
-                px: 1.5, py: dense ? 1 : 1.25, borderRadius: 1, cursor: "pointer", border: "1px solid",
+                px: 1.5, py: dense ? 1 : 1.25, borderRadius: 1, border: "1px solid",
+                cursor: onChange ? "pointer" : "default",
                 borderColor: on ? "text.primary" : "divider",
                 bgcolor: (t) => (on ? selectedBg(t) : "transparent"),
               }}
             >
               <Iconify icon={id === "sdk" ? "solar:laptop-2-linear" : "solar:server-square-linear"} width={16} sx={{ color: "text.secondary", mt: 0.25, flexShrink: 0 }} />
               <Box flex={1} minWidth={0}>
-                <Stack direction="row" alignItems="center" spacing={0.75} useFlexGap flexWrap="wrap">
-                  <Typography sx={{ typography: "s2", fontWeight: 600 }}>{loc.label}</Typography>
-                  {id === rec && <Typography sx={{ ...HEAD, letterSpacing: 0.3 }}>Recommended</Typography>}
-                </Stack>
+                <Typography sx={{ typography: "s2", fontWeight: 600 }}>{loc.label}</Typography>
                 <Typography component="div" sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
                   <HintLine hint={loc.note}>{RUN_LOCATION_SHORT[id]}</HintLine>
                 </Typography>
@@ -178,13 +179,13 @@ export function RunLocationChoice({ agent, env, value, onChange, dense }) {
         })}
       </Box>
       <Typography component="div" sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
-        <HintLine hint={`${runLocationReason(rec)}.`}>Change it later on the Connections tab.</HintLine>
+        <HintLine hint={`${runLocationReason(value)}.`}>{value === "sdk" ? "It runs on your machine and checks in with its commit." : "We build it from the code for every run."}</HintLine>
       </Typography>
     </Box>
   );
 }
 RunLocationChoice.propTypes = {
-  agent: PropTypes.object, env: PropTypes.object, value: PropTypes.oneOf(["sdk", "hosted"]), onChange: PropTypes.func.isRequired, dense: PropTypes.bool,
+  agent: PropTypes.object, env: PropTypes.object, value: PropTypes.oneOf(["sdk", "hosted"]), onChange: PropTypes.func, dense: PropTypes.bool,
 };
 
 /**
@@ -342,7 +343,7 @@ export function CloneScopeChoice({ providerName, choice, onReissue, onMocked }) 
       id: "mocked",
       title: "Override its settings for one call",
       body: "Live assistant, new settings per call · Proof: Live",
-      hint: "Each test call runs your live assistant with the candidate's settings for that call only. Its real tools run.",
+      hint: "Each test call runs your live assistant with the proposed change's settings for that call only. Its real tools run.",
       onClick: onMocked,
     },
   ];

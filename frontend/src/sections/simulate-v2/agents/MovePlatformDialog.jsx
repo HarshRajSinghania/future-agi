@@ -1,7 +1,7 @@
 import PropTypes from "prop-types";
 import { useEffect, useState } from "react";
 import { Box, Button, Dialog, Stack, Typography } from "@mui/material";
-import { HOSTED_PLATFORMS_BY_TYPE, PLATFORM_LOGOS, isLivePlatform } from "../environments/connectOptions";
+import { HOSTED_PLATFORMS_BY_TYPE, PLATFORM_KEY_HELPER, PLATFORM_LOGOS, isLivePlatform } from "../environments/connectOptions";
 import { ChipCard, Field, Label, PlatformLogo } from "../environments/StartEnvironment";
 import SecretRefField from "./connect/SecretRefField";
 import { keyRefOf, preflightRecord } from "../_mock/secretRefs";
@@ -100,7 +100,7 @@ export default function MovePlatformDialog({ open, onClose, agent, onSave }) {
                 required={!samePlatform}
                 placeholder={`vault://acme/sim/${platform.id}_api_key`}
                 value={keyRef} onChange={setKeyRef}
-                helper={samePlatform ? "Leave empty to keep the key it uses now." : `${platform.name} needs its own key.`}
+                helper={samePlatform ? `Leave empty to keep the key it uses now. ${PLATFORM_KEY_HELPER}` : `${platform.name} needs its own key. ${PLATFORM_KEY_HELPER}`}
                 fullWidth
               />
             </>

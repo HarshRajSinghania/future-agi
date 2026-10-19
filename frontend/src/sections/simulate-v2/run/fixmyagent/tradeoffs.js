@@ -5,22 +5,29 @@
   answers faster. The frontier is the set where nothing else is at least as
   good on all three and better on one.
 */
-import { winnerEffect, COST_NOISE } from "../../_mock/optimizationRuns";
+import { candidateEffect, costSavingsOf, limitGateOf, projectedHeld, chosenVerified, isIssueFix } from "../../_mock/optimizationRuns";
+
+export { projectedHeld, chosenVerified };
 
 export const candidatesOf = (record) => {
   const r = record?.result;
   if (!r) return [];
-  const limits = record.limits || {};
+  /* The search's own gate: a percentage or a fixed amount, "No increase"
+     within run-to-run noise, cost only where it's measured. */
+  const gate = limitGateOf(record);
   return r.trials.map((t) => {
     const proposals = (r.pool || []).filter((p) => t.picks.includes(p.id));
-    const effect = winnerEffect({ proposals, costSavings: t.costSavings });
-    /* "No increase" allows the noise two runs differ by, on newer records. */
-    const ceiling = limits.costCeiling ?? 5;
-    const tol = record.frozen?.costNoise && ceiling <= 0 ? COST_NOISE : 0;
-    const overCost = effect.cost > ceiling + tol;
-    const overLatency = effect.latency > (limits.latencyCeiling ?? 10);
+    const effect = candidateEffect(t, proposals);
+    const over = proposals.length ? t.overLimit || gate(proposals, costSavingsOf(t)) : null;
+    const overCost = over?.id === "cost";
+    const overLatency = over?.id === "latency";
     /* Stopped at Fits the environment — never ran, never eligible. */
     const unfit = (!!t.compat && t.compat.pass === false) || (!!t.static && t.static.pass === false);
+    /* The same bar the verdict uses: a held-back gain inside run-to-run noise
+       can't ship, so it can't be chosen either. (A fix is judged on its
+       issue's scenarios; a held-back set already passing can only regress.) */
+    const lift = (projectedHeld(r, t) ?? r.heldBase) - r.heldBase;
+    const noisy = !isIssueFix(record) && r.heldBase < 100 && !r.split?.thin && lift <= (r.noise || 0);
     return {
       n: t.n,
       score: t.score,
@@ -30,10 +37,10 @@ export const candidatesOf = (record) => {
       proposals,
       brokeBlocker: t.brokeBlocker,
       cheated: !!t.cheats,
-      eligible: !t.brokeBlocker && !t.cheats && !(t.repoTests && !t.repoTests.pass) && !unfit && !overCost && !overLatency,
+      eligible: !t.brokeBlocker && !t.cheats && !(t.repoTests && !t.repoTests.pass) && !unfit && !overCost && !overLatency && !noisy,
       repoFailed: !!t.repoTests && !t.repoTests.pass,
       ...(unfit && { unfit: true }),
-      why: t.cheats ? "cheated" : t.brokeBlocker ? "a must-pass failure repeated" : unfit ? (t.static && t.static.pass === false ? "failed a static check" : "doesn't fit the sealed environment") : t.repoTests && !t.repoTests.pass ? "broke the repository's tests" : overCost ? "over the cost limit" : overLatency ? "over the latency limit" : null,
+      why: t.cheats ? "failed a check" : t.brokeBlocker ? "a must-pass failure repeated" : unfit ? (t.static && t.static.pass === false ? "failed a static check" : "doesn't fit the sealed environment") : t.repoTests && !t.repoTests.pass ? "broke the repository's tests" : overCost ? "over the cost limit" : overLatency ? "over the latency limit" : noisy ? "held-back gain within run-to-run noise" : null,
     };
   });
 };
@@ -57,23 +64,6 @@ export const frontierOf = (candidates) => {
     .sort((a, b) => a.cost - b.cost || b.score - a.score);
 };
 
-/**
- * The held-back rate a chosen candidate would likely reach. A finalist was
- * scored there once, at the end — that number stands. Anyone else's is scaled
- * from what the winner did there by how much of its training lift it keeps,
- * shown as a projection.
- */
-export const projectedHeld = (result, candidate) => {
-  const w = result?.winner;
-  if (!w || !candidate) return null;
-  if (candidate.n === w.n) return result.heldScore;
-  const finalist = (result.finalists || []).find((f) => f.n === candidate.n);
-  if (finalist) return finalist.heldScore;
-  const lift = result.heldScore - result.heldBase;
-  const share = w.delta > 0 ? Math.max(0, Math.min(1.2, candidate.delta / w.delta)) : 1;
-  return Math.round(result.heldBase + lift * share);
-};
-
 /** What ships: the candidate someone chose on the trade-off view, else the search's pick. */
 export const shippedCandidate = (record) => {
   const r = record?.result;
@@ -82,5 +72,9 @@ export const shippedCandidate = (record) => {
   if (!n || n === r.winner.n) return { ...r.winner, chosen: false, held: r.heldScore };
   const c = candidatesOf(record).find((x) => x.n === n);
   const t = r.trials.find((x) => x.n === n);
-  return c && t ? { ...t, proposals: c.proposals, chosen: true, cost: c.cost, latency: c.latency, held: projectedHeld(r, c) } : { ...r.winner, chosen: false, held: r.heldScore };
+  /* Its held-back figure is a finalist's own, or projected until it's verified. */
+  const finalist = (r.finalists || []).some((f) => f.n === n);
+  return c && t
+    ? { ...t, proposals: c.proposals, chosen: true, cost: c.cost, latency: c.latency, held: projectedHeld(r, c), verified: chosenVerified(record), projected: !finalist && !chosenVerified(record) }
+    : { ...r.winner, chosen: false, held: r.heldScore };
 };

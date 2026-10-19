@@ -58,7 +58,7 @@ export default function SetupGapsPanel({ env, envState, patch, onGo, onClose, fo
           <Typography sx={{ typography: "s1", fontWeight: 700 }}>Needs input</Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
             {openNudges > 0
-              ? `${openNudges} suggestion${openNudges === 1 ? "" : "s"} from a new agent version, then what we couldn't work out from your agent.`
+              ? "Your agent changed — review that first, then what we couldn't work out from your agent."
               : "What we couldn't work out from your agent. Blocking items hold a run; optional ones only cost coverage."}
           </Typography>
         </Box>
@@ -153,12 +153,13 @@ const num = { fontVariantNumeric: "tabular-nums" };
 function Figures({ meter, coverage }) {
   const cells = [
     { k: "Blocking", v: meter.blocking, sub: meter.blocking ? "Hold the run" : "Run can start", red: meter.blocking > 0 },
-    { k: "Optional", v: meter.optional, sub: meter.optional ? "Cost coverage" : "None open" },
+    { k: "Optional", v: meter.optional, sub: meter.optional ? "Scenarios may sit out" : "None open" },
     { k: "Resolved", v: meter.resolved, sub: "Settled" },
+    /* A count of scenarios, never a coverage percentage. */
     {
-      k: "Coverage",
-      v: `${meter.blocking ? "—" : `${coverage.pct}%`}`,
-      sub: meter.blocking ? "Run held" : coverage.affected ? `${coverage.affected} of ${coverage.total} sit out` : "Every scenario runs",
+      k: "Sit out",
+      v: meter.blocking ? "—" : coverage.affected,
+      sub: meter.blocking ? "Run held" : coverage.affected ? `of ${coverage.total} scenarios` : "Every scenario runs",
     },
   ];
   return (
@@ -300,9 +301,8 @@ function GapCard({ gap, env, envState, patch, onGo, coverage, defaultOpen = fals
           {/* Inline on Overview the section already says it blocks — no code or status line. */}
           {!inline && (
           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
-            <Box component="span" sx={{ fontFamily: MONO }}>{gap.code}</Box>
             {/* Settled: who settled it and with what, said once. */}
-            {!waitingOnYou && line ? ` · ${line.split(" — ")[0]}` : ` · ${meta.label}`}
+            {!waitingOnYou && line ? line.split(" — ")[0] : meta.label}
             {!open && line && !waitingOnYou && line.includes(" — ") ? ` · ${line.split(" — ").slice(1).join(" — ")}` : ""}
             {!open && waitingOnYou && n > 0 ? ` · ${n} scenario${n === 1 ? "" : "s"} rest on it` : ""}
           </Typography>
@@ -332,8 +332,7 @@ function GapCard({ gap, env, envState, patch, onGo, coverage, defaultOpen = fals
                 <>
                   <Typography sx={{ typography: "s3", color: "text.subtitle", lineHeight: 1.6 }}>{gap.status === "skipped" ? "Sitting out" : "If skipped"}</Typography>
                   <Typography sx={{ typography: "s3", color: "text.secondary", lineHeight: 1.6, ...num }}>
-                    {`${n} ${n === 1 ? (gap.coverageWhat || "scenarios").replace(/^scenarios\b/, "scenario").replace(/\bthat call\b/, "that calls") : gap.coverageWhat || "scenarios"} (${pctOfSuite}% of the suite) ${n === 1 ? "sits" : "sit"} out${gap.status === "skipped" ? "" : " the run"}, attributed to `}
-                    <Box component="span" sx={{ fontFamily: MONO }}>{gap.code}</Box>
+                    {`${n} ${n === 1 ? (gap.coverageWhat || "scenarios").replace(/^scenarios\b/, "scenario").replace(/\bthat call\b/, "that calls") : gap.coverageWhat || "scenarios"} (${pctOfSuite}% of the suite) ${n === 1 ? "sits" : "sit"} out${gap.status === "skipped" ? "" : " the run"} until this is answered`}
                   </Typography>
                 </>
               )}

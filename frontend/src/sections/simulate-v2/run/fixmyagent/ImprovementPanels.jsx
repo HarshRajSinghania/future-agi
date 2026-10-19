@@ -6,6 +6,7 @@ import { clickable, focusRing } from "../../components/clickable";
 import { contractMessage } from "../../_mock/improvementPolicy";
 import { KIND_SURFACE, staticFailed } from "../../_mock/optimizer";
 import { changeFileFor } from "../../_mock/optimize";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 /*
   The updated RSI PRD's parts of an improvement page, each small: the proof
@@ -35,7 +36,7 @@ export function FinalistsTable({ result, bare = false }) {
       )}
       <Box sx={bare ? undefined : box}>
         <Stack direction="row" spacing={1.5} sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
-          {["Run", "Training", "Held back", ""].map((h, i) => (
+          {["Run", "Target", "Held back", ""].map((h, i) => (
             <Typography key={h || i} sx={{ typography: "s3", color: "text.subtitle", fontWeight: 600, width: i < 3 ? 90 : "auto", flex: i === 3 ? 1 : "none" }}>{h}</Typography>
           ))}
         </Stack>
@@ -93,7 +94,7 @@ export function MustPassNote({ result, bare = false }) {
       {open && (
         <Stack sx={{ ...box, mt: 0.75 }}>
           {flaky.map((t, i) => (
-            <Typography key={t.id} noWrap sx={{ typography: "s3", color: "text.secondary", px: 1.5, py: 0.625, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>{t.title}</Typography>
+            <Typography key={t.id} noWrap sx={{ typography: "s3", color: "text.secondary", px: 1.5, py: 0.625, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>{scenarioTitle(t.title)}</Typography>
           ))}
         </Stack>
       )}
@@ -120,8 +121,8 @@ export function ContractNotice({ contract, envVersion, nextVersion, approval, on
           <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>
             {approval
               ? approval.candidate
-                ? `Approved environment ${approval.to} with the new contract — ${contract.tool} takes ${contract.param}. The baseline ran again on ${approval.to} first: ${approval.baseline.train}% on training, ${approval.baseline.held}% held back. Then the change, on ${approval.to} only: ${approval.candidate.train}% on training (${signedPts(approval.candidate.train - approval.baseline.train)}), ${approval.candidate.held}% held back (${signedPts(approval.candidate.held - approval.baseline.held)}). Never compared against ${approval.from || "the old version"}.`
-                : `Approved environment ${approval.to} with the new contract — ${contract.tool} takes ${contract.param}. The baseline ran again on ${approval.to}: ${approval.baseline.train}% on training, ${approval.baseline.held}% held back. A run with this change is compared there, never against ${approval.from}.`
+                ? `Approved environment ${approval.to} with the new contract — ${contract.tool} takes ${contract.param}. The baseline ran again on ${approval.to} first: ${approval.baseline.train}% on the target scenarios, ${approval.baseline.held}% held back. Then the change, on ${approval.to} only: ${approval.candidate.train}% on the target scenarios (${signedPts(approval.candidate.train - approval.baseline.train)}), ${approval.candidate.held}% held back (${signedPts(approval.candidate.held - approval.baseline.held)}). Never compared against ${approval.from || "the old version"}.`
+                : `Approved environment ${approval.to} with the new contract — ${contract.tool} takes ${contract.param}. The baseline ran again on ${approval.to}: ${approval.baseline.train}% on the target scenarios, ${approval.baseline.held}% held back. A run with this change is compared there, never against ${approval.from}.`
               : contractMessage(contract, envVersion || "the frozen version")}
           </Typography>
           {contract.why && !approval && <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.5 }}>{contract.why}</Typography>}
@@ -213,7 +214,7 @@ export function StaticNotice({ result }) {
 }
 StaticNotice.propTypes = { result: PropTypes.object };
 
-const CODE_SURFACES = ["code", "structure", "toolcode"];
+const CODE_SURFACES = ["code", "structure"];
 
 /**
  * The plan a code or structural change was built to — root cause, the steps,

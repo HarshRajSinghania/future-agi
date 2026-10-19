@@ -32,10 +32,11 @@ import openExternal from "../openExternal";
 import { useErrorFeedStore } from "../store";
 import PropTypes from "prop-types";
 import { useIssueFix } from "src/sections/simulate-v2/errorFeed/issueFix";
+import { triageFixEffect } from "src/sections/simulate-v2/errorFeed/issueFixModel";
 import { useAgentImprovementFlag } from "src/sections/simulate-v2/_mock/featureFlags";
 import { textTone } from "src/sections/simulate-v2/components/textTone";
 import { clickable, focusRing } from "src/sections/simulate-v2/components/clickable";
-import { fixTriageRulesOf } from "src/sections/simulate-v2/errorFeed/issueFixModel";
+import IssueStatusChip from "./IssueStatusChip";
 
 const humanizeTime = (iso) => {
   if (!iso) return "—";
@@ -201,24 +202,13 @@ const STATUS_OPTIONS = [
     color: "#5ACE6D",
     darkColor: "#5ACE6D",
   },
-  {
-    value: "ignored",
-    label: "Ignored",
-    icon: "mdi:eye-off-outline",
-    color: "#938FA3",
-    darkColor: "#938FA3",
-  },
 ];
 
-function StatusDropdown({ clusterId, current, fixKey }) {
+function StatusDropdown({ clusterId, current, fix, onReopen }) {
   const [anchorEl, setAnchorEl] = useState(null);
-  /* The header's Triage menu rules: while a fix drives the status, Resolve
-     and Acknowledge are off here too, with the same note. */
-  const rules = fixTriageRulesOf(fixKey);
-  const ruleOf = (value) =>
-    value === "resolved" ? { disabled: rules.resolveDisabled, note: rules.resolveNote }
-      : value === "acknowledged" ? { disabled: rules.ackDisabled, note: rules.ackNote }
-        : { disabled: false, note: "" };
+  /* The issue's own triage status — a fix shows beside it, never instead.
+     Escalating a watched or resolved fix reopens it (triageFixEffect). */
+  const ruleOf = (value) => ({ disabled: false, note: triageFixEffect(fix, value)?.note || "" });
   const updateIssue = useUpdateErrorFeedIssue();
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
@@ -306,6 +296,8 @@ function StatusDropdown({ clusterId, current, fixKey }) {
                 disabled={rule.disabled}
                 onClick={() => {
                   updateIssue.mutate({ clusterId, status: option.value });
+                  const effect = triageFixEffect(fix, option.value);
+                  if (effect) onReopen?.(effect.reopen);
                   setAnchorEl(null);
                 }}
                 sx={{ gap: 1, fontSize: "13px", py: 0.75, ...(rule.note && { alignItems: "flex-start" }) }}
@@ -336,8 +328,9 @@ function StatusDropdown({ clusterId, current, fixKey }) {
 StatusDropdown.propTypes = {
   clusterId: PropTypes.string,
   current: PropTypes.string,
-  fixKey: PropTypes.string,
-};
+  fix: PropTypes.object,
+  onReopen: PropTypes.func,
+  };
 
 // ── Severity dropdown ─────────────────────────────────────────────────────────
 const SEVERITY_OPTIONS = [
@@ -1226,21 +1219,12 @@ const EVAL_TYPE_MAP = {
   deterministic: "deterministic",
 };
 
-/* Once a fix exists, the issue's status follows it — so the rail never says
-   Escalating while the header says Watching. Being fixed reads Acknowledged,
-   a released fix under watch reads Resolved, a fix that didn't hold
-   Escalating. Triage still changes it by hand when there's no fix. */
-const FIX_TRIAGE = {
-  fixing: "acknowledged", ready: "acknowledged", review: "acknowledged",
-  watching: "resolved", resolved: "resolved", reopened: "escalating",
-};
 
 export default function ErrorMetadataPanel({ error }) {
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
   const improving = useAgentImprovementFlag();
-  const { status: fix } = useIssueFix(error);
-  const fixTriage = improving && fix ? FIX_TRIAGE[fix.key] : null;
+  const { status: fix, setReopened } = useIssueFix(error);
   const [severity, setSeverityLocal] = useState(error?.severity ?? "high");
   const [assignee, setAssigneeLocal] = useState(error?.assignees?.[0] ?? null);
   // Use the live active org (matches the X-Organization-Id header) instead of
@@ -1323,14 +1307,16 @@ export default function ErrorMetadataPanel({ error }) {
             <FieldRow label="Status">
               <StatusDropdown
                 clusterId={error.cluster_id}
-                current={fixTriage || error.status}
-                fixKey={fix?.key || null}
+                current={error.status}
+                fix={improving ? fix : null}
+                onReopen={setReopened}
               />
             </FieldRow>
-            {fixTriage && (
-              <Typography sx={{ fontSize: "11px", color: "text.secondary", mt: -0.5, textAlign: "right" }}>
-                {`From its fix · ${fix.label}${fix.detail && fix.key === "watching" ? ` · ${fix.detail}` : ""}`}
-              </Typography>
+            {/* The fix's own status (RSI PRD: a fix-status chip), beside the issue's. */}
+            {improving && fix && (
+              <FieldRow label="Fix">
+                <IssueStatusChip issue={error} />
+              </FieldRow>
             )}
             <FieldRow label="Severity">
               <SeverityDropdown current={severity} onChange={setSeverity} />

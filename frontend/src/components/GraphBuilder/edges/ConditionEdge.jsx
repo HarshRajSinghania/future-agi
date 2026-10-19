@@ -88,6 +88,9 @@ const ConditionEdge = (props) => {
           ...style,
         }}
       />
+      {/* `hideEmptyLabel` (opt-in, read-only flows): no condition, no label —
+          instead of the editor's "No Condition Specified" prompt. */}
+      {!(data?.hideEmptyLabel && !data?.prompt) && (
       <EdgeLabelRenderer>
         <CustomTooltip
           show={true}
@@ -145,6 +148,7 @@ const ConditionEdge = (props) => {
           </Box>
         </CustomTooltip>
       </EdgeLabelRenderer>
+      )}
     </>
   );
 };

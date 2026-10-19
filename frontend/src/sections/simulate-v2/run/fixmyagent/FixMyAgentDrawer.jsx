@@ -16,6 +16,7 @@ import { buildImprovement } from "../../_mock/improvementStart";
 import { envAgentKey } from "../../_mock/agentRegistry";
 import OptimizationRunView from "./OptimizationRunView";
 import { useSimStore } from "../../store";
+import { improvementPath } from "../../improvements/improvementNav";
 
 /**
  * Debug failures → Improve.
@@ -32,7 +33,7 @@ export default function FixMyAgentDrawer({
   open, onClose, env, envState, patch, addAgentVersion, tasks, stats, runId, onOpenTask, onViewIssue, openOptimizationId,
 }) {
   const navigate = useNavigate();
-  const { state: simState } = useSimStore();
+  const { state: simState, commit } = useSimStore();
   /* Opening a row in the runs list lands on that run, not on the diagnosis —
      the list already told you which one you wanted. */
   const [view, setView] = useState(openOptimizationId ? "optimization" : "diagnosis");
@@ -119,11 +120,12 @@ export default function FixMyAgentDrawer({
     burning episodes on somebody's infrastructure.
   */
   /*
-    "Run improvement" opens Improve my agent, already on this agent and
+    "Run self improvement" opens Improve my agent, already on this agent and
     this environment: name it, pick the optimizer and model, the goal and the
-    budget. Starting writes the record running and opens it here — closing
-    the drawer mid-search doesn't lose a run that, in a real system, is
-    already spending.
+    budget. Starting writes the record running and opens the improvement's
+    own page — the same page every improvement runs on, its runs arriving
+    in the table as they finish. Saved before leaving (`commit`), so the
+    page finds it.
   */
   const [setupOpen, setSetupOpen] = useState(false);
   const startFromSetup = ({ name, model, envIds, goal, budget, limits, seed, lineage, reread, textSearch, targetMember, optimizerId }) => {
@@ -141,13 +143,15 @@ export default function FixMyAgentDrawer({
         /* The diagnosis this attempt was made against, kept with it — six
            weeks on, "why did we try that" is only answerable if the evidence
            travelled with the attempt. */
-        diagnosis: report.map((a) => ({ id: a.id, label: a.label, headline: a.headline, severity: a.severity })),
+        diagnosis: report.filter((a) => !a.nothing).map((a) => ({ id: a.id, label: a.label, headline: a.headline, severity: a.severity })),
       },
     });
-    patch({ optimizations: [...records, record] });
+    commit({ type: "patchEnvState", envId: env.id, patch: { optimizations: [...records, record] } });
     setSetupOpen(false);
-    setActiveId(record.id);
-    setView("optimization");
+    const from = (envState?.runs || []).find((r) => r.id === sourceRunId);
+    navigate(improvementPath(env.id, record.id), {
+      state: { back: { to: paths.dashboard.simulate.simulationRun(env.id, sourceRunId), label: from?.ordinal ? `Run ${from.ordinal}` : "the run" } },
+    });
   };
 
   const finish = () => {
@@ -167,9 +171,12 @@ export default function FixMyAgentDrawer({
     with the env version and scenario set a run must match to answer it.
   */
   const land = ({ key, version: minted, origin, note, changes, projected: expected, projectedOn, scenarioIds }) => {
+    /* A draft until it's released — environments following production
+       never test a version that isn't live. */
     const version = minted || {
       ...nextAgentVersion(envState, { note, applied: changes, fromRunId: sourceRunId, basedOnVersion: runAgentVersion }),
       origin,
+      status: "draft",
     };
     if (!minted) addAgentVersion?.(version);
     const at = new Date().toISOString();
@@ -191,28 +198,37 @@ export default function FixMyAgentDrawer({
     });
   };
 
-  /* Re-run tests whatever version is current — after a landing, the new one.
-     It never mints. */
-  const rerun = (scenarioIds) => {
+  /* Re-run the landed version by name — landing doesn't change what the
+     environment tests. Without one, the version the run tested. It never mints. */
+  const rerun = (scenarioIds, agent = null) => {
     const url = paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)));
     const subset = scenarioIds?.length && scenarioIds.length < allScenarioIds.length;
+    const q = new URLSearchParams();
+    if (subset) q.set("only", scenarioIds.join(","));
+    if (agent || runAgentVersion) q.set("agent", agent || runAgentVersion);
     onClose();
-    navigate(subset ? `${url}?only=${scenarioIds.join(",")}` : url);
+    navigate(q.toString() ? `${url}?${q.toString()}` : url);
   };
 
-  /* The winner on every scenario at the current env version — trials only
-     saw the training split. Tagged on the record so the runs list can name it. */
+  /* The winner on every scenario at the current env version — runs only
+     saw the target scenarios. Tagged on the record so the runs list can name
+     it, and a chosen run counts as verified once it has run. */
   const runWinner = (record, candidate = null) => {
     const id = protoRunId(env.id, Date.now().toString(36));
     patch({
       optimizations: records.map((o) => (
-        o.id === record.id ? { ...o, verifyRunIds: [...(o.verifyRunIds || []), id] } : o
+        o.id === record.id ? { ...o, verifyRunIds: [...(o.verifyRunIds || []), id], verifiedTrial: o.preferredTrial || o.result?.winner?.n } : o
       )),
     });
     onClose();
-    /* Run from a code snapshot when one was picked — the run says so. */
+    /* The winner applied to the version the search started from, named —
+       never whatever the environment tests today. From a code snapshot
+       when one was picked; the run says so. */
     const url = paths.dashboard.simulate.simulationRun(env.id, id);
-    navigate(candidate ? `${url}?candidate=${encodeURIComponent(candidate)}` : url);
+    const q = new URLSearchParams();
+    if (record.baseAgentVersion) q.set("agent", record.baseAgentVersion);
+    if (candidate) q.set("candidate", candidate);
+    navigate(q.toString() ? `${url}?${q.toString()}` : url);
   };
 
   const provenance = { fromRunId: sourceRunId || null, basedOnVersion: runAgentVersion };
@@ -263,7 +279,7 @@ export default function FixMyAgentDrawer({
               ...info, key: diagKey, changes, projected: expected,
               projectedOn: "if every addressed scenario passes", scenarioIds: runScenarioIds,
             }),
-            onRerun: () => rerun(runScenarioIds),
+            onRerun: (agent) => rerun(runScenarioIds, agent),
           }}
           env={env}
           envState={envState}
@@ -292,7 +308,7 @@ export default function FixMyAgentDrawer({
               ...info, key: active.id, changes: shippedCandidate(active)?.proposals || active.result?.winner?.proposals || [],
               projected: shippedCandidate(active)?.held ?? active.result?.heldScore, projectedOn: "held-back scenarios", scenarioIds: allScenarioIds,
             }),
-            onRerun: () => rerun(allScenarioIds),
+            onRerun: (agent) => rerun(allScenarioIds, agent),
           }}
           onBack={() => { setView("diagnosis"); setActiveId(null); }}
           onClose={close}

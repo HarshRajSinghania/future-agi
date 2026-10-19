@@ -14,6 +14,7 @@ const BRANDS = {
   /* Cloud coding agents — the same vendor marks; Devin has no common one. */
   claude_code_web: { icon: "logos:claude-icon" },
   codex_cloud: { icon: "simple-icons:openai", mono: true },
+  cursor_background: { icon: "simple-icons:cursor", mono: true },
   devin: { icon: "solar:cloud-linear", mono: true, muted: true },
   "coding-agents": { icon: "solar:code-linear", mono: true, muted: true },
 };

@@ -28,6 +28,8 @@ export default function RunFitDialog({ open, onClose, env, envState, patch, agen
   /* Environment versions as people read them (snapshots of world, scenarios, evals). */
   const nextLabel = nextSnapshotLabel(env, envState);
   const latestShown = latest ? envLabelOf(env, envState, latest.label) : null;
+  /* The version this run is on, as the page names it — never the world label. */
+  const fitShown = envLabelOf(env, envState, fit.envVersion);
 
   const fixAndRun = () => {
     if (latestFits) patch({ activeEnvVersion: latest.label });
@@ -57,7 +59,7 @@ export default function RunFitDialog({ open, onClose, env, envState, patch, agen
         <Iconify icon="solar:plug-circle-linear" width={20} />
       </Box>
       <Typography sx={{ typography: "m3", fontWeight: 700 }}>
-        Agent {agent} calls {n === 1 ? "a tool" : `${n} tools`} environment {fit.envVersion} can&apos;t answer
+        Agent {agent} calls {n === 1 ? "a tool" : `${n} tools`} environment {fitShown} can&apos;t answer
       </Typography>
       <Typography component="div" sx={{ typography: "s2", color: "text.secondary", mt: 1 }}>
         It calls <ToolList tools={fit.missing} />, which this world doesn&apos;t know how to answer. Scenarios where it
@@ -88,7 +90,7 @@ export default function RunFitDialog({ open, onClose, env, envState, patch, agen
             "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" },
           }}
         >
-          Run on {fit.envVersion} anyway
+          Run on environment {fitShown} anyway
         </Button>
         {!locked && (
         <Button

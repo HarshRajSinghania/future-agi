@@ -69,7 +69,7 @@ export default function ActorsPanel({ env, envState, patch, locked = false }) {
           <Typography sx={{ typography: "m2", fontWeight: 600 }}>Actors</Typography>
           <Typography sx={{ typography: "s2", color: "text.secondary", maxWidth: 780 }}>
             Other parties in the world, each with a goal that is not the task. They pull the
-            episode off-course, which is what makes them part of the environment&apos;s dynamics
+            conversation off-course, which is what makes them part of the environment&apos;s dynamics
             rather than part of the task.
           </Typography>
         </Box>

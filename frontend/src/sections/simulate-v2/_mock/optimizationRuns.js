@@ -13,7 +13,7 @@
  * we try that" is answerable only if the evidence travelled with the attempt.
  */
 
-import { OPTIMIZERS, optimizerById, KIND_SURFACE, blockingVerdict, protectedHit, rejectedFor, depthOf, areaOfProposal, searchTrace, goalWords } from "./optimizer";
+import { OPTIMIZERS, optimizerById, KIND_SURFACE, blockingVerdict, protectedHit, depthOf, areaOfProposal, searchTrace, goalWords } from "./optimizer";
 import { CONFIG_AREAS } from "./rsiModel";
 import { creditsLabel } from "./metering";
 
@@ -27,6 +27,9 @@ export const OPT_STATUS = {
   /* A new goal improvement where every scenario already meets the goal —
      it ends before searching. */
   NOTHING: "nothing-to-improve",
+  /* Checking the finalists alone would cost more than the budget (or take
+     longer than its time cap) — it stops before searching. */
+  OVER_BUDGET: "over-budget",
 };
 
 /**
@@ -57,8 +60,10 @@ export const optimizationsFromRun = (envState, runId) =>
 export const nextOptimizationName = (envState) =>
   `Improvement ${optimizations(envState).length + 1}`;
 
+/* One past the highest id, never the count — a deleted improvement's id is
+   never handed to a new one (its drafts and links still name it). */
 export const optimizationId = (envState) =>
-  `OPT-${String(optimizations(envState).length + 1).padStart(5, "0")}`;
+  `OPT-${String(optimizations(envState).reduce((m, o) => Math.max(m, Number(String(o.id).replace(/\D/g, "")) || 0), 0) + 1).padStart(5, "0")}`;
 
 /**
  * One row's worth of headline, so the list and the detail header cannot drift.
@@ -92,13 +97,30 @@ export const optimizationVerdict = (record) => {
       body: "The search found wording that passes the checks on scenarios that failed for a missing tool call. That is the self improver doing its job against a check that cannot tell the difference — fix the check before shipping this prompt.",
     };
   }
-  if (r.overruled) {
+  /* The run that scored highest on the targets but isn't the winner. Say why
+     from what actually happened to it — and not at all once someone chose it
+     (the "You chose Run N" line says it then). */
+  if (r.overruled && record.preferredTrial !== r.overruled.n) {
+    const n = r.overruled.n;
+    const finalist = (r.finalists || []).find((f) => f.n === n);
+    if (r.overruled.brokeBlocker) {
+      return {
+        tone: "#CA8A04",
+        title: `Run ${n} scored higher and was rejected`,
+        body: "It broke a must-pass scenario. The winner below is the best run that did not.",
+      };
+    }
+    if (!finalist) {
+      return {
+        tone: "#CA8A04",
+        title: `Run ${n} scored higher on the targets but wasn't a finalist`,
+        body: "Only finalists are checked on the held-back set, so it was never proven. The winner below is the best finalist that passed — choose Run " + n + " in Trade-offs to verify it instead.",
+      };
+    }
     return {
       tone: "#CA8A04",
-      title: `Run ${r.overruled.n} scored higher and was rejected`,
-      body: r.overruled.cheats
-        ? `It ${rejectedFor(r.overruled)}. The winner below is the best run that didn't cheat or break a must-pass scenario.`
-        : "It broke a must-pass scenario. The winner below is the best run that did not.",
+      title: `Run ${n} scored higher and was rejected`,
+      body: `${finalist.why ? `Rejected: ${finalist.why}.` : "It didn't pass the held-back checks."} The winner below is the best run that passed.`,
     };
   }
   /*
@@ -174,10 +196,11 @@ export const DEFAULT_LIMITS = {
   budget: { dollars: 250, minutes: 60 },
 };
 
-/* The cost ceiling improvements were recorded against before "No increase". */
+/* The cost ceiling the seeded improvements were once rewritten to — read
+   back to the agent's own "No increase" when the store loads. */
 export const LEGACY_COST_CEILING = 5;
 /* "No increase" reads as no increase beyond what two runs of the same agent
-   already differ by — new improvements only. */
+   already differ by. */
 export const COST_NOISE = 2;
 
 /*
@@ -190,16 +213,14 @@ export const SURFACES = [
   { id: "settings", label: "Agent settings", example: "Temperature, turn-taking or retrieval settings", delivered: "New agent version" },
   { id: "code", label: "Code", example: "Add a check before booking, fix a parser, change routing", delivered: "GitHub PR" },
   { id: "structure", label: "Structure", example: "Split into a router and specialists, add a retrieval step", delivered: "GitHub PR with a written rationale" },
-  /* Tool code belongs to the world, which is what grades the agent — so a
-     change to it is a world change: re-proved on a candidate world first,
-     then compared. Off unless someone turns it on. */
-  { id: "toolcode", label: "Tool code", example: "Fix a parser inside a tool handler", delivered: "A world change: new environment version, re-proved first, plus a PR" },
 ];
 
-const SURFACE_LABEL = { prompt: "prompts", tools: "tool descriptions", settings: "agent settings", code: "code", structure: "structure", toolcode: "tool code" };
+const SURFACE_LABEL = { prompt: "prompts", tools: "tool descriptions", settings: "agent settings", code: "code", structure: "structure" };
 export const allowedLabel = (allowed = DEFAULT_LIMITS.allowed) => {
   const order = SURFACES.map((x) => x.id);
-  const words = [...allowed].sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((a) => SURFACE_LABEL[a] || a);
+  /* Only the kinds of change there are — an older stored choice that names
+     another is left out. */
+  const words = [...allowed].filter((a) => SURFACE_LABEL[a]).sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((a) => SURFACE_LABEL[a]);
   const text = words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}` : words[0] || "nothing";
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
@@ -220,13 +241,19 @@ export const protectedLabel = (x) => (x.startsWith("tool:") ? `tool ${x.slice(5)
   : x.startsWith("section:") ? `${x.slice(8).split("#")[0].replace(/^.*\//, "")} › ${x.split("#")[1]}`
     : x);
 
-export const limitRows = (limits = DEFAULT_LIMITS, model) => [
+/*
+  `mustPass` — how many must-pass scenarios the improvement holds, across
+  every environment it checks — joins the rows when the caller knows it.
+*/
+export const limitRows = (limits = DEFAULT_LIMITS, model, { mustPass = null } = {}) => [
   { id: "model", label: "Model", value: modelLimitLabel(limits, model) },
   { id: "cost", label: "Cost per conversation", value: costCeilingLabel(limits) },
   { id: "latency", label: "Latency", value: ceilingLabel(limits.latencyCeiling) },
   { id: "changes", label: "Allowed changes", value: `${allowedLabel(limits.allowed)} only` },
   ...((limits.protected || []).length ? [{ id: "protected", label: "Never edited", value: limits.protected.map(protectedLabel).join(", ") }] : []),
-  ...(limits.budget ? [{ id: "budget", label: "Run budget", value: `${creditsLabel(limits.budget.dollars)} · ${limits.budget.minutes} min per improvement` }] : []),
+  ...(mustPass != null ? [{ id: "mustPass", label: "Must-pass", value: mustPass ? `${mustPass} ${mustPass === 1 ? "scenario" : "scenarios"} — none may fail` : "none yet" }] : []),
+  ...(limits.budget ? [{ id: "budget", label: "Run budget", value: creditsLabel(limits.budget.dollars) }] : []),
+  ...(limits.budget?.minutes ? [{ id: "time", label: "Time cap", value: `${limits.budget.minutes} min` }] : []),
 ];
 
 /* What one simulated conversation costs, and how often each is repeated so a
@@ -254,15 +281,17 @@ export const repeatsOf = (x) => x?.result?.repeats || x?.frozen?.repeats || x?.r
 
 /*
   What a new improvement runs beyond the trials and the finalists' held-back
-  check: the baseline twice, two more repeats for a code finalist, and each
-  finalist once in every other environment picked. Zero for older records.
+  check: the baseline twice, each finalist on the must-pass set, two more
+  repeats for a code finalist, and each finalist once in every other
+  environment picked. Zero for older records.
 */
 const extraFinalConversations = (result) => {
   const reps = result.repeats || REPEATS;
   const calib = result.calibration ? 2 * result.calibration.scenarios * reps : 0;
+  const mustPass = (result.mustPassMeasured || 0) * finalistCount(result) * reps;
   const deeper = (result.finalists || []).reduce((n, f) => n + (f.repeats && f.repeats > reps ? (f.repeats - reps) * result.heldMeasured : 0), 0);
   const envs = (result.otherEnvs || []).reduce((n, e) => n + finalistCount(result) * (e.scenarios || e.mustPass || 0) * reps, 0);
-  return calib + deeper + envs;
+  return calib + mustPass + deeper + envs;
 };
 
 /** Every conversation a search runs. */
@@ -272,7 +301,7 @@ export const searchConversations = (result) => {
   return (result.trials.length * result.trainMeasured + finalistCount(result) * result.heldMeasured) * reps + extraFinalConversations(result);
 };
 
-/** What a search spends: every trial runs the training split, each finalist the held-out set. */
+/** What a search spends: every trial runs the target scenarios, each finalist the held-back and must-pass sets. */
 export const searchSpend = (result, surface) => {
   if (!result) return 0;
   const reps = result.repeats || REPEATS;
@@ -292,12 +321,39 @@ export const improvementSpend = (record, surface) => {
   return searchSpend(r, surface);
 };
 
-/** How many trials a budget pays for, after the finalists' held-out check. */
+/*
+  Everything an improvement spent, said once for the list, the page and the
+  agent's numbers: what it ran first (reproducing an issue), the search, and
+  each attempt a coding agent submitted. One that stopped before searching
+  still spent what measuring it cost; an infrastructure failure only what
+  ran before it.
+*/
+export const improvementTotalSpend = (record, surface, { attempts = [] } = {}) => {
+  if (!record) return 0;
+  const per = PER_CONVERSATION[finalKind(surface || record.surface)];
+  const first = record.spentFirst
+    ?? (record.reproduce?.total ? record.reproduce.total * repeatsOf(record) * per : 0);
+  const status = statusOf(record);
+  const stoppedFirst = [OPT_STATUS.NOT_REPRODUCED, OPT_STATUS.NOTHING, OPT_STATUS.OVER_BUDGET].includes(status);
+  if (stoppedFirst) {
+    const p = record.pendingResult;
+    const measure = p?.calibration ? 2 * p.calibration.scenarios * (p.repeats || REPEATS) * per : 0;
+    return first + measure;
+  }
+  if (status === OPT_STATUS.FAILED) return first;
+  return first + improvementSpend(record, surface || record.surface) + attempts.reduce((n, a) => n + (a.spend || 0), 0);
+};
+
+/*
+  How many trials a budget pays for, after the finalists' checks. Zero when
+  checking the finalists alone would cost more than the budget — the
+  improvement then stops at the budget before searching.
+*/
 export const trialsWithin = (result, budget, surface) => {
   const reps = result.repeats || REPEATS;
   const perTrial = result.trainMeasured * reps * PER_CONVERSATION[trialKind(result, surface)];
   const verify = (finalistCount(result) * result.heldMeasured * reps + extraFinalConversations(result)) * PER_CONVERSATION[finalKind(surface)];
-  return perTrial > 0 ? Math.max(1, Math.floor((budget - verify) / perTrial)) : result.trials.length;
+  return perTrial > 0 ? Math.max(0, Math.floor((budget - verify) / perTrial)) : result.trials.length;
 };
 
 /**
@@ -346,6 +402,31 @@ export const winnerEffect = (winner) => {
 };
 
 const signed = (n) => `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n)}%`;
+
+/*
+  The cost and latency ceilings as one gate — the search drops a candidate
+  over either as it runs, and every screen that picks among candidates uses
+  the same one. "No increase" allows the ±2% two runs of one agent differ
+  by; a fixed amount is checked against today's cost per conversation; cost
+  only where it can be measured.
+*/
+export const limitGate = ({ limits, costKnown = true, surface }) => {
+  const ceiling = limits?.costCeiling ?? 0;
+  const tol = ceiling <= 0 ? COST_NOISE : 0;
+  const latency = limits?.latencyCeiling ?? 10;
+  const abs = limits?.costMode === "abs" && limits.costCeilingAbs != null ? limits.costCeilingAbs : null;
+  const today = PER_CONVERSATION[surface === "voice" ? "voice" : "chat"];
+  return (proposals, costSavings = 0) => {
+    const e = winnerEffect({ proposals, costSavings });
+    if (costKnown && abs != null && today * (1 + e.cost / 100) > abs) return { id: "cost", actual: `$${(today * (1 + e.cost / 100)).toFixed(3)} a conversation, over $${Number(abs).toFixed(2)}` };
+    if (costKnown && abs == null && e.cost > ceiling + tol) return { id: "cost", actual: `cost ${signed(e.cost)}, over ${ceiling <= 0 ? "no increase" : `+${ceiling}%`}` };
+    if (e.latency > latency) return { id: "latency", actual: `latency ${signed(e.latency)}, over +${latency}%` };
+    return null;
+  };
+};
+/** The same gate for a recorded improvement. */
+export const limitGateOf = (record) => limitGate({ limits: record?.limits || DEFAULT_LIMITS, costKnown: record?.costMeasured !== false, surface: record?.surface });
+
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -361,7 +442,62 @@ export const staleSince = (rec, now = Date.now()) => {
   return Number.isFinite(at) && now - at > STALE_AFTER_MS;
 };
 
-export const improvementOutcome = (record, { model } = {}) => {
+/*
+  Cost a candidate saves by fixing failing conversations: a failing
+  conversation runs long (retries, loops back), so fixing every failing one
+  pays for some of the tokens a change adds. Newer records carry it; for
+  older ones it's read off what the candidate fixed, the same way.
+*/
+const COST_SAVED_IF_ALL_FIXED = 6;
+export const costSavingsOf = (trial) => {
+  if (!trial) return 0;
+  if (trial.costSavings != null) return trial.costSavings;
+  const states = Object.values(trial.perScenario || {});
+  const failingBefore = states.filter((v) => v !== "same" && v !== "broke").length;
+  const fixed = states.filter((v) => v === "fixed").length;
+  return failingBefore ? Math.round(((COST_SAVED_IF_ALL_FIXED * fixed) / failingBefore) * 10) / 10 : 0;
+};
+/** A candidate's cost and latency against today, savings included. */
+export const candidateEffect = (trial, proposals = trial?.proposals || []) => winnerEffect({ proposals, costSavings: costSavingsOf(trial) });
+
+/*
+  The run someone chose over the search's pick (Trade-offs, Choose winner),
+  with its changes — null when the search's own pick stands.
+*/
+export const chosenTrialOf = (record) => {
+  const r = record?.result;
+  const n = record?.preferredTrial;
+  if (!r?.winner || !n || n === r.winner.n) return null;
+  const t = (r.trials || []).find((x) => x.n === n);
+  return t ? { ...t, proposals: (r.pool || []).filter((p) => t.picks.includes(p.id)) } : null;
+};
+/* Only a passing verdict marks a change verified: a chosen run is verified
+   once it has run on the full suite (`verifiedTrial`). The search's pick was
+   verified by the search. */
+export const chosenVerified = (record) => !chosenTrialOf(record) || record.verifiedTrial === record.preferredTrial;
+
+/**
+ * The held-back rate a chosen candidate would likely reach. A finalist was
+ * scored there once, at the end — that number stands. Anyone else's is scaled
+ * from what the winner did there by how much of its target lift it keeps,
+ * shown as a projection.
+ */
+export const projectedHeld = (result, candidate) => {
+  const w = result?.winner;
+  if (!w || !candidate) return null;
+  if (candidate.n === w.n) return result.heldScore;
+  const finalist = (result.finalists || []).find((f) => f.n === candidate.n);
+  if (finalist) return finalist.heldScore;
+  const lift = result.heldScore - result.heldBase;
+  const share = w.delta > 0 ? Math.max(0, Math.min(1.2, candidate.delta / w.delta)) : 1;
+  return Math.round(result.heldBase + lift * share);
+};
+
+export const improvementOutcome = (rec, { model } = {}) => {
+  /* An ending still playing its Reproducing phase reads as running; once
+     that phase has passed it reads as its ending, saved or not yet. */
+  const settled = statusOf(rec);
+  const record = rec && settled !== rec.status ? { ...rec, status: settled } : rec;
   const r = record?.result;
   const limits = record?.limits || DEFAULT_LIMITS;
   if (record?.status === OPT_STATUS.NOTHING) {
@@ -369,6 +505,16 @@ export const improvementOutcome = (record, { model } = {}) => {
   }
   if (record?.status === OPT_STATUS.NOT_REPRODUCED) {
     return { ending: { key: "not-reproduced", label: "Could not reproduce" }, headline: "The failure didn't happen on today's agent, so there was nothing to fix." };
+  }
+  if (record?.status === OPT_STATUS.OVER_BUDGET) {
+    const s = record.stoppedAtBudget || {};
+    return {
+      ending: { key: "budget", label: "Stopped at budget" },
+      headline: s.by === "time"
+        ? `Stopped at budget — checking the finalists alone would take longer than the ${s.minutes}-minute time cap, so nothing was searched.`
+        : `Stopped at budget — checking the finalists alone would cost more than the ${creditsLabel(s.budget || 0)} budget, so nothing was searched.`,
+      beforeSearch: true,
+    };
   }
   if (record?.status === OPT_STATUS.FAILED) {
     return {
@@ -395,7 +541,7 @@ export const improvementOutcome = (record, { model } = {}) => {
     const suggestion = suggestedFixOf(record);
     const all = r.trainMeasured + r.heldMeasured;
     const reproduced = record.reproduce
-      ? `Reproduced ${record.reproduce.reproduced} of ${plural(record.reproduce.total, "scenario")} from ${record.trigger?.issueId || "the issue"}`
+      ? `Reproduced on ${record.reproduce.reproduced} of ${plural(record.reproduce.total, "scenario")} from ${record.trigger?.issueId || "the issue"}`
       : `Reproduced the failures on ${r.failingToday ?? "some"} of ${plural(all, "scenario")}`;
     return {
       ending: { key: "suggestion", label: "Suggestion only" },
@@ -408,6 +554,15 @@ export const improvementOutcome = (record, { model } = {}) => {
   }
 
   const winner = r.winner;
+  /*
+    What ships: the search's pick, or the run someone chose instead. The
+    limits are checked on what ships; its held-back figure is the finalist's
+    own, or projected until it's verified.
+  */
+  const chosen = chosenTrialOf(record);
+  const shipped = chosen || winner;
+  const chosenFinalist = chosen ? (r.finalists || []).find((f) => f.n === chosen.n) || null : null;
+  const verified = chosenVerified(record);
   const held = { fixed: 0, broke: 0, stillFailing: 0, unchanged: 0, flaky: 0, inconclusive: 0 };
   Object.values(r.heldPerScenario || {}).forEach((v) => {
     if (v === "fixed") held.fixed += 1;
@@ -419,30 +574,36 @@ export const improvementOutcome = (record, { model } = {}) => {
   });
   /* Flaky and inconclusive ones failed before and aren't fixed now. */
   held.failingBefore = held.fixed + held.stillFailing + held.flaky + held.inconclusive;
-  const effect = winnerEffect(winner);
-  const surfaces = [...new Set((winner?.proposals || []).filter((p) => p.kind !== "Model").map((p) => KIND_SURFACE[p.kind] || "code"))]
+  const effect = candidateEffect(shipped);
+  const surfaces = [...new Set((shipped?.proposals || []).filter((p) => p.kind !== "Model").map((p) => KIND_SURFACE[p.kind] || "code"))]
     .sort((a, b) => ["prompt", "tools", "code"].indexOf(a) - ["prompt", "tools", "code"].indexOf(b));
   const offLimits = surfaces.filter((x) => !limits.allowed.includes(x));
-  const blockersBroken = (r.heldBlockers || []).length;
-  const heldCheats = r.heldCheats || [];
+  /* Must-pass failures that repeated: the search's pick's own; a chosen
+     finalist passed or it wasn't chosen; anyone else's aren't known until
+     it's verified. */
+  const heldBlockers = chosen ? [] : r.heldBlockers || [];
+  const blockersBroken = heldBlockers.length;
+  const mustPassUnknown = !!chosen && !chosenFinalist && !verified;
 
   const costKnown = record?.costMeasured !== false;
-  const switched = (winner?.proposals || []).find((p) => p.kind === "Model")?.model || null;
-  const worldChange = (winner?.proposals || []).filter((p) => p.worldChange);
-  const hitProtected = [...new Set((winner?.proposals || []).map((p) => protectedHit(p, limits.protected || [])).filter(Boolean))];
+  const switched = (shipped?.proposals || []).find((p) => p.kind === "Model")?.model || null;
+  const hitProtected = [...new Set((shipped?.proposals || []).map((p) => protectedHit(p, limits.protected || [])).filter(Boolean))];
   /* The newer engine's rows — only on records stamped with them. */
   const fz = record?.frozen || {};
-  const tol = fz.costNoise && (limits.costCeiling ?? 0) <= 0 ? COST_NOISE : 0;
-  const costLabel = (limits.costCeiling ?? 0) <= 0 && fz.costNoise ? "Cost per conversation · no increase" : `Cost per conversation within +${limits.costCeiling}%`;
-  const areas = fz.areaCheck ? [...new Set((winner?.proposals || []).map((p) => p.area || areaOfProposal(p)).filter(Boolean))] : [];
+  /* "No increase" allows the ±2% two runs of one agent already differ by. */
+  const noIncrease = (limits.costCeiling ?? 0) <= 0;
+  const tol = noIncrease ? COST_NOISE : 0;
+  const costLabel = noIncrease ? "Cost per conversation · no increase" : `Cost per conversation within +${limits.costCeiling}%`;
+  const areas = fz.areaCheck ? [...new Set((shipped?.proposals || []).map((p) => p.area || areaOfProposal(p)).filter(Boolean))] : [];
   const areaWord = (id) => CONFIG_AREAS.find((a) => a.id === id)?.label || id;
   const offAreas = fz.areaCheck && limits.areas ? areas.filter((a) => limits.areas[a] === false) : [];
-  const chosenFinalist = (r?.finalists || []).find((f) => f.winner) || null;
-  const envRuns = fz.multiEnv ? chosenFinalist?.envs || null : null;
-  const deepWinner = fz.depthRule && winner ? depthOf(winner.proposals || []) >= 3 : false;
-  const lift = r ? r.heldScore - r.heldBase : 0;
-  const checks = winner ? [
-    ...(fz.staticCheck ? [{ id: "static", label: "Static checks", actual: "areas, protected parts, settings in range, judges untouched", pass: !winner.static || winner.static.pass !== false }] : []),
+  const shippedFinalist = (r?.finalists || []).find((f) => f.n === shipped?.n) || null;
+  const envRuns = fz.multiEnv ? shippedFinalist?.envs || null : null;
+  const deepWinner = fz.depthRule && shipped ? depthOf(shipped.proposals || []) >= 3 : false;
+  const heldNow = chosen ? projectedHeld(r, chosen) : r.heldScore;
+  const lift = r ? heldNow - r.heldBase : 0;
+  const checks = shipped ? [
+    ...(fz.staticCheck ? [{ id: "static", label: "Static checks", actual: "areas, protected parts, settings in range, judges untouched", pass: !shipped.static || shipped.static.pass !== false }] : []),
     {
       id: "model",
       label: limits.model?.mode === "approved" ? "Model on the approved list" : "Model unchanged",
@@ -457,41 +618,38 @@ export const improvementOutcome = (record, { model } = {}) => {
         return { id: "cost", label: `Cost per conversation under $${Number(limits.costCeilingAbs).toFixed(2)}`, actual: `$${after.toFixed(3)} (${signed(effect.cost)})`, pass: after <= limits.costCeilingAbs };
       })()
       : costKnown
-      ? { id: "cost", label: costLabel, actual: `${signed(effect.cost)}${tol && effect.cost > 0 && effect.cost <= tol ? ` · within the ±${tol}% two runs differ by` : ""}`, pass: effect.cost <= limits.costCeiling + tol }
+      ? { id: "cost", label: costLabel, actual: `${signed(effect.cost)}${tol && effect.cost > 0 && effect.cost <= tol ? ` · within the ±${tol}% two runs differ by` : ""}`, pass: effect.cost <= (limits.costCeiling ?? 0) + tol }
       /* No cost data from this agent: unverified, never passed. */
       : { id: "cost", label: costLabel, actual: "Unverified — this agent reports no cost", pass: null },
     { id: "latency", label: `Latency within +${limits.latencyCeiling}%`, actual: signed(effect.latency), pass: effect.latency <= limits.latencyCeiling },
-    { id: "changes", label: `${allowedLabel(limits.allowed)} only`, actual: offLimits.length ? `also ${offLimits.map((x) => SURFACE_LABEL[x]).join(", ")}` : allowedLabel(surfaces).toLowerCase() || "no change", pass: !offLimits.length },
+    { id: "changes", label: `${allowedLabel(limits.allowed)} only`, actual: offLimits.length ? `also ${offLimits.map((x) => SURFACE_LABEL[x] || x).join(", ")}` : allowedLabel(surfaces).toLowerCase() || "no change", pass: !offLimits.length },
     ...(fz.areaCheck && areas.length ? [{ id: "areas", label: "Only areas this agent allows", actual: offAreas.length ? `changes ${offAreas.map(areaWord).join(", ")}` : areas.map(areaWord).join(", "), pass: !offAreas.length }] : []),
     ...((limits.protected || []).length ? [{ id: "protected", label: "Protected parts untouched", actual: hitProtected.length ? `edits ${hitProtected.join(", ")}` : "untouched", pass: !hitProtected.length }] : []),
-    ...(winner.compat ? [{ id: "compat", label: "Fits the sealed environment", actual: winner.compat.pass ? "entry point, build and start command unchanged" : winner.compat.reason, pass: !!winner.compat.pass }] : []),
-    ...(winner.repoTests ? [{ id: "repoTests", label: "The repository's own tests still pass", actual: `${winner.repoTests.command} · ${winner.repoTests.pass ? "passed" : "failed"}`, pass: !!winner.repoTests.pass }] : []),
+    ...(shipped.compat ? [{ id: "compat", label: "Fits the sealed environment", actual: shipped.compat.pass ? "entry point, build and start command unchanged" : shipped.compat.reason, pass: !!shipped.compat.pass }] : []),
+    ...(shipped.repoTests ? [{ id: "repoTests", label: "The repository's own tests still pass", actual: `${shipped.repoTests.command} · ${shipped.repoTests.pass ? "passed" : "failed"}`, pass: !!shipped.repoTests.pass }] : []),
     {
       id: "blockers",
       label: "No must-pass failure repeated on a re-run",
-      actual: blockersBroken
+      actual: mustPassUnknown
+        ? "not run yet — it runs when you verify this pick"
+        : blockersBroken
         ? `${plural(blockersBroken, "failed", "failed")} again`
         : `none of ${r.mustPass?.total ?? "the"} must-pass${(r.flakyToday || []).length ? ` · ${(r.flakyToday || []).length} flaky, not counted` : ""}`,
-      pass: !blockersBroken,
-    },
-    /* fail · cheat on any run of the winner — an off-limits tool or a canary
-       reached — and it's out, whatever it scored. */
-    {
-      id: "cheats",
-      label: "No cheats",
-      actual: heldCheats.length
-        ? heldCheats[0].signal === "canary" ? `reached the goal on the canary “${heldCheats[0].title}”` : `called ${heldCheats[0].tool}`
-        : r.scope?.canaries || r.scope?.offLimits ? "none caught" : "nothing to check — no canaries or off-limits tools",
-      pass: !heldCheats.length,
+      pass: mustPassUnknown ? null : !blockersBroken,
     },
     /* A candidate never changes the rules it's graded against — a rule
        change is a spec change, decided by a person outside the loop. */
     { id: "rules", label: "No tested rule changed", actual: "rules untouched", pass: true },
-    ...(worldChange.length ? [{ id: "world", label: "World change re-proved first", actual: `${worldChange.map((p) => p.step).join(", ")} · changed world`, pass: true }] : []),
-    ...(fz.calibration && r?.calibration ? [{
+    ...(fz.calibration && r?.calibration ? [mustPassUnknown ? {
+      /* A projection isn't a measurement — it's checked once it's verified. */
       id: "calibration",
-      label: "Gain clears the measured noise",
-      actual: `${lift >= 0 ? "+" : "−"}${Math.abs(lift)} pts against ±${r.noise} · baseline twice: ${r.calibration.disagreed} of ${r.calibration.scenarios} disagreed`,
+      label: "Gain clears run-to-run noise",
+      actual: `projected ${lift >= 0 ? "+" : "−"}${Math.abs(lift)} pts against ±${r.noise} — measured when you verify this pick`,
+      pass: null,
+    } : {
+      id: "calibration",
+      label: "Gain clears run-to-run noise",
+      actual: `${lift >= 0 ? "+" : "−"}${Math.abs(lift)} pts against ±${r.noise} · baseline run twice: ${r.calibration.disagreed} of ${r.calibration.scenarios} disagreed`,
       /* A fix is judged on its issue's scenarios; a held-back set already
          passing can only show a regression. */
       pass: isIssueFix(record) || r.heldBase >= 100 || !!r.split?.thin || lift > (r.noise || 0),
@@ -502,7 +660,7 @@ export const improvementOutcome = (record, { model } = {}) => {
       actual: envRuns.map((e) => (e.held ? `${e.name} · ${e.mustPass} held` : `${e.name} · “${e.broke.title}” failed twice`)).join(" · "),
       pass: envRuns.every((e) => e.held),
     }] : []),
-    ...(deepWinner ? [{ id: "depth", label: "Deeper change, stronger proof", actual: `Code change → ${chosenFinalist?.repeats || repeatsOf(record) + 2} repeats per finalist and the full regression set${winner.repoTests ? ", repository tests" : ""}`, pass: true }] : []),
+    ...(deepWinner ? [{ id: "depth", label: "Deeper change, stronger proof", actual: `Code change → ${shippedFinalist?.repeats || repeatsOf(record) + 2} repeats per finalist and the full regression set${shipped.repoTests ? ", repository tests" : ""}`, pass: true }] : []),
   ] : [];
   const failedCheck = checks.find((c) => c.pass === false);
 
@@ -517,14 +675,21 @@ export const improvementOutcome = (record, { model } = {}) => {
     A fix is judged on its issue first. Held-back scenarios from the rest of
     the suite not moving is fine for a fix — they must not break, and the
     critical-scenario and regression checks still apply. Only a broken
-    must-pass scenario, a cheat or a held-back regression stops it.
+    must-pass scenario or a held-back regression stops it.
   */
   const fixesIssue = !!issue?.fixed;
   const soft = optimizationVerdict(record);
   const blocking = blockingVerdict(r)
     || (soft?.tone === "#DC2626" && !(fixesIssue && r.heldScore >= r.heldBase) ? soft : null);
   const base = {
-    held, effect, costKnown, checks, issue, worldChange: worldChange.map((p) => p.step), noise: r.noise, stoppedEarly: r.stoppedEarly, shallower: r.shallower, train: winner ? { from: r.base, to: winner.score } : null,
+    held, effect, costKnown, checks, issue, noise: r.noise, stoppedEarly: r.stoppedEarly, shallower: r.shallower,
+    train: shipped ? { from: r.base, to: shipped.score } : null,
+    /* Target score minus held-back score — how much the change fitted the
+       scenarios it was tuned on rather than the task. */
+    gap: shipped ? shipped.score - heldNow : null,
+    heldScore: heldNow,
+    /* The run someone chose, and whether its numbers are measured yet. */
+    chosen: chosen ? { n: chosen.n, held: heldNow, finalist: !!chosenFinalist, verified, projected: !verified && !chosenFinalist } : null,
     /* Too few reproduced to hold any back. */
     thin: !!r.split?.thin,
     finalists: r.finalists || [],
@@ -535,23 +700,22 @@ export const improvementOutcome = (record, { model } = {}) => {
   if (failedCheck) {
     /* Said as what the candidate would do, not as the rule it failed. */
     const why = {
-      cost: `it would raise cost per conversation ${failedCheck.actual}, over the ${limits.costMode === "abs" ? `$${Number(limits.costCeilingAbs).toFixed(2)}` : (limits.costCeiling ?? 0) <= 0 ? "no-increase" : `+${limits.costCeiling}%`} limit`,
+      cost: `it would raise cost per conversation ${failedCheck.actual}, over the ${limits.costMode === "abs" ? `$${Number(limits.costCeilingAbs).toFixed(2)}` : noIncrease ? "no-increase" : `+${limits.costCeiling}%`} limit`,
       latency: `it would slow responses by ${failedCheck.actual}, over the +${limits.latencyCeiling}% limit`,
-      changes: `it changes ${offLimits.map((x) => SURFACE_LABEL[x]).join(" and ")}, which this agent's constraints don't allow`,
+      changes: `it changes ${offLimits.map((x) => SURFACE_LABEL[x] || x).join(" and ")}, which this agent's constraints don't allow`,
       protected: `it edits ${hitProtected.join(", ")}, which this agent protects`,
-      blockers: (r.heldBlockers || []).length === 1
-        ? `it failed the must-pass scenario “${r.heldBlockers[0].title.replace(/\.$/, "")}” on the held-back set, and again on a re-run`
-        : `it failed ${blockersBroken} must-pass scenarios on the held-back set, each again on a re-run`,
-      repoTests: `it breaks the repository's own tests (${winner.repoTests?.command})`,
+      blockers: heldBlockers.length === 1
+        ? `it failed the must-pass scenario “${heldBlockers[0].title.replace(/\.$/, "")}”, and again on a re-run`
+        : `it failed ${blockersBroken} must-pass scenarios, each again on a re-run`,
+      repoTests: `it breaks the repository's own tests (${shipped.repoTests?.command})`,
       compat: "it doesn't fit the sealed environment — rebuild the environment from its commit to test it",
-      cheats: `it cheated on the held-back set — it ${failedCheck.actual}`,
       areas: `it ${failedCheck.actual}, which this agent's constraints don't allow`,
-      calibration: `gained ${lift >= 0 ? "+" : "−"}${Math.abs(lift)} pts on the held-back set, within the noise its baseline-twice run measured (±${r.noise})`,
+      calibration: `gained ${lift >= 0 ? "+" : "−"}${Math.abs(lift)} pts on the held-back set, within run-to-run noise (±${r.noise})`,
       envs: `failed a must-pass scenario in ${(envRuns || []).filter((e) => !e.held).map((e) => e.name).join(" and ")}, and again on a re-run`,
     }[failedCheck.id] || failedCheck.label.toLowerCase();
-    return { ...base, ending: { key: "no-fix", label: "No safe improvement" }, headline: `No safe improvement — the best run ${why.replace(/^it /, "")}.` };
+    return { ...base, ending: { key: "no-fix", label: "No safe improvement" }, headline: `No safe improvement — the ${chosen ? "run you chose" : "best run"} ${why.replace(/^it /, "")}.` };
   }
-  if (blocking) {
+  if (blocking && !chosen) {
     return { ...base, ending: { key: "no-fix", label: "No safe improvement" }, headline: `No safe improvement — ${blocking.title.charAt(0).toLowerCase()}${blocking.title.slice(1)}.` };
   }
   /* A fix that improved the suite but not the issue it was started for isn't
@@ -569,7 +733,7 @@ export const improvementOutcome = (record, { model } = {}) => {
     fix is judged on its issue's scenarios instead — each fixed on every
     repeat, which noise doesn't do.
   */
-  if (!issue && r.heldBase < 100 && r.heldScore - r.heldBase <= (r.noise || 0)) {
+  if (!issue && !chosen && r.heldBase < 100 && r.heldScore - r.heldBase <= (r.noise || 0)) {
     return {
       ...base,
       ending: { key: "no-fix", label: "No safe improvement" },
@@ -577,12 +741,18 @@ export const improvementOutcome = (record, { model } = {}) => {
     };
   }
   /* A fix leads with its issue; the rest of the held-back set is the next line. */
-  const said = issue?.targets
-    ? `Fixed ${issue.id} on ${issue.fixed} of ${plural(issue.targets, "scenario")} where it failed, broke ${held.broke ? held.broke : "none"}, ${costText}`
+  const searchSaid = issue?.targets
+    /* Its failing scenarios include held-back ones the search never saw —
+       said, so the count doesn't read against Reproduce's. */
+    ? `Fixed ${issue.id} on ${issue.fixed} of ${issue.targets} failing ${issue.targets === 1 ? "scenario" : "scenarios"}${issue.held ? ` (${issue.held} never seen by the search)` : ""}, broke ${held.broke ? held.broke : "none"}, ${costText}`
     : result;
+  /* A chosen run is read on its own numbers — projected until it's verified. */
+  const said = chosen
+    ? `Run ${chosen.n}, your pick: ${base.chosen.projected ? "projected " : ""}${heldNow}% on the held-back set (from ${r.heldBase}%), ${costText}${verified ? "" : " — verify it before it can ship"}`
+    : searchSaid;
   if (record.stoppedAtBudget) {
     const s = record.stoppedAtBudget;
-    const limit = s.by === "time" ? `${s.minutes}-minute limit` : `$${s.budget} budget`;
+    const limit = s.by === "time" ? `${s.minutes}-minute time cap` : `${creditsLabel(s.budget || 0)} budget`;
     return { ...base, ending: { key: "budget", label: "Stopped at budget" }, headline: `Stopped at the ${limit} after ${s.trials} of ${s.of} runs. Best so far: ${said.charAt(0).toLowerCase()}${said.slice(1)}.` };
   }
   return { ...base, ending: { key: "ready", label: "Ready for review" }, headline: `${said}.` };
@@ -649,8 +819,8 @@ export const issueLine = (issue, held, { thin = false } = {}) => {
   How a candidate is proven, cheapest first; it stops at the first tier it
   fails. Static checks (model, protected parts, nothing touching the judges;
   for a code change, that it fits the sealed environment — same entry point,
-  build and start command — and the repository's own tests), no cheats on any of its
-  runs (off-limits tools, canaries), the target scenarios, the held-back set
+  build and start command — and the repository's own tests), the target
+  scenarios, the held-back set
   — scored once, at the end, for finalists only — the must-pass set (a
   failure counts only when it repeats on a re-run), and repeats.
 */
@@ -659,11 +829,6 @@ export const ladderOf = (record, trial) => {
   if (!r || !trial) return [];
   const isWinner = r.winner?.n === trial.n;
   const finalist = (r.finalists || []).find((f) => f.n === trial.n) || null;
-  const caught = [...(trial.cheats || []), ...(isWinner ? r.heldCheats || [] : [])];
-  const checked = [
-    r.scope?.canaries ? `${r.scope.canaries} ${r.scope.canaries === 1 ? "canary" : "canaries"} held` : null,
-    r.scope?.offLimits ? "no off-limits calls" : null,
-  ].filter(Boolean).join(" · ");
   const tests = trial.repoTests || null;
   /* Only code candidates in an improvement stamped with the check carry it. */
   const compat = trial.compat || null;
@@ -677,31 +842,23 @@ export const ladderOf = (record, trial) => {
       : { id: "static", label: "Static checks", state: "pass", note: "model, protected parts, judges untouched" },
     ...(compat ? [{ id: "compat", label: "Fits the environment", state: compat.pass ? "pass" : "fail", note: compat.pass ? compat.note || "entry point, build and start command unchanged" : `${compat.reason} It stops here.` }] : []),
     ...(tests ? [{ id: "repoTests", label: "Repository tests", state: tests.pass ? "pass" : "fail", note: tests.pass ? `${tests.command} · still pass` : `${tests.command} · failed — it stops here` }] : []),
-    caught.length
-      ? { id: "cheats", label: "No cheats", state: "fail", note: `fail · cheat — ${caught[0].signal === "canary" ? `reached the goal on the canary “${caught[0].title}”` : `called ${caught[0].tool} on “${caught[0].title}”`}` }
-      : { id: "cheats", label: "No cheats", state: "pass", note: checked || "no canaries or off-limits tools to check" },
     /* Stamped records hold every candidate to cost and latency as it runs. */
     ...(stat ? [{ id: "limits", label: "Cost and latency", state: trial.overLimit ? "fail" : "pass", note: trial.overLimit ? `${trial.overLimit.actual} — dropped here` : "within the agent's ceilings" }] : []),
-    /* A run issue's Fix targets the issue's scenarios; anything else targets
-       the training split. */
+    /* A run issue's Fix targets the issue's scenarios; a goal the scenarios
+       short of it; older records the rest of the suite with them. */
     typeof trial.issueFixed === "number" && trial.issueTargets
-      ? { id: "target", label: "Target scenarios", state: trial.issueFixed > 0 ? "pass" : "fail", note: trial.issueFixed > 0 ? `fixed ${trial.issueFixed} of ${trial.issueTargets} issue ${trial.issueTargets === 1 ? "scenario" : "scenarios"} in training` : "didn't fix the issue's scenarios" }
+      ? { id: "target", label: "Target scenarios", state: trial.issueFixed > 0 ? "pass" : "fail", note: trial.issueFixed > 0 ? `fixed ${trial.issueFixed} of ${trial.issueTargets} issue ${trial.issueTargets === 1 ? "scenario" : "scenarios"} the search could see` : "didn't fix the issue's scenarios" }
       : typeof trial.goalFixed === "number" && trial.goalTargets
-        ? { id: "target", label: "Target scenarios", state: trial.goalFixed > 0 && trial.delta > 0 ? "pass" : "fail", note: trial.goalFixed > 0 ? `fixed ${trial.goalFixed} of ${trial.goalTargets} short of ${goalWords(r.goal)} in training · ${trial.delta >= 0 ? "+" : "−"}${Math.abs(trial.delta)} pts` : `fixed none of the ${trial.goalTargets} short of ${goalWords(r.goal)}` }
-        : { id: "target", label: "Target scenarios", state: trial.delta > 0 ? "pass" : "fail", note: trial.delta > 0 ? `+${trial.delta} pts on training` : "no gain on the scenarios it was for" },
+        ? { id: "target", label: "Target scenarios", state: trial.goalFixed > 0 && trial.delta > 0 ? "pass" : "fail", note: trial.goalFixed > 0 ? `fixed ${trial.goalFixed} of ${trial.goalTargets} short of ${goalWords(r.goal)} · ${trial.delta >= 0 ? "+" : "−"}${Math.abs(trial.delta)} pts` : `fixed none of the ${trial.goalTargets} short of ${goalWords(r.goal)}` }
+        : { id: "target", label: "Target scenarios", state: trial.delta > 0 ? "pass" : "fail", note: trial.delta > 0 ? `+${trial.delta} pts on the target scenarios` : "no gain on the scenarios it was for" },
     { id: "held", label: "Held-back set", state: "todo", note: "" },
     { id: "mustpass", label: "Must-pass set", state: "todo", note: "" },
     { id: "repeats", label: "Repeats", state: "todo", note: "" },
   ];
-  /* A tool-code change rebuilds the world first: the scenarios using that
-     tool are re-proved on the candidate world before anything is compared. */
-  const world = (r.pool || []).filter((p) => trial.picks.includes(p.id) && p.worldChange);
-  const finish = (t) => (world.length
-    ? [t[0], { id: "world", label: "Changed world re-proved", state: "pass", note: `tool code in ${world.map((p) => p.step).join(", ")} — scenarios using it re-proved first` }, ...t.slice(1)]
-    : t);
+  const finish = (t) => t;
   const at = (id) => tiers.findIndex((t) => t.id === id);
   const set = (id, patch) => { tiers[at(id)] = { ...tiers[at(id)], ...patch }; };
-  const after = (id) => tiers.slice(at(id) + 1).map((t) => t.id).filter((x) => x !== "world");
+  const after = (id) => tiers.slice(at(id) + 1).map((t) => t.id);
   if (stat && !stat.pass) {
     after("static").forEach((id) => set(id, { state: "skip", note: "not run — it failed a static check" }));
     return finish(tiers);
@@ -714,19 +871,20 @@ export const ladderOf = (record, trial) => {
     after("repoTests").forEach((id) => set(id, { state: "skip", note: "stopped at the repository's tests" }));
     return finish(tiers);
   }
-  if (tiers[at("cheats")].state === "fail") {
-    ["limits", "target", "held", "mustpass", "repeats"].filter((id) => at(id) >= 0).forEach((id) => set(id, { state: "skip", note: "rejected — a run that cheats goes no further" }));
-    return finish(tiers);
-  }
   if (at("limits") >= 0 && tiers[at("limits")].state === "fail") {
     ["target", "held", "mustpass", "repeats"].forEach((id) => set(id, { state: "skip", note: "not a finalist — over the agent's limits" }));
     return finish(tiers);
   }
   if (tiers[at("target")].state === "fail") return finish(tiers);
-  const repeated = (trial.mustPassFails || []).filter((f) => f.repeated);
-  const once = (trial.mustPassFails || []).filter((f) => !f.repeated);
+  /* Must-pass is run for finalists only on newer records — read off the
+     finalist; older ones read it off the run. */
+  const fin0 = (r.finalists || []).find((f) => f.n === trial.n) || null;
+  const mpFails = fin0?.mustPassFails || trial.mustPassFails || [];
+  const repeated = mpFails.filter((f) => f.repeated);
+  const once = mpFails.filter((f) => !f.repeated);
   if (!finalist) {
-    set("held", { state: "skip", note: trial.brokeBlocker ? "not a finalist — a must-pass failure repeated in training" : "not a finalist" });
+    set("held", { state: "skip", note: trial.brokeBlocker ? "not a finalist — a must-pass failure repeated on its run" : "not a finalist" });
+    if (!trial.brokeBlocker) set("mustpass", { state: "skip", note: "runs for finalists only" });
     if (trial.brokeBlocker) set("mustpass", { state: "fail", note: `“${repeated[0]?.title || "a must-pass scenario"}” failed, and again on a re-run` });
     return finish(tiers);
   }
@@ -734,10 +892,10 @@ export const ladderOf = (record, trial) => {
   const lift = finalist.heldScore - r.heldBase;
   const heldNote = thin
     ? "held-back check is thin — too few groups reproduced to hold any back"
-    : `${finalist.pick ? "finalist 1" : "finalist"} · scored once at the end · ${lift >= 0 ? "+" : "−"}${Math.abs(lift)} pts · noise ±${r.noise || 0}${r.calibration ? " measured by running the baseline twice" : ""}`;
+    : `${finalist.pick ? "finalist 1" : "finalist"} · scored once at the end · ${lift >= 0 ? "+" : "−"}${Math.abs(lift)} pts · run-to-run noise ±${r.noise || 0}${r.calibration ? ", from the baseline run twice" : ""}`;
   set("held", { state: thin ? "thin" : finalist.accepted ? "pass" : "fail", note: finalist.accepted || thin ? heldNote : `${heldNote} · ${finalist.why}` });
-  if (tiers[at("held")].state === "fail" && finalist.why !== "a must-pass scenario failed again on a re-run" && finalist.why !== "cheated on the held-back set") return finish(tiers);
-  const blockers = isWinner ? r.heldBlockers || [] : finalist.why === "a must-pass scenario failed again on a re-run" ? [{}] : [];
+  if (tiers[at("held")].state === "fail" && finalist.why !== "a must-pass scenario failed again on a re-run") return finish(tiers);
+  const blockers = fin0?.mustPassFails ? repeated : isWinner ? r.heldBlockers || [] : finalist.why === "a must-pass scenario failed again on a re-run" ? [{}] : [];
   const parts = r.mustPass ? `${r.mustPass.total} must-pass` : "must-pass";
   /* Each other environment picked: its must-pass set held, or which broke. */
   const envBroke = fz.multiEnv ? (finalist.envs || []).find((e) => !e.held) : null;
@@ -771,10 +929,12 @@ export const judgeFor = (proposerId = "") => (/claude/i.test(proposerId) ? "GPT-
   trace it has reached — timed the way the trace plays (`RunTrace`), from
   when the run started. Null once it has ended.
 */
+/* Diagnosing is a step of the search, not a state of its own — it reads as
+   Searching wherever a status is shown; the stepper still names Diagnose. */
 export const IMPROVEMENT_PHASES = {
   draft: "Draft",
   reproducing: "Reproducing",
-  diagnosing: "Diagnosing",
+  diagnosing: "Searching",
   searching: "Searching",
   verifying: "Verifying",
 };
@@ -784,13 +944,53 @@ const STEP_PHASE = {
   holdout: "verifying", suggest: "verifying",
 };
 export const TRACE_STEP_MS = 800;
+/* One candidate run, start to scored — long enough to watch them arrive. */
+export const RUN_MS = 1600;
+const runsOfStep = (s) => (s.lines || []).filter((l) => /^run \d+ —/.test(l)).length;
 const stepDuration = (s, stepMs = TRACE_STEP_MS) => {
+  if (s.id === "trials") return runsOfStep(s) * RUN_MS + stepMs * 0.55;
   const n = (s.lines || []).length;
   return n * Math.max(180, stepMs / (n + 1)) + stepMs * 0.55;
 };
+/*
+  Endings decided before any search — Could not reproduce, Nothing to
+  improve, Stopped at budget, Failed — still play their Reproducing phase
+  first (RSI PRD: Draft → Reproducing → Searching → Verifying → an ending).
+  The record is written running with the ending pending (`pendingEnding`)
+  and reads as that ending once its Reproduce steps would have played.
+*/
+const REPRODUCE_STEPS = new Set(["reread", "reproduce", "calibrate"]);
+/** The trace's Reproduce steps — what a pending ending plays before it settles. */
+export const reproduceStepsOf = (record) => {
+  const r = record?.result || record?.pendingResult;
+  return r ? searchTrace(r, record).filter((s) => REPRODUCE_STEPS.has(s.id)) : [];
+};
+export const reproduceMsOf = (record) => Math.max(
+  reproduceStepsOf(record).reduce((t, s) => t + stepDuration(s), 0),
+  /* Never so short it reads as instant. */
+  TRACE_STEP_MS * 3,
+);
+/** The status a record has now — a pending ending once its Reproduce has played. */
+export const statusOf = (record, now = Date.now()) => {
+  if (!record?.pendingEnding) return record?.status;
+  /* A caller that marked it finished without knowing — its ending stands. */
+  if (record.status === OPT_STATUS.COMPLETED) return record.pendingEnding;
+  if (record.status !== OPT_STATUS.RUNNING) return record.status;
+  const start = Date.parse(record.startedAt || record.createdAt || "") || now;
+  return now >= start + reproduceMsOf(record) ? record.pendingEnding : record.status;
+};
+/** The record with its pending ending applied — what a page saves once Reproduce has played. */
+export const settlePending = (record, now = Date.now()) => {
+  if (!record?.pendingEnding) return record;
+  const { pendingEnding, ...rest } = record;
+  return { ...rest, status: pendingEnding, completedAt: new Date(now).toISOString() };
+};
+
 export const improvementPhaseOf = (record, now = Date.now()) => {
   if (record?.status === "draft") return { key: "draft", label: IMPROVEMENT_PHASES.draft };
-  if (record?.status !== OPT_STATUS.RUNNING) return null;
+  if (statusOf(record, now) !== OPT_STATUS.RUNNING) return null;
+  /* An ending decided up front still reproduces first. */
+  if (record.pendingEnding) return { key: "reproducing", label: IMPROVEMENT_PHASES.reproducing, step: "reproduce" };
   const r = record.result;
   if (!r) return { key: "draft", label: IMPROVEMENT_PHASES.draft };
   const steps = searchTrace(r, record);
@@ -806,17 +1006,72 @@ export const improvementPhaseOf = (record, now = Date.now()) => {
   return { key: "verifying", label: IMPROVEMENT_PHASES.verifying, step: steps[steps.length - 1]?.id };
 };
 
+/*
+  How far a running improvement has got, on the one clock every view reads —
+  from when it started, timed the way the trace plays. The stage is the
+  PRD's: Reproduce, Search, Verify. `runsDone` is how many of its runs have
+  finished; `done` once the last step has played. Null when it isn't running.
+*/
+const STEP_STAGE = {
+  reread: "reproduce", reproduce: "reproduce", calibrate: "reproduce",
+  diagnose: "search", split: "search", candidates: "search", trials: "search",
+  holdout: "verify", suggest: "verify",
+};
+export const improvementProgressOf = (record, now = Date.now()) => {
+  if (record?.status !== OPT_STATUS.RUNNING) return null;
+  /* An ending decided up front: Reproduce plays, then it settles to it. */
+  if (record.pendingEnding) {
+    const elapsed = Math.max(0, now - (Date.parse(record.startedAt || record.createdAt || 0) || now));
+    const total = record.fixDepth === "suggestion" ? 0 : (record.pendingResult?.trials || []).length;
+    return { stage: "reproduce", step: "reproduce", runsDone: 0, runsTotal: total, done: elapsed >= reproduceMsOf(record), pending: true };
+  }
+  if (!record.result) return null;
+  const steps = searchTrace(record.result, record);
+  const total = record.fixDepth === "suggestion" ? 0 : (record.result.trials || []).length;
+  const elapsed = Math.max(0, now - (Date.parse(record.startedAt || record.createdAt || 0) || now));
+  let t = 0;
+  let runsDone = 0;
+  for (const s of steps) {
+    const d = stepDuration(s);
+    if (elapsed < t + d) {
+      if (s.id === "trials") runsDone = Math.min(total, Math.floor((elapsed - t) / RUN_MS));
+      return { stage: STEP_STAGE[s.id] || "search", step: s.id, runsDone, runsTotal: total, done: false };
+    }
+    if (s.id === "trials") runsDone = total;
+    t += d;
+  }
+  return { stage: "verify", step: steps[steps.length - 1]?.id, runsDone: total, runsTotal: total, done: true };
+};
+
 /**
  * A running improvement whose search has played out is finished — whether or
  * not anyone had it open. Without this it sat on Verifying until its page was
  * opened, and a day later read as an infrastructure failure. Applied when the
  * store loads.
  */
+/*
+  Seeded improvements were once stored with their cost ceiling rewritten to
+  +5% though the agent's limits said "No increase". Only records built by
+  the older engine (no `staticCheck` stamp) were rewritten; read them back
+  to "No increase".
+*/
+const legacyCeiling = (o) => !o.frozen?.staticCheck && o.limits?.costMode !== "abs"
+  && o.limits?.costCeiling === LEGACY_COST_CEILING && o.frozen?.cost === `At most +${LEGACY_COST_CEILING}%`;
+const unlegacy = (o) => ({ ...o, limits: { ...o.limits, costCeiling: 0 }, frozen: { ...o.frozen, cost: "No increase" } });
+
 export const settleImprovements = (es, now = Date.now()) => {
   const list = es?.optimizations || [];
-  if (!list.some((o) => o.status === OPT_STATUS.RUNNING && o.result)) return es;
+  if (!list.some((o) => (o.status === OPT_STATUS.RUNNING && (o.result || o.pendingEnding)) || (o.pendingEnding && o.status === OPT_STATUS.COMPLETED) || legacyCeiling(o))) return es;
   let changed = false;
-  const optimizations = list.map((o) => {
+  const optimizations = list.map((o0) => {
+    const o = legacyCeiling(o0) ? unlegacy(o0) : o0;
+    if (o !== o0) changed = true;
+    /* An ending that played its Reproducing phase settles to it. */
+    if (o.pendingEnding) {
+      if (statusOf(o, now) === o.status) return o;
+      changed = true;
+      return settlePending(o, now);
+    }
     if (o.status !== OPT_STATUS.RUNNING || !o.result) return o;
     const start = Date.parse(o.startedAt || o.createdAt || "") || now;
     const done = start + searchTrace(o.result, o).reduce((t, s) => t + stepDuration(s), 0);

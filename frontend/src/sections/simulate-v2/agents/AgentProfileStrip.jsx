@@ -24,20 +24,23 @@ export function AgentStatusBanner({ agent, onReconnect, onRestore }) {
         bgcolor: (t) => (red ? alpha("#DC2626", t.palette.mode === "dark" ? 0.1 : 0.05) : "background.neutral"),
       }}
     >
-      <Iconify icon={red ? "solar:link-broken-linear" : "solar:archive-linear"} width={16} sx={{ color: red ? "#DC2626" : "text.secondary", flexShrink: 0 }} />
+      <Iconify icon={red ? "solar:link-broken-linear" : s.status === "deleted" ? "solar:trash-bin-minimalistic-linear" : "solar:archive-linear"} width={16} sx={{ color: red ? "#DC2626" : "text.secondary", flexShrink: 0 }} />
       <Box flex={1} minWidth={0}>
         <Typography sx={{ typography: "s2", fontWeight: 700, color: red ? "#DC2626" : "text.primary" }}>{s.label}</Typography>
         <Typography sx={{ typography: "s3", color: "text.secondary" }}>
           {red ? `${s.reason} Runs and improvements are stopped until it's reconnected.` : s.reason}
         </Typography>
       </Box>
-      <Button
-        size="small" variant="outlined"
-        onClick={red ? onReconnect : onRestore}
-        sx={{ typography: "s3", fontWeight: 700, height: 28, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
-      >
-        {red ? "Open Connections" : "Restore"}
-      </Button>
+      {/* A deleted agent has nothing to restore — only its history. */}
+      {s.status !== "deleted" && (
+        <Button
+          size="small" variant="outlined"
+          onClick={red ? onReconnect : onRestore}
+          sx={{ typography: "s3", fontWeight: 700, height: 28, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
+        >
+          {red ? "Open Connections" : "Restore"}
+        </Button>
+      )}
     </Stack>
   );
 }

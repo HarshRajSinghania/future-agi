@@ -5,6 +5,7 @@ import Iconify from "src/components/iconify";
 import { validate } from "../../_mock/contract";
 import { asSentence } from "../../_mock/scenarioBrief";
 import { StateChip, TextAction } from "./ScenarioStateBits";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 /*
   Scenario quality review (PRD v7 §4.10.9).
@@ -53,7 +54,7 @@ export function QualityReviewStrip({ gate, onOpen }) {
         {gate.quarantined.length > 0 && (
           <>
             <Sep />
-            <Box component="span" sx={{ color: "#DC2626" }}>{`${gate.quarantined.length} quarantined`}</Box>
+            <Box component="span" sx={{ color: "#DC2626" }}>{`${gate.quarantined.length} set aside`}</Box>
           </>
         )}
         <Sep />
@@ -88,7 +89,7 @@ export function QualityReviewFacts({ gate }) {
       {gate.quarantined.length > 0 && (
         <>
           <Sep />
-          <Box component="span" sx={{ color: "#DC2626" }}>{`${gate.quarantined.length} quarantined`}</Box>
+          <Box component="span" sx={{ color: "#DC2626" }}>{`${gate.quarantined.length} set aside`}</Box>
         </>
       )}
       <Sep />
@@ -147,7 +148,9 @@ export default function QualityReviewPanel({ gate, rows, env, connect = false, o
                 <Stack key={q.id} direction="row" spacing={1} alignItems="flex-start">
                   <Iconify icon="solar:shield-cross-linear" width={14} sx={{ color: "#DC2626", flexShrink: 0, mt: "3px" }} />
                   <Box flex={1} minWidth={0}>
-                    <Typography noWrap sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>{q.name}</Typography>
+                    {/* Title first, like the Scenarios table; the slug only when there's no title. */}
+                    <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{scenarioTitle(q.title) || q.name}</Typography>
+                    {q.summary && <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{q.summary}</Typography>}
                     <Typography sx={{ typography: "s3", color: "text.secondary", lineHeight: 1.55 }}>{q.reason}</Typography>
                   </Box>
                   {onOpenScenario && (
@@ -248,11 +251,12 @@ function SpotCheckRow({ row, env, answer, onAnswer }) {
     <Box sx={{ px: 2.5, py: 1.25 }}>
       <Stack direction="row" alignItems="flex-start" spacing={1.5}>
         <Box flex={1} minWidth={0}>
-          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
-            {row.name || row.title}
+          <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>
+            {scenarioTitle(row.title) || row.name}
           </Typography>
-          {(row.summary || row.title) && (
-            <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{row.summary || row.title}</Typography>
+          {/* The caller variation — never the title a second time. */}
+          {row.summary && row.summary !== row.title && (
+            <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{row.summary}</Typography>
           )}
         </Box>
         <Stack

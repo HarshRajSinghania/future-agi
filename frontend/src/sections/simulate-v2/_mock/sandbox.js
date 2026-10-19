@@ -43,4 +43,4 @@ export const SHADOW_GUARANTEES = [
 
 /** One line for a header chip, where there is no room for the list. */
 export const SHADOW_SUMMARY =
-  "Your agent runs against a sandbox copy of this environment — seeded data, test credentials, no outbound traffic. Nothing touches production.";
+  "Your agent runs against a sandbox copy of this environment — seeded data, test credentials, outbound traffic limited to an allowlist. Nothing touches production.";

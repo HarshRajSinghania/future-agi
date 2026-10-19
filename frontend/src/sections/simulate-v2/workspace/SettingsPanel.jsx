@@ -11,19 +11,17 @@ import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import { SectionCard, CopyField } from "../components/primitives";
 import {
-  DEFAULT_BUILD_ARGS, DEFAULT_RUNTIME,
-  ISOLATION_OPTIONS, envVarsOf, envVarRefPatch, envVarCheckOf,
+  envVarsOf, envVarRefPatch, envVarCheckOf, isAgentBehaviourKey, AGENT_BEHAVIOUR_MESSAGE,
+  credentialSetsOf, credentialSetPatch,
 } from "../_mock/envConfig";
 import { validateSecretRef, looksLikeRawKey, RAW_KEY_MESSAGE } from "../_mock/secretRefs";
 import { SecretRefText, SetRefAction, SecretRefEditor, PreflightLine, RefTag } from "./SecretRefControls";
 import {
-  environmentVersions, nextEnvVersion, currentEnvVersion,
-  pendingEnvChanges, envChangePatch, saveEnvChangesPatch, envChangeLabel,
+  currentEnvVersion,
+  pendingEnvChanges, envChangePatch, saveEnvChangesPatch, envChangeLabel, scenariosInSet,
 } from "../_mock/versions";
-import { INVALIDATING, staleScenarios } from "../_mock/proofs";
 import { twinById, resolveSeedPromptToJson } from "../_mock/twins";
 import TwinLogo from "./../components/TwinLogo";
-import { scenariosInEnvVersion } from "../_mock/toolFit";
 import { envLabelOf, pendingCostOf } from "../_mock/envVersionKinds";
 import { snapshotHistoryOf, currentEnvSnapshot, envSnapshotsOf, SNAPSHOT_KIND_LABEL } from "../_mock/envSnapshot";
 import { REPLAY_HEADER, REPLAY_SDK, stubbedToolNames, toggleStubPatch } from "../_mock/replay";
@@ -32,18 +30,18 @@ import {
 } from "../_mock/rsiModel";
 import { simulatorOf, callerChangePatch } from "../_mock/envModel";
 import { envTurnLimitOf, TURN_LIMIT_RANGE } from "../_mock/runStream";
-import { useWorkspaceSettings } from "../store";
-import { clickable, focusRing } from "../components/clickable";
+import { useSimStore, useWorkspaceSettings } from "../store";
+import RollbackDialog from "./RollbackDialog";
 
 const TWIN_TINT = "#7857FC";
 
 /**
  * Environment settings.
  *
- * Run defaults sit here rather than in the SDK on purpose: concurrency,
- * timeouts and isolation decide what a run costs and whether its results mean
- * anything, and burying them in code means nobody checks them before pressing
- * Run. The pre-flight quotes its estimate from these numbers.
+ * Simulation defaults sit here rather than in the SDK on purpose: repeats,
+ * conversations at once and the simulated user's model decide what a run
+ * costs and whether its results compare, and burying them in code means
+ * nobody checks them before pressing Run.
  */
 export default function SettingsPanel({ env, envState, patch, onDelete, locked = false }) {
   /* Edits made since the pinned version — what "New version" saves. */
@@ -51,16 +49,14 @@ export default function SettingsPanel({ env, envState, patch, onDelete, locked =
   const pinned = currentEnvVersion(env, envState);
   /* Stored labels read as major.minor (v3 → v2.1). */
   const shown = (label) => envLabelOf(env, envState, label);
-  /* The version pending a Restore confirmation. Null when the dialog is
-     closed. Holds the actual version object so the preflight can read
-     its `changed` list. */
+  /* The environment version ("v5") pending a Roll back confirmation. */
   const [restoring, setRestoring] = useState(null);
-  const [buildArgs, setBuildArgs] = useState(
-    DEFAULT_BUILD_ARGS.map((a) => `${a.key}=${a.value}`).join("\n"),
-  );
-  const [runtime, setRuntime] = useState(DEFAULT_RUNTIME);
-
-  const set = (patch) => setRuntime((r) => ({ ...r, ...patch }));
+  /* Rename — a field on the environment itself, not a version. */
+  const { state, dispatch } = useSimStore();
+  const adopted = (state.myEnvironments || []).some((e) => e.id === env.id);
+  const [name, setName] = useState(env.name);
+  const canRename = !locked && adopted && !!name.trim() && name.trim() !== env.name;
+  const rename = () => { if (canRename) dispatch({ type: "patchEnvironment", envId: env.id, patch: { name: name.trim() } }); };
 
   return (
     <Box sx={{ p: 2 }}>
@@ -77,19 +73,24 @@ export default function SettingsPanel({ env, envState, patch, onDelete, locked =
               <Stack direction="row" spacing={1}>
                 <TextField
                   size="small"
-                  defaultValue={env.name}
+                  value={name}
+                  disabled={locked || !adopted}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") rename(); }}
                   sx={{ flex: 1, maxWidth: 460, "& .MuiInputBase-root": { typography: "s2" } }}
                 />
                 <Button
                   variant="outlined"
                   size="small"
+                  disabled={!canRename}
+                  onClick={rename}
                   sx={{ color: "text.primary", borderColor: "divider", typography: "s2", fontWeight: 600 }}
                 >
                   Rename
                 </Button>
               </Stack>
               <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.625 }}>
-                Renaming changes the identifier used by runs and SDK clients.
+                The name only — the environment ID below and every run stay as they are.
               </Typography>
             </Box>
             <Box sx={{ maxWidth: 460 }}>
@@ -108,97 +109,6 @@ export default function SettingsPanel({ env, envState, patch, onDelete, locked =
           />
         )}
 
-        {/* ── run defaults — the part HUD leaves to the SDK ── */}
-        <SectionCard
-          title="Run defaults"
-          subtitle="Every run inherits these unless it overrides them"
-        >
-          <Stack spacing={2.75} sx={{ p: 2.5 }}>
-            <Box>
-              <Typography sx={{ typography: "s2", fontWeight: 600, mb: 1 }}>Isolation</Typography>
-              <Stack spacing={1}>
-                {ISOLATION_OPTIONS.map((o) => {
-                  const on = runtime.isolation === o.value;
-                  return (
-                    <Box
-                      key={o.value}
-                      {...clickable(() => set({ isolation: o.value }), { role: "radio", checked: on })}
-                      sx={{ ...focusRing,
-                        p: 1.5, borderRadius: 1.25, cursor: "pointer",
-                        border: "1px solid",
-                        borderColor: on ? "primary.main" : "divider",
-                        bgcolor: (t) => on ? alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.12 : 0.05) : "transparent",
-                      }}
-                    >
-                      <Stack direction="row" alignItems="center" spacing={0.75}>
-                        <Iconify
-                          icon={on ? "solar:check-circle-bold" : "solar:circle-linear"}
-                          width={15}
-                          sx={{ color: on ? "primary.main" : "text.subtitle" }}
-                        />
-                        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{o.label}</Typography>
-                        {o.value === "persistent" && (
-                          <Chip
-                            size="small"
-                            label="Not comparable"
-                            sx={{
-                              height: 18, borderRadius: 0.5, color: "text.secondary",
-                              bgcolor: (t) => alpha("#CA8A04", t.palette.mode === "dark" ? 0.16 : 0.1),
-                              "& .MuiChip-label": { px: 0.75, typography: "s3", fontWeight: 700 },
-                            }}
-                          />
-                        )}
-                      </Stack>
-                      <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25, pl: 2.75 }}>
-                        {o.desc}
-                      </Typography>
-                    </Box>
-                  );
-                })}
-              </Stack>
-            </Box>
-
-            <Stack direction={{ xs: "column", md: "row" }} spacing={3}>
-              <NumberSetting
-                label="Concurrency"
-                help="Tasks running at once"
-                value={runtime.concurrency}
-                min={1} max={32}
-                onChange={(v) => set({ concurrency: v })}
-              />
-              <NumberSetting
-                label="Task timeout"
-                help="Seconds before a task is abandoned"
-                value={runtime.taskTimeoutS}
-                min={30} max={1800} step={30}
-                onChange={(v) => set({ taskTimeoutS: v })}
-              />
-              <NumberSetting
-                label="Step budget"
-                help="Max agent steps per task"
-                value={runtime.stepBudget}
-                min={5} max={200} step={5}
-                onChange={(v) => set({ stepBudget: v })}
-              />
-            </Stack>
-
-            <Stack spacing={1.5}>
-              <ToggleSetting
-                label="File tracking"
-                help="File changes inside the environment appear as diffs on the trace."
-                checked={runtime.fileTracking}
-                onChange={(v) => set({ fileTracking: v })}
-              />
-              <ToggleSetting
-                label="Record video"
-                help="Capture a replay of every task. Adds storage cost."
-                checked={runtime.recordVideo}
-                onChange={(v) => set({ recordVideo: v })}
-              />
-            </Stack>
-          </Stack>
-        </SectionCard>
-
         {/* ── what each new run starts from, saved on the environment ── */}
         <SimulationDefaultsSection env={env} envState={envState} patch={patch} locked={locked} />
 
@@ -211,28 +121,7 @@ export default function SettingsPanel({ env, envState, patch, onDelete, locked =
         {/* ── env vars — secrets by reference ── */}
         <EnvVarsSection envState={envState} patch={patch} locked={locked} />
         <AgentCredentialsSection envState={envState} />
-
-        {/* ── build args ── */}
-        <SectionCard
-          title="Build arguments"
-          subtitle="Passed at image build time, not at runtime. One per line: KEY=value"
-        >
-          <Box sx={{ p: 2.5 }}>
-            <TextField
-              fullWidth
-              multiline
-              minRows={3}
-              value={buildArgs}
-              onChange={(e) => setBuildArgs(e.target.value)}
-              sx={{
-                "& .MuiInputBase-root": {
-                  typography: "s2",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                },
-              }}
-            />
-          </Box>
-        </SectionCard>
+        <CredentialSetsSection envState={envState} />
 
         {/* ── versions — reproducibility, which HUD does not surface ── */}
         <SectionCard
@@ -276,8 +165,6 @@ export default function SettingsPanel({ env, envState, patch, onDelete, locked =
           )}
           <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
             {snapshotHistoryOf(env, envState).map((v) => {
-              /* The world version underneath — what Switch and Restore act on. */
-              const world = environmentVersions(env, envState).find((w) => w.label === v.parts.env);
               return (
               <Stack key={v.label} direction="row" alignItems="center" spacing={2} sx={{ px: 2.5, py: 1.5 }}>
                 <Typography
@@ -304,46 +191,23 @@ export default function SettingsPanel({ env, envState, patch, onDelete, locked =
                     {[
                       v.at && new Date(v.at).toLocaleDateString(),
                       v.kinds.map((k) => SNAPSHOT_KIND_LABEL[k]).join(" + "),
-                      `${scenariosInEnvVersion(envState, v.parts.env).length} scenarios`,
+                      `${scenariosInSet(envState, v.parts.env).length} scenarios`,
                       `${v.runs} run${v.runs === 1 ? "" : "s"}`,
                     ].filter(Boolean).join(" · ")}
                   </Typography>
                 </Box>
-                {/*
-                  Two actions on the newest version of each world: **Switch**
-                  pins runs to that world (non-destructive — newest still
-                  exists), and **Restore** forks by minting the next version
-                  with that world, so the history stays linear. An older
-                  version on the same world differs only in scenarios or
-                  evals, which aren't rolled back, so it offers neither.
-                */}
-                {!v.current && v.worldHead && world && !locked && (
-                  <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }}>
-                    <Button
-                      size="small"
-                      onClick={() => patch({ activeEnvVersion: world.label })}
-                      startIcon={<Iconify icon="solar:arrow-right-linear" width={13} />}
-                      sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}
-                    >
-                      Switch
-                    </Button>
-                    {/*
-                      Restore forks — mints the next version with this
-                      world and pins it active. Preflight first because the
-                      fork can invalidate proofs on every scenario currently
-                      proved against the newer world, and doing that
-                      silently on click is exactly the kind of thing
-                      versioning exists to make visible.
-                    */}
-                    <Button
-                      size="small"
-                      onClick={() => setRestoring(world)}
-                      startIcon={<Iconify icon="solar:refresh-linear" width={13} />}
-                      sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}
-                    >
-                      Restore
-                    </Button>
-                  </Stack>
+                {/* Roll back makes the next version with everything as in
+                    this one — world, scenarios, sub-goals, evaluations and
+                    caller. RollbackDialog says what moves first. */}
+                {!v.current && !locked && (
+                  <Button
+                    size="small"
+                    onClick={() => setRestoring(v.label)}
+                    startIcon={<Iconify icon="solar:history-linear" width={13} />}
+                    sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0 }}
+                  >
+                    Roll back
+                  </Button>
                 )}
               </Stack>
               );
@@ -385,36 +249,13 @@ export default function SettingsPanel({ env, envState, patch, onDelete, locked =
         </SectionCard>
       </Stack>
 
-      {/*
-        Restore preflight. Restoring an older env version forks — mints
-        v(N+1) with the older row's intent and pins it active. The old
-        versions are still there (versioning never loses data), but
-        every scenario currently proved against the newer world lapses
-        against the new active version. The dialog spells that out
-        instead of relying on the user to notice the RE-PROVE banner
-        later.
-      */}
-      <RestorePreflight
-        restoring={restoring}
+      <RollbackDialog
+        open={!!restoring}
+        targetLabel={restoring}
         env={env}
         envState={envState}
-        onCancel={() => setRestoring(null)}
-        onConfirm={() => {
-          const list = envState?.envVersions?.length
-            ? envState.envVersions
-            : [...environmentVersions(env, envState)].reverse();
-          /* Restoring copies that version's world — tools included. */
-          const forked = nextEnvVersion(env, envState, {
-            from: restoring.label,
-            changed: restoring.changed || [],
-            note: `Restored from ${shown(restoring.label)} — ${restoring.note}`,
-          });
-          patch({
-            envVersions: [...list, forked],
-            activeEnvVersion: forked.label,
-          });
-          setRestoring(null);
-        }}
+        patch={patch}
+        onClose={() => setRestoring(null)}
       />
     </Box>
   );
@@ -437,8 +278,8 @@ const KEY_W = 220;
   Secrets are references into the team's secret manager (AC-6.12): a secret
   row shows where its value lives, never the value or a mask of it, and
   "Set reference" takes only a reference. Pointing a key somewhere else
-  re-runs the access check and nothing else — no rebuild, no new version.
-  Plain variables keep plain values.
+  re-runs the access check and makes the next credential-set version — never
+  an environment or agent version. Plain variables keep plain values.
 */
 /* What runs use to reach the agent — the platform key a test copy or a draft
    is made with. By reference only; read here, set where the agent connects. */
@@ -464,24 +305,65 @@ function AgentCredentialsSection({ envState }) {
 }
 AgentCredentialsSection.propTypes = { envState: PropTypes.object };
 
+/*
+  Credentials versioned as one set: every secret reference above and every
+  agent credential, together. Moving any reference makes the next credential
+  version — not an environment or agent version — and each run records the
+  one it used. References only; values never appear here.
+*/
+function CredentialSetsSection({ envState }) {
+  const sets = credentialSetsOf(envState);
+  const current = sets[sets.length - 1];
+  const runs = (envState?.runs || []).filter((r) => !r.synthetic);
+  const usedBy = (label) => runs.filter((r) => r.credentialSet === label).length;
+  return (
+    <SectionCard
+      title={`Credentials ${current?.label || "v1"}`}
+      subtitle="Secret references and agent credentials are versioned together as one set. Changing any reference makes the next credentials version — never an environment or agent version. Every run records the set it used."
+    >
+      <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+        {[...sets].reverse().slice(0, 5).map((c, i) => (
+          <Stack key={c.label} direction="row" alignItems="center" spacing={2} sx={{ px: 2.5, py: 1.125 }}>
+            <Typography sx={{ typography: "s2", fontWeight: 700, fontFamily: MONO, width: 44, flexShrink: 0 }}>{c.label}</Typography>
+            <Box flex={1} minWidth={0}>
+              <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{(c.changes || []).join(" · ") || "References changed"}</Typography>
+              <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
+                {[
+                  c.at ? new Date(c.at).toLocaleDateString() : "Used from the next run",
+                  `${usedBy(c.label)} run${usedBy(c.label) === 1 ? "" : "s"}`,
+                ].join(" · ")}
+              </Typography>
+            </Box>
+            {i === 0 && <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", flexShrink: 0 }}>Current</Typography>}
+          </Stack>
+        ))}
+      </Stack>
+    </SectionCard>
+  );
+}
+CredentialSetsSection.propTypes = { envState: PropTypes.object };
+
 function EnvVarsSection({ envState, patch, locked = false }) {
   const vars = envVarsOf(envState);
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState({ key: "", value: "", secret: true });
   const [addError, setAddError] = useState(null);
 
-  const save = (next) => patch?.({ envVars: next });
-  const setRef = (key, ref) => { patch?.(envVarRefPatch(envState, key, ref)); setEditing(null); };
+  /* Every write goes through the credential set, so a moved reference makes its next version. */
+  const save = (next) => patch?.(credentialSetPatch(envState, { envVars: next }));
+  const setRef = (key, ref) => { patch?.(credentialSetPatch(envState, envVarRefPatch(envState, key, ref))); setEditing(null); };
   const remove = (key) => save(vars.filter((v) => v.key !== key));
 
   const add = () => {
     const key = draft.key.trim();
     if (!key) return;
     if (vars.some((v) => v.key === key)) { setAddError(`${key} is already set.`); return; }
+    /* Secret or not, a model id or flag changes the agent, not the world. */
+    if (isAgentBehaviourKey(key)) { setAddError(AGENT_BEHAVIOUR_MESSAGE); return; }
     if (draft.secret) {
       const res = validateSecretRef(draft.value);
       if (!res.ok) { setAddError(res.error); return; }
-      patch?.(envVarRefPatch({ ...envState, envVars: [...vars, { key, secret: true, usedBy: "environment", ref: res.ref }] }, key, res.ref));
+      patch?.(credentialSetPatch(envState, envVarRefPatch({ ...envState, envVars: [...vars, { key, secret: true, usedBy: "environment", ref: res.ref }] }, key, res.ref)));
     } else {
       if (looksLikeRawKey(draft.value)) { setAddError(RAW_KEY_MESSAGE); return; }
       save([...vars, { key, value: draft.value, secret: false, usedBy: "environment" }]);
@@ -704,20 +586,15 @@ ReplaySection.propTypes = {
  *                      Saving re-resolves the JSON in one step; the
  *                      env's run history isn't invalidated because
  *                      the seed carries a version.
- *   · Reset policy   — whether the sandbox rolls back between runs
- *                      (default: on).
- *   · Danger zone    — reset the current sandbox, rotate all
- *                      service credentials at once.
+ *   · Danger zone    — reset the current sandbox. (Each run signs in
+ *                      to the cloned services with its own test
+ *                      sign-ins, so there's nothing to rotate.)
  */
 function TwinConfigSection({ backing, envState, patch, locked = false }) {
   const { enqueueSnackbar } = useSnackbar();
   const [seedPrompt, setSeedPrompt] = useState(backing.seedPrompt || "");
   const [showJson, setShowJson] = useState(false);
-  const [resetBetween, setResetBetween] = useState(
-    envState?.twinResetBetween !== false,
-  );
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
-  const [rotating, setRotating] = useState(false);
 
   const services = backing.services || [];
   const dirty = seedPrompt !== (backing.seedPrompt || "");
@@ -754,30 +631,13 @@ function TwinConfigSection({ backing, envState, patch, locked = false }) {
     enqueueSnackbar("Sandbox reset · fresh seed installed", { variant: "success" });
   };
 
-  const rotateCreds = () => {
-    setRotating(true);
-    /* Scripted delay — real rotation is a round-trip per service. */
-    setTimeout(() => {
-      setRotating(false);
-      enqueueSnackbar(
-        `Credentials rotated for ${services.length} service${services.length === 1 ? "" : "s"}`,
-        { variant: "success" },
-      );
-    }, 900);
-  };
-
-  const toggleReset = (next) => {
-    setResetBetween(next);
-    patch({ twinResetBetween: next });
-  };
-
   return (
     <SectionCard
-      title="Clone backing"
+      title="Sandboxes"
       subtitle="How the sandbox is provisioned and seeded per run"
       action={
         <Chip
-          size="small" label="Clone-backed"
+          size="small" label="Sandboxed"
           icon={<Iconify icon="solar:server-square-linear" width={11} sx={{ ml: "6px !important", color: `${TWIN_TINT} !important` }} />}
           sx={{
             height: 20, borderRadius: 0.75,
@@ -793,7 +653,7 @@ function TwinConfigSection({ backing, envState, patch, locked = false }) {
         {/* services */}
         <Box>
           <Typography sx={{ typography: "s2", fontWeight: 600, mb: 1 }}>
-            Cloned services ({services.length})
+            Sandboxed apps ({services.length})
           </Typography>
           <Stack spacing={0.75}>
             {services.map((sId) => {
@@ -894,38 +754,12 @@ function TwinConfigSection({ backing, envState, patch, locked = false }) {
           )}
         </Box>
 
-        {/* reset policy */}
-        <Stack direction="row" alignItems="flex-start" spacing={2}>
-          <Box flex={1} minWidth={0}>
-            <Typography sx={{ typography: "s2", fontWeight: 600 }}>Reset sandbox between runs</Typography>
-            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-              Every scenario starts from a fresh copy of the seeded state. Turn off to let runs share sandbox state — useful when you&apos;re debugging a multi-run sequence, but scenarios become order-dependent.
-            </Typography>
-          </Box>
-          <Switch checked={resetBetween} onChange={(e) => toggleReset(e.target.checked)} />
-        </Stack>
-
+        {/* The world resets before every conversation — always; not a setting. */}
         {/* actions */}
         <Stack
           direction={{ xs: "column", sm: "row" }} spacing={1}
           sx={{ pt: 1.5, borderTop: "1px solid", borderColor: "divider" }}
         >
-          <Button
-            variant="outlined" size="small"
-            disabled={rotating}
-            onClick={rotateCreds}
-            startIcon={
-              rotating
-                ? <Iconify icon="solar:refresh-circle-linear" width={13} sx={{ animation: "spin 1.2s linear infinite", "@keyframes spin": { to: { transform: "rotate(360deg)" } } }} />
-                : <Iconify icon="solar:key-linear" width={13} />
-            }
-            sx={{
-              typography: "s2", fontWeight: 700,
-              color: "text.primary", borderColor: "divider",
-            }}
-          >
-            {rotating ? "Rotating…" : "Rotate service credentials"}
-          </Button>
           <Button
             variant="outlined" size="small"
             onClick={() => setResetDialogOpen(true)}
@@ -950,7 +784,7 @@ function TwinConfigSection({ backing, envState, patch, locked = false }) {
         PaperProps={{ sx: { borderRadius: 2, bgcolor: "background.paper", border: "1px solid", borderColor: "divider" } }}
       >
         <DialogTitle sx={{ typography: "m2", fontWeight: 700, p: 2.5, pb: 1 }}>
-          Reset the clone sandbox?
+          Reset the sandbox?
         </DialogTitle>
         <DialogContent sx={{ p: 2.5, pt: 1 }} dividers>
           <Typography sx={{ typography: "s2", color: "text.secondary" }}>
@@ -985,97 +819,7 @@ TwinConfigSection.propTypes = {
   locked: PropTypes.bool,
 };
 
-function RestorePreflight({ restoring, env, envState, onCancel, onConfirm }) {
-  const open = !!restoring;
-  const versions = environmentVersions(env, envState);
-  const current = versions.find((v) => v.current) || versions[0];
-  const changedKinds = (restoring?.changed || []).filter((c) => INVALIDATING[c]);
 
-  /* Simulate what proofs would look like if we were on the older
-     version — the fork carries the older version's `changed` kinds, so
-     stale count against that world approximates the impact. */
-  const projectedStale = restoring
-    ? staleScenarios(envState?.scenarios || [], env, {
-      ...envState,
-      envVersions: (envState?.envVersions?.length
-        ? envState.envVersions
-        : [...versions].reverse()).concat([{
-        ...restoring,
-        label: "next",
-        changed: restoring.changed || [],
-      }]),
-    })
-    : [];
-
-  return (
-    <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>
-        Restore {envLabelOf(env, envState, restoring?.label)}?
-      </DialogTitle>
-      <DialogContent>
-        <Stack spacing={1.5}>
-          <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-            Forks the environment: mints the next version with the same intent as{" "}
-            <b>{envLabelOf(env, envState, restoring?.label)}</b> and pins it active. {envLabelOf(env, envState, current?.label)} stays in the history.
-          </Typography>
-
-          {changedKinds.length > 0 && (
-            <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: "background.neutral" }}>
-              <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4, mb: 0.5 }}>
-                What changes
-              </Typography>
-              <Stack spacing={0.375}>
-                {changedKinds.map((k) => (
-                  <Typography key={k} sx={{ typography: "s3", color: "text.secondary" }}>
-                    · {INVALIDATING[k]}
-                  </Typography>
-                ))}
-              </Stack>
-            </Box>
-          )}
-
-          {projectedStale.length > 0 && (
-            <Stack
-              direction="row" alignItems="flex-start" spacing={1}
-              sx={{
-                px: 1.5, py: 1.25, borderRadius: 1,
-                bgcolor: (t) => alpha("#CA8A04", t.palette.mode === "dark" ? 0.12 : 0.07),
-                border: "1px solid",
-                borderColor: (t) => alpha("#CA8A04", 0.35),
-              }}
-            >
-              <Iconify icon="solar:danger-triangle-bold" width={14} sx={{ color: "#CA8A04", flexShrink: 0, mt: "2px" }} />
-              <Typography sx={{ typography: "s3", color: "text.secondary" }}>
-                <b>{projectedStale.length} of {envState?.scenarios?.length || 0} scenarios</b> would need re-proving against the restored world — their current proofs were made against a version the fork does not include.
-              </Typography>
-            </Stack>
-          )}
-        </Stack>
-      </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={onCancel} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>
-          Cancel
-        </Button>
-        <Button
-          variant="contained" color="primary"
-          onClick={onConfirm}
-          startIcon={<Iconify icon="solar:refresh-linear" width={15} />}
-          sx={{ typography: "s2", fontWeight: 700 }}
-        >
-          Restore
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
-RestorePreflight.propTypes = {
-  restoring: PropTypes.object,
-  env: PropTypes.object,
-  envState: PropTypes.object,
-  onCancel: PropTypes.func,
-  onConfirm: PropTypes.func,
-};
 
 function NumberSetting({ label, help, value, min, max, step = 1, onChange }) {
   return (
@@ -1151,14 +895,12 @@ function SimulationDefaultsSection({ env, envState, patch, locked = false }) {
   const callerRows = [
     ...[...changes].reverse().map((c, i) => ({
       key: `${c.label}-${c.at}`,
-      label: c.label,
       title: `${c.from} → ${c.to}`,
       sub: `${new Date(c.at).toLocaleDateString()}${madeIn(c) ? ` · made environment ${madeIn(c)}` : ""} · runs before this don't compare with runs after`,
       current: i === 0,
     })),
     {
-      key: "caller-1",
-      label: "caller 1",
+      key: "caller-first",
       title: changes[0]?.from || model,
       sub: "The simulated user this environment started with",
       current: !changes.length,
@@ -1242,9 +984,6 @@ function SimulationDefaultsSection({ env, envState, patch, locked = false }) {
         <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
           {callerRows.map((c) => (
             <Stack key={c.key} direction="row" alignItems="center" spacing={2} sx={{ px: 2.5, py: 1 }}>
-              <Typography sx={{ typography: "s2", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", width: 72, flexShrink: 0 }}>
-                {c.label}
-              </Typography>
               <Box flex={1} minWidth={0}>
                 <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{c.title}</Typography>
                 <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{c.sub}</Typography>

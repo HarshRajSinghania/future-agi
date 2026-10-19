@@ -11,7 +11,7 @@ import NudgeCard from "../workspace/NudgeCard";
  * The fix-or-policy question (PRD v7 §4.10.6), opened from a screen that
  * needs it answered — Compare, for one. It isn't a separate flow: it shows the
  * same rule nudge cards the environment's "Needs input" inbox holds,
- * answered the same way (Policy change / Not intended / Unsure) and never by
+ * answered the same way (Policy change / Not intended) and never by
  * minting an environment version. Closing it leaves them open there.
  */
 export default function RuleChangeDialog({ open, onClose, envs, version, origin }) {

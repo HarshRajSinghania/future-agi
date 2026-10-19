@@ -61,7 +61,7 @@ export default function ShareMenu({ env, envState, identity, report }) {
             Share this run&apos;s report
           </Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-            Brief, scoreboard, issues and evidence — read-only, stamped with every version this run held fixed.
+            Pass rate and every scenario&apos;s result, each with its trace — read-only, stamped with every version this run held fixed.
           </Typography>
         </Box>
         <MenuItem onClick={copy} sx={{ alignItems: "flex-start", gap: 0.75, py: 1.25 }}>

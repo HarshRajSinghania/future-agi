@@ -1,4 +1,9 @@
 import PropTypes from "prop-types";
+import { comparisonOf, PAIR_CLASSES } from "../_mock/pairs";
+import { runIdentityOf } from "../_mock/runIdentity";
+import { creditsForUsd } from "../_mock/metering";
+/* Spend is said in credits everywhere. */
+import { creditsText as fmtCredits } from "./runsTableFormat";
 import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { DrilldownContext } from "./drilldownContext";
 import { useTheme, alpha } from "@mui/material/styles";
@@ -40,6 +45,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, rectSortingStrategy } from "@dnd-kit/sortable";
 import { clickable, focusRing } from "../components/clickable";
+import { scenarioTitle } from "../_mock/scenarios";
 
 /**
  * Analytics — enterprise density. Prioritises numbers and small
@@ -165,7 +171,9 @@ function deriveBusiness(tasks) {
     if (!r) return t.status === "passed";
     return r.passed;
   }).length;
-  const totalCost = tasks.reduce((a, t) => a + (t.cost || 0), 0);
+  /* Only costs the agent's side reported; unverified ones are counted, never summed. */
+  const totalCost = tasks.filter((t) => !t.costUnverified).reduce((a, t) => a + (t.cost || 0), 0);
+  const costUnverified = tasks.filter((t) => t.costUnverified).length;
   const passedCount = passed.length;
   const durations = sortedNums(tasks, (t) => t.durationMs || 0);
   return {
@@ -180,6 +188,7 @@ function deriveBusiness(tasks) {
     containmentRate: 100 - pct(escalated, tasks.length),
     complianceRate: pct(compliancePassed, measured.length),
     totalCost,
+    costUnverified,
     /* Everything the run spent, divided by the calls that passed (a flaky
        scenario passed on some of its attempts, not none). */
     costPerPass: passedCalls(tasks) ? totalCost / passedCalls(tasks) : 0,
@@ -263,9 +272,8 @@ function deriveFailureClusters(tasks, limit = 4) {
 /*
   Retell-parity filter + breakdown vocabulary. Grouped into the same
   four tabs Retell uses. Each field carries `values` (options users can
-  pick from) and `test` (a predicate applied to a task). Fields without
-  `test` are the UI-only vocab surfacing — the real product would drive
-  them from server-side scoping.
+  pick from) and `test` (a predicate applied to a task) — a field with no
+  predicate would filter nothing, so there are none.
 */
 const FILTER_TABS = [
   {
@@ -299,44 +307,24 @@ const FILTER_TABS = [
           if (v === "1–5s") return s >= 1 && s <= 5;
           return s > 5;
         } },
-      { key: "Combined cost",        values: ["< $0.05", "$0.05–$0.20", "> $0.20"],
+      /* Spend in credits; an unverified cost matches no bucket. */
+      { key: "Combined cost",        values: ["< 5 credits", "5–20 credits", "> 20 credits"],
         test: (t, v) => {
-          const c = t.cost || 0;
-          if (v === "< $0.05") return c < 0.05;
-          if (v === "$0.05–$0.20") return c >= 0.05 && c <= 0.20;
-          return c > 0.20;
+          if (t.costUnverified || t.cost == null) return false;
+          const c = creditsForUsd(t.cost);
+          if (v === "< 5 credits") return c < 5;
+          if (v === "5–20 credits") return c >= 5 && c <= 20;
+          return c > 20;
         } },
-      { key: "Agent",                values: ["Any"] },
-      { key: "Task ID",              values: ["Any"] },
-      { key: "Batch ID",             values: ["Any"] },
-      { key: "Type",                 values: ["Any"] },
     ],
   },
+  /* Only fields that really filter. Agent, task, batch, type, post-call,
+     metadata and persona fields had no predicate and filtered nothing. */
   {
-    id: "post-call", label: "Post-call",
+    id: "scenario", label: "Scenario",
     fields: [
-      { key: "Policy adherence", values: ["Pass", "Fail"] },
-      { key: "Task success",     values: ["Pass", "Fail"] },
-      { key: "Summary keywords", values: ["Any"] },
-      { key: "Extracted entities", values: ["Any"] },
-    ],
-  },
-  {
-    id: "metadata", label: "Metadata",
-    fields: [
-      { key: "Environment",    values: ["Any"] },
-      { key: "Agent version",  values: ["Any"] },
-      { key: "Run trigger",    values: ["Any"] },
-      { key: "Author",         values: ["Any"] },
-    ],
-  },
-  {
-    id: "dynamic", label: "Dynamic",
-    fields: [
-      { key: "persona.role",       values: ["Any"] },
-      { key: "persona.age",        values: ["Any"] },
-      { key: "scenario.critical",  values: ["true", "false"] },
-      { key: "scenario.mode",      values: ["Any"] },
+      { key: "Must-pass", values: ["Yes", "No"],
+        test: (t, v) => !!(t.critical || t.regressionMemory) === (v === "Yes") },
     ],
   },
 ];
@@ -767,10 +755,10 @@ function KpiTileGrid({ tasks, biz, trend }) {
       tone: critical ? RED : GREEN,
       deltaPct: null },
     { label: "Total cost",
-      value: `$${biz.totalCost.toFixed(2)}`,
+      value: biz.costUnverified && !biz.totalCost ? "unverified" : fmtCredits(biz.totalCost),
       deltaPct: null },
     { label: "Cost / pass",
-      value: biz.costPerPass ? `$${biz.costPerPass.toFixed(3)}` : "—",
+      value: biz.costPerPass ? fmtCredits(biz.costPerPass) : "—",
       deltaPct: null },
     { label: "Latency p90",
       value: `${Math.round(p90Lat)}ms`,
@@ -915,8 +903,8 @@ function VolumeAreaChart({ tasks }) {
               custom: ({ dataPointIndex }) => {
                 const t = tasks[dataPointIndex];
                 if (!t) return "";
-                const status = t.status === "passed" ? "Passed" : (t.status === "error" ? "Errored" : "Failed");
-                const label = t.title || t.name || t.id || `Task ${dataPointIndex + 1}`;
+                const status = t.status === "passed" ? "Passed" : (t.status === "error" ? "Error" : "Failed");
+                const label = scenarioTitle(t.title) || t.name || t.id || `Task ${dataPointIndex + 1}`;
                 return `<div style="padding:6px 10px;font-size:11px">
                   <div style="font-weight:700;margin-bottom:2px">T${dataPointIndex + 1} · ${status}</div>
                   <div style="opacity:0.7">${label}</div>
@@ -1520,7 +1508,7 @@ const VoiceCostBreakdownPanel = memo(function VoiceCostBreakdownPanel({ tasks })
   return (
     <Panel
       title="Cost breakdown by pipeline stage"
-      subtitle={`$${totalCost.toFixed(2)} total across ${series[0].data.length} calls — LLM / TTS / STT / Transport split`}
+      subtitle={`${fmtCredits(totalCost)} total across ${series[0].data.length} calls — LLM / TTS / STT / Transport split`}
       exportRows={exportRows}
       info="Per-call spend, split by voice-pipeline stage. If LLM towers over everything, you're overspending on model tokens (shorter prompt, cheaper model, cache). If TTS or STT dominate, look at voice provider tier. Transport bloat usually means calls staying open too long."
     >
@@ -1549,12 +1537,12 @@ const VoiceCostBreakdownPanel = memo(function VoiceCostBreakdownPanel({ tasks })
               tickAmount: Math.min(8, Math.max(1, categories.length - 1)),
               labels: { style: { colors: theme.palette.text.secondary, fontSize: "10px" }, hideOverlappingLabels: true },
             },
-            yaxis: { labels: { style: { colors: theme.palette.text.secondary, fontSize: "10px" }, formatter: (v) => `$${Number(v).toFixed(2)}` } },
+            yaxis: { labels: { style: { colors: theme.palette.text.secondary, fontSize: "10px" }, formatter: (v) => fmtCredits(Number(v)) } },
             grid: { borderColor: theme.palette.divider, strokeDashArray: 4, padding: { left: 8, right: 8, top: -6, bottom: -6 } },
             tooltip: {
               theme: theme.palette.mode,
               shared: true, intersect: false,
-              y: { formatter: (v) => `$${Number(v).toFixed(3)}` },
+              y: { formatter: (v) => fmtCredits(Number(v)) },
             },
           }}
         />
@@ -1565,7 +1553,7 @@ const VoiceCostBreakdownPanel = memo(function VoiceCostBreakdownPanel({ tasks })
               <Box sx={{ width: 8, height: 8, borderRadius: 0.75, bgcolor: l.color, flexShrink: 0 }} />
               <Typography sx={{ fontSize: 11.5, color: "text.subtitle", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
                 <Box component="span" sx={{ color: "text.primary" }}>{l.key}</Box>{" "}
-                <b style={{ color: "inherit" }}>${l.value.toFixed(2)}</b>{" "}
+                <b style={{ color: "inherit" }}>{fmtCredits(l.value)}</b>{" "}
                 ({Math.round((l.value / totalCost) * 100)}%)
               </Typography>
             </Stack>
@@ -1667,7 +1655,7 @@ const DistributionSummary = memo(function DistributionSummary({ tasks }) {
     const measured = measuredOnly(tasks);
     const defs = [
       { key: "duration", label: "Call duration",     fmt: (v) => `${v.toFixed(1)}s`,          accessor: (t) => (t.durationMs || 0) / 1000, population: measured },
-      { key: "cost",     label: "Cost per scenario", fmt: (v) => `$${v.toFixed(3)}`,          accessor: (t) => t.cost || 0, population: tasks },
+      { key: "cost",     label: "Cost per scenario", fmt: (v) => fmtCredits(v),          accessor: (t) => t.cost || 0, population: tasks.filter((t) => !t.costUnverified) },
       { key: "tokens",   label: "Tokens per scenario", fmt: (v) => numFmt.format(Math.round(v)), accessor: (t) => t.tokens || 0, population: tasks },
       { key: "turns",    label: "Turns per call",    fmt: (v) => `${Math.round(v)}`,          accessor: (t) => t.steps?.length || 0, population: measured },
     ];
@@ -1826,7 +1814,7 @@ function TaskDrilldownDrawer({ open, onClose, title, subtitle, tasks: filtered, 
           <Stack divider={<Box sx={{ height: "1px", bgcolor: "divider" }} />}>
             {filtered.map((t, i) => {
               const status = t.status === "passed" ? "Passed"
-                : t.status === "error" ? "Errored"
+                : t.status === "error" ? "Error"
                 : t.status === "failed" ? "Failed"
                 : "Unknown";
               const statusColor = t.status === "passed" ? "#16A34A"
@@ -1841,7 +1829,7 @@ function TaskDrilldownDrawer({ open, onClose, title, subtitle, tasks: filtered, 
                       #{i + 1}
                     </Typography>
                     <Typography sx={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {t.title || t.name || t.id}
+                      {scenarioTitle(t.title) || t.name || t.id}
                     </Typography>
                     <Tooltip arrow title={isGold ? "Remove from golden set" : "Mark as golden — ground truth for the divergence widgets"}>
                       <IconButton
@@ -1864,7 +1852,7 @@ function TaskDrilldownDrawer({ open, onClose, title, subtitle, tasks: filtered, 
                       {t.steps?.length || 0} turns
                     </Typography>
                     <Typography sx={{ fontSize: 11, color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-                      ${(t.cost || 0).toFixed(3)}
+                      {t.costUnverified ? "cost unverified" : fmtCredits(t.cost || 0)}
                     </Typography>
                     {t.persona?.name && (
                       <Typography sx={{ fontSize: 11, color: "text.subtitle", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1920,9 +1908,9 @@ const TaskVolumeChart = memo(function TaskVolumeChart({ tasks }) {
         }}>
           {tasks.map((t, i) => {
             const c = colorOf(t);
-            const name = t.title || t.name || t.id || `Task ${i + 1}`;
+            const name = scenarioTitle(t.title) || t.name || t.id || `Task ${i + 1}`;
             const statusText = t.status === "passed" ? "Passed"
-              : t.status === "error" ? "Errored"
+              : t.status === "error" ? "Error"
               : t.escalated ? "Escalated"
               : t.status === "failed" ? "Failed"
               : "Unknown";
@@ -2064,15 +2052,15 @@ function KpiStrip({ tasks, biz, trend, env }) {
     },
     {
       label: "Cost / pass",
-      value: biz.costPerPass ? `$${biz.costPerPass.toFixed(3)}` : "—",
+      value: biz.costPerPass ? fmtCredits(biz.costPerPass) : "—",
       sub: `per passed call`,
       delta: deltaPct(biz.costPerPass, trend?.prevCostPerPass),
       goodUp: false,
     },
     {
       label: "Total cost",
-      value: `$${biz.totalCost.toFixed(2)}`,
-      sub: "this run",
+      value: biz.costUnverified && !biz.totalCost ? "unverified" : fmtCredits(biz.totalCost),
+      sub: biz.costUnverified ? `this run · ${biz.costUnverified} unverified` : "this run",
     },
   ];
 
@@ -2728,7 +2716,7 @@ const SlowestTable = memo(function SlowestTable({ tasks }) {
 
   const exportRows = rows.map((t, i) => ({
     rank: i + 1,
-    task: t.title || t.name || t.id,
+    task: scenarioTitle(t.title) || t.name || t.id,
     duration_s: Number(((t.durationMs || 0) / 1000).toFixed(1)),
     turns: t.steps?.length || 0,
     tokens: t.tokens ?? "",
@@ -2743,7 +2731,7 @@ const SlowestTable = memo(function SlowestTable({ tasks }) {
     >
       <RankedColumnChart
         rows={rows.map((t) => ({
-          label: t.title || t.name || t.id,
+          label: scenarioTitle(t.title) || t.name || t.id,
           value: (t.durationMs || 0) / 1000,
           meta: `${t.steps?.length || 0} turns · ${t.tokens != null ? numFmt.format(t.tokens) : "—"} tokens`,
         }))}
@@ -2766,7 +2754,7 @@ const ExpensiveTable = memo(function ExpensiveTable({ tasks }) {
   if (!rows.length) return null;
   const exportRows = rows.map((t, i) => ({
     rank: i + 1,
-    task: t.title || t.name || t.id,
+    task: scenarioTitle(t.title) || t.name || t.id,
     cost_usd: Number((t.cost || 0).toFixed(4)),
     tokens: t.tokens ?? "",
     duration_s: Number(((t.durationMs || 0) / 1000).toFixed(1)),
@@ -2781,11 +2769,11 @@ const ExpensiveTable = memo(function ExpensiveTable({ tasks }) {
     >
       <RankedColumnChart
         rows={rows.map((t) => ({
-          label: t.title || t.name || t.id,
+          label: scenarioTitle(t.title) || t.name || t.id,
           value: t.cost || 0,
           meta: `${t.tokens != null ? numFmt.format(t.tokens) : "—"} tokens · ${((t.durationMs || 0) / 1000).toFixed(1)}s`,
         }))}
-        formatter={(v) => `$${Number(v).toFixed(3)}`}
+        formatter={(v) => fmtCredits(Number(v))}
         color="#DB2777"
         emptyText="No cost data yet."
       />
@@ -3145,7 +3133,7 @@ function TaskScatter({
               const bucket = buckets[seriesIndex];
               const r = bucket?.rows?.[dataPointIndex];
               if (!r) return "";
-              const label = r.t.title || r.t.name || r.t.id || "Task";
+              const label = scenarioTitle(r.t.title) || r.t.name || r.t.id || "Task";
               return `<div style="padding:6px 10px;font-size:11px">
                 <div style="font-weight:700;margin-bottom:2px">${label}</div>
                 <div style="opacity:0.75">${xLabel}: ${xFormatter ? xFormatter(r.x) : r.x} · ${yLabel}: ${yFormatter ? yFormatter(r.y) : r.y}${sizeKey ? ` · ${r.z.toFixed(1)}s` : ""}</div>
@@ -3576,32 +3564,48 @@ PanelChart.propTypes = { title: PropTypes.node, subtitle: PropTypes.node, childr
 /* ── regression banner ─────────────────────────────────────────────── */
 
 /* Sits above the KPI strip when the current run has a previous run to
-   compare against. Reads like a release-note: "12 scenarios newly
-   passing · 5 regressions · +7pp pass-rate". Empty state suppresses. */
+   compare against. The verdict is Compare's own (pairs.comparisonOf):
+   Improved / Regressed / No meaningful change / Inconclusive on the same
+   environment version, side by side — no verdict — across versions. */
 function RegressionBanner({ delta }) {
   if (!delta) return null;
-  const passDelta = delta.passRate;
-  const good = passDelta >= 0;
+  const { label } = delta;
+  const side = label.id === "side";
+  const rows = label.id === "rows";
+  const good = label.id === "improved";
+  const bad = label.id === "regressed";
+  const tone = bad ? RED : good ? GREEN : null;
   return (
     <Stack direction="row" alignItems="center" spacing={2}
       sx={{
         px: 2.25, py: 1.25, borderRadius: 1,
         border: "1px solid", borderColor: "divider",
-        bgcolor: (t) => alpha(good ? GREEN : RED, t.palette.mode === "dark" ? 0.08 : 0.05),
+        bgcolor: (t) => (tone ? alpha(tone, t.palette.mode === "dark" ? 0.08 : 0.05) : "transparent"),
       }}
     >
-      <Iconify icon={good ? "solar:arrow-up-linear" : "solar:arrow-down-linear"} width={16} sx={{ color: good ? GREEN : RED }} />
+      <Iconify
+        icon={side ? "solar:transfer-horizontal-linear" : good ? "solar:arrow-up-linear" : bad ? "solar:arrow-down-linear" : label.id === "same" ? "solar:minus-circle-linear" : "solar:question-circle-linear"}
+        width={16}
+        sx={{ color: tone || "text.secondary" }}
+      />
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-          {good ? "Improvement" : "Regression"} vs {delta.prevLabel}
-          <Box component="span" sx={{ color: good ? GREEN : RED, ml: 1, fontWeight: 800 }}>
-            {passDelta >= 0 ? "+" : ""}{passDelta}pp pass rate
-          </Box>
+          {side ? `Side by side with ${delta.prevLabel}` : rows ? `No verdict against ${delta.prevLabel}` : `${label.label} vs ${delta.prevLabel}`}
+          {!side && !rows && delta.passRate != null && (
+            <Box component="span" sx={{ color: tone || "text.secondary", ml: 1, fontWeight: 800 }}>
+              {delta.passRate >= 0 ? "+" : ""}{delta.passRate} pts pass rate
+            </Box>
+          )}
         </Typography>
         <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 11.5, mt: 0.25 }}>
-          {delta.newlyPassing} scenarios newly passing · {delta.regressions} regressed
-          {delta.costDeltaPct !== null ? ` · cost per call ${delta.costDeltaPct > 0 ? "+" : ""}${delta.costDeltaPct}%` : ""}
-          {` · compared on ${delta.shared} scenario${delta.shared === 1 ? "" : "s"} both runs measured`}
+          {side ? label.note : (
+            <>
+              {delta.newlyPassing} scenarios newly passing · {delta.regressions} regressed
+              {delta.costDeltaPct !== null ? ` · cost per call ${delta.costDeltaPct > 0 ? "+" : ""}${delta.costDeltaPct}%` : ""}
+              {` · compared on ${delta.shared} scenario${delta.shared === 1 ? "" : "s"}`}
+              {rows ? ` — ${label.note}` : ""}
+            </>
+          )}
         </Typography>
       </Box>
     </Stack>
@@ -3932,55 +3936,44 @@ export default function RunAnalyticsV2({ tasks, evals, env, runHistory, currentR
     const idx = runHistory.findIndex((r) => r.id === currentRunId);
     const prevRun = idx > 0 ? runHistory[idx - 1] : null;
     if (!prevRun) return { delta: null, trend: null };
-    /* Like for like: diff scenario by scenario, over the scenarios both runs
-       measured. A re-run of four blockers compared with a full sweep would
-       otherwise read as a huge swing that no scenario actually made. */
-    const byId = (list) => new Map((list || []).map((t) => [t.id, t]));
-    const currById = byId(tasks);
-    const prevById = byId(prevRun.tasks);
-    const shared = [...currById.keys()].filter((id) => {
-      const c = currById.get(id);
-      const p = prevById.get(id);
-      return p && outcomeOf(c) !== "unmeasured" && outcomeOf(p) !== "unmeasured";
-    });
-    const sharedCurr = shared.map((id) => currById.get(id));
-    const sharedPrev = shared.map((id) => prevById.get(id));
-    let newlyPassing = 0;
-    let regressions = 0;
-    shared.forEach((id) => {
-      const was = outcomeOf(prevById.get(id)) === "passed";
-      const now = outcomeOf(currById.get(id)) === "passed";
-      if (!was && now) newlyPassing += 1;
-      if (was && !now) regressions += 1;
-    });
-    const passDelta = (passRateOf(sharedCurr) ?? 0) - (passRateOf(sharedPrev) ?? 0);
-    /* Cost per call, so different scenario counts / repeats still compare. */
+    /* One verdict, the one Compare gives: scenario by scenario over the
+       comparable pairs, and side by side when the environment versions differ. */
+    const read = env ? comparisonOf([prevRun, { ...runHistory[idx], tasks }], env, envState) : null;
+    if (!read) return { delta: null, trend: null };
+    const side = read.label.id === "side";
+    const usable = read.pairs.filter((p) => PAIR_CLASSES[p.cls].inDelta && p.shareA != null && p.shareB != null);
+    const newlyPassing = usable.filter((p) => p.flip.kind === "improved").length;
+    const regressions = usable.filter((p) => p.flip.kind === "regressed").length;
+    /* Cost per call over the calls whose cost was reported, so different
+       scenario counts / repeats still compare and unverified costs never count. */
     const perCall = (list) => {
-      const calls = (list || []).reduce((a, t) => a + samplesOf(t), 0);
-      return calls ? (list || []).reduce((a, t) => a + (t.cost || 0), 0) / calls : 0;
+      const known = (list || []).filter((t) => !t.costUnverified);
+      const calls = known.reduce((a, t) => a + samplesOf(t), 0);
+      return calls ? known.reduce((a, t) => a + (t.cost || 0), 0) / calls : 0;
     };
     const currCost = perCall(tasks);
     const prevCost = perCall(prevRun.tasks);
-    const costDeltaPct = prevCost > 0 ? Math.round(((currCost - prevCost) / prevCost) * 100) : null;
+    const costDeltaPct = !side && prevCost > 0 ? Math.round(((currCost - prevCost) / prevCost) * 100) : null;
     const prevPassed = passedCalls(prevRun.tasks || []);
-    const prevTotal = (prevRun.tasks || []).reduce((a, t) => a + (t.cost || 0), 0);
+    const prevTotal = (prevRun.tasks || []).filter((t) => !t.costUnverified).reduce((a, t) => a + (t.cost || 0), 0);
     return {
       delta: {
-        passRate: Math.round(passDelta),
+        label: read.label,
+        passRate: read.interval.delta == null ? null : Math.round(read.interval.delta),
         newlyPassing,
         regressions,
         costDeltaPct,
-        shared: shared.length,
-        partial: shared.length < Math.max(currById.size, prevById.size),
-        prevLabel: `Run ${prevRun.ordinal ?? idx} · agent ${prevRun.agentVersion || "—"}`,
+        shared: usable.length,
+        prevLabel: `Run ${prevRun.ordinal ?? idx} · ${runIdentityOf(prevRun, envState, env).label}`,
       },
-      trend: {
+      /* KPI deltas only on the same environment version. */
+      trend: side ? null : {
         prevPassRate: passRateOf(prevRun.tasks || []),
         prevEscalationRate: prevRun.escalationRate,
         prevCostPerPass: prevPassed ? prevTotal / prevPassed : null,
       },
     };
-  }, [runHistory, currentRunId, tasks]);
+  }, [runHistory, currentRunId, tasks, env, envState]);
 
   return (
     <DrilldownContext.Provider value={openDrilldown}>

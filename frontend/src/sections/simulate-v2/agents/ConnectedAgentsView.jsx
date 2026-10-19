@@ -14,7 +14,8 @@ import { paths } from "src/routes/paths";
 import { useConnectedAgents } from "../store";
 import { neutralCheckboxSx } from "../components/primitives";
 import { agentSourceOf } from "../_mock/agentRegistry";
-import { projectsOfAgent } from "../_mock/projectLinks";
+import { observeProjectOf } from "./observeProject";
+import { deleteBlockOf } from "./agentDelete";
 import AgentStateTags from "./AgentStateTags";
 import BuildEnvironmentDialog from "./BuildEnvironmentDialog";
 import { MONO, ago, buildPresetFor } from "./agentViewUtils";
@@ -49,7 +50,7 @@ export default function ConnectedAgentsView({ onConnect }) {
     /* A template's stand-in isn't anyone's agent — it lives in its environment. */
     return agents
       .filter((a) => !a.placeholder)
-      .map((a) => ({ ...a, source: agentSourceOf(a), identity: identityOf(a), projects: projectsOfAgent(a, state, agents) }))
+      .map((a) => ({ ...a, source: agentSourceOf(a), identity: identityOf(a), project: observeProjectOf(a, state, agents) }))
       .filter((a) => !q || `${a.name} ${a.source.label} ${a.source.where} ${a.identity.owner} ${a.identity.description}`.toLowerCase().includes(q));
   }, [agents, query, state]);
 
@@ -60,8 +61,8 @@ export default function ConnectedAgentsView({ onConnect }) {
   const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
   const pageRows = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
 
-  /* Select several and delete them. Any agent can go: environments testing
-     it stay, unlinked, with their scenarios, evaluations and runs. Selection
+  /* Select several and delete them. An agent can be deleted only once it
+     has no environments left, so those are skipped — and said so. Selection
      is kept by id across pages. */
   const [selectedIds, setSelectedIds] = useState([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -73,15 +74,16 @@ export default function ConnectedAgentsView({ onConnect }) {
     : [...new Set([...ids, ...pageRows.map((a) => a.id)])]));
   /* Only ids still in the list count (one may have been deleted elsewhere). */
   const picked = agents.filter((a) => selectedIds.includes(a.id));
-  /* The environments left without an agent — each counted once. */
-  const envsLeft = new Set(picked.flatMap((a) => (a.usedIn || []).map((u) => u.envId))).size;
+  /* Agents that still have environments can't be deleted — they're skipped. */
+  const deletable = picked.filter((a) => !deleteBlockOf(a));
+  const skipped = picked.filter((a) => deleteBlockOf(a));
   const performDelete = () => {
-    picked.forEach((a) => removeAgent(a.key));
+    deletable.forEach((a) => removeAgent(a.key));
     enqueueSnackbar(
-      `${picked.length === 1 ? `${picked[0].name} deleted` : `${picked.length} agents deleted`}.${envsLeft ? ` ${envsLeft === 1 ? "1 environment stays" : `${envsLeft} environments stay`} — connect an agent there to run again.` : ""}`,
+      `${deletable.length === 1 ? `${deletable[0].name} deleted` : `${deletable.length} agents deleted`}.${skipped.length ? ` ${skipped.length === 1 ? `${skipped[0].name} was skipped` : `${skipped.length} were skipped`} — it still has environments.` : ""}`,
       { variant: "success" },
     );
-    setSelectedIds([]);
+    setSelectedIds(skipped.map((a) => a.id));
     setConfirmDelete(false);
   };
 
@@ -163,15 +165,15 @@ export default function ConnectedAgentsView({ onConnect }) {
       ),
     },
     {
-      /* Where its production traces land — what lets its Error Feed issues
-         be fixed. None means an issue can't be fixed against it. */
-      id: "production", accessorKey: "projects", header: "Production", size: 170, enableSorting: false,
+      /* The one Observe project its traces or call logs land in — what lets
+         its Error Feed issues be fixed. */
+      id: "observe", accessorKey: "project", header: "Observe project", size: 170, enableSorting: false,
       cell: ({ row }) => {
-        const p = row.original.projects || [];
+        const p = row.original.project;
         return (
-          <Tooltip arrow title={p.length ? `Error Feed issues from ${p.map((x) => x.name).join(", ")} can be fixed with this agent.` : "No Observe project — its Error Feed issues can't be fixed. Set one on its Connections tab."}>
-            <Typography variant="body2" noWrap sx={{ fontSize: 13, color: p.length ? "text.primary" : "text.disabled" }}>
-              {p.length ? p.map((x) => x.name).join(", ") : "Not linked"}
+          <Tooltip arrow title={p ? `Error Feed issues from ${p.name} can be fixed with this agent.` : "Not linked — its Error Feed issues can't be fixed. Link a project on its Connections tab."}>
+            <Typography variant="body2" noWrap sx={{ fontSize: 13, color: p ? "text.primary" : "text.disabled" }}>
+              {p ? p.name : "Not linked"}
             </Typography>
           </Tooltip>
         );
@@ -229,12 +231,12 @@ export default function ConnectedAgentsView({ onConnect }) {
     return (
       <Box sx={{ p: 5, textAlign: "center", border: "1px dashed", borderColor: "divider", borderRadius: 1.5 }}>
         <Iconify icon="solar:link-circle-linear" width={28} sx={{ color: "text.subtitle" }} />
-        <Typography sx={{ typography: "s1", fontWeight: 600, mt: 1 }}>No connected agents yet</Typography>
+        <Typography sx={{ typography: "s1", fontWeight: 600, mt: 1 }}>No agents yet</Typography>
         <Typography sx={{ typography: "s2", color: "text.subtitle", mt: 0.5, mb: 2, maxWidth: 460, mx: "auto" }}>
-          Connect your agent — a hosted platform, an endpoint, a repository or an upload — and we make the copy simulations run against.
+          Bring one from code — GitHub or an upload — or a platform it runs on, or build it in Future AGI. Then build an environment to test it in.
         </Typography>
         <Button variant="contained" color="primary" size="small" onClick={onConnect} sx={{ typography: "s2", fontWeight: 700 }}>
-          Connect an agent
+          New agent
         </Button>
       </Box>
     );
@@ -296,13 +298,22 @@ export default function ConnectedAgentsView({ onConnect }) {
           </Typography>
           <Box flex={1} />
           <Button size="small" onClick={() => setSelectedIds([])} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", minWidth: 0, px: 1 }}>Clear</Button>
-          <Button
-            size="small" onClick={() => setConfirmDelete(true)}
-            startIcon={<Iconify icon="solar:trash-bin-trash-linear" width={13} />}
-            sx={{ typography: "s2", fontWeight: 600, color: "#DC2626", px: 1, minWidth: 0, flexShrink: 0, "&:hover": { bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.12 : 0.06) } }}
+          <Tooltip
+            arrow
+            title={!deletable.length
+              ? `${picked.length === 1 ? "It still has environments" : "Each of these still has environments"}. Delete its environments first, or archive the agent.`
+              : skipped.length ? `${skipped.length} with environments will be skipped.` : ""}
           >
-            Delete
-          </Button>
+            <span>
+              <Button
+                size="small" disabled={!deletable.length} onClick={() => setConfirmDelete(true)}
+                startIcon={<Iconify icon="solar:trash-bin-trash-linear" width={13} />}
+                sx={{ typography: "s2", fontWeight: 600, color: "#DC2626", px: 1, minWidth: 0, flexShrink: 0, "&:hover": { bgcolor: (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.12 : 0.06) } }}
+              >
+                {skipped.length && deletable.length ? `Delete ${deletable.length}` : "Delete"}
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
       )}
       <DataTable
@@ -325,15 +336,15 @@ export default function ConnectedAgentsView({ onConnect }) {
       )}
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ typography: "m2", fontWeight: 700 }}>
-          {picked.length === 1 ? `Delete ${picked[0].name}?` : `Delete ${picked.length} agents?`}
+          {deletable.length === 1 ? `Delete ${deletable[0].name}?` : `Delete ${deletable.length} agents?`}
         </DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ typography: "s2" }}>
-            {`${picked.length === 1 ? "It leaves" : "They leave"} Connected agents with ${picked.length === 1 ? "its" : "their"} versions. Proofs on shipped changes are kept. Connect ${picked.length === 1 ? "it" : "any of them"} again any time.`}
+            {`${deletable.length === 1 ? "It leaves" : "They leave"} Agents and every picker. ${deletable.length === 1 ? "Its" : "Their"} versions, and the runs, improvements and proofs that name ${deletable.length === 1 ? "it" : "them"}, are kept — they still open ${deletable.length === 1 ? "its" : "their"} history.`}
           </DialogContentText>
-          {envsLeft > 0 && (
+          {skipped.length > 0 && (
             <DialogContentText sx={{ typography: "s2", mt: 1.5 }}>
-              {`${envsLeft === 1 ? "1 environment tests" : `${envsLeft} environments test`} ${picked.length === 1 ? "it" : "them"}. ${envsLeft === 1 ? "It stays" : "They stay"}, with ${envsLeft === 1 ? "its" : "their"} scenarios, evaluations and runs, and ${envsLeft === 1 ? "shows" : "show"} "Connect agent" until you connect one.`}
+              {`Skipped: ${skipped.map((a) => a.name).join(", ")}. An agent can be deleted only once it has no environments left — delete ${skipped.length === 1 ? "its environments" : "theirs"} first, or archive ${skipped.length === 1 ? "it" : "them"}.`}
             </DialogContentText>
           )}
         </DialogContent>

@@ -41,7 +41,7 @@ export const failingCasesOf = (env, envState) => {
           agentVersion: run.agentVersion,
           finishedAt: run.finishedAt || null,
           taskId: t.id,
-          name: t.name || t.title || t.id,
+          name: t.title || t.name || t.id,
           title: t.title || t.name,
           summary: t.summary,
           verdict: t.status,

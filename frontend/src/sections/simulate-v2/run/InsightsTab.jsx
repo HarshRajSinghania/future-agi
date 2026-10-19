@@ -1,4 +1,5 @@
 import PropTypes from "prop-types";
+import { creditsLabel } from "../_mock/metering";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
@@ -17,6 +18,7 @@ import { budgetsWithin } from "../_mock/improvementStart";
 import { OUTCOMES } from "../_mock/decoupled";
 import { RunRecordFooter } from "./RunRecord";
 import { clickable, focusRing } from "../components/clickable";
+import { scenarioTitle } from "../_mock/scenarios";
 
 /**
  * Insights — the run read for what to do next (PRD v6, Story 20; v7 §4.10.10).
@@ -501,7 +503,7 @@ function TopIssues({ insights, run, fixCap, tracing, candidate, existingFixes, o
             <RunFixButton
               issue={i} tracing={tracing} candidate={candidate} existing={existingFixes?.[i.id] || null}
               onFix={onFix} onOpenFix={onOpenFix} primary={k === 0}
-              label={fixCap ? `Fix · up to $${fixCap}` : "Fix"}
+              label={fixCap ? `Fix · up to ${creditsLabel(fixCap)}` : "Fix"}
             />
           )}
         </Stack>
@@ -899,7 +901,7 @@ function CallRow({ task, onOpenTrace, passing }) {
     >
       <StatusDot status={task.status === "error" ? "failed" : task.status} size={6} />
       <Box flex={1} minWidth={0}>
-        <Typography noWrap sx={{ typography: "s2", fontWeight: 500 }}>{task.title || task.name || task.id}</Typography>
+        <Typography noWrap sx={{ typography: "s2", fontWeight: 500 }}>{scenarioTitle(task.title) || task.name || task.id}</Typography>
         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
           {[task.persona?.name, temp, `${(task.steps || []).length} turns`, task.actor ? `with ${task.actor.name}` : null].filter(Boolean).join(" · ")}
         </Typography>

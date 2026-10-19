@@ -4,7 +4,7 @@ import { Box, Button, Chip, MenuItem, Select, Stack, TextField, ToggleButton, To
 import Iconify from "src/components/iconify";
 import { CHANNEL_LABELS, agentChannelsOf, channelEnvsOf } from "../_mock/rsiModel";
 import { ActionText, InfoTip, PanelCard } from "./AgentBits";
-import { DIRECTIONS, LANGUAGES, MAX_CONCURRENT_STEPS, TURN_LIMIT_STEPS, identityOf, reachOf, reachPatch, turnLimitLabel } from "./agentProfile";
+import { DIRECTIONS, LANGUAGES, MAX_CONCURRENT_STEPS, TURN_LIMIT_STEPS, contactNumbersOf, contactNumbersPatch, identityOf, languageName, phoneLabelOf, reachOf, reachPatch, turnLimitLabel } from "./agentProfile";
 import { MONO, testedInLine } from "./agentViewUtils";
 import { segmentedToggleSx } from "./segmentedToggleSx";
 
@@ -20,7 +20,8 @@ const toggleSx = segmentedToggleSx;
  * number, an agent that now greets first, a chat window next to the phone
  * line. Same for every version, so editing it doesn't make one.
  *   values.reach = { maxConcurrent, whoSpeaksFirst, direction, turnLimit, whoWritesFirst }
- *   values.languages, values.channels, values.contact (call over, number)
+ *   values.languages, values.channels, values.contact (call over, numbers —
+ *   the first is the one simulations dial)
  */
 export default function AgentCallSettings({ agent, state, onSave, onBuildEnv, callOver = true, bare = false }) {
   const c = agent.values?.contact || {};
@@ -29,12 +30,20 @@ export default function AgentCallSettings({ agent, state, onSave, onBuildEnv, ca
   const { languages } = identityOf(agent);
   const channels = agentChannelsOf(agent);
   const tested = channelEnvsOf(agent, state);
-  const [number, setNumber] = useState(c.number || "");
-  const [code, setCode] = useState(c.countryCode || "+1");
-  useEffect(() => { setNumber(c.number || ""); setCode(c.countryCode || "+1"); }, [c.number, c.countryCode]);
-  const numberDirty = number.trim() !== (c.number || "") || code.trim() !== (c.countryCode || "+1");
+  /* Every number it answers on; a new one is typed in the add row. */
+  const numbers = contactNumbersOf(agent);
+  /* Only the ones saved here are a list to edit. */
+  const saved = numbers.filter((n) => !n.connected).map(({ countryCode, number: num }) => ({ countryCode, number: num }));
+  const [number, setNumber] = useState("");
+  const [code, setCode] = useState(numbers[0]?.countryCode || c.countryCode || "+1");
+  useEffect(() => { setNumber(""); }, [numbers.length]);
 
   const saveContact = (patch) => onSave({ contact: { ...c, mode, inboundCalls: reach.direction !== "outbound", ...patch } });
+  const saveNumbers = (next, msg) => onSave({ contact: { ...contactNumbersPatch(c, next), mode, inboundCalls: reach.direction !== "outbound" } }, msg);
+  const addNumber = () => {
+    const n = { countryCode: code.trim(), number: number.trim() };
+    saveNumbers([...saved, n], `${phoneLabelOf(n)} added.`);
+  };
   const saveReach = (patch, msg) => onSave(reachPatch(agent, patch), msg);
   const voice = channels.includes("voice");
   const chat = channels.includes("chat");
@@ -118,21 +127,35 @@ export default function AgentCallSettings({ agent, state, onSave, onBuildEnv, ca
       )}
       {voice && callOver && mode === "phone" && (
         <Box sx={{ px: 2, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
-          <Typography sx={{ typography: "s2", fontWeight: 600, mb: 0.75 }}>Number to call</Typography>
-          {!c.number && (
+          <Typography sx={{ typography: "s2", fontWeight: 600, mb: 0.75 }}>
+            Phone numbers
+            {numbers.length > 1 && <InfoTip text="Simulations dial the first one." />}
+          </Typography>
+          {numbers.length ? (
+            <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, mb: 1 }}>
+              {numbers.map((n, i) => (
+                <Stack key={`${n.countryCode}${n.number}`} direction="row" alignItems="center" spacing={1} sx={{ px: 1.25, py: 0.625, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+                  <Typography sx={{ typography: "s2", fontFamily: MONO, flex: 1, minWidth: 0 }}>{phoneLabelOf(n)}</Typography>
+                  {!n.connected && (
+                    <ActionText onClick={() => saveNumbers(saved.filter((x) => phoneLabelOf(x) !== phoneLabelOf(n)), `${phoneLabelOf(n)} removed.`)}>Remove</ActionText>
+                  )}
+                </Stack>
+              ))}
+            </Box>
+          ) : (
             <Typography sx={{ typography: "s3", color: "text.secondary", mb: 0.75 }}>
               Simulations can&apos;t reach the agent by phone until a number is saved.
             </Typography>
           )}
           <Stack direction="row" spacing={1}>
-            <TextField size="small" value={code} onChange={(e) => setCode(e.target.value)} sx={{ width: 76 }} InputProps={{ sx: { typography: "s2", fontFamily: MONO } }} />
-            <TextField size="small" fullWidth value={number} onChange={(e) => setNumber(e.target.value)} placeholder="415 555 0182" InputProps={{ sx: { typography: "s2", fontFamily: MONO } }} />
+            <TextField size="small" value={code} onChange={(e) => setCode(e.target.value)} sx={{ width: 76 }} inputProps={{ "aria-label": "Country code" }} InputProps={{ sx: { typography: "s2", fontFamily: MONO } }} />
+            <TextField size="small" fullWidth value={number} onChange={(e) => setNumber(e.target.value)} placeholder="415 555 0182" inputProps={{ "aria-label": "Phone number" }} InputProps={{ sx: { typography: "s2", fontFamily: MONO } }} />
             <Button
-              size="small" variant="contained" color="primary" disabled={!numberDirty || !number.trim()}
-              onClick={() => saveContact({ number: number.trim(), countryCode: code.trim() })}
+              size="small" variant="contained" color="primary" disabled={!number.trim()}
+              onClick={addNumber}
               sx={{ typography: "s3", fontWeight: 700, flexShrink: 0 }}
             >
-              Save
+              {numbers.length ? "Add another" : "Add"}
             </Button>
           </Stack>
         </Box>
@@ -236,8 +259,8 @@ function LanguagePicker({ value, onChange }) {
     <Stack direction="row" flexWrap="wrap" gap={0.75} alignItems="center">
       {value.map((l) => (
         <Chip
-          key={l} size="small" label={l}
-          onDelete={value.length > 1 ? () => onChange(value.filter((x) => x !== l), `${l} removed.`) : undefined}
+          key={l} size="small" label={languageName(l)}
+          onDelete={value.length > 1 ? () => onChange(value.filter((x) => x !== l), `${languageName(l)} removed.`) : undefined}
           sx={{ height: 24, borderRadius: 0.75, typography: "s3", color: "text.primary", bgcolor: "transparent", border: "1px solid", borderColor: "text.primary" }}
         />
       ))}

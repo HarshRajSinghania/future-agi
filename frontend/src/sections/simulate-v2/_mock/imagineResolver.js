@@ -20,6 +20,8 @@
  * with a text-only apology so the user retries with a different prompt".
  */
 
+import { goalLabel } from "./scenarios";
+
 const paletteFail = ["#DC2626", "#F97316", "#F59E0B", "#EAB308", "#84CC16"];
 const paletteMix = ["#7857FC", "#2563EB", "#0EA5E9", "#22C55E", "#F59E0B", "#DC2626"];
 
@@ -30,14 +32,16 @@ const isPassed = (t) => t?.status === "passed";
 const isFailed = (t) => isMeasured(t) && !isPassed(t);
 
 const personaOf = (t) => t?.persona?.name || "No persona";
-const goalOf = (t) => t?.useCase || t?.title || "Unknown goal";
+const goalOf = (t) => goalLabel(t?.useCase) || t?.title || "Unknown goal";
 
 /* Extract the specific rule name from titles shaped like
    "Refuse a request that would break: Refunds above $200 need supervisor
    approval". Non-rule scenarios return null and drop out of rule
    groupings — same convention the trace table uses. */
 const ruleOf = (t) => {
-  const m = (t?.title || "").match(/^Refuse a request that would break:\s*(.+)$/);
+  /* The stored goal carries it — rule scenarios' titles are plain names now
+     ("Instruction override"), so matching the title alone found none. */
+  const m = [t?.useCase, t?.title].map((x) => String(x || "").match(/^Refuse a request that would break:\s*(.+)$/)).find(Boolean);
   return m ? m[1].trim() : null;
 };
 
@@ -126,7 +130,7 @@ function widgetOutcomeDonut(tasks) {
     title: "Run outcome",
     subtitle: `${c.passed} of ${total - c.unmeasured} measured passed`,
     config: {
-      labels: ["Passed", "Failed", "Errored", "Not measured"].filter((_, i) => [c.passed, c.failed, c.errored, c.unmeasured][i] > 0),
+      labels: ["Passed", "Failed", "Error", "Not measured"].filter((_, i) => [c.passed, c.failed, c.errored, c.unmeasured][i] > 0),
       series: [c.passed, c.failed, c.errored, c.unmeasured].filter((v) => v > 0),
       colors: ["#16A34A", "#DC2626", "#F97316", "#6B7280"],
       centerLabel: `${pct(c.passed, total - c.unmeasured)}%`,
@@ -304,6 +308,12 @@ const RECIPES = [
     reply: "Counting which hard rules broke most across the rule-check scenarios in this run.",
     build: (tasks) => [widgetRuleBrokenDonut(tasks)],
   },
+  /* Before the outcome recipe: "Pass rate by goal" is about goals, not the overall pass rate. */
+  {
+    match: /goal|task|use ?case|worst.*goal|weakest/i,
+    reply: "Pass rate per goal, worst first — these are the goals to work on.",
+    build: (tasks) => [widgetGoalPassRateTable(tasks)],
+  },
   {
     match: /outcome|pass ?rate|overall/i,
     reply: "Overall outcome breakdown for the run.",
@@ -323,11 +333,6 @@ const RECIPES = [
     match: /where.*(fail|break)|opening|closing|mid.?call|step.*(fail|break)/i,
     reply: "Where in the call the agent tends to break down — grouped by position in the conversation.",
     build: (tasks) => [widgetFailStepDistribution(tasks)],
-  },
-  {
-    match: /goal|task|use ?case|worst.*goal|weakest/i,
-    reply: "Pass rate per goal, worst first — these are the goals to work on.",
-    build: (tasks) => [widgetGoalPassRateTable(tasks)],
   },
   {
     match: /summar|top|theme|overview/i,

@@ -29,7 +29,8 @@ const plainAxis = { leftY: { abbreviation: false, decimals: 0, showSeriesUnit: f
 const msAxis = { leftY: { abbreviation: false, decimals: 0, unit: "ms", prefixSuffix: "suffix" } };
 const countAxis = { leftY: { abbreviation: false, decimals: 0, showSeriesUnit: false } };
 const pctAxis = { leftY: { abbreviation: false, decimals: 0 } };
-const dollarAxis = (decimals) => ({ leftY: { abbreviation: false, decimals, unit: "$", prefixSuffix: "prefix" } });
+/* Spend is said in credits (the cost metrics are in credits). */
+const creditAxis = (decimals) => ({ leftY: { abbreviation: false, decimals, unit: "credits", prefixSuffix: "suffix", separator: " " } });
 
 const evalMetrics = (catalog, aggregation) => catalog
   .filter((c) => c.category === "evals")
@@ -93,7 +94,7 @@ const DEFS = {
         m(c, "cost_stt", "sum", "STT"), m(c, "cost_transport", "sum", "Transport"),
       ],
     },
-    axis_config: dollarAxis(2),
+    axis_config: creditAxis(1),
     display: { colorMap: { LLM: PURPLE, TTS: "#0EA5E9", STT: AMBER, Transport: "#94A3B8" } },
   }),
   dual_line_over_time: (c) => ({
@@ -185,7 +186,7 @@ const DEFS = {
       xAxis: "call", metrics: [m(c, "cost", "sum", "Cost")],
       sort: "value_desc", limit: 8, rankLabels: true,
     },
-    axis_config: dollarAxis(3),
+    axis_config: creditAxis(1),
     display: { seriesColor: "#DB2777", dataLabels: true, legend: "metric" },
   }),
 };

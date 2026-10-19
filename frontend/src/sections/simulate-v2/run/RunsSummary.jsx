@@ -1,10 +1,11 @@
 import { staleSince } from "../_mock/optimizationRuns";
 import PropTypes from "prop-types";
+import { requiredEvalIds } from "../_mock/evals";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
 import RunsOverview from "./RunsOverview";
-import { previousRunOf, runStatsOf, sharedDeltaOf } from "../_mock/runCompare";
+import { previousRunOf, runStatsOf, sharedDeltaOf, sameEnvVersion } from "../_mock/runCompare";
 import {
   Box, Stack, Typography, Button, Checkbox, Popover, Tooltip, IconButton,
   Menu, MenuItem, ListItemText, ListItemIcon, Chip,
@@ -23,6 +24,8 @@ import WinnerDrawer from "./WinnerDrawer";
 import FromImprovement from "./FromImprovement";
 import AppliedEvalsDrawer from "../workspace/evals/AppliedEvalsDrawer";
 import { allMetrics, deltaAgainst } from "../_mock/winner";
+import { creditsLabel } from "../_mock/metering";
+import { priceOf } from "../_mock/pairs";
 import { useEnvState } from "../store";
 import { neutralCheckboxSx } from "../components/primitives";
 import { Head, MetricCell, ScoreCell } from "./RunsTableCells";
@@ -70,14 +73,6 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
   const runGroup = useRunGroup(env.id);
   const [pickingWinner, setPickingWinner] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  /* The reference agent version (PRD v7 AC-13.14): the one kept runnable and
-     offered as the bridge for every new scenario set. A marker, never a
-     release — the harness doesn't ship anything. */
-  const referenceVersion = envState.referenceAgentVersion || null;
-  const setReference = (version) => patch({
-    referenceAgentVersion: version,
-    referenceLog: [...(envState.referenceLog || []), { version, at: new Date().toISOString() }],
-  });
   const [addEvalsOpen, setAddEvalsOpen] = useState(false);
   /* Candidate runs — an improvement's trials and its winner run — are off
      until asked for. */
@@ -108,17 +103,19 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
     stream and assign a single continuous ordinal across both — Run 4, 5,
     6, … regardless of which one is a manual re-run and which is a trial.
   */
-  /* Demo-friendly cap (TRIAL_CAP): show at
-     most 8 trials so the merged list stays readable at a glance. The mock
-     generates far more; the search is the same story with 8 candidates. Take
-     the earliest 8 so the improvement run reads left-to-right. */
-  const trials = useMemo(() => {
-    const all = trialSummaries(env, envState);
-    return all
-      .slice()
-      .sort((a, b) => new Date(a.finishedAt || 0) - new Date(b.finishedAt || 0))
-      .slice(0, TRIAL_CAP);
-  }, [env, envState]);
+  /* Cap (TRIAL_CAP): the 8 most recent improvement runs, so the merged list
+     stays readable — the latest improvements are the ones people come to
+     check; "Show all" lifts it. Kept oldest-first here (the merge sorts by
+     time); the table shows newest first like every other run. */
+  const [allTrials, setAllTrials] = useState(false);
+  const trialsAll = useMemo(
+    () => trialSummaries(env, envState).slice().sort((a, b) => new Date(a.finishedAt || 0) - new Date(b.finishedAt || 0)),
+    [env, envState],
+  );
+  const trials = useMemo(
+    () => (allTrials ? trialsAll : trialsAll.slice(-TRIAL_CAP)),
+    [trialsAll, allTrials],
+  );
 
   /*
     The one source of row-level truth. Chronological, then stamped with
@@ -213,6 +210,9 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
      that produced it, if one did (its trials, and "Run winner on full
      suite"). The same helper names the run on its own page. */
   const identityOf = (r) => runIdentityOf(r, envState, env);
+  /* The environment version people see — rows are read against each other
+     only on the same one. */
+  const versionOf = (r) => identityOf(r).env;
 
   /*
     The improvement's projection, held against what happened.
@@ -232,10 +232,11 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
       && (!expectation.envVersion || r.envVersion === expectation.envVersion)
       && setOf(r.scenarioIds?.length ? r.scenarioIds : all) === wanted) || null;
   }, [expectation, summaries, envState.scenarios]);
-  const evals = useMemo(
-    () => series.map((s) => ({ id: s.id, name: s.name, color: s.color })),
-    [series],
-  );
+  /* Required ones are marked — only they weigh like a pass/fail signal. */
+  const evals = useMemo(() => {
+    const required = new Set(requiredEvalIds(envState?.evals || []));
+    return series.map((s) => ({ id: s.id, name: s.name, color: s.color, required: required.has(s.id) }));
+  }, [series, envState?.evals]);
 
   /* The same metric definitions the winner weights use, so a column that reads
      as an improvement here cannot count as a regression there. */
@@ -355,8 +356,8 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
       <Box sx={{ mb: 2, flexShrink: 0 }}>
         <RunsOverview
           runs={listed}
+          versionOf={versionOf}
           evals={evals}
-          referenceVersion={envState.referenceAgentVersion || null}
           barPct={Math.round(((envState.reportBar?.pass1) ?? 0.8) * 100)}
           onOpenRun={(r) => navigate(paths.dashboard.simulate.simulationRun(env.id, r.id))}
         />
@@ -430,7 +431,7 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                   <Box component="span" sx={{ color: "text.primary", fontWeight: 700 }}>
                     {baseline.kind === "trial" ? `Run ${baseline.trialN}${baseline.selfImprovementName ? ` · ${baseline.selfImprovementName}` : ""}` : `Run ${baseline.ordinal}`} · {identityOf(baseline).label}
                   </Box>
-                  {" "}— rates in points, everything else in percent.
+                  {" "}— rates in points, everything else in percent; runs on other environment versions show no change.
                 </>
               ) : "Select two or more to compare them scenario by scenario"}
             </Typography>
@@ -454,6 +455,15 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                   {showCandidates ? "Hide improvement runs" : "Show improvement runs"}
                 </Button>
               </Tooltip>
+              {showCandidates && trialsAll.length > TRIAL_CAP && (
+                <Button
+                  size="small"
+                  onClick={() => setAllTrials((v) => !v)}
+                  sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", flexShrink: 0, whiteSpace: "nowrap", minWidth: 0 }}
+                >
+                  {allTrials ? `Show the latest ${TRIAL_CAP}` : `Show all ${trialsAll.length} improvement runs`}
+                </Button>
+              )}
             </Stack>
           )}
           {/* The page's own actions — on the runs bar while nothing is
@@ -598,7 +608,7 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
               <Head right>Tokens</Head>
               <Head right>Cost</Head>
               <Head right title="Tasks where the agent said it was done but the world shows it wasn't">Said, not done</Head>
-              <Head right title="Mean return — the environment's reward, averaged over tasks">Return</Head>
+              <Head right title="Mean return — the environment's score, averaged over conversations">Return</Head>
               {evals.map((e, i) => (
                 <Head key={e.id} right divider={i === 0} last={i === evals.length - 1} title={e.name} wrap>
                   {/* snake_case names are one long word — a break opportunity
@@ -613,10 +623,12 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                 const picked = selected.includes(r.id);
                 const won = winner?.runId === r.id;
                 /* What this row's red and green numbers are read against: the
-                   baseline when one is set, else the run before it. A run with
-                   no results has nothing to compare. */
+                   baseline when one is set, else the run before it — on the
+                   same environment version only. A run with no results, or on
+                   another version than the baseline, shows no deltas. */
                 const against = !r.finishedAt ? null
-                  : baseline || (r.kind === "trial" ? null : previousRunOf(finishedRuns, r));
+                  : baseline ? (sameEnvVersion(baseline, r, versionOf) ? baseline : null)
+                    : (r.kind === "trial" ? null : previousRunOf(finishedRuns, r, versionOf));
 
                 if (r.kind === "queued-demo") {
                   return (
@@ -764,8 +776,8 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                         delta={deltaAgainst(metrics.tokens, r, against)}
                       />
                       <MetricCell
-                        quiet deltaWidth={grid.deltaWidth} text={`$${r.cost.toFixed(2)}`}
-                        delta={deltaAgainst(metrics.cost, r, against)}
+                        quiet deltaWidth={grid.deltaWidth} text={costText(r)}
+                        delta={costComparable(r, against) ? deltaAgainst(metrics.cost, r, against) : null}
                       />
                       <MetricCell quiet deltaWidth={grid.deltaWidth} text="—" />
                       <MetricCell quiet deltaWidth={grid.deltaWidth} text="—" />
@@ -814,16 +826,13 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                     }}
                     {...clickable(() => navigate(paths.dashboard.simulate.simulationRun(env.id, r.id)), { role: "link" })}
                   >
-                    {/* Row menu — mark as reference, delete. Overlaid on the right
+                    {/* Row menu — delete. Overlaid on the right
                         of the row on hover so the grid columns stay comparable
                         across rows. Only for finished, non-trial runs (this
                         branch). Nothing here ships, promotes or blocks a version. */}
                     {r.status !== "queued" && (
                       <RunRowMenu
                         run={r}
-                        isReference={referenceVersion === r.agentVersion}
-                        onMarkReference={() => setReference(r.agentVersion)}
-                        onClearReference={() => setReference(null)}
                         onDelete={() => { setSelected([r.id]); setDeleting(true); }}
                       />
                     )}
@@ -918,21 +927,6 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                           {/* The chip marks the row; the bar above the table is
                               where it can be removed, because a control nobody
                               can see is not a control. */}
-                          {/* The reference agent version's runs (AC-13.14) —
-                              what new scenario sets offer a bridge run of. */}
-                          {referenceVersion && referenceVersion === r.agentVersion && (
-                            <Tooltip arrow title={`Agent ${r.agentVersion} is this environment's reference version — kept runnable, and offered as a priced re-run whenever a new scenario set or fork lands, so every version links to it.`}>
-                              <Typography
-                                sx={{
-                                  px: 0.75, py: 0.125, borderRadius: 0.5, flexShrink: 0, cursor: "default",
-                                  typography: "s3", fontWeight: 700, color: "text.secondary",
-                                  border: "1px solid", borderColor: "divider",
-                                }}
-                              >
-                                Reference
-                              </Typography>
-                            </Tooltip>
-                          )}
                           {r.id === baselineId && (
                             <Typography
                               sx={{
@@ -1003,8 +997,8 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                       delta={deltaAgainst(metrics.tokens, r, against)}
                     />
                     <MetricCell
-                      quiet deltaWidth={grid.deltaWidth} text={`$${r.cost.toFixed(2)}`}
-                      delta={deltaAgainst(metrics.cost, r, against)}
+                      quiet deltaWidth={grid.deltaWidth} text={costText(r)}
+                      delta={costComparable(r, against) ? deltaAgainst(metrics.cost, r, against) : null}
                     />
                     {/* The one system number that is a finding rather than a
                         measurement, so it is the one that gets an accent. */}
@@ -1081,6 +1075,8 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
         scenarioCount={envState.scenarios.length}
         env={env}
         envState={envState}
+        /* Ranked on the environment version in use — none yet says so. */
+        currentOnly
         initial={winner?.weights}
         onApply={(w) => { patch({ winner: w }); setPickingWinner(false); }}
       />
@@ -1112,9 +1108,10 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
             {/* Sampling is part of the cost and part of what the next rate
                 will mean, so it is quoted before the run, not discovered
                 afterwards in a tooltip. */}
-            <Line label="Samples" value="3 per scenario" />
+            <Line label="Repeats" value="3 per scenario" />
             <Line label="Evals" value={`${envState.evals.length} applied`} />
-            <Line label="Est. cost" value={`$${(envState.scenarios.length * 3 * 0.08).toFixed(2)}`} />
+            {/* Priced with the metering rates, scenarios × repeats, in credits. */}
+            <Line label="Est. cost" value={`≈ ${creditsLabel(priceOf(env, envState, envState.scenarios.length, 3).usd)}`} />
           </Stack>
 
           {/* A run with no graders is not a measurement. It still produces
@@ -1238,13 +1235,9 @@ const RUN_CHIP_STYLES = {
 /**
  * Per-row kebab. Overlaid on the right edge of the row on hover.
  *
- * "Mark as reference" writes the run's agent version to
- * `envState.referenceAgentVersion` (PRD v7 AC-13.14) — the version kept
- * runnable as the bridge for every new scenario set. A marker only: the
- * harness never ships, promotes or blocks a version. Delete opens the same
- * confirm dialog the multi-select bar uses.
+ * Delete opens the same confirm dialog the multi-select bar uses.
  */
-function RunRowMenu({ run, isReference, onMarkReference, onClearReference, onDelete }) {
+function RunRowMenu({ onDelete }) {
   const [anchor, setAnchor] = useState(null);
   const stop = (e) => { e.stopPropagation(); };
   return (
@@ -1274,32 +1267,6 @@ function RunRowMenu({ run, isReference, onMarkReference, onClearReference, onDel
         transformOrigin={{ vertical: "top", horizontal: "right" }}
         slotProps={{ paper: { sx: { minWidth: 220 } } }}
       >
-        {isReference ? (
-          <MenuItem
-            onClick={(e) => { stop(e); setAnchor(null); onClearReference(); }}
-            sx={{ typography: "s2", gap: 1 }}
-          >
-            <ListItemIcon sx={{ minWidth: "0 !important", mr: 0 }}>
-              <Iconify icon="solar:bookmark-linear" width={16} />
-            </ListItemIcon>
-            <ListItemText primary={`Clear agent ${run.agentVersion} as reference`} primaryTypographyProps={{ typography: "s2" }} />
-          </MenuItem>
-        ) : (
-          <MenuItem
-            onClick={(e) => { stop(e); setAnchor(null); onMarkReference(); }}
-            sx={{ typography: "s2", gap: 1, alignItems: "flex-start" }}
-          >
-            <ListItemIcon sx={{ minWidth: "0 !important", mr: 0, mt: "2px" }}>
-              <Iconify icon="solar:bookmark-linear" width={16} />
-            </ListItemIcon>
-            <ListItemText
-              primary={`Mark agent ${run.agentVersion} as reference`}
-              secondary="The version kept runnable for this environment. New scenario sets and forks offer a priced re-run of it, so every version links back."
-              primaryTypographyProps={{ typography: "s2" }}
-              secondaryTypographyProps={{ typography: "s3", color: "text.subtitle", sx: { whiteSpace: "normal", maxWidth: 280 } }}
-            />
-          </MenuItem>
-        )}
         <MenuItem
           onClick={(e) => { stop(e); setAnchor(null); onDelete(); }}
           sx={{ typography: "s2", gap: 1, color: "#DC2626" }}
@@ -1315,9 +1282,6 @@ function RunRowMenu({ run, isReference, onMarkReference, onClearReference, onDel
 }
 RunRowMenu.propTypes = {
   run: PropTypes.object,
-  isReference: PropTypes.bool,
-  onMarkReference: PropTypes.func,
-  onClearReference: PropTypes.func,
   onDelete: PropTypes.func,
 };
 
@@ -1387,6 +1351,17 @@ const fmtTook = (ms) => {
 };
 const statsOf = (r) => (r?.finishedAt ? runStatsOf(r) : null);
 
+/* Spend in credits, over the costs the agent's side reported. Unverified
+   ones are never summed — said instead: "unverified" when none reported,
+   "+ n unverified" beside a partial sum. */
+const costText = (r) => {
+  const n = r.costUnverified || 0;
+  if (n && !(r.cost > 0)) return "unverified";
+  return n ? `${creditsLabel(r.cost || 0)} + ${n} unverified` : creditsLabel(r.cost || 0);
+};
+/* A cost delta needs every cost known on both sides. */
+const costComparable = (r, against) => !!against && !r.costUnverified && !against.costUnverified;
+
 /* A count against the same count in another run: lower is better. */
 const countDelta = (now, before) => (now == null || before == null ? null
   : now === before ? { flat: true }
@@ -1399,10 +1374,15 @@ function scenarioCell(r, against) {
   const d = st && against && against.id !== r.id ? sharedDeltaOf(r, against) : null;
   const vs = against ? (against.kind === "trial" ? `Run ${against.trialN}${against.selfImprovementName ? ` · ${against.selfImprovementName}` : ""}` : `Run ${against.ordinal}`) : "";
   const delta = d && (d.pts === 0 ? { flat: true } : { text: `${Math.abs(d.pts)} pts`, up: d.pts > 0, better: d.pts > 0, muted: d.within });
+  const onlySome = r.kind === "trial" && r.partial;
   return (
     <Tooltip
-      key="scenario" arrow disableHoverListener={!d}
-      title={d ? `${d.pts > 0 ? "+" : ""}${d.pts} pts against ${vs} on the ${d.shared} scenarios both measured. Two runs of that size differ by up to ±${d.noise} pts by chance (95%)${d.within ? ", so this is within noise." : "."}` : ""}
+      key="scenario" arrow disableHoverListener={!d && !onlySome}
+      title={[
+        /* An improvement's run measures only the scenarios it worked on. */
+        onlySome ? "Target scenarios only — held-back scenarios are checked on the change it picks." : null,
+        d ? `${d.pts > 0 ? "+" : ""}${d.pts} pts against ${vs} on the ${d.shared} scenarios both measured. Two runs of that size differ by up to ±${d.noise} pts by chance (95%)${d.within ? ", so this is within noise." : "."}` : null,
+      ].filter(Boolean).join(" ")}
     >
       <Box sx={{ display: "grid", minWidth: 0 }}>
         <MetricCell
@@ -1429,7 +1409,7 @@ function addedCells(r, against) {
     <MetricCell
       key="calls" quiet
       text={st ? (
-        <Tooltip arrow title={`${(r.tasks || []).length} scenarios × ${r.repeats || 1} ${(r.repeats || 1) === 1 ? "repeat" : "repeats"}`}>
+        <Tooltip arrow title={`${(r.tasks?.length ? r.tasks : r.trialTasks || []).length} scenarios × ${r.repeats || 1} ${(r.repeats || 1) === 1 ? "repeat" : "repeats"}`}>
           <Box component="span" sx={{ cursor: "default" }}>{st.calls.toLocaleString()}</Box>
         </Tooltip>
       ) : "—"}

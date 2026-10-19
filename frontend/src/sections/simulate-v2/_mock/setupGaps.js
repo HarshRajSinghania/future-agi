@@ -11,7 +11,7 @@
  * that rests on it is never quietly trusted. Nothing waits on a question that
  * did not have to be asked.
  */
-import { agentIdOf, agentNeedsRuntime, envAgentKey, PROVIDER_LABELS } from "./agentRegistry";
+import { agentIdOf, agentNeedsRuntime, envAgentKey, needsFoundCheck, PROVIDER_LABELS } from "./agentRegistry";
 import { replicationOf } from "./replication";
 import { needsSafeTarget, tierOf, toolEnvOf, toolEnvPatch, unsafeLiveToolNames } from "./toolEnv";
 import { requiredToolsOf } from "./toolFit";
@@ -566,6 +566,8 @@ export const runReadiness = (envState, env = null) => {
   const agentHref = agentConnectionHref(env, envState);
   if (!envState?.agent) return { ready: false, step: "overview", reason: "Connect an agent on Overview" };
   if (agentNeedsRuntime(envState.agent)) return { ready: false, step: "overview", reason: "Add where the agent runs on Overview" };
+  /* A newly connected code agent runs once its detected items are confirmed (RSI PRD Flow 1). */
+  if (needsFoundCheck(envState.agent)) return { ready: false, step: "overview", href: agentHref?.replace("tab=connections", "tab=overview"), reason: "Confirm what we found in the agent's code first — Check what we found, on the agent's Overview" };
   /* A disconnected or archived agent can't be run — the agent page says why. */
   const status = typeof agentStatusOf === "function" ? agentStatusOf(envState.agent) : null;
   if (status && status.status !== "connected") return { ready: false, step: "overview", href: agentHref, gap: "gap_agent_status", reason: `${status.label || "Not connected"}${status.reason ? ` — ${status.reason}` : ""}. Open the agent's Connections tab.` };

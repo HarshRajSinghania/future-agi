@@ -78,8 +78,9 @@ export default function AgentSyncDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  /* Syncing from inside an environment can also make the new version the one
-     it tests. Other environments using the agent keep theirs. */
+  /* A synced version is production: environments following production test
+     it next. From inside an environment the one other choice is to hold this
+     environment on the version it tests now (a pin). */
   const inEnvironment = !!(runningLabel && onRunHere);
   /* A repository commit can touch the world's code too. That's proposed as
      a nudge (update the handler?), never saved as an environment version. */
@@ -88,7 +89,9 @@ export default function AgentSyncDialog({
   const save = (switchHere = inEnvironment) => {
     const version = syncedVersion({ result, baseTools });
     onSave?.(version);
-    if (switchHere) onRunHere(version.label);
+    /* After the save lands: the new version follows production here; staying
+       pins the version it tests now. */
+    if (inEnvironment) onRunHere(switchHere ? version.label : runningLabel);
     const results = raiseNudgesIn(state, envs, version, {
       /* Only tools the world already served can "behave differently" — a new
          one is an Add nudge. */
@@ -137,11 +140,11 @@ export default function AgentSyncDialog({
               {phase === "upToDate" && `Nothing changed in ${source.label} since ${result?.latest} was saved.`}
               {phase === "changes" && `Saving creates agent ${result.label} only; ${result.basedOn} stays as it was. The environment and its scenarios stay as they are — we'll list anything that no longer fits.`}
               {phase === "saved" && (saved.switched
-                ? `This environment tests ${saved.version.label} from the next run. The environment and scenarios didn't change.`
+                ? `This environment follows production, so it tests ${saved.version.label} from the next run. The environment and scenarios didn't change.`
                 : inEnvironment
-                  ? `This environment still tests ${runningLabel}. The environment and scenarios didn't change.`
+                  ? `This environment stays pinned to ${runningLabel}; environments following production test ${saved.version.label}. The environment and scenarios didn't change.`
                   : usedInCount
-                    ? "Environments keep the version they run until someone switches. Their environments and scenarios didn't change."
+                    ? "Environments following production test it on their next run; pinned ones stay put. Their worlds and scenarios didn't change."
                     : "Nothing else changed.")}
             </Typography>
           </Box>
@@ -207,7 +210,7 @@ export default function AgentSyncDialog({
               {saved.announcement.envs.map((e) => (
                 <Stack key={e.id} direction="row" alignItems="center" spacing={1} sx={{ px: 1.75, py: 0.75, borderTop: "1px solid", borderColor: "divider" }}>
                   <Typography noWrap sx={{ typography: "s3", flex: 1, minWidth: 0 }}>{e.name}</Typography>
-                  <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>{`${e.count} waiting · Drifted until answered`}</Typography>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>{`Agent ${saved.version.label} changed`}</Typography>
                   <Button
                     size="small" onClick={() => review(e.id)}
                     endIcon={<Iconify icon="solar:arrow-right-linear" width={13} />}
@@ -225,21 +228,21 @@ export default function AgentSyncDialog({
               </Stack>
             ))}
             <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-              Suggestions never block a run. Nothing in an environment changes until someone approves one there.
+              None of this blocks a run. An environment changes only when someone rebuilds it there.
             </Typography>
           </Stack>
         )}
 
         {phase !== "checking" && (
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2.5 }}>
-            {/* Saved from the agent page: environments keep their version —
-                the way to move one onto it is right here. */}
+            {/* Saved from the agent page: following environments already test
+                it — this is where to see which, and move a pinned one. */}
             {phase === "saved" && !inEnvironment && usedInCount > 0 && onOpenEnvironments && (
               <Button
                 variant="outlined" size="small" onClick={() => { onClose(); onOpenEnvironments(); }}
                 sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
               >
-                {`Switch environments to ${saved.version.label}…`}
+                Review environments
               </Button>
             )}
             {(phase === "upToDate" || phase === "saved") && (
@@ -253,7 +256,7 @@ export default function AgentSyncDialog({
                     variant="outlined" size="small" onClick={() => save(false)}
                     sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
                   >
-                    {`Save, keep testing ${runningLabel}`}
+                    {`Save, stay on ${runningLabel}`}
                   </Button>
                 )}
                 <Button variant="contained" color="primary" size="small" onClick={() => save()} sx={{ typography: "s2", fontWeight: 700 }}>

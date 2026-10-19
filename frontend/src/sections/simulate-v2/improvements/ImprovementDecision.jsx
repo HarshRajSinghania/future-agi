@@ -1,10 +1,12 @@
 import PropTypes from "prop-types";
+import { useMemo } from "react";
 import { Box, ButtonBase, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { improvementOutcome, ladderOf } from "../_mock/optimizationRuns";
 import { improvementRunName } from "../_mock/optimizer";
 import { shippedCandidate } from "../run/fixmyagent/tradeoffs";
 import StatusPill from "./ImprovementStatusPill";
+import { agentDefinitionOf } from "../_mock/agentRegistry";
 
 const GREEN = "#16A34A";
 const RED = "#DC2626";
@@ -20,9 +22,16 @@ const signed = (n, unit) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(Math.
  * table. The search, per-scenario outcomes, trade-offs and the receipt are
  * in the full record.
  */
-export default function ImprovementDecision({ record, envState, onClose, onFullRecord }) {
+export default function ImprovementDecision({ record, env, envState, onClose, onFullRecord }) {
   const result = record.result;
-  const outcome = improvementOutcome(record);
+  /* The model the agent runs on — what a model lock is checked against, as
+     on the runs page, so the two read the same constraint the same way. */
+  const agentModel = useMemo(() => {
+    if (!envState?.agent) return null;
+    const def = agentDefinitionOf({ agent: envState.agent, env, envState });
+    return def.model?.visible ? def.model.name : null;
+  }, [env, envState]);
+  const outcome = improvementOutcome(record, { model: agentModel });
   const winner = result?.winner || null;
   const shipped = shippedCandidate(record) || winner;
   const name = improvementRunName(envState, record);
@@ -36,6 +45,11 @@ export default function ImprovementDecision({ record, envState, onClose, onFullR
   const broken = limits.filter((c) => c.pass === false);
   const measured = limits.filter((c) => c.pass !== null).length;
   const thin = !result || result.split?.thin;
+  /* A chosen run's numbers are its own; its held-back figure is projected
+     until it's verified. */
+  const heldNow = outcome.heldScore ?? result?.heldScore;
+  const projected = !!outcome.chosen?.projected;
+  const unverified = !!outcome.chosen && !outcome.chosen.verified;
 
   return (
     <Stack sx={{ height: "100%" }}>
@@ -43,7 +57,7 @@ export default function ImprovementDecision({ record, envState, onClose, onFullR
         <Box flex={1} minWidth={0}>
           <Typography sx={{ typography: "s1", fontWeight: 700 }}>How it was decided</Typography>
           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
-            {`${name}${shipped ? ` · Run ${shipped.n} ${chosen ? "chosen by you" : "kept"}` : ""}`}
+            {`${name}${shipped ? ` · Run ${shipped.n} ${chosen ? `chosen by you${unverified ? " · not verified yet" : " · verified"}` : "kept"}` : ""}`}
           </Typography>
         </Box>
         <IconButton size="small" onClick={onClose} aria-label="Close">
@@ -65,14 +79,20 @@ export default function ImprovementDecision({ record, envState, onClose, onFullR
             <Sheet>
               <Line
                 k="Held-back scenarios"
-                hint="Scenarios kept out of the search — the number worth quoting."
-                v={thin ? "Too few held back" : `${result.heldBase}% → ${result.heldScore}%`}
-                d={thin ? null : { pts: result.heldScore - result.heldBase }}
+                hint={projected ? "Projected from the search's pick — this run hasn't been scored on the held-back set yet. Verify it to measure it." : "Scenarios kept out of the search — the number worth quoting."}
+                v={thin ? "Too few held back" : `${result.heldBase}% → ${heldNow}%${projected ? " · projected" : ""}`}
+                d={thin ? null : { pts: heldNow - result.heldBase }}
               />
-              <Line k="Training scenarios" v={`${result.base}% → ${shipped.score}%`} d={{ pts: shipped.score - result.base, quiet: true }} />
+              <Line k="Target scenarios" hint="The scenarios the search tuned on." v={`${result.base}% → ${shipped.score}%`} d={{ pts: shipped.score - result.base, quiet: true }} />
+              <Line
+                k="Overfit gap"
+                hint="Target score minus held-back score — how much the change fitted the scenarios it was tuned on rather than the task."
+                v={thin || outcome.gap == null ? "—" : `${outcome.gap > 0 ? "" : outcome.gap < 0 ? "−" : ""}${Math.abs(outcome.gap)} pts${projected ? " · projected" : ""}`}
+                d={{ alarm: !thin && outcome.gap > 12 }}
+              />
               <Line k="Cost / conversation" v={outcome.costKnown ? signed(outcome.effect.cost, "%") : "Not measured"} />
               <Line k="Latency" v={signed(outcome.effect.latency, "%")} />
-              <Line k="Scenarios broken" v={`${shipped.broke ?? 0}`} d={{ alarm: !!shipped.broke }} last />
+              <Line k="Target scenarios broken" v={`${shipped.broke ?? 0}`} d={{ alarm: !!shipped.broke }} last />
             </Sheet>
           </Box>
         )}
@@ -84,7 +104,7 @@ export default function ImprovementDecision({ record, envState, onClose, onFullR
             <Sheet>
               <Stack direction="row" sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
                 <Typography sx={{ ...cell, flex: 1, color: "text.subtitle", fontWeight: 600 }}>Run</Typography>
-                <Typography sx={{ ...cell, width: 84, textAlign: "right", color: "text.subtitle", fontWeight: 600 }}>Training</Typography>
+                <Typography sx={{ ...cell, width: 84, textAlign: "right", color: "text.subtitle", fontWeight: 600 }}>Target</Typography>
                 <Typography sx={{ ...cell, width: 84, textAlign: "right", color: "text.subtitle", fontWeight: 600 }}>Held back</Typography>
                 <Typography sx={{ ...cell, width: 120, pl: 2, color: "text.subtitle", fontWeight: 600 }}>Result</Typography>
               </Stack>
@@ -103,8 +123,10 @@ export default function ImprovementDecision({ record, envState, onClose, onFullR
             </Sheet>
             <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
               {chosen
-                ? `Run ${shipped.n} was chosen over the search's pick; its held-back result is projected until it runs on the full suite.`
-                : "Finalists are scored once on held-back scenarios; of those that pass, the highest training score is kept."}
+                ? unverified
+                  ? `Run ${shipped.n} was chosen over the search's pick. It can't ship until it's verified on the full suite${projected ? " — its held-back result is projected until then" : ""}.`
+                  : `Run ${shipped.n} was chosen over the search's pick and verified on the full suite.`
+                : "Finalists are scored once on held-back scenarios; of those that pass, the highest target score is kept."}
             </Typography>
           </Box>
         )}
@@ -168,6 +190,7 @@ export default function ImprovementDecision({ record, envState, onClose, onFullR
 
 ImprovementDecision.propTypes = {
   record: PropTypes.object.isRequired,
+  env: PropTypes.object,
   envState: PropTypes.object,
   onClose: PropTypes.func.isRequired,
   onFullRecord: PropTypes.func.isRequired,

@@ -1,4 +1,5 @@
 import PropTypes from "prop-types";
+import { creditsText } from "./runsTableFormat";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { alpha, useTheme } from "@mui/material/styles";
 import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
@@ -6,6 +7,7 @@ import Iconify from "src/components/iconify";
 import { StatusDot, ScorePill } from "../components/primitives";
 import { traceOf, spanTree, fmtMs } from "../_mock/runTrace";
 import { clickable, focusRing } from "../components/clickable";
+import { scenarioTitle } from "../_mock/scenarios";
 
 /**
  * The trace of one scenario, as a waterfall (Story 11 — AC-11.3, 11.7, 11.9,
@@ -87,7 +89,7 @@ export default function TraceWaterfall({ task, env, envState, focusSpanId }) {
           {`${trace.spans.length} spans · ${fmtMs(trace.total)}`}
         </Typography>
         <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-          {`${llm.length} LLM · ${tools.length} tool · ${tokens.toLocaleString()} tokens · $${cost.toFixed(3)} · ${trace.model}`}
+          {`${llm.length} LLM · ${tools.length} tool · ${tokens.toLocaleString()} tokens · ${creditsText(cost)} · ${trace.model}`}
         </Typography>
         <Box flex={1} />
         {offending && (
@@ -222,7 +224,7 @@ function SpanDetail({ span, parent }) {
   if (span.kind === "llm") {
     rows.push(["Model", span.model]);
     if (span.tokens) rows.push(["Tokens", `${span.tokens.toLocaleString()} (${(span.inputTokens || 0).toLocaleString()} in · ${(span.tokens - (span.inputTokens || 0)).toLocaleString()} out)`]);
-    if (span.cost != null) rows.push(["Cost", `$${span.cost.toFixed(4)}`]);
+    if (span.cost != null) rows.push(["Cost", creditsText(span.cost)]);
     if (span.input) rows.push(["Input", span.input]);
     if (span.output) rows.push(["Output", span.output]);
   }
@@ -239,7 +241,7 @@ function SpanDetail({ span, parent }) {
   }
   if (span.guard) {
     rows.push(["Rule", span.guard.rule]);
-    rows.push(["Verdict", span.guard.verdict === "breached" ? "Breached" : span.guard.verdict === "unsure" ? "Unsure — broke on some repeats" : "Held"]);
+    rows.push(["Verdict", span.guard.verdict === "breached" ? "Breached" : span.guard.verdict === "unsure" ? "Flaky — broke on some repeats" : "Held"]);
   }
   if ((span.kind === "caller" || span.kind === "actor" || span.kind === "turn") && span.output) rows.push(["Said", span.output]);
   if (span.note) rows.push(["Finding", span.note]);
@@ -302,7 +304,7 @@ export function TraceSheet({ task, env, envState, onClose, onPrev, onNext }) {
       <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2, py: 1.25, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
         <StatusDot status={task.status} />
         <Box flex={1} minWidth={0}>
-          <Typography noWrap sx={{ typography: "s1", fontWeight: 600 }}>{task.title || task.name || task.id}</Typography>
+          <Typography noWrap sx={{ typography: "s1", fontWeight: 600 }}>{scenarioTitle(task.title) || task.name || task.id}</Typography>
           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
             {[`Trace · ${task.id}`, task.persona?.name].filter(Boolean).join(" · ")}
           </Typography>

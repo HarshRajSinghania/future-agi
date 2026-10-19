@@ -5,12 +5,12 @@ import { useSearchParams } from "react-router-dom";
 import {
   Box, Stack, Typography, Button, Tooltip, IconButton,
   TextField, Popover, Checkbox, InputBase, Menu, MenuItem, ListItemIcon,
-  Dialog, DialogTitle, DialogContent, DialogActions,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { alpha } from "@mui/material/styles";
 import { PersonaBadge } from "../components/primitives";
-import { generatedPool } from "../_mock/scenarios";
+import { generatedPool, goalLabel } from "../_mock/scenarios";
+import { runScopeOf } from "../_mock/runScope";
 import { staleScenarios, proofStatus, autoReprove, markEdited } from "../_mock/proofs";
 import { subTasksFor } from "../_mock/contract";
 import ScenarioDetail from "../components/ScenarioDetail";
@@ -61,20 +61,16 @@ import {
 } from "../_mock/scenarioStates";
 import { subGoalUsageOf } from "../_mock/scenarioSubGoals";
 import { ArchiveControl } from "./scenarios/ScenarioStateBits";
-import {
-  TIERS, TIER_CHOICES, tierOf, isAnchor, anchorLogPatch, tierCounts, PROPOSAL_SOURCES,
-} from "../_mock/tiers";
 import { suiteLogPatch } from "../_mock/suiteLog";
 import { applyEditBump } from "../_mock/scenarioEdits";
 import { setBlocker } from "../_mock/releaseBlocker";
-import { PRIORITY_LABEL, priorityOf, withPriority } from "../_mock/scenarioPriority";
 import ScenarioDrawer from "./scenarios/ScenarioDrawer";
 import { ImprovementScenariosDialog } from "./scenarios/ImprovementScenariosStrip";
 import { pendingImprovementScenarios } from "../_mock/improvementScenarios";
 import GroupByMenu from "./scenarios/GroupByMenu";
 import NeedsReviewMenu from "./scenarios/NeedsReviewMenu";
-import { MustPassSuggestDialog, ProtectionLine } from "./scenarios/MustPassBits";
-import { goalKeyOf, mustPassGoalsOf, mustPassSuggestionsOf, protectionTally } from "../_mock/mustPassProtection";
+import { ProtectionLine } from "./scenarios/MustPassBits";
+import { protectionTally } from "../_mock/mustPassProtection";
 import { coverageSummary } from "./scenarios/coverageSummary";
 import SubGoalsPanel from "./SubGoalsPanel";
 import useEnvViewAs from "./useEnvViewAs";
@@ -243,8 +239,8 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
     [env, envState.envVersions, envState.agentVersions],
   );
   const toolsOf = (r) => requiredToolsOf(r, knownTools);
-  /* The agent version under test — a scenario an approved applicability
-     rule takes away from it reads Not applicable, with the reason. */
+  /* The agent version under test — a scenario needing a tool an agent change
+     removed reads Stale, with the reason. */
   const agentLabel = currentAgentVersion(envState)?.label;
   const statusCtx = { env, envState: viewState, envVersion: envLabel, answers, buildMode };
   const statusById = useMemo(
@@ -253,8 +249,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
     [selected, env, envState.envVersions, viewState.activeEnvVersion, answers, knownTools, buildMode],
   );
   const statusOf = (r) => statusById.get(r.id) || scenarioStatus(r, statusCtx);
-  /* The versioning doc's state — Valid · Re-check · Outdated · Not applicable
-     · Archived — read from the status above, refined by rule changes on the
+  /* The scenario's state — Valid · Re-check · Outdated · Stale · Archived — read from the status above, refined by rule changes on the
      scenario's flow and by sub-goal edits it hasn't been re-proved for. */
   const stateById = useMemo(
     () => new Map(selected.map((r) => [r.id, scenarioStateFor(r, statusById.get(r.id), { env, envState: viewState, tools: requiredToolsOf(r, knownTools), agentLabel })])),
@@ -265,8 +260,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   /* Archived rows stay listed but don't run or count. */
   const live = liveScenarios(selected);
   const archivedCount = selected.length - live.length;
-  const naCount = live.filter((r) => stateOf(r).id === "na").length;
-  const tiers = tierCounts(live);
+  const staleCount = live.filter((r) => stateOf(r).id === "stale").length;
   const proposed = live.filter((r) => r.proposed);
   /* The scenario quality review. Read on the version being viewed. */
   const qualityReview = useMemo(
@@ -322,13 +316,11 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
      covers. */
   const statusFacets = (r) => {
     const ids = [];
-    /* The scenario's state first, in the doc's words. Needs attention and
-       Canary are questions people arrive with, but they narrow the list, so
-       they're filters like the rest. Needs attention = Outdated, or Re-check
-       that isn't mid-build. */
+    /* The scenario's state first. Needs attention is a question people
+       arrive with, but it narrows the list, so it's a filter like the rest.
+       Needs attention = Outdated, Stale, or Re-check that isn't mid-build. */
     const st = stateOf(r);
     ids.push(st.label);
-    if (r.canary) ids.push("Canary");
     if (r.proposed) ids.push("Proposed");
     if (needsReview(st)) ids.push("Needs attention");
     if (proofStatus(r, env, viewState).edited) ids.push("Edited");
@@ -354,7 +346,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       const ids = statusFacets(r);
       if (!filters.status.some((s) => ids.includes(s))) return false;
     }
-    if (filters.tier?.length && !filters.tier.includes(TIERS[tierOf(r)].long)) return false;
     if (filters.persona?.length && !filters.persona.includes(personaFacet(r))) return false;
     if (filters.kind?.length && !filters.kind.includes(kindFacet(r))) return false;
     if (filters.subgoal?.length && !filters.subgoal.includes(subgoalFacet(r))) return false;
@@ -380,8 +371,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
     [selected, env],
   );
   const filterFields = useMemo(() => [
-    { value: "status",  label: "State",    type: "enum", choices: [...STATE_CHOICES, "Needs attention", "Edited", "Canary", "Proposed"] },
-    { value: "tier",    label: "Tier",     type: "enum", choices: TIER_CHOICES },
+    { value: "status",  label: "State",    type: "enum", choices: [...STATE_CHOICES, "Needs attention", "Edited", "Proposed"] },
     { value: "persona", label: "Persona",  type: "enum", choices: personaChoices },
     { value: "kind",    label: "Kind",     type: "enum", choices: Object.values(KIND_LABEL) },
     { value: "subgoal", label: "Sub-goal", type: "enum", choices: subgoalChoices },
@@ -449,18 +439,15 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
         enqueueSnackbar(rejectedNote(batch) || "None of those passed their checks, so none were added.", { variant: "warning", autoHideDuration: 7000 });
         return;
       }
-      /* Sources arrive as proposals (AC-9.22). Generated, production and
-         failure-cluster scenarios land in the exploration tier; the ones
-         nobody previewed (generated) wait as proposals until approved. The
-         rest were picked one by one in the drawer — that pick approved them. */
-      const exploring = PROPOSAL_SOURCES.has(stampSource);
-      /* Routes that build rows themselves (failing-case variations, the
+      /* Sources propose; the user adds. The ones nobody previewed (generated)
+         wait as proposals until someone adds them. The rest were picked one
+         by one in the drawer — that pick added them.
+         Routes that build rows themselves (failing-case variations, the
          Error Feed, production replays) mark them proposed already. */
       const waiting = stampSource === "generated" || fresh.every((r) => r.proposed);
       const at = new Date().toISOString();
       const fresh2 = batch.rows.map((r) => ({
         ...r,
-        tier: r.tier || (exploring ? "exploration" : "core"),
         ...(waiting && !r.proposed && { proposed: { at, source: stampSource } }),
       }));
       /* A variation's scenario group: the scenario it came from joins the
@@ -468,15 +455,13 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       const groupSources = new Set(fresh2.map((r) => r.groupId).filter(Boolean));
       const grouped = selected.map((s) => (groupSources.has(s.id) && !s.groupId ? { ...s, groupId: s.id } : s));
       /* The environment's own source (how it was first populated) is not
-         whichever add route was used last. */
-      patch(suiteLogPatch(envState, {
+         whichever add route was used last. A proposal isn't part of the set
+         yet, so it writes no new version — adding it does (approve below). */
+      const nextScenarios = {
         scenarios: [...grouped, ...fresh2], ...(!envState.scenarioSource && { scenarioSource: source }),
-      }, {
-        summary: waiting
-          ? (stampSource === "generated"
-            ? `Proposed ${fresh2.length} generated scenario${fresh2.length === 1 ? "" : "s"} — exploration, awaiting approval`
-            : `Proposed ${fresh2.length} scenario${fresh2.length === 1 ? "" : "s"} ${sourceOf(stampSource).label.toLowerCase()} — exploration, awaiting approval`)
-          : `Added ${fresh2.length} scenario${fresh2.length === 1 ? "" : "s"}${exploring ? " to exploration" : ""}`,
+      };
+      patch(waiting ? nextScenarios : suiteLogPatch(envState, nextScenarios, {
+        summary: `Added ${fresh2.length} scenario${fresh2.length === 1 ? "" : "s"}`,
         by: currentUser().name,
       }));
       if (batch.needing) {
@@ -486,7 +471,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
         enqueueSnackbar(rejectedNote(batch), { variant: "warning", autoHideDuration: 7000 });
       }
       const base = waiting
-        ? `${kept} proposed — approve them to add them to the set`
+        ? `${kept} proposed — review and add them to the environment`
         : kept === 1 ? "1 scenario added" : `${kept} scenarios added`;
       const suffix = dupeCount > 0
         ? ` · ${dupeCount} already on this environment`
@@ -640,23 +625,16 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
      (patch) edit leaves the proof standing. A rewrite of an Outdated
      scenario answers the spec change that made it so. */
   const saveScenario = (row, { metaOnly, bump } = {}) => {
-    const before = selected.find((s) => s.id === row.id);
-    const name = row.name || row.title || "scenario";
+    const name = row.title || row.name || "scenario";
     const next = metaOnly
       ? row
       : applyEditBump(bump?.level === "patch" ? rewrittenScenario(row) : markEdited(rewrittenScenario(row)), bump);
-    const tierMoved = before && tierOf(before) !== tierOf(next) && (isAnchor(before) || isAnchor(next));
-    const marks = [
-      tierMoved && (isAnchor(next) ? "pinned to anchor core" : "moved out of anchor core"),
-      before && !!before.canary !== !!next.canary && (next.canary ? "marked canary" : "canary mark removed"),
-    ].filter(Boolean);
     patch(suiteLogPatch(envState, {
       scenarios: selected.map((s) => (s.id === row.id ? next : s)),
-      ...(tierMoved && anchorLogPatch(envState, [next], isAnchor(next) ? "pin" : "unpin", { by: currentUser().name })),
     }, {
       summary: bump?.level
-        ? `${name} → ${next.version} (${bump.level}) — ${bump.why}`
-        : `${name} ${marks.join(", ") || "updated"}`,
+        ? `${name} edited — ${bump.why}`
+        : `${name} updated`,
       largestBump: bump?.level || null,
       by: currentUser().name,
     }));
@@ -676,16 +654,13 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
     );
   };
   /* Archived, not deleted: it stays in the set, listed and filterable, and
-     the set moves to a new version. An anchor's archive is logged. Undo
-     puts the row back as it was. */
+     the set moves to a new version. Undo puts the row back as it was. */
   const archive = (row, note) => {
     const next = archiveScenario(row, note);
-    const anchor = isAnchor(row);
-    const name = row.name || row.title || "scenario";
+    const name = row.title || row.name || "scenario";
     patch(suiteLogPatch(envState, {
       scenarios: selected.map((s) => (s.id === row.id ? next : s)),
-      ...(anchor && anchorLogPatch(envState, [row], "archive", { note, by: currentUser().name })),
-    }, { summary: `Archived ${anchor ? "anchor " : ""}${name}${note ? ` — ${note}` : ""}`, by: currentUser().name }));
+    }, { summary: `Archived ${name}${note ? ` — ${note}` : ""}`, by: currentUser().name }));
     const key = enqueueSnackbar(`Archived "${name}" — it won't run or count`, {
       variant: "info",
       autoHideDuration: 6000,
@@ -702,64 +677,8 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   const restore = (row) => {
     patch(suiteLogPatch(envState, {
       scenarios: selected.map((s) => (s.id === row.id ? restoreScenario(row) : s)),
-    }, { summary: `Restored ${row.name || row.title || "scenario"}`, by: currentUser().name }));
+    }, { summary: `Restored ${row.title || row.name || "scenario"}`, by: currentUser().name }));
   };
-  /* Must-pass by goal: every live scenario in the goal is marked, and the
-     goal remembers it, so scenarios added to it later join. Taking the goal
-     off un-marks only what the goal marked. */
-  const setGoalsMustPass = (keys, on) => {
-    const want = new Set(keys.filter(Boolean));
-    if (!want.size) return;
-    let changed = 0;
-    const scenarios = selected.map((r) => {
-      if (r.archived || !want.has(goalKeyOf(r))) return r;
-      if (on && !r.critical) { changed += 1; return { ...setBlocker(r, true), mustPassGoal: true }; }
-      if (!on && r.mustPassGoal) {
-        changed += 1;
-        const { mustPassGoal: _goal, ...rest } = setBlocker(r, false);
-        return rest;
-      }
-      return r;
-    });
-    const goals = on
-      ? [...mustPassGoalsOf(envState).filter((k) => !want.has(k)), ...want]
-      : mustPassGoalsOf(envState).filter((k) => !want.has(k));
-    const label = selected.find((r) => goalKeyOf(r) === [...want][0])?.useCase || "goal";
-    const what = want.size === 1 ? `"${label}"` : `${want.size} goals`;
-    patch(suiteLogPatch(envState, { scenarios, mustPassGoals: goals }, {
-      summary: `${what} ${on ? "made must-pass" : "no longer must-pass"}${changed ? ` · ${changed} scenario${changed === 1 ? "" : "s"}` : ""}`,
-      by: currentUser().name,
-    }));
-    enqueueSnackbar(
-      on
-        ? `${what} ${want.size === 1 ? "is" : "are"} must-pass${changed ? ` — ${changed} more scenario${changed === 1 ? "" : "s"} marked` : ""}. Scenarios added later join.`
-        : `${what} ${want.size === 1 ? "is" : "are"} no longer must-pass${changed ? ` — ${changed} scenario${changed === 1 ? "" : "s"} un-marked` : ""}`,
-      { variant: "success" },
-    );
-  };
-  /* Priority: what a quick run takes and what a capped run fills first — a
-     mark on the set, like must-pass, so the scenario keeps its version and
-     proof. A must-pass scenario stays high. */
-  const setPriorityRows = (rows, priority) => {
-    const targets = rows.filter((r) => !r.critical && !r.archived && priorityOf(r) !== priority);
-    if (!targets.length) return;
-    const byId = new Map(targets.map((r) => [r.id, withPriority(r, priority)]));
-    const one = targets[0].name || targets[0].title || "scenario";
-    patch(suiteLogPatch(envState, {
-      scenarios: selected.map((s) => byId.get(s.id) || s),
-    }, {
-      summary: targets.length === 1
-        ? `${one} set to ${PRIORITY_LABEL[priority].toLowerCase()} priority`
-        : `${targets.length} scenarios set to ${PRIORITY_LABEL[priority].toLowerCase()} priority`,
-      by: currentUser().name,
-    }));
-    const skipped = rows.filter((r) => r.critical).length;
-    enqueueSnackbar(
-      `${targets.length === 1 ? `"${one}" is` : `${targets.length} scenarios are`} ${PRIORITY_LABEL[priority].toLowerCase()} priority${skipped ? ` · ${skipped} must-pass stay high` : ""}`,
-      { variant: "success" },
-    );
-  };
-  /* Proposals join the set only on approval (AC-9.22). */
   /* Must-pass (a release blocker): a mark on the set, not the scenario's
      content (PRD v7 §4.10.3) — the scenario set moves to a new S version,
      logged with who marked what; the scenario keeps its version and proof.
@@ -785,6 +704,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
     );
   };
 
+  /* Proposals join the environment only once someone adds them. */
   const approve = (rows) => {
     if (!rows.length) return;
     const ids = new Set(rows.map((r) => r.id));
@@ -792,60 +712,22 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       scenarios: selected.map((s) => {
         if (!ids.has(s.id)) return s;
         const { proposed: _p, ...rest } = s;
-        return { ...rest, tier: rest.tier || "exploration" };
+        return rest;
       }),
-    }, { summary: `Approved ${rows.length} proposed scenario${rows.length === 1 ? "" : "s"} into exploration`, by: currentUser().name }));
-    enqueueSnackbar(rows.length === 1 ? "Approved — it joins the set as exploration" : `Approved ${rows.length} — they join the set as exploration`, { variant: "success" });
+    }, { summary: `Added ${rows.length} proposed scenario${rows.length === 1 ? "" : "s"}`, by: currentUser().name }));
+    enqueueSnackbar(rows.length === 1 ? "Added — it joins the environment and runs from now on" : `Added ${rows.length} — they join the environment and run from now on`, { variant: "success" });
   };
   /* What each state asks for, from the table, the list and the drawer alike. */
   const onStateAction = (kind, row, arg) => {
     if (ro && kind !== "subgoal") return;
     if (kind === "reprove") reprove([row]);
-    else if (kind === "rewrite") { setOpenId(null); setEditing(row); }
+    else if (kind === "rewrite" || kind === "edit") { setOpenId(null); setEditing(row); }
     else if (kind === "archive") archive(row, arg);
     else if (kind === "restore") restore(row);
     else if (kind === "update") replaceRows([row]);
-    else if (kind === "pin" || kind === "unpin") setPinned(row.id, kind === "pin");
     else if (kind === "approve") approve([row]);
     else if (kind === "blocker") setMustPass([row], arg ?? !row.critical);
-    else if (kind === "priority") setPriorityRows([row], arg);
-    else if (kind === "goal-blocker") setGoalsMustPass([goalKeyOf(row)], arg);
     else if (kind === "subgoal") { setOpenId(null); setGoalId(arg || null); setMode("subgoals"); }
-  };
-
-  /* Pinning to the anchor core changes how the set treats a scenario, not
-     what it tests — the proof stands, the scenario keeps its version, and
-     the set moves on. Taking an anchor out is an explicit decision: confirmed,
-     then logged. */
-  const [unpinning, setUnpinning] = useState(null);
-  const setPinned = (id, on, { confirmed = false } = {}) => {
-    const before = selected.find((s) => s.id === id);
-    if (!before || isAnchor(before) === on) return;
-    if (!on && !confirmed) { setUnpinning(before); return; }
-    const after = { ...before, tier: on ? "anchor" : "core" };
-    patch(suiteLogPatch(envState, {
-      scenarios: selected.map((s) => (s.id === id ? after : s)),
-      ...anchorLogPatch(envState, [before], on ? "pin" : "unpin", { by: currentUser().name }),
-    }, { summary: `${before.name || before.title} ${on ? "pinned to" : "moved out of"} anchor core`, by: currentUser().name }));
-    const name = before.name || before.title || "Scenario";
-    const key = enqueueSnackbar(
-      on ? `"${name}" pinned to the anchor core` : `"${name}" moved out of the anchor core — logged`,
-      {
-        variant: "info",
-        autoHideDuration: 5000,
-        action: (snackId) => (
-          <Button
-            size="small" sx={{ color: "common.white", fontWeight: 700, typography: "s2" }}
-            onClick={() => {
-              patch({ scenarios: selected.map((s) => (s.id === id ? before : s)) });
-              closeSnackbar(snackId || key);
-            }}
-          >
-            Undo
-          </Button>
-        ),
-      },
-    );
   };
 
   /*
@@ -855,6 +737,8 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   */
   const finishedRuns = (envState.runs || []).filter((r) => !r.synthetic).length;
   const needsBaseline = !buildMode && !viewing && !!onStartRun && live.length > 0 && finishedRuns === 0;
+  /* What the baseline takes — the header Run's count (runScopeOf). */
+  const baselineScope = needsBaseline ? runScopeOf(env, envState) : null;
   const readiness = runReadiness(envState);
   const baselineWith = baselineAlso.filter((id) => groupCandidates.some((c) => c.envId === id && c.ready));
 
@@ -884,7 +768,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   */
   const review = useMemo(() => {
     if (buildMode) return null;
-    const by = { outdated: [], recheck: [] };
+    const by = { outdated: [], stale: [], recheck: [] };
     selected.forEach((r) => {
       const st = stateOf(r);
       if (needsReview(st)) by[st.id].push(r);
@@ -916,7 +800,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   const narrowed = q.length > 0 || hiddenCount > 0 || filterCount > 0;
 
   /* The Coverage button's hover: the drawer's three numbers, on the same rows. */
-  const coverageRows = useMemo(() => liveScenarios(selected).filter((r) => !r.canary), [selected]);
+  const coverageRows = useMemo(() => liveScenarios(selected), [selected]);
   const coverage = useMemo(
     () => (selected.length ? coverageSummary(coverageRows, env) : null),
     [selected.length, coverageRows, env],
@@ -931,18 +815,16 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
     () => (buildMode ? 0 : pendingImprovementScenarios(envState).reduce((n, g) => n + g.rows.length, 0)),
     [buildMode, envState],
   );
-  /* Rule and pressure goals only partly must-pass — asked about once, in Needs review. */
-  const mustPassSuggestions = useMemo(() => mustPassSuggestionsOf(selected, envState), [selected, envState]);
-  const [suggestOpen, setSuggestOpen] = useState(false);
   /* How much of the set improvements can't break, and why. */
   const protection = protectionTally(selected, latestOf);
   const notices = [
-    review && review.outdated.length + review.recheck.length > 0 && {
+    review && review.outdated.length + review.stale.length + review.recheck.length > 0 && {
       id: "change-review",
       icon: "solar:refresh-circle-linear",
       attention: true,
       title: [
         review.outdated.length > 0 && { n: review.outdated.length, label: "Outdated", red: true },
+        review.stale.length > 0 && { n: review.stale.length, label: "Stale" },
         review.recheck.length > 0 && { n: review.recheck.length, label: "Re-check" },
       ].filter(Boolean).map((c, i) => (
         <Fragment key={c.label}>
@@ -950,9 +832,9 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
           <Box component="span" sx={{ color: c.red ? "#DC2626" : "text.primary" }}>{`${c.n} ${c.label}`}</Box>
         </Fragment>
       )),
-      sub: `Checked against environment ${envDisplay}. Re-check ones need their proof re-run; Outdated ones need rewriting, or archiving if they no longer apply.`,
+      sub: `Checked against environment ${envDisplay}. Re-check ones need their proof re-run; Outdated ones need rewriting; Stale ones need a tool the agent no longer has — update or archive them. Until then they run but count toward no decision.`,
       actions: [
-        { label: "Review", primary: true, onClick: () => setFilters({ status: ["Outdated", "Re-check"] }) },
+        { label: "Review", primary: true, onClick: () => setFilters({ status: ["Outdated", "Stale", "Re-check"] }) },
         !ro && review.reprovable.length > 0 && { label: `Re-prove ${review.reprovable.length}`, onClick: () => reprove(review.reprovable) },
       ].filter(Boolean),
     },
@@ -960,11 +842,11 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       id: "proposed",
       icon: "solar:inbox-linear",
       attention: true,
-      title: `${proposed.length} proposed scenario${proposed.length === 1 ? "" : "s"} · exploration`,
-      sub: "Generated, failing-case, Error Feed and production scenarios join the set only once you approve them. Until then they run and report separately, as candidates.",
+      title: `${proposed.length} proposed scenario${proposed.length === 1 ? "" : "s"} waiting to be added`,
+      sub: "Generated, failing-case, Error Feed and production scenarios join the environment only once you add them. Until then they don't run.",
       actions: [
         { label: "Review", onClick: () => setFilters({ status: ["Proposed"] }) },
-        !ro && { label: `Approve ${proposed.length}`, primary: true, onClick: () => approve(proposed) },
+        !ro && { label: `Add ${proposed.length}`, primary: true, onClick: () => approve(proposed) },
       ].filter(Boolean),
     },
     improvementTotal > 0 && {
@@ -974,14 +856,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       title: `${improvementTotal} scenario${improvementTotal === 1 ? "" : "s"} from improvements ${improvementTotal === 1 ? "isn't" : "aren't"} in this environment`,
       sub: "Improvements wrote these to reproduce what they were fixing. They stay with the improvement until you add them.",
       actions: [{ label: "Review", onClick: () => setImprovOpen(true) }],
-    },
-    !ro && mustPassSuggestions.length > 0 && {
-      id: "must-pass-goals",
-      icon: "solar:shield-check-linear",
-      attention: true,
-      title: `${mustPassSuggestions.length} rule goal${mustPassSuggestions.length === 1 ? " is" : "s are"} only partly must-pass`,
-      sub: "Some of their scenarios are must-pass and some aren't. A must-pass goal covers every scenario in it, including ones added later.",
-      actions: [{ label: "Review", primary: true, onClick: () => setSuggestOpen(true) }],
     },
     qualityReview && selected.length > 0 && {
       id: "quality",
@@ -1039,7 +913,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
                 onEdit={handleEditSelected}
                 onDelete={bulkDelete}
                 onMustPass={() => setMustPass(selectedRows, !selectedRows.every((r) => r.critical))}
-                onPriority={(p) => setPriorityRows(selectedRows, p)}
                 allMustPass={selectedRows.length > 0 && selectedRows.every((r) => r.critical)}
                 onClear={clearSelection}
                 run={selectionRun && onStartRun ? { ...selectionRun, onRun: () => onStartRun(selectedIds, Number(selectionRun.repeats) || 3) } : null}
@@ -1087,7 +960,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
                   filterFields={filterFields}
                   currentFilters={filters}
                   onApply={applyFilters}
-                  aiPlaceholder="Ask AI — e.g. 'anchor scenarios with the impatient persona'"
+                  aiPlaceholder="Ask AI — e.g. 'must-pass scenarios with the impatient persona'"
                   placement="bottom-start"
                 />
               </>
@@ -1192,14 +1065,14 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
             onChange={setBaselineAlso}
             agentVersion={currentAgentVersion(envState)?.label}
           />
-          <Tooltip arrow title={readiness.ready ? `Runs all ${live.length} scenarios, 3 times each` : readiness.reason}>
+          <Tooltip arrow title={readiness.ready ? `${baselineScope?.sitOut ? `Runs ${baselineScope.count} of the ${baselineScope.runnable} scenarios that can run (${baselineScope.sitOut} wait on Needs input)` : `Runs all ${baselineScope?.count ?? live.length} scenarios`}, 3 times each` : readiness.reason}>
             <span>
               <Button
                 variant="contained"
                 color="primary"
                 size="small"
                 disabled={!readiness.ready}
-                onClick={() => onStartRun(undefined, 3, { also: baselineWith })}
+                onClick={() => onStartRun(baselineScope?.sitOut && !baselineWith.length ? baselineScope.ids : undefined, 3, { also: baselineWith })}
                 startIcon={<Iconify icon="solar:play-bold" width={14} />}
                 sx={{ typography: "s2", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap" }}
               >
@@ -1289,9 +1162,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
                   selectedIds,
                   onSelectionChange: handleSelectionChange,
                   locked: ro,
-                  /* Goal rows offer "Mark goal must-pass" when grouped by goal. */
-                  goalActions: groupBy === "goal",
-                  mustPassGoals: mustPassGoalsOf(envState),
                 }}
                 renderList={(innerGroups) => (
                   <GroupedScenarioList
@@ -1327,7 +1197,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
                     batches={history}
                     runs={(envState.runs || []).filter((r) => !r.synthetic)}
                     versions={environmentVersions(env, envState).map((v) => ({ ...v, shownAs: firstSnapshotOfWorld(env, envState, v.label)?.label }))}
-                    total={live.length}
+                    total={live.filter((r) => !r.proposed).length}
                     asOf={asOfBatch ? asOf : null}
                     onPick={pick}
                     onViewAsOf={(id) => { setAsOf(id); if (id) pick(id); }}
@@ -1378,13 +1248,8 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
           ) : (
             <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
               {`${live.length} scenario${live.length === 1 ? "" : "s"}`}
-              <Tooltip arrow title={`${TIERS.anchor.long}: ${TIERS.anchor.note} ${TIERS.exploration.long}: ${TIERS.exploration.note}`}>
-                <Box component="span" sx={{ cursor: "help" }}>
-                  {` · ${tiers.anchor} anchor · ${tiers.core} core · ${tiers.exploration} exploration`}
-                </Box>
-              </Tooltip>
               {[
-                naCount > 0 && ` · ${naCount} not applicable for ${agentLabel}`,
+                staleCount > 0 && ` · ${staleCount} stale for agent ${agentLabel}`,
                 archivedCount > 0 && ` · ${archivedCount} archived`,
                 viewing && ` · viewing environment ${envDisplay}, read-only`,
               ].filter(Boolean).join("")}
@@ -1394,7 +1259,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       )}
 
       <SideDrawer open={coverageOpen} onClose={() => setCoverageOpen(false)} width={{ xs: "100%", md: 880 }}>
-        <CoverageMatrix scenarios={live.filter((r) => !r.canary)} env={env} onClose={() => setCoverageOpen(false)} />
+        <CoverageMatrix scenarios={live} env={env} onClose={() => setCoverageOpen(false)} />
       </SideDrawer>
 
       <SideDrawer open={gateOpen && !!qualityReview} onClose={() => setGateOpen(false)} width={{ xs: "100%", md: 620 }}>
@@ -1428,17 +1293,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       {!buildMode && (
         <ImprovementScenariosDialog envState={envState} patch={patch} locked={ro} open={improvOpen} onClose={() => setImprovOpen(false)} />
       )}
-      <MustPassSuggestDialog
-        open={suggestOpen}
-        goals={mustPassSuggestions}
-        onClose={() => setSuggestOpen(false)}
-        onApply={(keys) => { setSuggestOpen(false); setGoalsMustPass(keys, true); }}
-        onDismiss={(keys) => {
-          setSuggestOpen(false);
-          patch({ mustPassSuggestDismissed: [...new Set([...(envState.mustPassSuggestDismissed || []), ...keys])] });
-        }}
-      />
-
       <AddScenariosDrawer
         open={adding}
         onClose={() => setAdding(false)}
@@ -1449,25 +1303,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
         onBuilderPrompt={onBuilderPrompt}
         initialRoute={addRoute}
       />
-      {/* Taking a scenario out of the anchor core is an explicit decision. */}
-      <Dialog open={!!unpinning} onClose={() => setUnpinning(null)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ typography: "m2", fontWeight: 600 }}>Move out of the anchor core?</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-            {`"${unpinning?.name || unpinning?.title || ""}" is in the frozen slice every agent version is compared on. It moves to core and keeps running; the change is logged on the scenario and in the version history.`}
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setUnpinning(null)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
-          <Button
-            variant="contained" color="primary" size="small"
-            onClick={() => { const r = unpinning; setUnpinning(null); if (r) setPinned(r.id, false, { confirmed: true }); }}
-            sx={{ typography: "s2", fontWeight: 700 }}
-          >
-            Move to core
-          </Button>
-        </DialogActions>
-      </Dialog>
       <ScenarioEditor
         open={!!editing}
         onClose={() => setEditing(null)}
@@ -1598,7 +1433,7 @@ const deriveUseCase = (row) => {
   */
   if (row?.useCase) {
     const slug = row.useCase.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-    return { id: slug, label: row.useCase };
+    return { id: slug, label: goalLabel(row.useCase) };
   }
   const id = row?.id || "";
   const title = row?.title || "";
@@ -1896,7 +1731,7 @@ function CollapsibleGroup({ group, env, envState, buildMode, onEdit, onRemove, s
                         </span>
                       </Tooltip>
                     ) : (
-                      <ArchiveControl disabled={locked} anchor={isAnchor(s)} onArchive={(note) => onStateAction?.("archive", s, note)} />
+                      <ArchiveControl disabled={locked} onArchive={(note) => onStateAction?.("archive", s, note)} />
                     )}
                   </Box>
                   <Tooltip arrow title={locked ? "Fork this environment to edit." : "Delete scenario"}>

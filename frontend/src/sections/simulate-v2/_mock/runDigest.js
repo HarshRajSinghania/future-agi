@@ -11,6 +11,7 @@
 import { paths } from "src/routes/paths";
 import { MIN_MEASURED } from "./runInsights";
 import { causeCountsLine } from "./runRollup";
+import { SHOW_INSIGHTS } from "./featureFlags";
 
 /* The workspace's notification email list (Settings → Notifications in the
    product). Read-only here — the digest inherits it, it doesn't configure it. */
@@ -45,10 +46,11 @@ const runName = (run) => (run?.ordinal ? `Run ${run.ordinal}` : "Run");
 /** Deep links into the run — the app's own routes, so they open where the reader works. */
 export const runLinksOf = (envId, runId) => {
   const base = paths.dashboard.simulate.simulationRun(envId, runId);
+  /* While Insights is hidden, every link opens the run's scenarios. */
   return {
-    insights: `${base}?tab=insights`,
+    insights: SHOW_INSIGHTS ? `${base}?tab=insights` : `${base}?tab=tasks`,
     scenarios: `${base}?tab=tasks`,
-    issue: (issueId) => `${base}?tab=insights&issue=${encodeURIComponent(issueId)}`,
+    issue: (issueId) => (SHOW_INSIGHTS ? `${base}?tab=insights&issue=${encodeURIComponent(issueId)}` : `${base}?tab=tasks`),
   };
 };
 
@@ -67,7 +69,7 @@ export const runDigestOf = ({ env, run, insights, summary: rollup, label }) => {
     : [
       `${insights.passed} of ${m} passed${low ? "" : ` (${pct}%)`}`,
       insights.failed ? `${insights.failed} failed` : null,
-      insights.mixed ? `${insights.mixed} mixed` : null,
+      insights.mixed ? `${insights.mixed} flaky` : null,
       ...(rollup
         ? [
           rollup.outcomes?.["test-invalid"] ? `${rollup.outcomes["test-invalid"]} test invalid` : null,
@@ -101,7 +103,7 @@ export const runDigestOf = ({ env, run, insights, summary: rollup, label }) => {
     summary,
     ...(rollup?.caveat ? [rollup.caveat] : []),
     ...issues.map((i, k) => `${k + 1}. ${i.text}`),
-    ...(more ? [`+${more} more in Insights`] : []),
+    ...(more ? [`+${more} more in ${SHOW_INSIGHTS ? "Insights" : "the run"}`] : []),
   ].filter(Boolean);
   return {
     title,
@@ -110,11 +112,10 @@ export const runDigestOf = ({ env, run, insights, summary: rollup, label }) => {
     caveat: rollup?.caveat || null,
     issues,
     more,
-    links: [
-      { label: "Open Insights", href: links.insights },
-      { label: "Scenarios", href: links.scenarios },
-    ],
+    links: SHOW_INSIGHTS
+      ? [{ label: "Open Insights", href: links.insights }, { label: "Scenarios", href: links.scenarios }]
+      : [{ label: "Open run", href: links.scenarios }],
     lines,
-    text: [title, ...lines, `Open Insights: ${links.insights}`].join("\n"),
+    text: [title, ...lines, `${SHOW_INSIGHTS ? "Open Insights" : "Open run"}: ${links.insights}`].join("\n"),
   };
 };

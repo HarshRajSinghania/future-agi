@@ -6,7 +6,6 @@ import { useErrorFeedList } from "src/api/errorFeed/mockAdapter";
 import ErrorFeedFilters from "./components/ErrorFeedFilters";
 import ErrorFeedTable from "./components/ErrorFeedTable";
 import { useErrorFeedApiParams } from "./store";
-import AgentImprovementToggle from "src/sections/simulate-v2/errorFeed/AgentImprovementToggle";
 
 export default function ErrorFeedView() {
   const theme = useTheme();
@@ -95,8 +94,6 @@ export default function ErrorFeedView() {
         </Stack>
 
         <Stack direction="row" alignItems="center" gap={1}>
-          {/* Agent improvement is a design partner preview — switched here. */}
-          <AgentImprovementToggle />
           <Button
             variant="outlined"
             size="small"

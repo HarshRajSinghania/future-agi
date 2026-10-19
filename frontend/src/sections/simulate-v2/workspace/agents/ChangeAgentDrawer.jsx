@@ -182,7 +182,7 @@ ChangeAgentDrawer.propTypes = {
 function SwitchPreview({ plan, name }) {
   const rows = plan.nudges.map((n) => {
     if (n.kind === "add") return { id: n.id, sign: "+", text: `${n.capability}`, note: `${n.scenarioIds.length} scenario${n.scenarioIds.length === 1 ? "" : "s"} exercise it — propose a handler and 3 scenarios` };
-    if (n.kind === "remove") return { id: n.id, sign: "−", text: `${n.capability}`, note: `${n.scenarioIds.length} scenario${n.scenarioIds.length === 1 ? " needs" : "s need"} it — propose not applicable` };
+    if (n.kind === "remove") return { id: n.id, sign: "−", text: `${n.capability}`, note: `${n.scenarioIds.length} scenario${n.scenarioIds.length === 1 ? " needs" : "s need"} it — they go stale` };
     return { id: n.id, sign: "?", text: n.title, note: "" };
   });
   return (
@@ -204,7 +204,7 @@ function SwitchPreview({ plan, name }) {
         )}
       </Box>
       <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
-        {`Agent ${plan.version.label} · these are nudges in Needs input, not changes — nothing moves until you approve one.`}
+        {`Agent ${plan.version.label} · these wait in Needs input as one agent-change card — nothing moves until you rebuild or answer them.`}
       </Typography>
     </Box>
   );

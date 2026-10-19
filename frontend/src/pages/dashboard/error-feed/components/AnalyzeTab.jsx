@@ -924,7 +924,7 @@ function SynthesisCard({ synthesis }) {
 }
 function ProveFixCard() {
   const setFixSheetOpen = useErrorFeedStore((s) => s.setFixSheetOpen);
-  /* Agent improvement is a design partner preview — no Fix when it's off. */
+  /* Agent improvement sits behind an internal workspace flag — no Fix when it's off. */
   const improving = useAgentImprovementFlag();
   if (!improving) return null;
   return (

@@ -12,12 +12,14 @@
  * can see the reasoning behind is just a badge.
  */
 import { versionNumber } from "./versions";
+import { creditsLabel } from "./metering";
 
 /** Which way is better for each metric — half of them are lower-is-better. */
 export const SYSTEM_METRICS = [
   { id: "duration", label: "Average response time", group: "system", lowerIsBetter: true, get: (r) => r.avgDurationMs, format: (v) => `${(v / 1000).toFixed(1)}s` },
   { id: "tokens", label: "Tokens", group: "system", lowerIsBetter: true, get: (r) => r.tokens, format: (v) => v.toLocaleString() },
-  { id: "cost", label: "Cost", group: "system", lowerIsBetter: true, get: (r) => r.cost, format: (v) => `$${v.toFixed(2)}` },
+  /* Spend is said in credits; unverified call costs are never in `cost`. */
+  { id: "cost", label: "Cost", group: "system", lowerIsBetter: true, get: (r) => r.cost, format: (v) => creditsLabel(v) },
 ];
 
 /**
@@ -38,6 +40,9 @@ export const evalMetrics = (evals = []) => [
     lowerIsBetter: false,
     get: (r) => r.scores?.[e.id] ?? 0,
     format: (v) => `${Math.round(v)}%`,
+    /* Sub-goals decide pass or fail; an evaluation only decides when it's
+       marked required — so only then does it weigh like one. */
+    required: !!(e.required || e.applied?.required),
   })),
   { id: "saidNotDone", label: "Said, not done", group: "eval", lowerIsBetter: true, get: (r) => r.saidNotDone, format: (v) => `${v}` },
 ];
@@ -48,15 +53,25 @@ export const allMetrics = (evals) => [...evalMetrics(evals), ...SYSTEM_METRICS];
  * Presets, because most teams have one of four opinions and typing six sliders
  * to express a common one is a tax. Each is a starting point — every preset
  * leaves the sliders live.
+ *
+ * In every one the pass rate leads: sub-goals decide pass or fail, so a
+ * winner that passes less isn't a winner. A required evaluation weighs
+ * almost as much; an optional one only scores, so it only breaks ties.
  */
+const qualityWeight = (m, { pass, required, optional, other }) => (
+  m.id === "passRate" ? pass
+    : m.id === "saidNotDone" ? Math.max(other, 6)
+      : m.id.startsWith("eval:") ? (m.required ? required : optional)
+        : other
+);
 export const WEIGHT_PRESETS = [
   {
     id: "balanced",
     label: "Balanced",
     icon: "solar:scale-linear",
     color: "#CA8A04",
-    blurb: "Everything counts the same.",
-    weights: () => 5,
+    blurb: "Pass rate leads; speed, cost and scores break ties.",
+    weights: (m) => (m.group === "system" ? 4 : qualityWeight(m, { pass: 10, required: 8, optional: 2, other: 3 })),
   },
   {
     id: "quality",
@@ -64,7 +79,7 @@ export const WEIGHT_PRESETS = [
     icon: "solar:like-linear",
     color: "#16A34A",
     blurb: "Correctness over speed and spend.",
-    weights: (m) => (m.group === "eval" ? 9 : 2),
+    weights: (m) => (m.group === "system" ? 1 : qualityWeight(m, { pass: 10, required: 9, optional: 5, other: 5 })),
   },
   {
     id: "speed",
@@ -72,7 +87,7 @@ export const WEIGHT_PRESETS = [
     icon: "solar:bolt-linear",
     color: "#2563EB",
     blurb: "Latency leads, quality still has to hold.",
-    weights: (m) => (m.id === "duration" ? 10 : m.group === "eval" ? 5 : 3),
+    weights: (m) => (m.id === "duration" ? 10 : m.group === "system" ? 3 : qualityWeight(m, { pass: 8, required: 6, optional: 1, other: 2 })),
   },
   {
     id: "cost",
@@ -80,7 +95,7 @@ export const WEIGHT_PRESETS = [
     icon: "solar:dollar-minimalistic-linear",
     color: "#EA580C",
     blurb: "Cheapest run that still passes.",
-    weights: (m) => (m.id === "cost" ? 10 : m.id === "tokens" ? 7 : m.group === "eval" ? 5 : 3),
+    weights: (m) => (m.id === "cost" ? 10 : m.id === "tokens" ? 7 : m.group === "system" ? 3 : qualityWeight(m, { pass: 8, required: 6, optional: 1, other: 2 })),
   },
 ];
 
@@ -104,14 +119,17 @@ export const defaultWeights = (metrics) =>
  */
 /**
  * The runs a winner can be picked from: the ones that took the same test.
- * Same environment version (the newest any of them used), the full scenario
- * set, no tools the world couldn't answer, and the same number of trials —
- * otherwise "best" is partly "had an easier exam".
+ * Same environment version (the newest any of them used — the version people
+ * see, via `versionOf`), the full scenario set, no tools the world couldn't
+ * answer, and the same number of trials — otherwise "best" is partly "had an
+ * easier exam".
  */
-export const comparableRuns = (summaries = []) => {
-  const envs = [...new Set(summaries.map((r) => r.envVersion).filter(Boolean))];
-  const envVersion = envs.sort((a, b) => versionNumber(b) - versionNumber(a))[0] || null;
-  const onEnv = summaries.filter((r) => (!envVersion || r.envVersion === envVersion)
+export const comparableRuns = (summaries = [], versionOf = (r) => r.envVersion, target = null) => {
+  const envs = [...new Set(summaries.map(versionOf).filter(Boolean))];
+  /* `target` — rank on that version only (the one in use), even when no run
+     has taken it yet; otherwise the newest any run used. */
+  const envVersion = target || envs.sort((a, b) => versionNumber(b) - versionNumber(a))[0] || null;
+  const onEnv = summaries.filter((r) => (!envVersion || versionOf(r) === envVersion)
     && !r.partial && !(r.toolGap || []).length);
   const counts = onEnv.reduce((m, r) => m.set(r.repeats || 1, (m.get(r.repeats || 1) || 0) + 1), new Map());
   const repeats = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0]?.[0] ?? null;

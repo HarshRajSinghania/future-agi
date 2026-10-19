@@ -20,15 +20,15 @@ const OPTIONS = [
   },
   {
     id: "connect",
-    title: "Connect agents",
-    description: "Connect an agent that already runs, to test it in simulations",
+    title: "Connect or build an agent",
+    description: "From code (GitHub or an upload), a third-party platform, or built in Future AGI — to test and improve it",
     iconSrc: "/assets/icons/settings/Integrations_new.svg",
   },
 ];
 
 /**
- * "Create Agents" — build one in the Playground, or connect one that already
- * exists. The Playground limit only gates the Playground option; connecting
+ * "New agent" (Agents → New agent) — build one in the Playground, or connect
+ * one from code or a platform, or build one in Future AGI to test and improve. The Playground limit only gates the Playground option; connecting
  * an agent is always available.
  */
 export default function CreateAgentsButton({ canCreatePlayground = true }) {
@@ -65,7 +65,7 @@ export default function CreateAgentsButton({ canCreatePlayground = true }) {
         startIcon={<SvgColor src="/assets/icons/ic_add.svg" sx={{ height: 20, width: 20 }} />}
         endIcon={<Iconify icon="eva:chevron-down-fill" width={18} />}
       >
-        Create Agents
+        New agent
       </LoadingButton>
 
       <CustomPopover

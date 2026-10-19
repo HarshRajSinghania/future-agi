@@ -83,7 +83,11 @@ export default function CompareSummary({ comparison, evals, env, envState }) {
                   <Typography sx={{ typography: "s2", fontWeight: 600, fontVariantNumeric: "tabular-nums", color: i ? "text.primary" : "text.subtitle" }}>
                     {i ? pairLine(read) : "—"}
                   </Typography>
-                  {read && read.label.id !== "rows" && read.interval.delta != null && (
+                  {/* Across environment versions there is no delta — side by side only. */}
+                  {read && read.label.id === "side" && (
+                    <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Side by side · no verdict across environment versions</Typography>
+                  )}
+                  {read && !["rows", "side"].includes(read.label.id) && read.interval.delta != null && (
                     <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
                       {`${read.interval.delta > 0 ? "+" : ""}${read.interval.delta} pts · ${read.interval.lo} to ${read.interval.hi} · ${read.label.label}`}
                     </Typography>

@@ -81,18 +81,8 @@ export default function AgentReplicationCard({ agent, env, clones = [], onSaveVa
       {r.runLocation && (
         <Box sx={{ px: 2, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
           <Typography sx={{ typography: "s2", fontWeight: 700, mb: 0.75 }}>Where it runs</Typography>
-          <RunLocationChoice
-            agent={agent}
-            env={env}
-            value={r.runLocation}
-            dense
-            onChange={(loc) => loc !== r.runLocation && onSaveValues(
-              { runLocation: loc },
-              loc === "hosted"
-                ? `${agent.name} now runs in the hosted sandbox — built from its code for each run, metered in sandbox minutes.`
-                : `${agent.name} now runs locally through the SDK — nothing metered.`,
-            )}
-          />
+          {/* Only the hosted sandbox can be chosen today — nothing to save. */}
+          <RunLocationChoice value={r.runLocation} dense />
         </Box>
       )}
 

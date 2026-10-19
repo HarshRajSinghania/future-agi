@@ -46,15 +46,24 @@ export const disconnectReasonFor = (agent, cause = "key") => {
   return `The ${name} API key was revoked — ${name} refused the last read. Replace the key's reference on Connections to reconnect.`;
 };
 
-export const AGENT_STATUS_LABELS = { connected: "Connected", disconnected: "Disconnected", archived: "Archived" };
+export const AGENT_STATUS_LABELS = { connected: "Connected", disconnected: "Disconnected", archived: "Archived", deleted: "Deleted" };
 
 /**
- * { status: "connected" | "disconnected" | "archived", label, reason, at?, cause? }
+ * { status: "connected" | "disconnected" | "archived" | "deleted", label, reason, at?, cause? }
  * Archived wins over disconnected: an archived agent stays archived whatever
  * happens to its key. A repository the GitHub App lost reads as disconnected.
  */
 export const agentStatusOf = (agent) => {
   const v = agent?.values || {};
+  /* Deleted wins: a tombstone kept only so its history can be read. */
+  if (agent?.deleted?.at) {
+    return {
+      status: "deleted",
+      label: AGENT_STATUS_LABELS.deleted,
+      at: agent.deleted.at,
+      reason: "Deleted — it's no longer in Agents or any picker. Its versions, and the runs and proofs that name it, are kept here.",
+    };
+  }
   if (v.archived?.at) {
     return {
       status: "archived",
@@ -77,18 +86,6 @@ export const agentStatusOf = (agent) => {
     return { status: "disconnected", label: AGENT_STATUS_LABELS.disconnected, cause: "app", reason: disconnectReasonFor(agent, "app") };
   }
   return { status: "connected", label: AGENT_STATUS_LABELS.connected, reason: null };
-};
-
-/**
- * What deleting it does to the environments testing it: nothing is deleted
- * with it — they stay, unlinked, with their scenarios, evaluations and runs.
- * Null when no environment tests it.
- */
-export const deleteEffectOf = (agent) => {
-  const used = agent?.usedIn || [];
-  if (!used.length) return null;
-  const one = used.length === 1;
-  return `${one ? `${used[0].envName} stays` : `Its ${used.length} environments stay`}, with ${one ? "its" : "their"} scenarios, evaluations and runs. ${one ? "It shows" : "They show"} "Connect agent" until you connect one.`;
 };
 
 /* ── where it's tested ────────────────────────────────────────────────────── */
@@ -197,16 +194,44 @@ export const CLOSED_PLATFORMS = [
   { id: "intercom_fin", label: "Intercom Fin" },
   { id: "zendesk", label: "Zendesk" },
 ];
-export const CLOSED_PLATFORM_NOTE = "Closed platforms don't expose their agents' settings, so they're test only — through their phone number or chat channel. Improvements end in a suggested fix.";
+export const CLOSED_PLATFORM_NOTE = "Closed platforms don't expose their agents' settings, so they're test only — through their phone number, chat channel, or a conversation API where one exists. Improvements end in a suggested fix.";
 
 /* ── framework-aware tuning, by phase ─────────────────────────────────────── */
 
-/* Any framework the environment can run works from Phase 1; the phase is when
-   improvements learn its structure (graphs, handoffs, crews) to tune it. */
+/* Any framework the environment can run works; each row is the PRD's tuning
+   table — the frameworks improvements learn the structure of (graphs,
+   handoffs, crews, pipelines) so they can change it, grouped by when they
+   were tuned. Every row is tuned now, the Later ones included. `edits` is
+   the PRD's "What the improver edits" column, by framework. The phase is
+   bookkeeping only — never shown. */
 export const FRAMEWORK_TUNING = [
-  { phase: "1", tuned: true, items: ["LangGraph / LangChain", "OpenAI Agents SDK", "Direct OpenAI, Anthropic or Gemini calls", "LiveKit Agents"] },
-  { phase: "2", tuned: true, items: ["Pipecat", "Google ADK", "Mastra and Vercel AI SDK", "AWS Strands and Pydantic AI", "CrewAI and Claude Agent SDK"] },
-  { phase: "later", tuned: false, items: ["Agno", "Haystack", "LlamaIndex", "smolagents", "DSPy", "Microsoft Agent Framework"] },
+  {
+    phase: "1", tuned: true, items: ["LangGraph / LangChain", "OpenAI Agents SDK", "Direct OpenAI, Anthropic or Gemini calls", "LiveKit Agents"],
+    edits: {
+      "LangGraph / LangChain": "Prompts, tools and each step's model",
+      "OpenAI Agents SDK": "Each agent's instructions, model, tools and handoffs",
+      "Direct OpenAI, Anthropic or Gemini calls": "Prompts and tools written in the code; you name where the agent starts",
+      "LiveKit Agents": "Each agent's instructions and tools, and the speech, model and turn-taking settings it uses",
+    },
+  },
+  {
+    phase: "2", tuned: true, items: ["Pipecat", "Google ADK", "Mastra and Vercel AI SDK", "AWS Strands and Pydantic AI", "CrewAI and Claude Agent SDK"],
+    edits: {
+      Pipecat: "The pipeline's settings, and its flow file when it has one",
+      "Google ADK": "Agents in code or a configuration file",
+      "Mastra and Vercel AI SDK": "Agents defined in code or files; Mastra also keeps its own draft versions",
+      "AWS Strands and Pydantic AI": "Agents in code; Strands can also load one from a configuration file",
+      "CrewAI and Claude Agent SDK": "CrewAI agents in configuration files; Claude agents in code plus instruction files",
+    },
+  },
+  {
+    phase: "later", tuned: true, items: ["Agno", "Haystack", "LlamaIndex", "smolagents", "DSPy", "Microsoft Agent Framework"],
+    edits: {
+      Agno: "Agents in code", Haystack: "Agents in code", LlamaIndex: "Agents in code", smolagents: "Agents in code",
+      DSPy: "Agents in code; DSPy's instructions are rewritten by its own optimizers",
+      "Microsoft Agent Framework": "Agents in code",
+    },
+  },
 ];
 export const FRAMEWORK_TUNING_NOTE = "Any framework the environment can run works. Where its structure is tuned, improvements also learn its graph, handoffs or crew and can change them.";
 

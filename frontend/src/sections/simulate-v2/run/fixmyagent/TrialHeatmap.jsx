@@ -3,6 +3,8 @@ import { useMemo } from "react";
 import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { triedLabelOf } from "../../_mock/optimizer";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 /**
  * Scenarios down, trials across.
@@ -92,7 +94,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
     <Box sx={{ p: 2.5 }}>
       <Stack direction="row" alignItems="flex-start" spacing={2} sx={{ mb: 2 }} flexWrap="wrap" rowGap={1}>
         <Typography sx={{ typography: "s2", color: "text.subtitle", flex: 1, minWidth: 260 }}>
-          Every training scenario against every run. A row that stays grey is a scenario no run could
+          Every target scenario against every run. A row that stays grey is a scenario no run could
           fix — a different kind of change, not a better prompt.
         </Typography>
         <Stack direction="row" spacing={1.25} flexWrap="wrap" rowGap={0.5} sx={{ flexShrink: 0 }}>
@@ -126,7 +128,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
               return (
                 <Tooltip
                   key={t.n} arrow
-                  title={`Run ${t.n} — ${t.score}% · ${t.tried}${t.cheats ? " · rejected, cheated" : t.brokeBlocker ? " · rejected, a must-pass failure repeated" : ""}`}
+                  title={`Run ${t.n} — ${t.score}% · ${triedLabelOf(t, trials)}${t.cheats ? " · rejected" : t.brokeBlocker ? " · rejected, a must-pass failure repeated" : ""}`}
                 >
                   <Box sx={{ width: COL, flexShrink: 0, textAlign: "center", cursor: "default" }}>
                     {(t.brokeBlocker || t.cheats) && (
@@ -175,7 +177,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
                         />
                       </Tooltip>
                     )}
-                    <Tooltip arrow title={s.title}>
+                    <Tooltip arrow title={scenarioTitle(s.title)}>
                       <Typography
                         noWrap
                         sx={{
@@ -184,7 +186,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
                           color: stubborn ? "text.subtitle" : "text.primary",
                         }}
                       >
-                        {s.title}
+                        {scenarioTitle(s.title)}
                       </Typography>
                     </Tooltip>
                   </Stack>
@@ -195,7 +197,7 @@ export default function TrialHeatmap({ trials = [], scenarios = [], winner }) {
                     const win = winner && t.n === winner.n;
                     return (
                       <Box key={t.n} sx={{ width: COL, flexShrink: 0, px: "3px" }}>
-                        <Tooltip arrow title={`Run ${t.n} · ${s.title} — ${tone.label}`}>
+                        <Tooltip arrow title={`Run ${t.n} · ${scenarioTitle(s.title)} — ${tone.label}`}>
                           <Box
                             sx={{
                               height: 24, borderRadius: "4px", cursor: "default",

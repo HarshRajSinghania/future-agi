@@ -25,6 +25,8 @@ export default function RegressionMemoryRow({ issue }) {
   const es = state.byEnv[status.envId];
   const memory = regressionMemoryOf(es, status.optId);
   if (!memory || memory.status === "none") return null;
+  /* A reopened fix didn't hold — don't offer its scenarios as proof it can't come back. */
+  if (status.key === "reopened" && memory.status !== "kept") return null;
   const n = memory.offer.length;
   const envName = env?.name || "the environment";
   const keep = () => commit({

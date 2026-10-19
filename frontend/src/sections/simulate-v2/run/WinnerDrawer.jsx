@@ -9,6 +9,7 @@ import { clickable, focusRing } from "../components/clickable";
 import SideDrawer from "../components/SideDrawer";
 import { runIdentityOf } from "../_mock/runIdentity";
 import { envLabelOf } from "../_mock/envVersionKinds";
+import { currentEnvSnapshot } from "../_mock/envSnapshot";
 import {
   allMetrics, WEIGHT_PRESETS, presetWeights, defaultWeights, rankRuns, winningMargins, comparableRuns,
 } from "../_mock/winner";
@@ -24,6 +25,7 @@ import { causeCountsLine, runRollupOf } from "../_mock/runRollup";
  */
 export default function WinnerDrawer({
   open, onClose, summaries, evals, initial, onApply, scenarioCount, env, envState, metricIds, nameOf, showSummary = true,
+  currentOnly = false,
 }) {
   /* `metricIds` keeps only the metrics these runs carry — an improvement's
      runs have no mean return to weigh. */
@@ -32,7 +34,24 @@ export default function WinnerDrawer({
   const [preset, setPreset] = useState(initial ? null : "balanced");
 
   /* Only runs that took the same test are in the race. */
-  const field = useMemo(() => comparableRuns(summaries), [summaries]);
+  const field = useMemo(() => {
+    if (!currentOnly || !env) {
+      return comparableRuns(summaries, env ? (r) => runIdentityOf(r, envState, env).env : undefined);
+    }
+    /* The Runs tab ranks on the environment version in use. A run is on it
+       only when its snapshot is that one AND it started after that version
+       existed — a label alone can collide (a seeded run's stamp), and a run
+       can't have taken a test that didn't exist yet. */
+    const current = currentEnvSnapshot(env, envState);
+    /* The first version existed before any run, so only a later one is timed. */
+    const since = current?.n > 1 && current?.at ? Date.parse(current.at) : 0;
+    const on = (r) => {
+      const id = runIdentityOf(r, envState, env);
+      const started = Date.parse(r.startedAt || r.finishedAt || 0) || 0;
+      return id.env === current?.label && (!since || started >= since) ? current.label : `older:${id.env || "?"}`;
+    };
+    return comparableRuns(summaries, on, current?.label || null);
+  }, [summaries, env, envState, currentOnly]);
   const ranked = useMemo(
     () => rankRuns(field.runs, metrics, weights),
     [field, metrics, weights],
@@ -57,7 +76,9 @@ export default function WinnerDrawer({
   /* One-line field summary, with the left-out detail behind a tooltip so the
      header stays short. */
   const fieldChips = [
-    field.envVersion && `environment ${envLabelOf(env, envState, field.envVersion)}`,
+    /* With an environment the field is already its snapshot ("v7"); without,
+       the stamped world label is mapped to one. */
+    field.envVersion && `environment ${env ? field.envVersion : envLabelOf(env, envState, field.envVersion)}`,
     field.repeats && `${field.repeats} repeat${field.repeats === 1 ? "" : "s"}`,
     `${field.runs.length} run${field.runs.length === 1 ? "" : "s"} ranked`,
   ].filter(Boolean);
@@ -83,7 +104,7 @@ export default function WinnerDrawer({
                   title={`${field.excluded} left out — a different environment, a partial re-run, a different repeat count, or tools the world couldn't answer.`}
                 >
                   <Stack direction="row" alignItems="center" spacing={0.25} sx={{ color: "text.subtitle", cursor: "help" }}>
-                    <Typography sx={{ typography: "s3", color: "text.subtitle" }}>· {field.excluded} left out</Typography>
+                    <Typography sx={{ typography: "s3", color: "text.subtitle" }}>· {field.runs.length ? field.excluded : "all"} left out</Typography>
                     <Iconify icon="solar:info-circle-linear" width={11} />
                   </Stack>
                 </Tooltip>
@@ -142,6 +163,16 @@ export default function WinnerDrawer({
 
         {/* ── footer: winner + its run summary + actions ── */}
         <Box sx={{ borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+          {!winner && (
+            <Box sx={{ px: 2.5, py: 1.5, bgcolor: "background.neutral" }}>
+              <Typography sx={{ typography: "s2", fontWeight: 600 }}>Nothing comparable yet</Typography>
+              <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+                {currentOnly && summaries?.length
+                  ? `Every run is on an older environment version — run environment ${field.envVersion || "the current version"} to rank it.`
+                  : "No finished full runs to rank yet."}
+              </Typography>
+            </Box>
+          )}
           {winner && (
             <Stack
               direction="row" alignItems="center" spacing={1.5}
@@ -203,6 +234,7 @@ export default function WinnerDrawer({
 }
 
 WinnerDrawer.propTypes = {
+  currentOnly: PropTypes.bool,
   open: PropTypes.bool,
   onClose: PropTypes.func,
   summaries: PropTypes.array,

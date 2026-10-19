@@ -9,8 +9,8 @@ import { getEnvironment } from "./environments";
 import { envAgentKey, repairAgentRecord } from "./agentRegistry";
 import { defaultRefFor, migrateEnvVars, scrubAgentSecrets } from "./secretRefs";
 import { withDemoFaultRun, replaceLegacyDemoRun, withPassingRun, DEMO_RUN_ENV, PASS_RUN_ENV } from "./demoRun";
-import { withScenarioSetSeed, withArchivedMigration, withImprovementScenarioSeed } from "./scenarioSetSeed";
-import { withErrorFeedFixes, withAirlineTracing, SEEDED_RETELL_VALUES } from "./seedErrorFeedFixes";
+import { withScenarioSetSeed, withArchivedMigration, withImprovementScenarioSeed, isRetiredCheckRow } from "./scenarioSetSeed";
+import { withErrorFeedFixes, withAirlineTracing, withWatchedFixes, SEEDED_RETELL_VALUES } from "./seedErrorFeedFixes";
 import { withVoiceRunHistory, HISTORY_ENV } from "./voiceRunHistory";
 import { withFiveAGoal, TOPUP_ENV } from "./voiceScenarioTopUp";
 
@@ -24,7 +24,7 @@ import { withFiveAGoal, TOPUP_ENV } from "./voiceScenarioTopUp";
   has are left exactly as they are, and an environment someone deliberately
   removed stays removed because the marker moves on regardless.
 */
-export const SEED_VERSION = 27;
+export const SEED_VERSION = 28;
 /* Environments a seed version added, so a later top-up adds only those —
    never one someone removed since the last. */
 const ADDED_AT = { 21: ["env-clinic-line"] };
@@ -224,7 +224,50 @@ const withMovedDemoFixes = (state, envs) => {
   return withErrorFeedFixes({ ...state, byEnv }, envs).byEnv;
 };
 
-export const topUpSeed = (stored) => {
+/*
+  Concepts the prototype no longer has, cleared from any stored copy on every
+  load — idempotent, so it needs no seed version:
+    · the impossible-by-design "canary" rows of the removed cheat checks
+    · a rule question answered "Unsure", which reads as unanswered again
+    · the template's stand-in agent ("Template baseline"): every environment
+      now belongs to an agent from Agents, so an old copy of the stand-in is
+      marked as the placeholder it was and kept off the lists and pickers
+*/
+const TEMPLATE_STAND_IN = "Template baseline";
+const withoutRetiredConcepts = (state) => {
+  if (!state?.byEnv) return state;
+  let changed = false;
+  const byEnv = {};
+  const standIns = (state.connectedAgents || []).filter((a) => a.origin === "environment" && a.name === TEMPLATE_STAND_IN);
+  Object.entries(state.byEnv).forEach(([id, es]) => {
+    let next = es;
+    if (es?.agent?.name === TEMPLATE_STAND_IN && !es.agent.seeded) next = { ...next, agent: { ...es.agent, seeded: true } };
+    if (es?.scenarios?.some(isRetiredCheckRow)) next = { ...next, scenarios: es.scenarios.filter((r) => !isRetiredCheckRow(r)) };
+    if (es?.nudges?.some((n) => n.answer === "unsure")) {
+      const reset = new Set(es.nudges.filter((n) => n.answer === "unsure").map((n) => n.id));
+      next = {
+        ...next,
+        subGoalShadows: (es.subGoalShadows || []).filter((sh) => !reset.has(sh.nudgeId)),
+        nudges: es.nudges.map((n) => {
+          if (n.answer !== "unsure") return n;
+          const { answer: _a, resolvedAt: _r, ...rest } = n;
+          return { ...rest, status: "open" };
+        }),
+      };
+    }
+    if (next !== es) changed = true;
+    byEnv[id] = next;
+  });
+  if (standIns.length) {
+    changed = true;
+    return { ...state, byEnv, connectedAgents: state.connectedAgents.filter((a) => !standIns.includes(a)) };
+  }
+  return changed ? { ...state, byEnv } : state;
+};
+
+export const topUpSeed = (stored) => withoutRetiredConcepts(topUpSeedVersions(stored));
+
+const topUpSeedVersions = (stored) => {
   if ((stored.seedVersion || 0) >= SEED_VERSION) return { ...stored, seedVersion: SEED_VERSION };
   const seed = seededState();
   const have = new Set((stored.myEnvironments || []).map((e) => e.id));
@@ -245,10 +288,7 @@ export const topUpSeed = (stored) => {
   /* Seed 15: the passing run moved to one that also holds against run 2. */
   if ((stored.seedVersion || 0) < 15 && have.has(PASS_RUN_ENV)) upgradeSeededRun(byEnv, stored.myEnvironments, PASS_RUN_ENV, withPassingRun);
   /* Seed 16 (PRD v7): nothing is retired any more — a retired scenario reads
-     as archived, everywhere. Seeded environments gain tiers, canaries and
-     off-limits tools, filled only where the saved copy has none: a tier set
-     by hand, an off-limits list someone edited, a canary someone deleted
-     (the marker moves on) all stay as they are. */
+     as archived, everywhere. */
   if ((stored.seedVersion || 0) < 16) {
     Object.keys(byEnv).forEach((id) => {
       byEnv[id] = seed.byEnv[id] ? withScenarioSetSeed(id, byEnv[id]) : withArchivedMigration(byEnv[id]);
@@ -348,6 +388,11 @@ export const topUpSeed = (stored) => {
     upgraded = Object.fromEntries(Object.entries(upgraded).map(([id, es]) => [id, (es?.optimizations || []).some((o) => o.seededAs === "ef-not-reproduced")
       ? { ...es, optimizations: es.optimizations.filter((o) => o.seededAs !== "ef-not-reproduced") }
       : es]));
+  }
+  /* Seed 28: the fix lifecycle after release on Customer Support Line —
+     one Resolved, one Watching, and ISS-4402 released and Reopened. */
+  if ((stored.seedVersion || 0) < 28) {
+    upgraded = withWatchedFixes({ ...stored, myEnvironments, byEnv: upgraded, agentLimits }, myEnvironments).byEnv;
   }
   return {
     ...stored,

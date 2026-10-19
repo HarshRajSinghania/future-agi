@@ -218,9 +218,10 @@ const MOCK_CLUSTERS = [
   {
     cluster_id: "ISS-4402",
     project_id: "customer-support-line-agent",
-    /* Demo: after its fix is released the issue comes back, so the chip
-       shows Reopened. */
-    recurs_after_fix: true,
+    /* What the feed saw after each fix was released for it, by release:
+       it came back 6 hours after the first, so that fix reads Reopened. A
+       later fix has no entry, so it holds — Watching, then Resolved. */
+    recurs_after: [{ release: 1, after_hours: 6 }],
     error: {
       name: "Cancellation flow proceeds without reading policy exceptions",
       type: "PolicyBypassError",
@@ -229,14 +230,58 @@ const MOCK_CLUSTERS = [
     status: "acknowledged",
     evidence_state: "confirmed",
     why_shown:
-      "Release 41 shipped a fix on Sep 1; no qualifying occurrences observed for 6 days of eligible traffic. Keeping under Monitoring.",
+      "84 calls where the agent confirmed a cancellation straight away without reading the policy exceptions — notice periods, kept benefits, price-match promises — and in most no cancel_order call followed. Matched cancellations check the exceptions before calling cancel_order.",
     trace_count: 84,
     users_affected: 61,
     fix_layer: "prompt",
     trends: sparkFor("ISS-4402"),
     first_seen: nowIso(60 * 24 * 42),
-    last_seen: nowIso(60 * 24 * 6),
+    last_seen: nowIso(60 * 3),
     eval_score: 0.88,
+    modality: "voice",
+  },
+  {
+    /* Fixed and watched for 30 days without coming back — Resolved. */
+    cluster_id: "ISS-4366",
+    project_id: "customer-support-line-agent",
+    error: {
+      name: "Refund issued without checking return eligibility",
+      type: "SkippedVerification",
+    },
+    severity: "high",
+    status: "resolved",
+    evidence_state: "confirmed",
+    why_shown:
+      "26 calls where issue_refund ran with no check_return_eligibility call before it; 9 of those orders were outside the return window. Matched refunds check eligibility first.",
+    trace_count: 26,
+    users_affected: 24,
+    fix_layer: "prompt",
+    trends: sparkFor("ISS-4366"),
+    first_seen: nowIso(60 * 24 * 50),
+    last_seen: nowIso(60 * 24 * 34),
+    eval_score: 0.58,
+    modality: "voice",
+  },
+  {
+    /* Its fix was released a few days ago; nothing since — Watching. */
+    cluster_id: "ISS-4431",
+    project_id: "customer-support-line-agent",
+    error: {
+      name: "New delivery address confirmed after the parcel was dispatched",
+      type: "UnsupportedClaim",
+    },
+    severity: "high",
+    status: "acknowledged",
+    evidence_state: "confirmed",
+    why_shown:
+      "33 calls where the agent confirmed a new delivery address although shipment_status already showed the parcel dispatched; update_shipping_address failed and the caller was never told. Matched calls check shipment_status first.",
+    trace_count: 33,
+    users_affected: 30,
+    fix_layer: "prompt",
+    trends: sparkFor("ISS-4431"),
+    first_seen: nowIso(60 * 24 * 20),
+    last_seen: nowIso(60 * 24 * 4),
+    eval_score: 0.63,
     modality: "voice",
   },
   {
@@ -328,6 +373,178 @@ const MOCK_CLUSTERS = [
     last_seen: nowIso(48),
     eval_score: 0.57,
     modality: "chat",
+  },
+  /* Escalating issues for testing Fix end to end — one per path:
+     linked with an environment (4563, 4566, 4571, 4574, 4578), not
+     confirmed yet (4582), an agent with no environment (4585, 4593), and a
+     project no agent records yet (4589). */
+  {
+    cluster_id: "ISS-4563",
+    project_id: "customer-support-line-agent",
+    error: { name: "Loyalty discount applied without checking the caller's tier", type: "PolicyViolation" },
+    severity: "critical",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "58 calls where apply_discount_code ran with a loyalty discount and no check_loyalty_status call before it; 21 of those callers were not in a qualifying tier. Matched discounts check the tier first.",
+    trace_count: 58,
+    users_affected: 52,
+    fix_layer: "prompt",
+    trends: sparkFor("ISS-4563"),
+    first_seen: nowIso(60 * 24 * 3),
+    last_seen: nowIso(6),
+    eval_score: 0.47,
+    modality: "voice",
+  },
+  {
+    cluster_id: "ISS-4566",
+    project_id: "customer-support-line-agent",
+    error: { name: "Agent says the return label was sent when creating it failed", type: "UnsupportedClaim" },
+    severity: "high",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "36 calls where generate_return_label returned an error and the agent still told the caller the label was on its way. Matched calls say the label failed and offer another way.",
+    trace_count: 36,
+    users_affected: 34,
+    fix_layer: "tools",
+    trends: sparkFor("ISS-4566"),
+    first_seen: nowIso(60 * 24 * 2),
+    last_seen: nowIso(14),
+    eval_score: 0.51,
+    modality: "voice",
+  },
+  {
+    cluster_id: "ISS-4571",
+    project_id: "guest-booking-line",
+    error: { name: "Deposit quoted from last season's price list", type: "StaleToolResult" },
+    severity: "high",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "29 calls where the agent quoted a group deposit that matches last season's rates, not what the booking tool charged. Matched calls read the deposit from the booking result.",
+    trace_count: 29,
+    users_affected: 27,
+    fix_layer: "data",
+    trends: sparkFor("ISS-4571"),
+    first_seen: nowIso(60 * 24 * 5),
+    last_seen: nowIso(19),
+    eval_score: 0.55,
+    modality: "voice",
+  },
+  {
+    cluster_id: "ISS-4574",
+    project_id: "airline-rebooking",
+    error: { name: "Seat request dropped when rebooking onto a partner airline", type: "ToolResultDropped" },
+    severity: "high",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "41 chats where the traveller asked for an aisle or window seat and the rebooking onto a partner flight went through with no seat request. Matched rebookings on the same airline keep it.",
+    trace_count: 41,
+    users_affected: 38,
+    fix_layer: "tools",
+    trends: sparkFor("ISS-4574"),
+    first_seen: nowIso(60 * 24 * 6),
+    last_seen: nowIso(23),
+    eval_score: 0.49,
+    modality: "text",
+  },
+  {
+    cluster_id: "ISS-4578",
+    project_id: "clinic-appointment-line",
+    error: { name: "Appointment confirmed in a slot another patient already holds", type: "UnsupportedClaim" },
+    severity: "critical",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "17 calls where the agent confirmed a new time although the booking tool returned the slot as taken; two patients arrived for the same appointment. Matched calls offer the next free slot.",
+    trace_count: 17,
+    users_affected: 17,
+    fix_layer: "orchestration",
+    trends: sparkFor("ISS-4578"),
+    first_seen: nowIso(60 * 24 * 2),
+    last_seen: nowIso(27),
+    eval_score: 0.38,
+    modality: "voice",
+  },
+  {
+    cluster_id: "ISS-4582",
+    project_id: "returns-refunds-line-agent",
+    error: { name: "Store credit offered when the caller asked for a refund", type: "PolicyViolation" },
+    severity: "medium",
+    status: "escalating",
+    evidence_state: "unresolved",
+    why_shown:
+      "12 calls where the caller asked for their money back and the agent offered store credit first. Some of these orders only allow store credit, so the feed can't confirm it from the traces alone.",
+    trace_count: 12,
+    users_affected: 12,
+    fix_layer: "prompt",
+    trends: sparkFor("ISS-4582"),
+    first_seen: nowIso(60 * 30),
+    last_seen: nowIso(33),
+    eval_score: 0.61,
+    modality: "voice",
+  },
+  {
+    /* Billing copilot is connected but has no environment yet: Fix builds
+       its main environment first. */
+    cluster_id: "ISS-4585",
+    project_id: "billing-copilot",
+    error: { name: "Invoice total leaves out the late fee the customer was told about", type: "SelfContradiction" },
+    severity: "high",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "22 chats where the agent mentioned a late fee and then sent an invoice total without it. Matched chats add the fee before quoting the total.",
+    trace_count: 22,
+    users_affected: 20,
+    fix_layer: "tools",
+    trends: sparkFor("ISS-4585"),
+    first_seen: nowIso(60 * 24 * 4),
+    last_seen: nowIso(38),
+    eval_score: 0.53,
+    modality: "text",
+  },
+  {
+    /* Rebooking assistant is connected from GitHub and watched in Observe,
+       but has no environment yet: Fix builds its main environment first. */
+    cluster_id: "ISS-4593",
+    project_id: "rebooking-assistant",
+    error: { name: "Rebooked flight quoted without the fare difference", type: "UnsupportedClaim" },
+    severity: "high",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "19 chats where the agent rebooked onto a pricier flight and said there was nothing to pay. Matched chats quote the fare difference before confirming.",
+    trace_count: 19,
+    users_affected: 18,
+    fix_layer: "prompt",
+    trends: sparkFor("ISS-4593"),
+    first_seen: nowIso(60 * 24 * 3),
+    last_seen: nowIso(26),
+    eval_score: 0.55,
+    modality: "text",
+  },
+  {
+    /* Call logs from Observe's own Vapi integration — no agent in Agents
+       records this project yet, so Fix reads Connect agent to fix. */
+    cluster_id: "ISS-4589",
+    project_id: "storefront-chat",
+    error: { name: "Order cancelled when the customer only asked how cancelling works", type: "PolicyViolation" },
+    severity: "high",
+    status: "escalating",
+    evidence_state: "confirmed",
+    why_shown:
+      "19 chats where the customer asked what cancelling would cost and the agent called cancel_order without asking. Matched chats explain the policy and wait for a yes.",
+    trace_count: 19,
+    users_affected: 19,
+    fix_layer: "prompt",
+    trends: sparkFor("ISS-4589"),
+    first_seen: nowIso(60 * 24 * 1),
+    last_seen: nowIso(44),
+    eval_score: 0.46,
+    modality: "text",
   },
 ];
 
@@ -421,6 +638,16 @@ const INPUT_PROMPTS = {
     "Cancel my subscription please.",
     "I want to end the plan effective today.",
   ],
+  "ISS-4366": [
+    "I want my money back for the boots I bought in July.",
+    "Refund the jacket please, I never wore it.",
+    "Can I get a refund on order 5512?",
+  ],
+  "ISS-4431": [
+    "Can you send my order to my office instead?",
+    "I've moved — please change the delivery address on order 7720.",
+    "Ship it to 14 Harbour Road, not my old flat.",
+  ],
   "ISS-4552": [
     "Hi, I need a table for twelve on Saturday at seven.",
     "It's a birthday — eleven of us, can you book it?",
@@ -430,6 +657,51 @@ const INPUT_PROMPTS = {
     "Hi, it's Daniel Reyes — I need to move my Thursday appointment.",
     "Can you push my check-up to next week? Name's Maria Lopez.",
     "I have to reschedule, something came up. It's under Chen.",
+  ],
+  "ISS-4563": [
+    "I've been with you for years — can I get the loyalty discount on this order?",
+    "Is there a member discount? I'm sure I'm gold tier.",
+    "Apply my loyalty code to order 6610 please.",
+  ],
+  "ISS-4566": [
+    "I need to send these shoes back, can you email me a label?",
+    "Can you send a return label for order 4471?",
+    "The label never came — can you try again?",
+  ],
+  "ISS-4571": [
+    "Party of fourteen in March — what's the deposit?",
+    "How much do I put down for a group of twelve on the 20th?",
+    "What's the deposit for a private room for sixteen?",
+  ],
+  "ISS-4574": [
+    "My flight was cancelled — put me on the next one, aisle seat please.",
+    "Rebook me on the partner flight and keep my window seat.",
+    "Any flight tonight is fine, but I need an aisle.",
+  ],
+  "ISS-4578": [
+    "Can you move me to Thursday at 3?",
+    "I need the earliest slot tomorrow morning.",
+    "Is 9:30 on Friday free? Book it if so.",
+  ],
+  "ISS-4582": [
+    "I'd like a refund for the kettle, it arrived broken.",
+    "Just give me my money back please, not credit.",
+    "Can I get a refund on the coat? I don't want store credit.",
+  ],
+  "ISS-4585": [
+    "Why is there a late fee on my account?",
+    "Send me the invoice for March with everything included.",
+    "What do I owe in total, including the late charge?",
+  ],
+  "ISS-4593": [
+    "Can you move me to the 6pm flight instead?",
+    "Rebook me on anything that leaves before noon tomorrow.",
+    "Is there anything to pay if I switch to the later flight?",
+  ],
+  "ISS-4589": [
+    "What happens if I cancel my order?",
+    "Is there a fee to cancel order 3381?",
+    "If I cancel now do I get the full amount back?",
   ],
   "ISS-4548": [
     "Actually make it the 14th instead of the 12th — what does that cost?",
@@ -446,10 +718,21 @@ const AGENT_UTTERANCE = {
   "ISS-4489": "Applying the standard rate — no commitments found on the account.",
   "ISS-4501": "Refund confirmation reading before identity check completes.",
   "ISS-4478": "Reading inventory from the previous warehouse — cache is stale.",
-  "ISS-4402": "Cancellation processed with default policy — exceptions not read.",
+  "ISS-4402": "Done — your subscription is cancelled as of today.",
+  "ISS-4366": "Done — your refund of $89 is on its way.",
+  "ISS-4431": "Sorted — it'll go to 14 Harbour Road instead.",
   "ISS-4552": "All set — a table for twelve on Saturday at 7pm.",
   "ISS-4557": "Done — I've moved you to next Tuesday at 10am.",
   "ISS-4548": "The fare for the 14th is $212 — same as I quoted before.",
+  "ISS-4563": "Done — your loyalty discount of 15% is applied.",
+  "ISS-4566": "Your return label is on its way to your inbox.",
+  "ISS-4571": "The deposit for fourteen is $280.",
+  "ISS-4574": "You're rebooked on the 9:40 partner flight — all set.",
+  "ISS-4578": "You're booked for Thursday at 3pm.",
+  "ISS-4582": "I can offer you store credit for the full amount.",
+  "ISS-4585": "Your March invoice total is $1,240.",
+  "ISS-4589": "Your order has been cancelled.",
+  "ISS-4593": "You're on the 6pm flight — nothing more to pay.",
 };
 
 /** Representative trace records for OverviewTab + TracesTab. Shape
@@ -693,7 +976,7 @@ function filterAndPaginate(rows, params = {}) {
   let list = rows.slice();
   if (params.search) {
     const q = String(params.search).toLowerCase();
-    list = list.filter((r) => r.error.name.toLowerCase().includes(q));
+    list = list.filter((r) => r.error.name.toLowerCase().includes(q) || r.cluster_id.toLowerCase().includes(q));
   }
   if (params.severity) list = list.filter((r) => r.severity === params.severity);
   if (params.status) list = list.filter((r) => r.status === params.status);

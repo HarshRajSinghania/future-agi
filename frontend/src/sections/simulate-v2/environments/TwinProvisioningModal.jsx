@@ -18,10 +18,10 @@ const SUCCESS = "#16A34A";
  * The steps mirror the `handshake` array on the "twin_backed" agent
  * type in agentTypes.js so the same story reads in both places:
  *
- *   1. Provisioning twin services  — per-service check turns green
- *   2. Seeding starting state      — indeterminate bar then filled
- *   3. Rotating per-run credentials — masked → rotated
- *   4. Streaming first probe       — per-service latency lights up
+ *   1. Setting up the sandboxes  — per-app check turns green
+ *   2. Seeding the starting state — indeterminate bar then filled
+ *   3. Creating test sign-ins     — one test account per run
+ *   4. Checking each app answers  — per-app latency lights up
  *
  * The modal is non-dismissible: closing before ready would leave the
  * sandbox half-provisioned. The parent controls open state.
@@ -29,26 +29,26 @@ const SUCCESS = "#16A34A";
 const PHASES = [
   {
     key: "provision",
-    title: "Provisioning twin services",
-    subtitle: "Spinning up the sandbox instance for each service",
+    title: "Setting up the sandboxes",
+    subtitle: "One sandbox for each app you picked",
     dwell: 1200,
   },
   {
     key: "seed",
-    title: "Seeding starting state",
-    subtitle: "Resolving the seed prompt into concrete service state",
+    title: "Seeding the starting state",
+    subtitle: "Turning your description into each app's starting data",
     dwell: 900,
   },
   {
     key: "rotate",
-    title: "Rotating per-run credentials",
-    subtitle: "Minting fresh service tokens for this environment",
+    title: "Creating test sign-ins",
+    subtitle: "Each run signs in to the sandboxes with a fresh test account",
     dwell: 700,
   },
   {
     key: "probe",
-    title: "Streaming first probe",
-    subtitle: "Confirming each service responds",
+    title: "Checking each app answers",
+    subtitle: "A first request to every sandbox",
     dwell: 900,
   },
 ];
@@ -117,7 +117,7 @@ export default function TwinProvisioningModal({ open, services, onDone }) {
             <Iconify icon="solar:server-square-bold" width={17} />
           </Box>
           <Box flex={1} minWidth={0}>
-            <Typography sx={{ typography: "m2", fontWeight: 700 }}>Provisioning twin sandbox</Typography>
+            <Typography sx={{ typography: "m2", fontWeight: 700 }}>Setting up the SaaS sandbox</Typography>
             <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
               Setting up {services.length} service{services.length === 1 ? "" : "s"} · this normally takes ~30s
             </Typography>
@@ -148,9 +148,6 @@ export default function TwinProvisioningModal({ open, services, onDone }) {
             "& .MuiLinearProgress-bar": { bgcolor: TWIN_TINT, borderRadius: 2 },
           }}
         />
-        <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 1, textAlign: "center" }}>
-          Prototype resolves quickly · production streams live provisioning steps
-        </Typography>
       </Box>
     </Dialog>
   );

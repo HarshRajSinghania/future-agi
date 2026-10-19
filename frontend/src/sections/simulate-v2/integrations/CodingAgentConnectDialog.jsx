@@ -20,7 +20,7 @@ const MONO = "ui-monospace, Menlo, monospace";
  *   setup    → pick the way (Claude Code only) and run the steps
  *   waiting  → the agent opens Future AGI in the browser to link the workspace
  *   done     → connected for you, with a scoped improver token; Copy for
- *              coding agent becomes Hand to … for you (teammates connect
+ *              coding agent becomes Open in … for you (teammates connect
  *              their own)
  */
 export default function CodingAgentConnectDialog({ open, onClose, agent }) {
@@ -146,7 +146,7 @@ export default function CodingAgentConnectDialog({ open, onClose, agent }) {
               </Stack>
             )}
             <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-              {`For you, Copy for coding agent now reads Hand to ${agent.label} on Error Feed issues, run diagnoses and improvements. ${agent.label} fetches the brief when you ask it to. Teammates connect their own.`}
+              {`For you, Copy for coding agent now reads Open in ${agent.label} on Error Feed issues, run diagnoses and improvements. ${agent.label} fetches the brief when you ask it to. Teammates connect their own.`}
             </Typography>
           </Stack>
         )}

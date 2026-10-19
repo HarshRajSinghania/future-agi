@@ -13,12 +13,12 @@ import { MONO } from "./agentViewUtils";
 const RULE_TEXT = {
   knowledge: { text: "Content only as a suggestion", hint: "Retrieval settings may change. Knowledge content changes only as a suggestion — someone applies it." },
   variables: { text: "Defaults only", hint: "Which variables exist and how each conversation fills them stay as they are." },
+  structure: { text: "Always with a written rationale", hint: "A structural change — splitting a member, adding a step or a node — ships with a written explanation of why, and gets stricter review." },
 };
-/* Code and tool code — their own switches, listed with the areas. */
-const CODE_SURFACES = ["code", "toolcode"];
+/* Code — its own switch, listed with the areas. */
+const CODE_SURFACES = ["code"];
 const CODE_COVERS = {
   code: "Checks, parsers, routing — ships as a draft pull request",
-  toolcode: "Tool handlers — re-proved as a new environment version first",
 };
 
 /**
@@ -26,7 +26,7 @@ const CODE_COVERS = {
  * agent can use, then one line for what it can't — grouped by why — and one
  * for what's never changed. Each area switch writes `limits.areas` and keeps
  * `limits.allowed` in step, which is what the improvement engine reads; code
- * and tool code write `limits.allowed` directly.
+ * writes `limits.allowed` directly.
  *
  * Sub-rules sit under their area: who speaks first (Opening), adding or
  * removing tools (code agents only), knowledge content as a suggestion,
@@ -71,8 +71,7 @@ export default function AgentConfigAreasCard({ agent, limits, can, onChange, spe
   codeRows.forEach((x) => {
     if (can?.[x.id]?.ok) open.push({ kind: "code", x });
     else {
-      /* Code and tool code both need the repository — said once. */
-      const why = can?.code?.why || can?.[x.id]?.why;
+      const why = can?.[x.id]?.why;
       blocked.set(why, [...(blocked.get(why) || []), x.label]);
     }
   });
@@ -80,7 +79,7 @@ export default function AgentConfigAreasCard({ agent, limits, can, onChange, spe
   const subRule = (a, on) => {
     if (a.id === "opening") {
       return (
-        <SubRow text="Who speaks first may change" hint="Off: the lines may change, the order stays. On: a candidate may also switch who opens the conversation.">
+        <SubRow text="Who speaks first may change" hint="Off: the lines may change, the order stays. On: a proposed change may also switch who opens the conversation.">
           <Switch
             size="small" checked={on && !!rules.whoSpeaksFirst} disabled={!on}
             onChange={(e) => setRule({ whoSpeaksFirst: e.target.checked })}

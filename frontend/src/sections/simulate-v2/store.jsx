@@ -19,18 +19,23 @@ import { seededState } from "./_mock/seedState";
 import { runReadiness } from "./_mock/setupGaps";
 import { getEnvironment } from "./_mock/environments";
 import { generatedPool } from "./_mock/scenarios";
-import { agentVersions, currentAgentVersion, versionNumber } from "./_mock/versions";
+import { agentPinPatch, agentVersions, isPendingDraft, versionNumber } from "./_mock/versions";
+import { raiseNudgesIn } from "./_mock/nudgeEffects";
 /* Which agent this is, across environments: where it lives. Two
    environments connected to the same repo, endpoint or hosted assistant are
    testing one agent. */
 import { envAgentKey, connectedAgentsFrom, repairAgentRecord } from "./_mock/agentRegistry";
 /* Secrets are held as secret-manager references, never values (AC-6.12). */
 import { scrubAgentSecrets } from "./_mock/secretRefs";
+import { recordCredentialSets } from "./_mock/envConfig";
 /* Topping a stored copy up with what the seed gained since it was saved. */
 import { SEED_VERSION, topUpSeed, scrubEnvState, scrubPatch, withRsiSeed } from "./_mock/seedTopUp";
 import { readStored, writeStored, updateStored } from "./_mock/storeStorage";
 /* A search that played out while nobody watched has finished. */
 import { settleImprovements } from "./_mock/optimizationRuns";
+import { settleAbandonedRuns } from "./_mock/runGroup";
+/* Scheduled improvements start on their own, once per store. */
+import { useScheduledImprovements } from "./_mock/scheduledImprovements";
 import { uniqueEnvName } from "./_mock/envNames";
 
 /*
@@ -87,13 +92,9 @@ const emptyEnvState = () => ({
     the env-level default (follow-up work).
   */
   twinBacking: null,
-  /* PRD v7 — the scenario set's own version log ([{ label, at, summary,
-     largestBump }], _mock/suiteLog.js), the logged anchor-core decisions
-     (_mock/tiers.js) and the tools and paths a run may never call
-     ([{ name, why }], _mock/cheatControls.js). */
+  /* The scenario set's own version log ([{ label, at, summary, largestBump }],
+     _mock/suiteLog.js). */
   suiteVersions: [],
-  anchorLog: [],
-  offLimits: [],
 });
 
 const initialState = {
@@ -155,13 +156,12 @@ const mintVersion = (state, key, version, activateEnvId) => {
   const byEnv = { ...state.byEnv };
   Object.entries(state.byEnv).forEach(([id, es]) => {
     if (envAgentKey(es?.agent, id) !== key) return;
-    byEnv[id] = {
-      ...es,
-      agentVersions: unionVersions(agentVersions(es), [v]),
-      /* Only the environment it was minted in switches; the rest stay pinned
-         to what they ran so a new version never switches anyone silently. */
-      activeAgentVersion: id === activateEnvId ? v.label : es.activeAgentVersion || currentAgentVersion(es)?.label,
-    };
+    const next = { ...es, agentVersions: unionVersions(agentVersions(es), [v]) };
+    /* Environments that follow production move with it on their own; a
+       pinned one stays put. The environment it was minted in (when asked)
+       tests it straight away — unless it's a draft: a draft is never what
+       an environment tests; its runs name it (?agent=) until it's released. */
+    byEnv[id] = id === activateEnvId && v.status !== "draft" ? { ...next, ...agentPinPatch(next, v.label) } : next;
   });
   const connectedAgents = (state.connectedAgents || []).map((a) => (a.key === key ? { ...a, versions: unionVersions(a.versions, [v]) } : a));
   return { ...state, byEnv, connectedAgents };
@@ -273,8 +273,9 @@ function reducer(state, action) {
          back, wherever a copy is stored — keyed the same way in each copy so
          the registry and the environment still agree on who it is. */
       Object.keys(nextByEnv).forEach((id) => {
-        /* An improvement whose search finished while nobody watched is done. */
-        const es = settleImprovements(scrubEnvState(nextByEnv[id]));
+        /* An improvement whose search finished while nobody watched is done —
+           and so is a run whose page was closed before it finished. */
+        const es = settleAbandonedRuns({ ...state, ...payload, myEnvironments: envs }, id, settleImprovements(scrubEnvState(nextByEnv[id])));
         nextByEnv[id] = es?.agent ? { ...es, agent: repairAgentRecord(es.agent, `env:${id}`) } : es;
       });
       const connectedAgents = (payload.connectedAgents || state.connectedAgents || []).map((a) => repairAgentRecord(scrubAgentSecrets(a)));
@@ -350,12 +351,55 @@ function reducer(state, action) {
       };
     }
 
+    /* Test `label` here — pinned to it, or following production when it is production. */
+    case "pinAgentVersion": {
+      const prev = state.byEnv[action.envId];
+      if (!prev) return state;
+      /* A draft is never what an environment tests — refused, nothing moves. */
+      if (isPendingDraft(prev, action.label)) return state;
+      return { ...state, byEnv: { ...state.byEnv, [action.envId]: { ...prev, ...agentPinPatch(prev, action.label) } } };
+    }
+
     case "patchEnvState": {
       const prev = state.byEnv[action.envId] || emptyEnvState();
-      return {
-        ...state,
-        byEnv: { ...state.byEnv, [action.envId]: { ...prev, ...scrubPatch(action.patch) } },
-      };
+      const byEnv = { ...state.byEnv, [action.envId]: { ...prev, ...scrubPatch(action.patch) } };
+      /* A version released here is released for the agent: every environment
+         testing it learns so, and those following production move to it. */
+      const before = new Set((prev.releases || []).map((r) => r.version));
+      const fresh = (action.patch?.releases || []).map((r) => r.version).filter((l) => l && !before.has(l));
+      const key = fresh.length ? envAgentKey(prev.agent, action.envId) : null;
+      if (!key) return { ...state, byEnv };
+      /* Released is production: whatever an admin made active before gives
+         way to it, and a pin held on it (someone trying the draft) is now
+         just following production — so every environment that follows
+         production, the one that shipped it included, tests it next. */
+      const now = new Date().toISOString();
+      const shipped = [...fresh].sort((a, b) => versionNumber(a) - versionNumber(b)).pop();
+      const mark = (list) => (list || []).map((v) => (fresh.includes(v.label) && v.status === "draft" ? { ...v, status: "released", releasedAt: v.releasedAt || now } : v));
+      const madeActive = (values) => (values?.activeVersion?.label && values.activeVersion.label !== shipped
+        ? { ...values, activeVersion: { label: shipped, at: now, by: "release" } }
+        : values);
+      const others = [];
+      Object.entries(byEnv).forEach(([id, es]) => {
+        if (envAgentKey(es?.agent, id) !== key) return;
+        let next = { ...es, agentVersions: mark(agentVersions(es)), ...(es.agent?.values && { agent: { ...es.agent, values: madeActive(es.agent.values) } }) };
+        if (next.agentVersionPinned && fresh.includes(next.activeAgentVersion)) next = { ...next, ...agentPinPatch(next, next.activeAgentVersion) };
+        byEnv[id] = next;
+        if (id !== action.envId) others.push(id);
+      });
+      const connectedAgents = (state.connectedAgents || []).map((a) => (a.key === key ? { ...a, versions: mark(a.versions), values: madeActive(a.values) } : a));
+      /* A released fix is an agent change everywhere else the agent is
+         tested: those environments get its one card — a changed rule still
+         gets its question. The environment that verified it doesn't. */
+      const released = { ...state, byEnv, connectedAgents };
+      const version = agentVersions(byEnv[action.envId]).find((v) => v.label === shipped);
+      const envs = others.map((id) => state.myEnvironments.find((e) => e.id === id)).filter(Boolean);
+      if (version && envs.length) {
+        raiseNudgesIn(released, envs, version).forEach((r) => {
+          if (r.patch.nudges || r.patch.likelyFixes) byEnv[r.envId] = { ...byEnv[r.envId], ...r.patch };
+        });
+      }
+      return { ...state, byEnv, connectedAgents };
     }
 
     /*
@@ -373,7 +417,12 @@ function reducer(state, action) {
       const idx = runs.findIndex((r) => r.id === action.run.id);
       /* A run records which agent it tested, not just the version label —
          after the environment changes agent, "v3" means a different thing. */
-      const stamped = action.run.agentKey ? action.run : { ...action.run, agentKey: envAgentKey(prev.agent, action.envId) };
+      const keyed = action.run.agentKey ? action.run : { ...action.run, agentKey: envAgentKey(prev.agent, action.envId) };
+      /* And which credential set it used — once, when it's first recorded;
+         the set is written down so its label never moves. */
+      const needsSet = !keyed.credentialSet && !(idx >= 0 && runs[idx].credentialSet);
+      const sets = needsSet ? recordCredentialSets(prev) : null;
+      const stamped = needsSet ? { ...keyed, credentialSet: sets.credentialSets.slice(-1)[0]?.label } : keyed;
       const nextRuns = idx >= 0
         ? runs.map((r, i) => (i === idx ? { ...r, ...stamped } : r))
         : [stamped, ...runs];
@@ -381,7 +430,7 @@ function reducer(state, action) {
         ...state,
         byEnv: {
           ...state.byEnv,
-          [action.envId]: { ...prev, runs: nextRuns },
+          [action.envId]: { ...prev, runs: nextRuns, ...sets },
         },
       };
     }
@@ -395,14 +444,18 @@ function reducer(state, action) {
       const list = agentVersions(prev);
       const byEnv = {
         ...state.byEnv,
-        /* A new version is the one the next run tests. */
-        [action.envId]: { ...prev, agentVersions: [...list, action.version], activeAgentVersion: action.version.label },
+        /* A new live version is production, so this environment tests it
+           next; a draft changes nothing until it's released. */
+        [action.envId]: (() => {
+          const next = { ...prev, agentVersions: [...list, action.version] };
+          return action.version.status === "draft" ? next : { ...next, ...agentPinPatch(next, action.version.label) };
+        })(),
       };
       /*
         An agent version belongs to the agent, not to one environment. Every
         other environment testing the same agent learns that the version
-        exists (it doesn't switch to it — each environment chooses what it
-        runs), so "v2" means the same thing everywhere.
+        exists, so "v2" means the same thing everywhere — and those
+        following production test it next; pinned ones stay put.
       */
       const key = envAgentKey(prev.agent, action.envId);
       /* With an agent attached, it's the same mint as everywhere else. */
@@ -440,7 +493,7 @@ function reducer(state, action) {
             ...prev,
             agent,
             agentVersions: versions,
-            activeAgentVersion: activeLabel || versions[versions.length - 1]?.label || null,
+            ...agentPinPatch({ agent, agentVersions: versions }, activeLabel || null),
             runs,
             previousAgents: [
               ...(prev.previousAgents || []),
@@ -461,7 +514,8 @@ function reducer(state, action) {
       /* Connecting the same agent again fills in what it was missing — an
          endpoint, a name, a linked repository, contact settings. Never a
          version: it's the same agent. Filled-in values win over blanks only. */
-      const prev = list[i];
+      /* A deleted agent connected again comes back, with the history it kept. */
+      const { deleted: _deleted, ...prev } = list[i];
       const next = incoming;
       const filled = Object.fromEntries(Object.entries(next.values || {}).filter(([, val]) => val !== undefined && val !== ""));
       const merged = {
@@ -493,10 +547,19 @@ function reducer(state, action) {
       runs — so they're never deleted with it: each one testing the agent
       is unlinked and keeps everything else, showing "Connect agent" until
       one is connected. Observe projects linked to it are unlinked too, so
-      their issues read "Connect agent to fix".
+      their issues read "Connect agent to fix". The agent itself stays as a
+      tombstone (`deleted: { at }`) with its versions — off the list and
+      the pickers, but the runs and improvements that name it still open
+      its history (RSI PRD: "its history is kept in each case").
     */
     case "removeAgent": {
       const { key } = action;
+      /* RSI PRD: "Deleted: possible only once the agent has no environments
+         left." With one still testing it, nothing changes. */
+      /* Only environments that exist count — a build left part-way can leave
+         its state behind with no environment, and it mustn't block a delete. */
+      const live = new Set((state.myEnvironments || []).map((e) => e.id));
+      if (Object.entries(state.byEnv || {}).some(([envId, es]) => live.has(envId) && es?.agent && envAgentKey(es.agent, envId) === key)) return state;
       const at = new Date().toISOString();
       const byEnv = Object.fromEntries(Object.entries(state.byEnv || {}).map(([envId, es]) => (
         es?.agent && envAgentKey(es.agent, envId) === key
@@ -506,7 +569,7 @@ function reducer(state, action) {
       const projectLinks = Object.fromEntries(Object.entries(state.projectLinks || {}).filter(([, k]) => k !== key));
       return {
         ...state,
-        connectedAgents: (state.connectedAgents || []).filter((a) => a.key !== key),
+        connectedAgents: (state.connectedAgents || []).map((a) => (a.key === key ? { ...a, deleted: { at } } : a)),
         byEnv,
         projectLinks,
       };
@@ -569,7 +632,8 @@ function reducer(state, action) {
       made (a draft PR, a platform draft, a patch exported) becomes the version
       that landed. Updated in place by label everywhere the agent is recorded,
       never re-minted, so landing a draft can't create a second version.
-      `activateEnvId`, if given, switches that environment to it.
+      `activateEnvId`, if given, makes that environment test it (pinned, or
+      following production when it is production).
     */
     case "updateAgentVersion": {
       const { key, label, patch: vPatch, activateEnvId } = action;
@@ -578,30 +642,16 @@ function reducer(state, action) {
       const byEnv = { ...state.byEnv };
       Object.entries(state.byEnv).forEach(([id, es]) => {
         if (envAgentKey(es?.agent, id) !== key) return;
-        byEnv[id] = {
-          ...es,
-          agentVersions: apply(agentVersions(es)),
-          ...(id === activateEnvId && { activeAgentVersion: label }),
-        };
+        const next = { ...es, agentVersions: apply(agentVersions(es)) };
+        byEnv[id] = id === activateEnvId ? { ...next, ...agentPinPatch(next, label) } : next;
       });
       const connectedAgents = (state.connectedAgents || []).map((a) => (a.key === key ? { ...a, versions: apply(a.versions) } : a));
       return { ...state, byEnv, connectedAgents };
     }
 
-    /* Workspace feature flags — `agentImprovement` (design partner preview). */
+    /* Workspace feature flags — internal, never shown: `agentImprovement` (RSI rollout). */
     case "setFlag": {
       return { ...state, flags: { ...(state.flags || {}), [action.flag]: action.on } };
-    }
-
-    case "release": {
-      const prev = state.byEnv[action.envId] || emptyEnvState();
-      return {
-        ...state,
-        byEnv: {
-          ...state.byEnv,
-          [action.envId]: { ...prev, releases: [action.release, ...(prev.releases || [])] },
-        },
-      };
     }
 
     /* A workspace admin's setting — applies to every environment. */
@@ -690,6 +740,8 @@ function SimStoreRoot({ children }) {
     updateStored(STORAGE_KEY, (saved) => reducer(saved, action));
   }, []);
 
+  useScheduledImprovements(state, commit);
+
   const value = useMemo(() => ({ state, dispatch, commit }), [state, commit]);
   return (
     <SimStoreContext.Provider value={value}>{children}</SimStoreContext.Provider>
@@ -729,11 +781,6 @@ export function useEnvState(envId) {
     [dispatch, envId],
   );
 
-  const release = useCallback(
-    (entry) => dispatch({ type: "release", envId, release: entry }),
-    [dispatch, envId],
-  );
-
   const addAgentVersion = useCallback(
     (version) => dispatch({ type: "addAgentVersion", envId, version }),
     [dispatch, envId],
@@ -758,7 +805,7 @@ export function useEnvState(envId) {
   const canRun = runReadiness(envState).ready;
   const nextStep = steps.find((s) => !s.done && !s.optional) || steps[3];
 
-  return { envState, patch, recordRun, addAgentVersion, release, steps, canRun, nextStep };
+  return { envState, patch, recordRun, addAgentVersion, steps, canRun, nextStep };
 }
 
 /**
@@ -802,7 +849,7 @@ export function useConnectedAgents() {
     [dispatch],
   );
   const runVersionIn = useCallback(
-    (envId, label) => dispatch({ type: "patchEnvState", envId, patch: { activeAgentVersion: label } }),
+    (envId, label) => dispatch({ type: "pinAgentVersion", envId, label }),
     [dispatch],
   );
   return { agents, connectAgent, removeAgent, setAgentRuntime, setAgentValues, recordAgentVersion, runVersionIn, changeEnvAgent, hydrated: !!state.hydrated, state };

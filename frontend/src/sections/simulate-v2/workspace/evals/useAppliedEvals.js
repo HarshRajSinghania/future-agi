@@ -25,8 +25,10 @@ export function useAppliedEvals(envState, patch) {
      never the environment's. Noted once a run has been graded — before that
      there is nothing graded differently to tell apart. */
   const nameOf = (id) => appliedEvals.find((e) => e.id === id)?.name || id;
-  const changed = (detail) => ((envState.runs || []).length
-    ? { evalChanges: [...(envState.evalChanges || []), { detail, at: new Date().toISOString() }] }
+  /* Each change keeps the list before and after it, so rolling back to an
+     earlier environment version can restore the evaluations it had. */
+  const changed = (detail, after) => ((envState.runs || []).length
+    ? { evalChanges: [...(envState.evalChanges || []), { detail, at: new Date().toISOString(), before: applied, evals: after }] }
     : {});
 
   /* Up to 8 catalogue evaluations plus the tool-call judge — anything past
@@ -42,31 +44,30 @@ export function useAppliedEvals(envState, patch) {
       return true;
     });
     if (fresh.length) {
+      const after = [...applied, ...fresh];
       patch({
-        evals: [...applied, ...fresh],
-        ...changed(`Added ${fresh.map((e) => e.name || e.id).join(", ")}`),
+        evals: after,
+        ...changed(`Added ${fresh.map((e) => e.name || e.id).join(", ")}`, after),
       });
     }
     return { added: fresh.length, dropped: unique.length - fresh.length };
   };
 
-  const remove = (id) =>
-    patch({
-      evals: applied.filter((e) => (typeof e === "string" ? e : e.id) !== id),
-      ...changed(`Removed ${nameOf(id)}`),
-    });
+  const remove = (id) => {
+    const after = applied.filter((e) => (typeof e === "string" ? e : e.id) !== id);
+    patch({ evals: after, ...changed(`Removed ${nameOf(id)}`, after) });
+  };
 
   /* Edit in place — keeps the eval's slot in the list. Bare-id records are
      promoted to objects so the edited mapping / threshold survive. */
-  const update = (id, changes) =>
-    patch({
-      evals: applied.map((e) => {
-        const entryId = typeof e === "string" ? e : e.id;
-        if (entryId !== id) return e;
-        return { ...(typeof e === "string" ? { id: e } : e), ...changes };
-      }),
-      ...changed(`Edited ${nameOf(id)}`),
+  const update = (id, changes) => {
+    const after = applied.map((e) => {
+      const entryId = typeof e === "string" ? e : e.id;
+      if (entryId !== id) return e;
+      return { ...(typeof e === "string" ? { id: e } : e), ...changes };
     });
+    patch({ evals: after, ...changed(`Edited ${nameOf(id)}`, after) });
+  };
 
   /**
    * The picker returns a configured eval — template, judge model and the

@@ -257,22 +257,22 @@ export const brokenScenarios = (scenarios = [], env, envState) => {
  * Every count of "what Run will do" reads from here, so the header, the
  * Repeats picker and the live run agree.
  */
-export const runPlan = (env, envState, { only, envVersion, applies } = {}) => {
+export const runPlan = (env, envState, { only, envVersion } = {}) => {
   const label = envVersion || currentEnvVersion(env, envState)?.label;
   const pinned = { ...envState, activeEnvVersion: label };
   /* Re-proved rows, in place — the caller may persist them. */
   const reproofed = autoReprove(envState?.scenarios || [], env, pinned);
-  /* Archived scenarios (retired, before v7) stay in the set but never run. */
-  const inVersion = reproofed.filter((sc) => !laterThan(sc, label) && !sc.archived && !sc.retired);
+  /* Archived scenarios (retired, before v7) stay in the set but never run.
+     Proposed ones aren't in the environment until someone adds them. */
+  const inVersion = reproofed.filter((sc) => !laterThan(sc, label) && !sc.archived && !sc.retired && !sc.canary && !sc.proposed);
   const wanted = only?.length ? new Set(only) : null;
   const pool = wanted ? inVersion.filter((sc) => wanted.has(sc.id)) : inVersion;
   const run = [];
   const skipped = [];
   pool.forEach((sc) => {
-    /* `applies(row)` → { applies, reason } (decoupled.js applicabilityOf for
-       the agent version under test): not applicable isn't run or charged. */
-    const app = applies ? applies(sc) : null;
-    const why = app && !app.applies ? `Not applicable — ${app.reason || "an approved applicability rule"}.` : skipReasonFor(sc, env, pinned, label);
+    /* A stale scenario (an agent change removed a tool it needs) still
+       runs — it counts toward no decision, it isn't skipped. */
+    const why = skipReasonFor(sc, env, pinned, label);
     if (why) skipped.push({ ...sc, skipReason: why });
     else run.push(sc);
   });
@@ -360,8 +360,8 @@ export const PROOF_CHECKS = [
   {
     id: "exploit",
     name: "exploit_control",
-    desc: "A scripted agent told to cheat — an off-limits tool, claiming success, talking to the judge or the caller — must score 0.",
+    desc: "A scripted agent told to game the test — claiming success, talking to the judge or the caller — must score 0.",
     file: "scenarios/<id>/exploit_control.py",
-    code: "def exploit_control(world, scenario):\n    for exploit in EXPLOITS:  # off-limits call, false claim, judge or caller steering\n        world.reset()\n        trace = world.replay(exploit.against(scenario))\n        assert scenario.score(trace) == 0, f\"{exploit.id} passes\"\n",
+    code: "def exploit_control(world, scenario):\n    for exploit in EXPLOITS:  # false claim, judge or caller steering\n        world.reset()\n        trace = world.replay(exploit.against(scenario))\n        assert scenario.score(trace) == 0, f\"{exploit.id} passes\"\n",
   },
 ];

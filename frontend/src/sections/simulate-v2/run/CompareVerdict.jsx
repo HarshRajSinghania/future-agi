@@ -18,9 +18,26 @@ const PIN_EFFECT = {
   env: "rechecked where a scenario touches what changed",
   suite: "paired on stable ids",
   catalog: "re-graded, or criteria changed for a policy edit",
-  eval: "re-graded to one eval version",
+  eval: "re-graded to one set of evaluations",
   simulator: "changed until re-run",
   toolEnv: "rechecked on scenarios calling those tools",
+};
+
+/* Each part in plain words. The internal labels underneath (world, set,
+   catalogue and eval numbers, the dial's fingerprint) are never shown — only
+   whether the part matched; the simulated caller is named by its model. */
+const PIN_LABEL = {
+  env: "World and tools",
+  suite: "Scenarios",
+  catalog: "Sub-goals",
+  eval: "Evaluations",
+  simulator: "Simulated caller",
+  toolEnv: "Tool fidelity",
+};
+const pinLabel = (r) => PIN_LABEL[r.id] || r.label;
+const pinValue = (r) => {
+  if (r.id === "simulator") return r.same ? `same${r.values[0] ? ` · ${r.values[0]}` : ""}` : r.values.join(" → ");
+  return r.same ? "same" : "changed";
 };
 
 /**
@@ -32,7 +49,7 @@ const PIN_EFFECT = {
  * to refuse; what each run pinned sits one click away.
  */
 export default function CompareVerdict({
-  read, held, runs, identityOf, onExcludeRechecked, onFix, onWarning, questions, onAnswer, envHeadline = null,
+  read, held, runs, identityOf, onExcludeRechecked, onFix, onWarning, questions = [], onAnswer, envHeadline = null,
 }) {
   const [pinsOpen, setPinsOpen] = useState(false);
   if (!read) return null;
@@ -102,7 +119,6 @@ export default function CompareVerdict({
                 {`pass rate, on ${iv.n} of ${read.total} scenarios`}
               </Typography>
             </Tooltip>
-            {read.relation === "fork" && <Tag>cross-environment</Tag>}
             <Box flex={1} />
             {counts.rechecked > 0 && (
               <Tooltip arrow title="Rechecked pairs count in the delta, badged: a world element they touch changed, so the delta may mix agent and world effects.">
@@ -179,8 +195,8 @@ export default function CompareVerdict({
         </Stack>
       )}
 
-      {/* Trend across several agent versions (AC-14.13). */}
-      {trend && (
+      {/* Trend across several agent versions (AC-14.13) — on one environment version only. */}
+      {trend && !side && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2, py: 1, borderTop: "1px solid", borderColor: "divider", flexWrap: "wrap", rowGap: 0.5 }}>
           <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4 }}>Trend</Typography>
           {trend.n ? trend.points.map((p, i) => (
@@ -217,7 +233,7 @@ export default function CompareVerdict({
             <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>What each run pinned</Typography>
             <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", minWidth: 0 }}>
               {differs.length
-                ? `${differs.length} differ${differs.length === 1 ? "s" : ""}: ${differs.map((d) => d.label.toLowerCase()).join(", ")}`
+                ? `${differs.length} differ${differs.length === 1 ? "s" : ""}: ${differs.map((d) => pinLabel(d).toLowerCase()).join(", ")}`
                 : held.agents.length > 1 ? "only the agent varies" : "everything matches"}
               {` · ${held.agents.length > 1 ? held.agents.join(" → ") : `agent ${held.agents[0] || "—"}`}`}
             </Typography>
@@ -226,9 +242,9 @@ export default function CompareVerdict({
             <Box sx={{ px: 2, pb: 1.5, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", columnGap: 2.5, rowGap: 1 }}>
               {held.rows.map((r) => (
                 <Box key={r.id} minWidth={0}>
-                  <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{r.label}</Typography>
+                  <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{pinLabel(r)}</Typography>
                   <Typography noWrap sx={{ typography: "s2", fontWeight: r.same ? 500 : 700, minWidth: 0 }}>
-                    {r.same ? `same${r.values[0] ? ` · ${r.values[0]}` : ""}` : r.values.join(" → ")}
+                    {pinValue(r)}
                   </Typography>
                   {!r.same && PIN_EFFECT[r.id] && (
                     <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{PIN_EFFECT[r.id]}</Typography>
@@ -270,17 +286,6 @@ function Line({ icon, title, body, action }) {
 }
 Line.propTypes = { icon: PropTypes.string, title: PropTypes.string, body: PropTypes.string, action: PropTypes.node };
 
-function Tag({ children }) {
-  return (
-    <Typography
-      component="span"
-      sx={{ px: 0.75, py: 0.125, borderRadius: 0.5, typography: "s3", fontWeight: 700, color: "text.secondary", bgcolor: (t) => alpha(t.palette.text.primary, 0.06) }}
-    >
-      {children}
-    </Typography>
-  );
-}
-Tag.propTypes = { children: PropTypes.node };
 
 function Letter({ letter, color }) {
   return (

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { Box, Collapse, Fade, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { triedLabelOf } from "../../_mock/optimizer";
 import { clickable, focusRing } from "../../components/clickable";
 
 /*
@@ -118,7 +119,7 @@ export default function ImprovementProgress({ title, subtitle, steps, trials = [
                   <Typography sx={{ typography: "s3", fontWeight: 600, width: 76, flexShrink: 0, color: rejected ? RED : t.improved ? GREEN : "text.subtitle" }}>
                     {rejected ? "Rejected" : t.improved ? "New best" : "No better"}
                   </Typography>
-                  <Typography noWrap sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>{t.tried}</Typography>
+                  <Typography noWrap sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>{triedLabelOf(t, trials)}</Typography>
                 </Stack>
               );
             })}

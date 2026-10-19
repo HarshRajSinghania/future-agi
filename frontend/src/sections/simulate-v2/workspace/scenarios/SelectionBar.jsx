@@ -1,10 +1,8 @@
 import PropTypes from "prop-types";
-import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, Button, IconButton, Menu, MenuItem, Tooltip } from "@mui/material";
+import { Box, Stack, Typography, Button, IconButton, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
 import TrialsPicker from "./TrialsPicker";
-import { PRIORITIES } from "../../_mock/scenarioPriority";
 
 /**
  * Bulk-action bar for the scenario table.
@@ -14,7 +12,7 @@ import { PRIORITIES } from "../../_mock/scenarioPriority";
  * the table never jumps when selection toggles; only the contents swap.
  *
  * Hierarchy (left → right):
- *   ✓  N scenarios selected ×  ....  [Priority] [Must-pass] [edit] [delete] | Repeats [Run (N)]
+ *   ✓  N scenarios selected ×  ....  [Must-pass] [edit] [delete] | Repeats [Run (N)]
  *   context                          marks on the set     edit · delete    the run
  *
  * Run + Repeats stay anchored to the workspace header (top-right); its Run
@@ -26,8 +24,7 @@ const BTN_SX = {
   color: "text.primary", borderColor: "divider",
 };
 
-export default function SelectionBar({ count, onEdit, onDelete, onClear, onMustPass, onPriority, allMustPass = false, run = null }) {
-  const [priorityEl, setPriorityEl] = useState(null);
+export default function SelectionBar({ count, onEdit, onDelete, onClear, onMustPass, allMustPass = false, run = null }) {
   return (
     <Stack direction="row" alignItems="center" spacing={1} sx={{ minHeight: 30 }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ flexShrink: 0 }}>
@@ -55,27 +52,6 @@ export default function SelectionBar({ count, onEdit, onDelete, onClear, onMustP
 
       <Box sx={{ flex: 1 }} />
 
-      {/* Priority for every selected scenario; must-pass ones stay high. */}
-      {onPriority && (
-        <>
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={(e) => setPriorityEl(e.currentTarget)}
-            endIcon={<Iconify icon="solar:alt-arrow-down-linear" width={13} />}
-            sx={BTN_SX}
-          >
-            Priority
-          </Button>
-          <Menu anchorEl={priorityEl} open={!!priorityEl} onClose={() => setPriorityEl(null)} slotProps={{ paper: { sx: { minWidth: 160 } } }}>
-            {PRIORITIES.map((p) => (
-              <MenuItem key={p.id} onClick={() => { setPriorityEl(null); onPriority(p.id); }} sx={{ typography: "s2" }}>
-                {p.label}
-              </MenuItem>
-            ))}
-          </Menu>
-        </>
-      )}
       {/* Must-pass: every selected scenario becomes a release blocker —
           or, when they all already are, stops being one. */}
       {onMustPass && (
@@ -150,7 +126,6 @@ SelectionBar.propTypes = {
   onDelete: PropTypes.func.isRequired,
   onClear: PropTypes.func.isRequired,
   onMustPass: PropTypes.func,
-  onPriority: PropTypes.func,
   allMustPass: PropTypes.bool,
   run: PropTypes.shape({
     repeats: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),

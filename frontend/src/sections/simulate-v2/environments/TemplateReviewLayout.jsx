@@ -11,6 +11,13 @@ import { useEnvState } from "../store";
 import { runReadiness } from "../_mock/setupGaps";
 import useRunFitCheck from "../run/useRunFitCheck";
 import { builderRun } from "../_mock/builder";
+import { generatedPool } from "../_mock/scenarios";
+import { detectAddScenariosIntent } from "../_mock/addScenariosIntent";
+import { stampNewBatch, unanswerableNote, rejectedNote } from "../_mock/addScenarios";
+import { asProposal } from "../_mock/scenarioSources";
+import { currentUser } from "../_mock/scenarioProvenance";
+import { currentAgentVersion } from "../_mock/versions";
+import { subGoalCatalogOf } from "../_mock/envModel";
 import AssistantConsole from "../assistant/AssistantConsole";
 import DerivedPanels from "./DerivedPanels";
 import AgentReadReceipt from "./AgentReadReceipt";
@@ -34,10 +41,10 @@ const STAGE_ORDER = ["understand", "build", "scenarios"];
 
 /*
   Suggested chip prompts, keyed by the tab the user is currently
-  viewing. Each list is short (3-4) so the composer stays uncluttered
-  and each one is a concrete action the builder can actually take on
-  that tab's data. New tabs added to DerivedPanels should add an entry
-  here or they'll fall back to the Overview set.
+  viewing. Only prompts this chat really answers or acts on: questions
+  it answers from the environment, and "write more scenarios", which
+  proposes them for review like every other source. Edits it can't make
+  here aren't offered. New tabs fall back to the Overview set.
 */
 const CHIPS_BY_TAB = {
   overview: [
@@ -46,25 +53,19 @@ const CHIPS_BY_TAB = {
     "Explain the tools and rules to me",
   ],
   agent: [
-    "Add a new version of the agent",
-    "Roll back to the previous version",
-    "What changed between versions?",
+    "Which agent version does this test?",
+    "What's still missing before we can run?",
   ],
   contract: [
-    "When does a run end early?",
-    "Add an actor who wants something else",
+    "Explain the tools and rules to me",
     "How is a run scored?",
   ],
   scenarios: [
-    "Drop payments scenarios",
-    "Add a dispute case",
-    "Add an edge case where the tool fails",
-    "Rewrite the rushed-caller persona",
+    "Write 5 more scenarios",
+    "How is a run scored?",
   ],
   evals: [
-    "Add a grader for tool-choice correctness",
-    "Tighten the hand-off quality bar",
-    "Explain what each grader measures",
+    "How is a run scored?",
   ],
 };
 export default function TemplateReviewLayout({
@@ -121,7 +122,7 @@ export default function TemplateReviewLayout({
   const startDerivation = () => {
     /* The world's real tools travel with the source, so the narration counts
        what this environment has — not the demo agent's twelve. */
-    const source = { kind: "template", value: env.name, templateId: env.id, tools: env.tools || [] };
+    const source = narrationSource();
     const play = (stageId, delay = 0) => {
       const stage = builderRun(stageId, source);
       const turnId = `t-${stageId}-${Date.now()}`;
@@ -145,7 +146,7 @@ export default function TemplateReviewLayout({
       role: "assistant",
       steps: [{
         kind: "note",
-        text: `Building the ${env.name} template — ${scenarioCount} scenarios, ${(env.tools || []).length} tools, ${(env.rules || []).length} rules.`,
+        text: `Building ${env.name} — ${scenarioCount} scenarios, ${(env.tools || []).length} tools, ${(env.rules || []).length} rules.`,
       }],
     }]);
     play("understand", 600);
@@ -168,19 +169,41 @@ export default function TemplateReviewLayout({
   */
   const chips = useMemo(() => (CHIPS_BY_TAB[activeTab] || CHIPS_BY_TAB.overview), [activeTab]);
 
+  /* What the build narration reads: this world's own tools, the agent it
+     belongs to (so the narration says sealed or live honestly), and the
+     distinct sub-goals its scenarios use. */
+  const narrationSource = () => ({
+    kind: "template", value: env.name, templateId: env.id, tools: env.tools || [],
+    connectedAgent: envState?.agent || null,
+    subGoalCount: subGoalCatalogOf(env, { ...envState, scenarios: (envState?.scenarios || []).filter((r) => !r.proposed) }).length,
+  });
+
+  /*
+    The chat never claims a change it didn't make. Asking for more scenarios
+    proposes them (reviewed and added on the Scenarios tab, like every other
+    source); questions are answered from the environment itself; anything
+    else says plainly it can't be done here, and where it can.
+  */
+  const reply = (trimmed) => {
+    const intent = detectAddScenariosIntent(trimmed);
+    if (intent) {
+      const existing = new Set((envState?.scenarios || []).map((r) => r.id));
+      const fresh = generatedPool(env).filter((r) => !existing.has(r.id)).slice(0, intent.count);
+      if (!fresh.length) return "Every scenario this world can write is already here — remove a few on the Scenarios tab first.";
+      const batch = stampNewBatch(fresh.map((r) => ({ ...r, chatAsk: trimmed })), { env, envState, source: "chat", actor: currentUser() });
+      if (batch.rows.length) patch({ scenarios: [...(envState?.scenarios || []), ...batch.rows.map((r) => asProposal(r, "chat"))] });
+      const warn = [unanswerableNote(batch), rejectedNote(batch)].filter(Boolean).join(" ");
+      return `${batch.rows.length} proposed — review and add them on the Scenarios tab.${fresh.length < intent.count ? ` Only ${fresh.length} new ones could be written.` : ""}${warn ? ` ${warn}` : ""}`;
+    }
+    return answerFromEnvironment(trimmed, env, envState);
+  };
+
   const send = (text) => {
     const trimmed = (text || "").trim();
     if (!trimmed) return;
     setTurns((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", text: trimmed }]);
-    setRunning(true);
-    setTimeout(() => {
-      setRunning(false);
-      setTurns((prev) => [...prev, {
-        id: `a-${Date.now()}`,
-        role: "assistant",
-        steps: [{ kind: "note", text: mockAssistantReply(trimmed, scenarioCount) }],
-      }]);
-    }, 900);
+    const answer = reply(trimmed);
+    setTurns((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", steps: [{ kind: "note", text: answer }] }]);
   };
 
   /*
@@ -216,7 +239,7 @@ export default function TemplateReviewLayout({
       }],
     }]);
     const play = (stageId, delay = 0) => {
-      const stage = builderRun(stageId, { kind: "template", value: env.name, templateId: env.id, tools: env.tools || [] });
+      const stage = builderRun(stageId, narrationSource());
       const turnId = `t-${stageId}-${Date.now()}`;
       timers.current.push(setTimeout(() => {
         setTurns((prev) => [...prev, { id: turnId, role: "builder", title: stage.title, steps: [] }]);
@@ -263,7 +286,7 @@ export default function TemplateReviewLayout({
         direction="row" alignItems="center" spacing={2}
         sx={{ px: 3, py: 1.75, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
       >
-        <Tooltip arrow title="Back to Connect step">
+        <Tooltip arrow title="Back to environments">
           <IconButton size="small" onClick={onBack}>
             <Iconify icon="solar:alt-arrow-left-linear" width={17} />
           </IconButton>
@@ -308,7 +331,7 @@ export default function TemplateReviewLayout({
             </Stack>
           </Stack>
           <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>
-            Review the template — tweak on the left, preview on the right, commit when ready
+            {envState?.agent?.name ? `${envState.agent.name}'s environment — review it, then run it` : "Review the environment, then run it"}
           </Typography>
         </Box>
         {/*
@@ -472,20 +495,40 @@ function buildTemplateQuestions(env) {
   return questions.slice(0, 2);
 }
 
-function mockAssistantReply(userText, scenarioCount) {
-  const t = userText.toLowerCase();
-  if (/drop|remove|cut/.test(t) && /scenario/.test(t)) {
-    const n = Math.max(1, Math.min(scenarioCount, 3 + (userText.length % 5)));
-    return `Dropped ${n} scenario${n === 1 ? "" : "s"} matching that. ${scenarioCount - n} left. Preview on the right updated.`;
+/* Answers this chat gives from the environment itself — and, for anything
+   it can't change, where the change is made instead. Never a made-up edit. */
+function answerFromEnvironment(text, env, envState) {
+  const t = text.toLowerCase();
+  const tools = env?.tools || [];
+  const rules = env?.rules || [];
+  const scenarios = (envState?.scenarios || []).filter((r) => !r.proposed && !r.retired && !r.archived);
+  const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const asksQuestion = /\?$|^(what|which|how|why|explain|summari[sz]e|show|list|tell)\b/.test(t);
+  if (asksQuestion) {
+    if (/missing|before we can run|ready/.test(t)) {
+      const r = runReadiness(envState, env);
+      return r.ready ? "Nothing — it's ready to run." : `${r.reason}.`;
+    }
+    if (/version/.test(t)) {
+      const v = currentAgentVersion(envState)?.label;
+      return envState?.agent
+        ? `It tests ${envState.agent.name || "the agent"}${v ? ` ${v}` : ""}${envState.agentVersionPinned ? ", pinned" : ", following the version in production"}. Versions are changed on the agent's page.`
+        : "No agent is attached to this environment.";
+    }
+    if (/scor|grad|pass|fail/.test(t)) {
+      return "Each scenario passes when every critical sub-goal holds; supporting ones are reported. Evaluations score each conversation, and one you mark required fails a conversation that misses it.";
+    }
+    if (/tool|rule|contract/.test(t)) {
+      return `${plural(tools.length, "tool")}: ${tools.map((x) => x.name).join(", ") || "none"}. ${plural(rules.length, "rule")}: ${rules.join(" · ") || "none"}.`;
+    }
+    if (/summar|what'?s in|overview/.test(t)) {
+      return `${plural(scenarios.length, "scenario")}, ${plural(tools.length, "tool")}, ${plural(rules.length, "rule")} and ${plural((envState?.evals || []).length, "evaluation")}${envState?.agent?.name ? `, testing ${envState.agent.name}` : ""}.`;
+    }
   }
-  if (/add/.test(t) && /scenario/.test(t)) {
-    return "Added one scenario — you'll see it in the list on the right. Anything else, or ready to commit?";
-  }
-  if (/rule/.test(t)) {
-    return "Updated the rule. The grader will enforce the tighter wording on the next run.";
-  }
-  if (/tool/.test(t)) {
-    return "Noted. Tool schema updated — fit check re-ran and still passes.";
-  }
-  return "Understood. Applied that to the environment — preview on the right reflects the change. Ready when you are.";
+  const where = /eval|grader|quality bar/.test(t) ? "the Evaluations tab"
+    : /rule|tool|actor|contract/.test(t) ? "the Contract tab"
+      : /version|roll ?back/.test(t) ? "the agent's page"
+        : /scenario|persona|case/.test(t) ? "the Scenarios tab"
+          : "the tabs on the right";
+  return `I can't make that change from this chat. You can do it on ${where} — or ask me to write more scenarios, which I'll propose for review.`;
 }

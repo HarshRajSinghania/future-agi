@@ -47,7 +47,7 @@ export default function IssueBriefButton({ issue, agent, sx }) {
       model: def?.model?.visible ? def.model.name : null,
       /* Without an environment there is nothing to run a branch against yet —
          the issue's own traces become the scenarios. */
-      submit: env ? undefined : `Push a branch and run \`fagi improve submit --issue ${issue?.cluster_id}\`. Future AGI builds scenarios from this issue's traces, runs your branch against the held-back set and reports a verdict.`,
+      submit: env ? undefined : `Push a branch, then call the \`submit_candidate\` tool (Future AGI MCP server or Claude Code plugin) with the commit and issue ${issue?.cluster_id}. Future AGI builds scenarios from this issue's traces, runs your branch against the held-back set and computes the verdict — read it with \`get_verdict\`.`,
     });
   };
 

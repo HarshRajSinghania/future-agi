@@ -9,14 +9,19 @@ import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import { SectionCard } from "../components/primitives";
 import TwinLogo from "../components/TwinLogo";
-import SecretRefField from "../agents/connect/SecretRefField";
+import { useConnectedAgents } from "../store";
 import { twinById, twinsByCategory } from "../_mock/twins";
 import { useCreateTwinEnv, defaultEnvName } from "../twins/useCreateTwinEnv";
 import { clickable, focusRing } from "../components/clickable";
+import WorldAgentPicker from "./AgentChoice";
+import { buildableAgentsOf } from "./worldSource";
 
 /**
- * Create an environment whose world is a live sandbox of one or more
- * third-party services (Slack, Notion, Salesforce, etc.).
+ * Create an agent's environment whose world is a sandbox of one or more
+ * third-party services (Slack, Notion, Salesforce, etc.). Like every
+ * environment it belongs to one agent in Agents — picked (or connected)
+ * here — and the sandbox is the world its build starts from. Sandboxes are
+ * kept until the environment is deleted; nothing expires.
  *
  * This is one of three entry points to `New environment` — equal peer
  * to "Build from your agent" and "Use a template". It exists because
@@ -61,10 +66,10 @@ export default function NewTwinEnvironment() {
         </Tooltip>
         <Box flex={1}>
           <Typography sx={{ typography: "m2", fontWeight: 600 }}>
-            Compose a multi-clone environment
+            SaaS sandbox
           </Typography>
           <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>
-            Pick the services your agent operates across. We provision a live sandbox for each, seeded to your prompt.
+            Pick the apps your agent works in and the agent itself. Each app gets a sandbox, seeded to your description.
           </Typography>
         </Box>
       </Stack>
@@ -74,10 +79,8 @@ export default function NewTwinEnvironment() {
 }
 
 /**
- * The composer body — twin picker + seed prompt + lifetime + name +
- * provision action. Extracted so the Environments → Templates → Twins
- * tab can embed it inline. When embedded there is no back-arrow header;
- * the gallery tabs provide navigation context.
+ * The composer body — app picker + the agent + seed prompt + name +
+ * set-up action. Extracted so it can be embedded without the page header.
  */
 export function TwinComposer({ preselect }) {
   const createTwinEnv = useCreateTwinEnv();
@@ -93,25 +96,11 @@ export function TwinComposer({ preselect }) {
     (TwinProvisioningView), not in a modal on this one.
   */
   const [provisioning, setProvisioning] = useState(false);
-  /*
-    Lifetime: "persistent" keeps the env until the user deletes it;
-    a number of minutes (10, 60, 240) makes it short-lived — the env
-    self-expires and the workspace shows a countdown. Short-lived is
-    the primary Arga model because it guarantees clean-slate
-    reproducibility, but Future AGI's evals-first users typically
-    want persistent so they can compare runs over time — that's why
-    persistent is the default here.
-  */
-  const [ttl, setTtl] = useState("persistent");
-  /*
-    Agent-connection fields — SDK endpoint is required to hand off to
-    the review layout; auth token is optional (many local/preview
-    agents run without one). Kept here rather than on a separate page
-    so the whole compose flow is one form.
-  */
-  const [sdkEndpoint, setSdkEndpoint] = useState("");
-  const [authToken, setAuthToken] = useState("");
-  const [showAuth, setShowAuth] = useState(false);
+  /* The agent this environment belongs to — one in Agents, never a raw
+     endpoint typed here. Its versions and identity come with it. */
+  const { agents: all } = useConnectedAgents();
+  const [agentId, setAgentId] = useState(null);
+  const agent = buildableAgentsOf(all).find((a) => a.id === agentId) || null;
 
   const cats = useMemo(() => twinsByCategory(), []);
   const filteredCats = useMemo(() => {
@@ -124,7 +113,7 @@ export function TwinComposer({ preselect }) {
 
   const toggle = (id) => setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
 
-  const canContinue = selected.length > 0 && !!sdkEndpoint.trim();
+  const canContinue = selected.length > 0 && !!agent;
 
   /*
     Provision now: mint the env with status="provisioning" and navigate
@@ -133,15 +122,7 @@ export function TwinComposer({ preselect }) {
   */
   const provision = () => {
     setProvisioning(true);
-    createTwinEnv(selected, {
-      name,
-      seedPrompt,
-      ttlMinutes: ttl === "persistent" ? null : Number(ttl),
-      agent: {
-        sdkEndpoint: sdkEndpoint.trim(),
-        authTokenRef: authToken.trim() || null,
-      },
-    });
+    createTwinEnv(selected, { name, seedPrompt, agent });
   };
 
   return (
@@ -152,14 +133,14 @@ export function TwinComposer({ preselect }) {
         "twin-backed envs", so a short reminder is enough.
       */}
       <Typography sx={{ typography: "s2", color: "text.subtitle", mb: 2 }}>
-        Your agent calls the real SDKs — Slack, Notion, Salesforce — but the calls land in a sandbox we own, seeded to your prompt and torn down between runs. Evals inspect what actually landed, not just which tools were called.
+        Your agent calls the real SDKs — Slack, Notion, Salesforce — but the calls land in a sandbox, seeded to your description and reset between runs. Evaluations check what actually landed, not just which tools were called.
       </Typography>
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
         <Stack spacing={2}>
           <SectionCard
-            title="1 · Pick the clones"
-            subtitle={`${selected.length} selected — one live sandbox per service. Multi-select for scenarios that chain across services.`}
+            title="1 · Pick the apps"
+            subtitle={`${selected.length} selected — one sandbox per app. Pick several for scenarios that chain across apps.`}
             action={
               <TextField
                 size="small" value={q} onChange={(e) => setQ(e.target.value)}
@@ -214,53 +195,22 @@ export function TwinComposer({ preselect }) {
         </Stack>
 
         {/*
-          Right rail — steps 2–4 + provision, sticky so they stay in
+          Right rail — steps 2–4 + set up, sticky so they stay in
           view as the user scrolls the picker. Compact section cards so
-          all three (starting state, lifetime, name) plus the CTA fit
+          all three (agent, starting state, name) plus the CTA fit
           in one viewport at typical laptop heights.
         */}
         <Box sx={{ position: { lg: "sticky" }, top: { lg: 16 }, alignSelf: "flex-start" }}>
           <Stack spacing={2}>
-            <SectionCard
-              title="2 · Connect your agent"
-              subtitle="Where the sandbox should call your agent."
-            >
-              <Stack spacing={1.5} sx={{ p: 2 }}>
-                <Box>
-                  <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>
-                    Agent SDK endpoint <Box component="span" sx={{ color: "error.main" }}>*</Box>
-                  </Typography>
-                  <TextField
-                    fullWidth size="small"
-                    value={sdkEndpoint}
-                    onChange={(e) => setSdkEndpoint(e.target.value)}
-                    placeholder="https://api.yourapp.com/agent/step"
-                    sx={{ "& .MuiInputBase-input": { typography: "s2", fontFamily: "ui-monospace, Menlo, monospace" } }}
-                  />
-                </Box>
-                <Box>
-                  <Button
-                    size="small"
-                    onClick={() => setShowAuth((o) => !o)}
-                    startIcon={<Iconify icon={showAuth ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"} width={12} />}
-                    sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", px: 0.5 }}
-                  >
-                    {showAuth ? "Hide auth token" : "Auth token (optional)"}
-                  </Button>
-                  {showAuth && (
-                    <Box sx={{ mt: 1 }}>
-                      {/* A reference, never the token — the same field the connect flows use. */}
-                      <SecretRefField
-                        fullWidth
-                        value={authToken}
-                        onChange={setAuthToken}
-                        placeholder="vault://acme/sim/endpoint_token"
-                        helper="Only if your endpoint requires an Authorization header. A path in your secret manager — the token itself never leaves it."
-                      />
-                    </Box>
-                  )}
-                </Box>
-              </Stack>
+            <SectionCard title="2 · Your agent">
+              <Box sx={{ p: 2 }}>
+                <WorldAgentPicker
+                  value={agentId}
+                  onChange={setAgentId}
+                  title="Agent"
+                  subtitle="It calls the sandboxed apps."
+                />
+              </Box>
             </SectionCard>
 
             <SectionCard
@@ -280,27 +230,7 @@ export function TwinComposer({ preselect }) {
               </Box>
             </SectionCard>
 
-            <SectionCard
-              title="4 · Lifetime"
-              subtitle="How long the sandbox stays alive. Short-lived environments auto-expire."
-            >
-              <Box sx={{ p: 2 }}>
-                <Stack spacing={0.5}>
-                  {TTL_OPTIONS.map((opt) => (
-                    <TtlChip
-                      key={opt.value}
-                      label={opt.label}
-                      sub={opt.sub}
-                      icon={opt.icon}
-                      on={ttl === opt.value}
-                      onClick={() => setTtl(opt.value)}
-                    />
-                  ))}
-                </Stack>
-              </Box>
-            </SectionCard>
-
-            <SectionCard title="5 · Name it (optional)">
+            <SectionCard title="4 · Name it (optional)">
               <Box sx={{ p: 2 }}>
                 <TextField
                   fullWidth size="small"
@@ -324,15 +254,15 @@ export function TwinComposer({ preselect }) {
                 sx={{ typography: "s1", fontWeight: 700, py: 1.25 }}
               >
                 {provisioning
-                  ? "Provisioning sandbox…"
+                  ? "Setting up…"
                   : canContinue
-                    ? `Provision ${selected.length} clone${selected.length === 1 ? "" : "s"}`
+                    ? `Set up ${selected.length} sandbox${selected.length === 1 ? "" : "es"}`
                     : selected.length === 0
-                      ? "Pick at least one clone"
-                      : "Add your agent endpoint"}
+                      ? "Pick at least one app"
+                      : "Pick the agent"}
               </Button>
               <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 1, textAlign: "center" }}>
-                Takes ~30s in production. Prototype resolves quickly.
+                Takes about 30 seconds.
               </Typography>
             </Box>
           </Stack>
@@ -363,48 +293,6 @@ ValueRow.propTypes = {
   icon: PropTypes.string,
   title: PropTypes.string,
   body: PropTypes.string,
-};
-
-/*
-  TTL choices. Persistent is first because it matches how Future AGI
-  users track env-run history over time; the ephemeral tiers below
-  cover Arga-style one-off testing.
-*/
-const TTL_OPTIONS = [
-  { value: "persistent", label: "Persistent", sub: "Keeps state until you delete", icon: "solar:bookmark-linear" },
-  { value: "10", label: "10 minutes", sub: "Quick throwaway test", icon: "solar:clock-circle-linear" },
-  { value: "60", label: "1 hour", sub: "One session", icon: "solar:clock-circle-linear" },
-  { value: "240", label: "4 hours", sub: "A working session", icon: "solar:clock-circle-linear" },
-];
-
-function TtlChip({ label, sub, icon, on, onClick }) {
-  return (
-    <Stack direction="row" alignItems="center" spacing={1}
-      {...clickable(onClick, { role: "radio", checked: on })}
-      sx={{ ...focusRing,
-        px: 1.25, py: 1, borderRadius: 1, cursor: "pointer",
-        border: "1px solid",
-        borderColor: (th) => on
-          ? (th.palette.mode === "dark" ? alpha(th.palette.text.primary, 0.4) : th.palette.primary.main)
-          : th.palette.divider,
-        bgcolor: (th) => on
-          ? (th.palette.mode === "dark" ? alpha(th.palette.text.primary, 0.06) : alpha(th.palette.primary.main, 0.05))
-          : "background.paper",
-        "&:hover": { borderColor: (th) => on ? undefined : th.palette.text.disabled },
-        transition: "border-color .12s ease",
-      }}>
-      <Iconify icon={on ? "solar:check-circle-bold" : icon} width={14}
-        sx={{ color: on ? "primary.main" : "text.subtitle", flexShrink: 0 }} />
-      <Typography sx={{ typography: "s2", fontWeight: 600, flexShrink: 0 }}>{label}</Typography>
-      <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>
-        {sub}
-      </Typography>
-    </Stack>
-  );
-}
-TtlChip.propTypes = {
-  label: PropTypes.string, sub: PropTypes.string, icon: PropTypes.string,
-  on: PropTypes.bool, onClick: PropTypes.func,
 };
 
 function seedPromptExample(services) {

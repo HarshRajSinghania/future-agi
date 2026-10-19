@@ -23,19 +23,23 @@ const SANDBOX_MOCKS = {
   gmail: GmailSandboxMock,
   salesforce: SalesforceSandboxMock,
 };
-import { packStats } from "../_mock/scenarios";
-import { effectiveEnv } from "../_mock/rlContract";
+import { goalLabel, packStats } from "../_mock/scenarios";
+import { contractUseCasesOf, effectiveEnv } from "../_mock/rlContract";
 import { contractFor } from "../_mock/contract";
 import { provenanceFor } from "../_mock/provenance";
 import { OriginChip, SectionCard, EmptyState } from "../components/primitives";
 import CapabilityGraph from "./CapabilityGraph";
 import ToolFitBanner from "./ToolFitBanner";
-import { isConnectOnly } from "../_mock/envModel";
+import { isConnectOnly, rulesOf } from "../_mock/envModel";
+import { currentEnvVersion, scenariosInSet } from "../_mock/versions";
+import { runListCount } from "../_mock/runList";
 import { toolSettingOf } from "../_mock/toolEnv";
 import { unexplainedMoveOf } from "../_mock/resultDrift";
 import ConnectOnlyWorld, { ResultsMovedNote, EnvironmentKindNote } from "./ConnectOnlyWorld";
 import { BlockingGapsInline } from "./SetupGapsPanel";
 import EnvAgentLine from "./EnvAgentLine";
+import useEnvViewAs from "./useEnvViewAs";
+import { agentNameOf } from "../_mock/agentRegistry";
 import { clickable, focusRing } from "../components/clickable";
 
 /**
@@ -55,6 +59,10 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
   /* The agent lives in Agents; "Connect agent" here opens the picker in place. */
   const [pick, setPick] = useState(0);
   const go = (step) => (step === "agent" ? setPick(Date.now()) : onGo?.(step));
+  /* Viewing an older version (?viewAs=) is read-only: no rebuilds, switches
+     or answers from here — those belong to the version in use. */
+  const { viewAs } = useEnvViewAs(env, envState);
+  const readOnly = locked || !!viewAs;
 
   const surface = getSurface(env.surface);
   const domain = getDomain(env.domain);
@@ -64,6 +72,8 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
   const shown = effectiveEnv(env, envState);
   const stats = packStats(shown);
   const contract = contractFor(env);
+  /* The use cases as they stand — corrections included, the same list the Contract tab shows. */
+  const useCases = contractUseCasesOf(env, envState).map((u) => u.text);
   /* Whether the environment already carries a world — either read
      from a connected agent, or (for scratch envs) derived from the
      flow description on adopt. Drives whether we show the capability
@@ -180,7 +190,7 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         <BlockingGapsInline
           env={env}
           envState={envState}
-          patch={locked ? null : patch}
+          patch={readOnly ? null : patch}
           onGo={go}
           skip={agentConnected ? [] : ["no-agent"]}
           sx={{ mb: 2 }}
@@ -188,9 +198,9 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
       )}
 
       {/* The agent this environment tests, in one line — its detail is the Agent tab. */}
-      <EnvAgentLine env={env} envState={envState} patch={patch} locked={locked} onFork={onFork} openPick={pick} />
+      <EnvAgentLine env={env} envState={envState} patch={patch} locked={readOnly} onFork={onFork} openPick={pick} />
 
-      {!locked && <AgentRefreshBanner env={env} envState={envState} patch={patch} />}
+      {!readOnly && <AgentRefreshBanner env={env} envState={envState} patch={patch} />}
 
       {/* State-of-the-env summary tiles + latest run — the "how's this
           env doing right now?" answer that used to be missing. Each
@@ -247,10 +257,10 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         <Grid item xs={12} md={7}>
           <SectionCard title="Use cases" subtitle="What it is actually for">
             <Stack sx={{ p: 2.5 }} spacing={1}>
-              {contract.useCases.map((u) => (
+              {useCases.map((u) => (
                 <Stack key={u} direction="row" spacing={1.25} alignItems="flex-start">
                   <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "text.subtitle", flexShrink: 0, mt: "7px" }} />
-                  <Typography sx={{ typography: "s2", color: "text.secondary" }}>{u}</Typography>
+                  <Typography sx={{ typography: "s2", color: "text.secondary" }}>{goalLabel(u)}</Typography>
                 </Stack>
               ))}
             </Stack>
@@ -380,20 +390,21 @@ OverviewPanel.propTypes = {
  * StateSummary — the state-of-the-env answer that Overview should lead with.
  *
  * Four tiles (Scenarios, Evaluations, Runs, Rules) each clickable to jump to
- * the relevant tab. Every number comes from the same state
- * Runs/Scenarios/Evaluations tabs read from, so the summary and the detail
+ * the relevant tab. Every number comes from the same selector the tab and
+ * the version bar use — scenarios in the set (scenariosInSet), the Runs
+ * list's own count, rules with their edits — so the summary and the detail
  * can't drift.
  */
 function StateSummary({ env, envState, onGo }) {
-  const scenarioCount = envState?.scenarios?.length || 0;
+  const scenarioCount = scenariosInSet(envState, currentEnvVersion(env, envState)?.label).length;
   const evalCount = envState?.evals?.length || 0;
-  const runs = envState?.runs || [];
-  const ruleCount = env?.rules?.length || 0;
+  const runCount = runListCount(env, envState);
+  const ruleCount = rulesOf(env, envState).length;
 
   const tiles = [
     { id: "scenarios", label: "Scenarios",     value: scenarioCount, icon: "solar:layers-minimalistic-linear", to: "scenarios" },
     { id: "evals",     label: "Evaluations",   value: evalCount,     icon: "solar:shield-check-linear",        to: "evals" },
-    { id: "runs",      label: "Runs",          value: runs.length,   icon: "solar:play-circle-linear",         to: "runs", disabled: runs.length === 0 },
+    { id: "runs",      label: "Runs",          value: runCount,      icon: "solar:play-circle-linear",         to: "runs", disabled: runCount === 0 },
     { id: "rules",     label: "Rules",         value: ruleCount,     icon: "solar:shield-keyhole-linear",      to: "contract" },
   ];
 
@@ -639,8 +650,10 @@ export function TwinSandboxSection({ env, envState }) {
           The bare "Connect agent" button only appears for envs that
           arrived here without a connected agent (legacy adopt path).
         */}
-        {envState?.agent?.values?.sdkEndpoint ? (
-          <Tooltip arrow title={`Connected: ${envState.agent.values.sdkEndpoint}`}>
+        {/* Connected = a real agent from Agents (not a template's placeholder);
+            a SaaS-sandbox agent has no endpoint of its own, so that isn't the test. */}
+        {envState?.agent && !envState.agent.seeded ? (
+          <Tooltip arrow title={`Connected: ${envState.agent.name || agentNameOf(envState.agent) || "your agent"}${envState.agent.values?.sdkEndpoint ? ` · ${envState.agent.values.sdkEndpoint}` : ""}`}>
             <Stack
               direction="row" alignItems="center" spacing={0.75}
               {...clickable(() => setConnectOpen(true))}
@@ -737,7 +750,7 @@ function TwinBackingPanel({ backing, envState }) {
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
         <Iconify icon="solar:server-square-linear" width={14} sx={{ color: "primary.main" }} />
         <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.primary", letterSpacing: 0.5 }}>
-          TWIN-BACKED WORLD
+          COPIED SERVICES
         </Typography>
         <Chip
           size="small" label={anyActivity ? "Active" : "Ready"}
@@ -959,12 +972,12 @@ function TwinBackedSections({ env, envState, onGo }) {
 
   return (
     <>
-      <GroupHeading>Clone surface</GroupHeading>
+      <GroupHeading>Sandboxed apps</GroupHeading>
       <Grid container spacing={2} alignItems="flex-start" sx={{ mb: 3 }}>
         {/* ── services list ── */}
         <Grid item xs={12} md={7}>
           <SectionCard
-            title="Clone services"
+            title="Sandboxed apps"
             subtitle={`${services.length} sandbox${services.length === 1 ? "" : "es"} provisioned for this environment`}
           >
             <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
@@ -1001,22 +1014,27 @@ function TwinBackedSections({ env, envState, onGo }) {
             subtitle="Where the sandbox calls your agent"
           >
             <Stack sx={{ p: 2.5 }} spacing={1.25}>
+              {/* Connected = a real agent from Agents, named; its endpoint
+                  only when it has one (a SaaS-sandbox agent doesn't). */}
               <Stack direction="row" alignItems="center" spacing={1}>
                 <Iconify icon="solar:link-circle-linear" width={13} sx={{ color: "primary.main" }} />
-                <Typography sx={{
-                  typography: "s2", fontWeight: 600,
-                  fontFamily: "ui-monospace, Menlo, monospace",
-                  flex: 1, minWidth: 0,
-                }} noWrap>
-                  {agent?.values?.sdkEndpoint || "Not connected"}
+                <Typography sx={{ typography: "s2", fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
+                  {agent && !agent.seeded ? agent.name || agentNameOf(agent) || "Your agent" : "Not connected"}
                 </Typography>
               </Stack>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Iconify icon="solar:key-linear" width={13} sx={{ color: "text.subtitle" }} />
-                <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                  {agent?.values?.authToken ? "Auth token set" : "No auth header — endpoint is open"}
-                </Typography>
-              </Stack>
+              {agent && !agent.seeded && agent.values?.sdkEndpoint && (
+                <>
+                  <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", fontFamily: "ui-monospace, Menlo, monospace" }}>
+                    {agent.values.sdkEndpoint}
+                  </Typography>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <Iconify icon="solar:key-linear" width={13} sx={{ color: "text.subtitle" }} />
+                    <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                      {agent.values.authToken ? "Auth token set" : "No auth header — endpoint is open"}
+                    </Typography>
+                  </Stack>
+                </>
+              )}
               {agent?.connectedAt && (
                 <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
                   Connected {timeAgo(agent.connectedAt)}
@@ -1088,7 +1106,7 @@ function TwinBackedSections({ env, envState, onGo }) {
         <Grid item xs={12}>
           <SectionCard
             title="End-state graders"
-            subtitle="Clone evals inspect what actually landed after each run — not just whether a tool was called"
+            subtitle="Sandbox evals inspect what actually landed after each run — not just whether a tool was called"
             action={
               <Button size="small" onClick={() => onGo?.("evals")}
                 sx={{ typography: "s3", fontWeight: 700 }}
@@ -1150,8 +1168,8 @@ function ApiSurfaceBadge({ apiLevel }) {
   return (
     <Tooltip arrow title={
       isUi
-        ? "This clone exposes both an API for the agent to call and a browsable UI you can open to inspect state."
-        : "This clone exposes an API only. Inspect state via the OpenAPI viewer or the Raw requests tab in a run."
+        ? "This sandbox exposes both an API for the agent to call and a browsable UI you can open to inspect state."
+        : "This sandbox exposes an API only. Inspect state via the OpenAPI viewer or the Raw requests tab in a run."
     }>
       <Typography sx={{
         typography: "s3", fontWeight: 700, letterSpacing: 0.3,
@@ -1194,7 +1212,7 @@ function ApiOnlySandboxPanel({ twin, endpoint, envState }) {
         <TwinLogo twin={twin} width={22} />
         <Box flex={1} minWidth={0}>
           <Typography sx={{ typography: "s2", fontWeight: 700 }}>
-            {twin?.name} clone — API only
+            {twin?.name} copy — API only
           </Typography>
           <Typography sx={{
             typography: "s3", color: "text.subtitle",
@@ -1230,9 +1248,9 @@ function ApiOnlySandboxPanel({ twin, endpoint, envState }) {
             How to inspect state
           </Typography>
           <Stack spacing={0.75}>
-            <InspectRow icon="solar:code-square-linear" title="OpenAPI viewer" body="Above · every endpoint the clone serves, with request/response shapes." />
+            <InspectRow icon="solar:code-square-linear" title="OpenAPI viewer" body="Above · every endpoint the sandbox serves, with request/response shapes." />
             <InspectRow icon="solar:list-linear" title="Raw requests tab" body="On any run drawer · chronological HTTP log with request + response payloads." />
-            <InspectRow icon="solar:pulse-2-linear" title="Clone state timeline" body="On any run drawer · semantic view of what the agent wrote to this clone." />
+            <InspectRow icon="solar:pulse-2-linear" title="Sandbox state timeline" body="On any run drawer · semantic view of what the agent wrote to this sandbox." />
           </Stack>
         </Box>
         <Box>

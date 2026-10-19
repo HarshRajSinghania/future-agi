@@ -583,12 +583,12 @@ export const ENVIRONMENT_TEMPLATES = [
   {
     id: "env-twin-support-desk",
     agentType: "twin_backed",
-    name: "Support desk (twin)",
+    name: "Support desk",
     surface: "chat",
     domain: "support",
     tagline: "Slack + Notion + Gmail sandbox, seeded with real support state",
     description:
-      "A clone-backed environment for a support copilot. Slack channels seeded with active tickets, a Notion knowledge base of playbooks and product FAQs, and a Gmail inbox with unread refund requests. Runs restart against a fresh copy of the same seeded state every time.",
+      "A sandbox of Slack, Notion and Gmail for a support copilot. Slack channels seeded with active tickets, a Notion knowledge base of playbooks and product FAQs, and a Gmail inbox with unread refund requests. Runs restart against a fresh copy of the same seeded state every time.",
     official: true,
     popularity: 2140,
     difficulty: "Advanced",
@@ -623,12 +623,12 @@ export const ENVIRONMENT_TEMPLATES = [
   {
     id: "env-twin-revops",
     agentType: "twin_backed",
-    name: "RevOps copilot (twin)",
+    name: "RevOps copilot",
     surface: "email",
     domain: "sales",
     tagline: "Gmail + Salesforce + Notion twin — email in, CRM writes out",
     description:
-      "A clone-backed environment for a RevOps copilot. Gmail is the inbound surface (renewal questions, refund asks, product asks from CSMs), Salesforce holds accounts + opportunities, and Notion carries the enablement playbooks. Each run resets both the inbox and the CRM to the same seed.",
+      "A sandbox of Gmail, Salesforce and Notion for a RevOps copilot. Gmail is the inbound surface (renewal questions, refund asks, product asks from CSMs), Salesforce holds accounts + opportunities, and Notion carries the enablement playbooks. Each run resets both the inbox and the CRM to the same seed.",
     official: true,
     popularity: 1520,
     difficulty: "Advanced",

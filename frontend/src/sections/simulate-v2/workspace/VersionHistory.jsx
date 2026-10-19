@@ -1,19 +1,22 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Button, Menu, Stack, Typography } from "@mui/material";
+import { Box, Button, Menu, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { currentAgentVersion } from "../_mock/versions";
+import { agentVersions, currentAgentVersion } from "../_mock/versions";
+import { releasedNote } from "../agents/versionRelease";
+import { useOptionalSimStore } from "../store";
 import { versionHistoryOf } from "../_mock/nudgeEffects";
-import { snapshotHistoryOf, snapshotPartsLine, SNAPSHOT_KIND_LABEL } from "../_mock/envSnapshot";
+import { snapshotHistoryOf, SNAPSHOT_KIND_LABEL } from "../_mock/envSnapshot";
 import { ago } from "../agents/agentViewUtils";
 import useEnvViewAs from "./useEnvViewAs";
 import { clickable, focusRing } from "../components/clickable";
+import RollbackDialog from "./RollbackDialog";
 
 const ACCENT = "#7857FC";
 const MONO = "ui-monospace, Menlo, monospace";
 const runs = (n) => `${n} run${n === 1 ? "" : "s"}`;
-const PART_NAME = { env: "World", set: "Scenarios", catalog: "Sub-goals", eval: "Evaluations", caller: "Caller" };
+const PART_NAME = { env: "World and contract", set: "Scenarios", catalog: "Sub-goals", eval: "Evaluations", caller: "Simulated caller" };
 
 /**
  * Version history: one list of environment versions, newest first.
@@ -23,23 +26,37 @@ const PART_NAME = { env: "World", set: "Scenarios", catalog: "Sub-goals", eval: 
  * the sub-goal catalogue, the evaluations and the simulated caller. Any change
  * to any of them is the next version; an agent change never is (envSnapshot.js).
  * Each row reads "v7 · 3 scenarios added from ISS-4529 · 2h ago" and opens to
- * the parts underneath it (world E v3 · scenarios s5 · …) and the scenario and
- * sub-goal bumps that made it.
+ * what changed in it, in words.
  *
- * "Use" makes an older world the one runs use; "View" opens it read-only.
- * Both are offered on the newest version of each world only — an older
- * version on the same world differs in its scenario set or evals, which are
- * not rolled back.
+ * "Roll back" makes the next version with everything as in an older one —
+ * world, scenarios, sub-goals, evaluations and caller (RollbackDialog says
+ * what moves first) — and is offered on every older version. "View" opens a
+ * world read-only, so it's offered on the newest version of each world.
  */
 export default function VersionHistoryMenu({ anchor, onClose, env, envState, patch, readOnly = false }) {
   const snapshots = snapshotHistoryOf(env, envState);
-  const agents = versionHistoryOf(env, envState).agent;
+  /* A released improvement's note drops its "not live until released" tail —
+     the agent's Versions tab reads it the same way. Released anywhere the
+     agent is tested counts, as Agents reads it. */
+  const store = useOptionalSimStore();
+  const records = new Map(agentVersions(envState).map((v) => [v.label, v]));
+  const releasedHere = new Set([envState, ...Object.values(store?.state?.byEnv || {})]
+    .flatMap((es) => (es?.releases || []).map((r) => r.version)));
+  const agents = versionHistoryOf(env, envState).agent.map((row) => {
+    const v = records.get(row.label);
+    return v?.note ? { ...row, summary: releasedNote(v, v.status !== "draft" || releasedHere.has(v.label)) } : row;
+  });
   const activeAgent = currentAgentVersion(envState)?.label;
   const { viewAs, setViewAs } = useEnvViewAs(env, envState);
   const [open, setOpen] = useState(null);
-  const canSwitch = !readOnly && !!patch;
+  const [rollbackTo, setRollbackTo] = useState(null);
+  const canSwitch = !readOnly && !!patch && !viewAs;
+  /* An environment left on an older world by an earlier pointer switch:
+     the latest is one click back, as itself — not a rollback. */
+  const onOlder = snapshots.some((v) => v.latest && !v.current) && snapshots.find((v) => v.current)?.parts.env !== snapshots.find((v) => v.latest)?.parts.env;
 
   return (
+    <>
     <Menu
       anchorEl={anchor}
       open={!!anchor}
@@ -74,6 +91,9 @@ export default function VersionHistoryMenu({ anchor, onClose, env, envState, pat
           const isViewed = v.worldHead && v.parts.env === viewAs;
           const expanded = open === v.label;
           const offer = v.worldHead && !isActive;
+          /* "Use latest" puts the pointer back on the newest world; every other
+             older version can be rolled back to. */
+          const useLatest = v.latest && onOlder;
           return (
             <Box
               key={v.label}
@@ -95,14 +115,23 @@ export default function VersionHistoryMenu({ anchor, onClose, env, envState, pat
                     {isActive && <Badge label="active" tone={ACCENT} />}
                     {isViewed && <Badge label="viewing" />}
                     <Box flex={1} />
-                    {offer && canSwitch && (
-                      <Button
-                        size="small"
-                        onClick={(e) => { e.stopPropagation(); patch({ activeEnvVersion: v.parts.env }); onClose(); }}
-                        sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0, px: 0.75, py: 0, height: 20 }}
-                      >
-                        Use
-                      </Button>
+                    {/* Roll back makes the next version from this one's world and
+                        contract — the dialog says what moves before it does. */}
+                    {!isActive && canSwitch && (
+                      <Tooltip arrow title={useLatest ? "Runs use the latest world again." : `Make the next version with everything as in ${v.label} — world, scenarios, sub-goals, evaluations and caller. Nothing is deleted.`}>
+                        <Button
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (useLatest) patch({ activeEnvVersion: v.parts.env });
+                            else setRollbackTo(v.label);
+                            onClose();
+                          }}
+                          sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0, px: 0.75, py: 0, height: 20 }}
+                        >
+                          {useLatest ? "Use latest" : "Roll back"}
+                        </Button>
+                      </Tooltip>
                     )}
                     {offer && !isViewed && (
                       <Button
@@ -123,20 +152,12 @@ export default function VersionHistoryMenu({ anchor, onClose, env, envState, pat
               </Stack>
               {expanded && (
                 <Box sx={{ pl: 4.75, pr: 1.25, pb: 1 }}>
-                  <Typography sx={{ typography: "s3", color: "text.secondary", fontFamily: MONO, fontVariantNumeric: "tabular-nums" }}>
-                    {`${v.label} = ${snapshotPartsLine(v)}`}
-                  </Typography>
                   {v.details.map((d, i) => (
                     <Typography key={`${d.part}-${d.label}-${i}`} sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-                      <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>{`${PART_NAME[d.part] || d.part} ${d.label}`}</Box>
+                      <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>{PART_NAME[d.part] || d.part}</Box>
                       {d.text ? ` — ${d.text}` : ""}
                     </Typography>
                   ))}
-                  {!v.worldHead && (
-                    <Typography sx={{ typography: "s3", color: "text.disabled", mt: 0.5 }}>
-                      Same world as a later version — switch to that one to run on this world.
-                    </Typography>
-                  )}
                 </Box>
               )}
             </Box>
@@ -150,12 +171,23 @@ export default function VersionHistoryMenu({ anchor, onClose, env, envState, pat
         <Line
           key={v.label}
           label={`Agent ${v.label}`}
-          badges={[v.label === activeAgent && { label: "testing", tone: ACCENT }, v.reference && { label: "reference" }].filter(Boolean)}
+          badges={[v.label === activeAgent && { label: "testing", tone: ACCENT }].filter(Boolean)}
           summary={v.summary}
           meta={`${runs(v.runs)} · ${ago(v.at)}`}
         />
       )) : <Empty text="No agent connected yet." />}
     </Menu>
+    {patch && (
+      <RollbackDialog
+        open={!!rollbackTo}
+        targetLabel={rollbackTo}
+        env={env}
+        envState={envState}
+        patch={patch}
+        onClose={() => setRollbackTo(null)}
+      />
+    )}
+    </>
   );
 }
 

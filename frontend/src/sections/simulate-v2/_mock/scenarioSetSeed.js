@@ -1,28 +1,21 @@
 /*
-  The PRD v7 scenario-set fields a seeded environment starts with: tiers
-  (anchor core seeded from the scenarios written critical, plus a spread
-  across use cases), its impossible-scenario canaries, and the off-limits
-  tools and paths it declares. Shared by the seed and by the top-up that
-  brings an older saved copy forward — which fills only what's missing and
-  never writes over an edit.
+  What a seeded environment's scenario set is read through, shared by the seed
+  and by the top-up that brings an older saved copy forward: a retired
+  scenario reads as archived, and rows from the removed cheat checks (the
+  impossible-by-design "canary" scenarios) are dropped, so nobody sees them as
+  scenarios that always fail. Never writes over an edit.
 
   Scenario versions need no seeding: a row without one is 1.0.0.
 */
-import { withSeedTiers } from "./tiers";
-import { seedCanariesFor, seedOffLimitsFor } from "./cheatControls";
 import { migrateRetired } from "./scenarioStates";
 import { failingCaseVariations } from "./scenarioSources";
 
+/** Rows from the removed cheat checks — never shown, never run. */
+export const isRetiredCheckRow = (row) => !!row?.canary || /-canary-\d+$/.test(String(row?.id || ""));
+
 export const withScenarioSetSeed = (envId, es) => {
   if (!es) return es;
-  const rows = (es.scenarios || []).map(migrateRetired);
-  const canaries = seedCanariesFor(envId, rows);
-  const offLimits = es.offLimits || seedOffLimitsFor(envId);
-  return {
-    ...es,
-    scenarios: withSeedTiers([...rows, ...canaries]),
-    ...(offLimits.length && { offLimits }),
-  };
+  return { ...es, scenarios: (es.scenarios || []).filter((r) => !isRetiredCheckRow(r)).map(migrateRetired) };
 };
 
 /** A stored environment we didn't seed: only `retired` becomes `archived`. */
@@ -46,7 +39,7 @@ export const withImprovementScenarioSeed = (envId, es, env) => {
   const i = records.findIndex((o) => o.trigger?.kind === "schedule");
   if (i < 0 || records[i].issueScenarios) return es;
   const record = records[i];
-  const sources = (es.scenarios || []).filter((r) => !r.canary && !r.archived && /-core-\d+-/.test(r.id)).slice(0, 2);
+  const sources = (es.scenarios || []).filter((r) => !isRetiredCheckRow(r) && !r.archived && /-core-\d+-/.test(r.id)).slice(0, 2);
   const rows = sources.flatMap((src) => failingCaseVariations(
     { id: `from-improvement::${record.id}::${src.id}`, name: src.name, title: src.title, batchNote: `from ${record.name || record.id}` },
     { source: src, env, envState: es, count: 2 },

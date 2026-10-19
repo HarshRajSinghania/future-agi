@@ -60,7 +60,7 @@ const SURFACE_COPY = {
   terminal: { id: "Session ID", analytics: "Shell analytics", log: "Tool calls" },
   tools: { id: "Trace ID", analytics: "Trace analytics", log: "Tool calls" },
   email: { id: "Thread ID", analytics: "Thread analytics", log: "Tool calls" },
-  sim: { id: "Episode ID", analytics: "Episode analytics", log: "Tool calls" },
+  sim: { id: "Conversation ID", analytics: "Conversation analytics", log: "Tool calls" },
 };
 
 export default function CallDrawer({ task, env, envState, focus, focusEvalName, initialPane, onClose, onPrev, onNext, verdict = null }) {
@@ -177,7 +177,7 @@ export default function CallDrawer({ task, env, envState, focus, focusEvalName, 
             <Tab value="graph" label="Graph" sx={{ minHeight: 40 }} />
             <Tab value="trace" label="Trace" sx={{ minHeight: 40 }} />
             {envState?.twinBacking && (
-              <Tab value="twin" label="Clone state" sx={{ minHeight: 40 }} />
+              <Tab value="twin" label="World state" sx={{ minHeight: 40 }} />
             )}
             {envState?.twinBacking && (
               <Tab value="requests" label="Raw requests" sx={{ minHeight: 40 }} />
@@ -559,19 +559,15 @@ CallDrawer.propTypes = {
 
 /*
   The scenario's outcome and its cause (PRD v7 §4.10.10, updated RSI PRD), in
-  the drawer header: "Failed · capability-missing", "Test invalid · simulator",
-  "Failed a required evaluation · Policy adherence", "N/A". Red only for a
-  fail; the evidence for a cheat, the missing capability, or why it doesn't
-  apply sits in the tooltip. A retry and a stale scenario trail it.
+  the drawer header: "Failed · agent", "Test invalid · simulator", "Failed a
+  required evaluation · Policy adherence". Red only for a fail; what the
+  cause means sits in the tooltip. A retry and a stale scenario trail it.
 */
 function VerdictCauseChip({ verdict, task }) {
   if (!verdict) return null;
   const fail = !verdict.pulled && verdict.cause?.startsWith("fail-");
   const tip = verdict.pulled ? `${verdict.reason} Outside every count.`
-    : verdict.cause === "fail-cheat" ? verdict.cheat?.evidence
-      : verdict.cause === "fail-capability" ? `Needs ${verdict.missing.join(", ")}, which this agent version doesn't have. The scenario still ran; the label is applied after the fail and it counts in the score.`
-        : verdict.na || verdict.canary ? verdictLineOf(verdict)
-          : VERDICT_CAUSES[verdict.cause]?.note || "";
+    : VERDICT_CAUSES[verdict.cause]?.note || "";
   const label = verdict.cause === "fail-required" && !verdict.pulled ? verdictLineOf(verdict) : verdict.label;
   const retried = verdict.retried || task?.retried;
   return (
@@ -580,7 +576,7 @@ function VerdictCauseChip({ verdict, task }) {
         <Box
           sx={{
             px: 0.75, height: 22, display: "inline-flex", alignItems: "center", borderRadius: 0.75, flexShrink: 0,
-            border: "1px solid", borderStyle: verdict.cause?.startsWith("inc-") || verdict.na || verdict.pulled ? "dashed" : "solid",
+            border: "1px solid", borderStyle: verdict.cause?.startsWith("inc-") || verdict.pulled ? "dashed" : "solid",
             borderColor: fail ? alpha("#DC2626", 0.3) : "divider",
             bgcolor: fail ? (t) => alpha("#DC2626", t.palette.mode === "dark" ? 0.16 : 0.08) : "transparent",
             color: fail ? "#DC2626" : "text.secondary",
@@ -598,12 +594,7 @@ function VerdictCauseChip({ verdict, task }) {
       )}
       {verdict.stale && (
         <Tooltip arrow title="It ran, but counts toward no decision until it's updated or archived.">
-          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{`${STALE_LABEL[verdict.stale]} · not counted`}</Typography>
-        </Tooltip>
-      )}
-      {task?.suspected && !task.cheat && (
-        <Tooltip arrow title={task.suspected.evidence}>
-          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>Suspected shortcut · for review</Typography>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{`${STALE_LABEL[verdict.stale] || "Stale"} · not counted`}</Typography>
         </Tooltip>
       )}
       {task?.regraded?.changed && (

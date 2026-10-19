@@ -12,7 +12,9 @@ import RunFitDialog from "./RunFitDialog";
  *
  * If the agent version fits the pinned environment version the run starts at
  * once; otherwise the dialog asks first, on the screen the user is already on.
- * `locked` (a template preview) leaves out the fixes that change the world.
+ * It warns, never blocks. `locked` (a template preview) leaves out the fixes
+ * that change the world. A secret that failed its access check is said by the
+ * run view itself, where every way of starting a run lands (LiveRunView).
  */
 export default function useRunFitCheck(env, envState, patch, { locked = false } = {}) {
   const [pending, setPending] = useState(null);

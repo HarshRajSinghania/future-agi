@@ -1,5 +1,5 @@
 import React from "react";
-import { Chip, useTheme } from "@mui/material";
+import { Chip, Tooltip, useTheme } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { textTone } from "src/sections/simulate-v2/components/textTone";
 import PropTypes from "prop-types";
@@ -7,6 +7,7 @@ import PropTypes from "prop-types";
 const STATUS_CONFIG = {
   escalating: {
     label: "Escalating",
+    tip: "Not triaged yet, and happening more often. No fix has started.",
     icon: "mdi:trending-up",
     color: "#DB2F2D",
     bg: "#FCE8E7",
@@ -15,6 +16,7 @@ const STATUS_CONFIG = {
   },
   acknowledged: {
     label: "Acknowledged",
+    tip: "Someone on the team has seen it. No fix has started.",
     icon: "mdi:check-circle-outline",
     color: "#605C70",
     bg: "#F1F0F5",
@@ -23,22 +25,16 @@ const STATUS_CONFIG = {
   },
   for_review: {
     label: "For review",
+    tip: "Flagged for a person to look at and decide what to do. No fix has started.",
     icon: "mdi:eye-outline",
     color: "#8C3F08",
     bg: "#FDEEE2",
     darkBg: "rgba(245,166,35,0.15)",
     darkColor: "#F5A623",
   },
-  ignored: {
-    label: "Ignored",
-    icon: "mdi:eye-off-outline",
-    color: "#605C70",
-    bg: "#F1F0F5",
-    darkBg: "rgba(148,143,163,0.15)",
-    darkColor: "#938FA3",
-  },
   resolved: {
     label: "Resolved",
+    tip: "Marked resolved by hand.",
     icon: "mdi:check-circle",
     color: "#005F2F",
     bg: "#E0F7EC",
@@ -54,6 +50,7 @@ export default function ErrorStatusChip({ status, size = "small", onClick }) {
 
   const baseBg = isDark ? cfg.darkBg : cfg.bg;
   return (
+    <Tooltip arrow title={cfg.tip}>
     <Chip
       size={size}
       {...(onClick ? { onClick } : {})}
@@ -84,6 +81,7 @@ export default function ErrorStatusChip({ status, size = "small", onClick }) {
         "&:focus": { bgcolor: baseBg },
       }}
     />
+    </Tooltip>
   );
 }
 
@@ -93,7 +91,6 @@ ErrorStatusChip.propTypes = {
     "acknowledged",
     "for_review",
     "resolved",
-    "ignored",
   ]),
   size: PropTypes.oneOf(["small", "medium"]),
   onClick: PropTypes.func,

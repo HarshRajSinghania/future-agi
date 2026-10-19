@@ -7,14 +7,15 @@
   applied by a click on a nudge card.
 
     agent change  → a new AGENT version only; nudges raised per environment
-    rule nudge    → Policy change / Not intended / Unsure (the fix-or-policy
+    rule nudge    → Policy change / Not intended (the fix-or-policy
                     question). Policy publishes the sub-goal's next version and
                     outdates the scenarios whose caller depends on the old rule
-                    (S bumps, never E). Unsure keeps @1 and records @2 as a
-                    shadow. Not intended changes nothing.
-    add           → E gets a handler (new version), S gets 3 exploration
-                    scenarios; a priced backfill is offered, never started
-    remove        → not applicable to versions without the capability
+                    (S bumps, never E). Not intended changes nothing.
+    add           → E gets a handler (new version), S gets 3 new scenarios;
+                    a priced backfill is offered, never started
+    remove        → the scenarios needing the tool are stale on versions
+                    without it (RSI PRD): they still run, but count toward no
+                    decision until updated or archived
     core          → fork a new environment carrying the scenarios whose
                     capabilities still exist, ids kept
     behaviour     → E's handler updated (new version)
@@ -26,16 +27,14 @@
     subGoalShadows[] { id, version, shadow, ruleId, nudgeId, agentVersion, name, criterion, at }
     likelyFixes[]    { ruleId, rule, subGoals, agentVersion, at }
     suiteVersions[]  S versions, written through suiteLog.suiteLogPatch (one S counter)
-    referenceAgentVersion  the version every new S or fork offers to re-run
 */
 import { paths } from "src/routes/paths";
-import { detectNudges, withNudges, resolveNudgePatch, notApplicablePatch, requiredCapsOf, manifestOf, bumpScenario } from "./decoupled";
-import { agentVersions, environmentVersions, currentEnvVersion, nextEnvVersion, versionNumber } from "./versions";
+import { detectNudges, withNudges, resolveNudgePatch, staleRulePatch, requiredCapsOf, manifestOf, bumpScenario } from "./decoupled";
+import { agentPinPatch, agentVersions, environmentVersions, currentEnvVersion, nextEnvVersion, versionNumber } from "./versions";
 import { rulesOf, ruleOfScenario, subGoalCatalogOf } from "./envModel";
 import { nextCatalogVersion, subGoalVersionOf as subGoalNumberOf } from "./subGoalCatalog";
 import { suiteLogPatch, suiteVersionLogOf, currentSuiteLabel } from "./suiteLog";
 import { currentEnvSnapshot, snapshotOfWorld } from "./envSnapshot";
-import { anchorLogPatch, anchorsAmong } from "./tiers";
 import { estimateRun } from "./metering";
 import { personaFor } from "./scenarios";
 import { stampNewBatch } from "./addScenarios";
@@ -79,7 +78,6 @@ const namesRule = (text, rule) => {
 export const ANSWERS = {
   policy: { label: "Policy change", short: "Policy change" },
   "not-intended": { label: "Not intended", short: "Not intended" },
-  unsure: { label: "Unsure", short: "Unsure" },
 };
 
 /**
@@ -91,7 +89,7 @@ export const prefillOf = (version, rule) => {
   if (!namesRule(note, rule)) return null;
   const t = note.toLowerCase();
   if (/\b(by mistake|mistaken|accident|unintended|not intended|bug|regress|revert|shouldn'?t)\b/.test(t)) return { answer: "not-intended", from: note };
-  if (/\b(not sure|unsure|unclear|to confirm|tbd)\b|\?/.test(t)) return { answer: "unsure", from: note };
+  if (/\b(not sure|unsure|unclear|to confirm|tbd)\b|\?/.test(t)) return null;
   if (/\b(polic(y|ies)|on purpose|intended|intentional|deliberate|now allowed|new rule|allowed now|we now)\b/.test(t)) return { answer: "policy", from: note };
   return null;
 };
@@ -119,7 +117,7 @@ export const draftSubGoalOf = (envState, nudge) => {
 /** The rewrite drafted for a scenario whose caller depended on the old rule. */
 export const rewriteDraftOf = (row, nudge) => ({
   id: row.id,
-  name: row.name || row.title || row.id,
+  name: row.title || row.name || row.id,
   from: row.task || row.situation || "",
   to: `${String(row.task || row.situation || "").replace(/\s+$/, "")} Rewritten for the new rule: ${nudge.to}.`,
 });
@@ -169,7 +167,17 @@ export const raiseNudgesIn = (state, envs, version, { extra = () => [] } = {}) =
   const { nudges, likelyFixes } = detectNudges(env, withV, version.label, prev);
   const all = [...nudges.map((n) => (n.kind === "rule" ? enrichRule(n, env, es, version) : n)), ...extra(env, withV, prev)];
   const fixes = likelyFixes.map((f) => ({ ...f, agentVersion: version.label, at: nowIso() }));
-  const merged = withNudges(es, all);
+  const folded = withNudges(es, all);
+  /* A tool the new version no longer has can't be added or followed — an
+     open add or behaviour change for it is settled as superseded, so a
+     Rebuild never gives the world a tool the agent dropped. */
+  const now = new Set(agentToolsFor(env, withV, version.label).map((t) => t.name));
+  const merged = folded === es ? es : {
+    ...folded,
+    nudges: folded.nudges.map((n) => ((n.kind === "add" || n.kind === "behaviour") && n.status === "open" && n.agentVersion !== version.label && !now.has(n.capability)
+      ? { ...n, status: "dismissed", supersededBy: version.label, resolvedAt: nowIso() }
+      : n)),
+  };
   const have = new Set((es.nudges || []).map((n) => n.id));
   return {
     env,
@@ -178,6 +186,7 @@ export const raiseNudgesIn = (state, envs, version, { extra = () => [] } = {}) =
     likelyFixes: fixes,
     patch: {
       ...(merged !== es && { nudges: merged.nudges }),
+      ...(merged.scenarioUpdate !== es.scenarioUpdate && { scenarioUpdate: merged.scenarioUpdate }),
       ...(fixes.length && { likelyFixes: [...fixes, ...(es.likelyFixes || []).filter((f) => !fixes.some((x) => x.ruleId === f.ruleId && x.agentVersion === f.agentVersion))] }),
     },
   };
@@ -195,18 +204,20 @@ const shortNames = (names) => names.map((n, i) => {
 });
 
 /**
- * The line the agent-sync flow ends with:
- * "2 nudges waiting in Customer Support Line and After hours".
+ * The line the agent-sync flow ends with — one card per environment, never a
+ * count of individual changes: "Review agent v5 in Customer Support Line and
+ * After hours".
  */
 export const nudgeAnnouncement = (results) => {
   const withNudge = (results || []).filter((r) => r.nudges.length);
-  const count = withNudge.reduce((n, r) => n + r.nudges.length, 0);
+  const count = withNudge.length;
   const names = shortNames(withNudge.map((r) => r.env.name));
   const list = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const label = withNudge[0]?.nudges[0]?.agentVersion || null;
   return {
     count,
     envs: withNudge.map((r) => ({ id: r.envId, name: r.env.name, count: r.nudges.length })),
-    text: count ? `${plural(count, "suggestion")} waiting in ${list}` : "Nothing in the environments needs your input",
+    text: count ? `Review ${label ? `agent ${label}` : "the agent change"} in ${list}` : "Nothing in the environments needs your input",
   };
 };
 
@@ -235,16 +246,6 @@ export const runPrice = (env, scenarios, repeats = 3) => {
 
 export const generationPrice = (n) => ({ credits: n * GEN_CREDITS, line: `${n * GEN_CREDITS} credits · ${usd(n * GEN_CREDITS * 0.01)}` });
 
-/* ── the reference agent (AC-13.14) ──────────────────────────────────────── */
-
-/** The version kept runnable as the reference — marked, else the first. */
-export const referenceOf = (envState) => {
-  const marked = envState?.referenceAgentVersion;
-  if (marked && agentVersions(envState).some((v) => v.label === marked)) return { label: marked, marked: true };
-  const first = agentVersions(envState)[0]?.label;
-  return first ? { label: first, marked: false } : null;
-};
-
 /** A new run of one agent version on some scenarios — a link; nothing starts until it opens. */
 export const rerunHref = (envId, { agent, only = [], trials = 3 }) => {
   const runId = protoRunId(envId, Date.now().toString(36));
@@ -263,7 +264,6 @@ export const rerunHref = (envId, { agent, only = [], trials = 3 }) => {
  *   policy        publish @N (the reviewed draft), outdate the caller-dependent
  *                 scenarios, drafted rewrites wait for approval — S bumps
  *   not-intended  nothing changes; the new version failing it is a regression
- *   unsure        @1 stays the baseline; @N kept as a draft shadow
  * Moving away from a published policy restores @1 in a new S version.
  */
 export const answerRulePatch = (env, envState, nudge, answer, { draft } = {}) => {
@@ -284,9 +284,10 @@ export const answerRulePatch = (env, envState, nudge, answer, { draft } = {}) =>
       subGoalVersion: nextSubGoalVersion(envState, goalId), policy: false, revertOf: nudge.id, ruleId: nudge.ruleId, at,
     }];
     out.scenarios = (envState.scenarios || []).map((r) => (r.outdatedBy?.nudgeId === nudge.id ? (({ outdatedBy, ...rest }) => rest)(r) : r));
-    summary = `${goalId} back to its earlier criteria — ${nudge.ruleId} answered ${ANSWERS[answer].label.toLowerCase()} instead of a policy change`;
+    summary = `${goalId} back to its earlier criteria — ${nudge.ruleId} answered ${(ANSWERS[answer]?.label || answer).toLowerCase()} instead of a policy change`;
   }
-  if (prior === "unsure" && answer !== "unsure") {
+  /* A draft kept from an earlier answer goes with it. */
+  if ((envState.subGoalShadows || []).some((s) => s.nudgeId === nudge.id)) {
     out.subGoalShadows = (envState.subGoalShadows || []).filter((s) => s.nudgeId !== nudge.id);
   }
 
@@ -310,13 +311,6 @@ export const answerRulePatch = (env, envState, nudge, answer, { draft } = {}) =>
         rewrites: { status: "drafted", ids: [...callers], drafts: rows.map((r) => rewriteDraftOf(r, nudge)) },
       }),
     }, { summary: `${goalId}${version} published — ${nudge.ruleId} is a policy change from agent ${nudge.agentVersion}; ${plural(callers.size, "scenario")} outdated`, by: "nudge" });
-  }
-
-  if (answer === "unsure") {
-    const d = draft || draftSubGoalOf(envState, nudge);
-    out.subGoalShadows = [...(out.subGoalShadows || envState.subGoalShadows || []).filter((s) => s.nudgeId !== nudge.id), {
-      id: goalId, version: d.version, shadow: true, ruleId: nudge.ruleId, nudgeId: nudge.id, agentVersion: nudge.agentVersion, name: d.name, criterion: d.criterion, at,
-    }];
   }
 
   const done = { ...out, ...resolveNudgePatch(envState, nudge.id, "approved", { answer, answers, rewrites: null }) };
@@ -345,7 +339,7 @@ export const approveRewritesPatch = (envState, nudge) => {
 
 /* ── Add: a handler in E, three exploration scenarios in S ────────────────── */
 
-const storedEnvList = (env, envState) => (envState?.envVersions?.length
+export const storedEnvList = (env, envState) => (envState?.envVersions?.length
   ? envState.envVersions
   : [...environmentVersions(env, envState)].reverse().map(({ current, ...v }) => v));
 
@@ -367,7 +361,7 @@ const ADD_VARIANTS = [
   },
 ];
 
-/** The three scenarios an approved Add generates — exploration tier, tagged with the capability. */
+/** The three scenarios an approved Add generates, tagged with the capability. */
 export const addScenarioRows = (env, tool, nudge, stamp = Date.now().toString(36)) => {
   const d = (tool.desc || `use ${tool.name}`).replace(/\.$/, "").replace(/^./, (c) => c.toLowerCase());
   return ADD_VARIANTS.map((v, i) => ({
@@ -388,7 +382,6 @@ export const addScenarioRows = (env, tool, nudge, stamp = Date.now().toString(36
       `Call ${tool.name} with the arguments the task actually needs`,
       "Confirm the outcome with the caller",
     ],
-    tier: "exploration",
     addedForCapability: tool.name,
     addedByNudge: nudge.id,
   }));
@@ -396,7 +389,7 @@ export const addScenarioRows = (env, tool, nudge, stamp = Date.now().toString(36
 
 /**
  * Approve an Add: E gets the handler (a new version, plain vN), S gets three
- * exploration scenarios for the tool. Returns { patch, envLabel, ids }.
+ * new scenarios for the tool. Returns { patch, envLabel, ids }.
  */
 export const approveAddPatch = (env, envState, nudge, { count = 3 } = {}) => {
   const at = nowIso();
@@ -404,7 +397,7 @@ export const approveAddPatch = (env, envState, nudge, { count = 3 } = {}) => {
     || { name: nudge.capability, desc: "", args: [] };
   const world = worldToolsFor(env, envState);
   const minted = {
-    ...nextEnvVersion(env, envState, { changed: ["contract"], note: `Added a ${tool.name} handler — approved from agent ${nudge.agentVersion}'s nudge.` }),
+    ...nextEnvVersion(env, envState, { changed: ["contract"], note: `Added a ${tool.name} handler — approved from agent ${nudge.agentVersion}'s change.` }),
     tools: [...world.filter((t) => t.name !== tool.name), tool],
     fromNudge: nudge.id,
   };
@@ -418,25 +411,23 @@ export const approveAddPatch = (env, envState, nudge, { count = 3 } = {}) => {
     patch: suiteLogPatch(envState, {
       envVersions,
       activeEnvVersion: minted.label,
+      unsavedEnvChanges: [],
       scenarios: [...rows, ...(envState.scenarios || [])],
       ...resolveNudgePatch(envState, nudge.id, "approved", { envVersion: minted.label, addedIds: ids }),
-    }, { summary: `${plural(rows.length, "exploration scenario")} for ${tool.name}, with its handler — new band, no delta until backfilled`, by: "nudge" }),
+    }, { summary: `${plural(rows.length, "new scenario")} for ${tool.name}, with its handler — shown apart until they have run on both versions`, by: "nudge" }),
   };
 };
 
 /* ── Remove, behaviour, dismiss ──────────────────────────────────────────── */
 
 /**
- * Approve a Remove: not applicable to versions without the capability.
- * Nothing retired; an anchor marked N/A is logged as an explicit decision.
+ * Acknowledge a Remove: the scenarios that need the tool are stale on agent
+ * versions without it — they still run, but count toward no decision until
+ * someone updates or archives them. Nothing retired.
  */
-export const approveRemovePatch = (envState, nudge, { by = "nudge" } = {}) => {
-  const anchors = anchorsAmong(envState, nudge.scenarioIds);
-  return suiteLogPatch(envState, {
-    ...notApplicablePatch(envState, nudge),
-    ...(anchors.length && anchorLogPatch(envState, anchors, "not-applicable", { by, note: `Needs ${nudge.capability}, which ${nudge.agentVersion} doesn't have` })),
-  }, { summary: `${plural(nudge.scenarioIds.length, "scenario")} not applicable to agent versions without ${nudge.capability}${anchors.length ? ` (${plural(anchors.length, "anchor")})` : ""} — kept in the set`, by });
-};
+export const approveRemovePatch = (envState, nudge, { by = "nudge" } = {}) => suiteLogPatch(envState, {
+  ...staleRulePatch(envState, nudge),
+}, { summary: `${plural(nudge.scenarioIds.length, "scenario")} stale on agent versions without ${nudge.capability} — they still run, counting toward no decision`, by });
 
 /** Approve a behaviour change: E's handler follows the agent's tool. */
 export const approveBehaviourPatch = (env, envState, nudge) => {
@@ -444,6 +435,7 @@ export const approveBehaviourPatch = (env, envState, nudge) => {
   return {
     envVersions: [...storedEnvList(env, envState), { ...minted, fromNudge: nudge.id }],
     activeEnvVersion: minted.label,
+    unsavedEnvChanges: [],
     ...resolveNudgePatch(envState, nudge.id, "approved", { envVersion: minted.label }),
   };
 };
@@ -524,8 +516,8 @@ export const forkFromNudge = (env, envState, nudge) => {
     ...rest,
     scenarios,
     agentVersions: agentVersions(envState).map((v) => ({ ...v })),
-    activeAgentVersion: nudge.agentVersion,
-    referenceAgentVersion: nudge.agentVersion,
+    /* The fork tests the version that asked for it — pinned unless that's production. */
+    ...agentPinPatch({ ...envState, agentVersionPinned: false }, nudge.agentVersion),
     envVersions: [{
       id: `${forkedId}-v1`, label: "v1", createdAt: at,
       note: `Forked from ${env.name} at environment ${snapshotOfWorld(env, envState, nudge.envVersion)?.label || nudge.envVersion} for ${channelLabel(nudge.channel.to).toLowerCase()} — ${scenarios.length} of ${nudge.total} scenarios carried, ids kept.`,
@@ -557,7 +549,6 @@ export const versionHistoryOf = (env, envState) => {
     at: v.createdAt || v.connectedAt || null,
     summary: v.note || (v.changes || []).map((c) => c.title).join(", ") || "A new agent version",
     runs: runCount(runs, (r) => r.agentVersion === v.label),
-    reference: referenceOf(envState)?.label === v.label,
   }));
   const environment = environmentVersions(env, envState).map((v) => ({
     label: v.label,

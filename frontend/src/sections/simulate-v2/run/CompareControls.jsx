@@ -318,7 +318,7 @@ export default function CompareActions({
         filterFields={filterFields(evals)}
         currentFilters={filters}
         onApply={onFilters}
-        aiPlaceholder="e.g. 'blockers that regressed'"
+        aiPlaceholder="e.g. 'must-pass that regressed'"
       />
       <DisplayPanel
         anchor={displayAnchor}

@@ -9,7 +9,7 @@ export const detectedRequestOf = (traced) => {
   const label = PROVIDER_LABELS[traced.provider] || traced.provider;
   return {
     kind: "hosted",
-    initial: { agentType: traced.agentType || "voice", platform: traced.provider, agentId: traced.agentId, apiKeyRef: traced.keyRef, keyFrom: traced.integration },
+    initial: { agentType: traced.agentType || "voice", platform: traced.provider, agentId: traced.agentId, ...(traced.agentName && { name: traced.agentName }), apiKeyRef: traced.keyRef, keyFrom: traced.integration },
     id: traced.provider, meta: { name: label, logo: traced.provider }, at: Date.now(),
   };
 };

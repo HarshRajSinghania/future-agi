@@ -13,10 +13,6 @@
  *   no-tool       it needs a tool this world can't answer
  *   stale         proved on an older world (or edited since) — re-prove
  *   proved        fine, on the pinned version
- *
- * The tier (anchor · core · exploration) and the canary mark are not a
- * status either — they say where the scenario sits in the set — so they
- * travel separately (tiers.js, cheatControls.js).
  */
 import { admissionOf } from "./coverage";
 import { proofStatus } from "./proofs";

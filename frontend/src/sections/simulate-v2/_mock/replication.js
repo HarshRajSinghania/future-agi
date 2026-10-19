@@ -5,7 +5,12 @@
   The user points at the agent as it runs in production; we make the copy a
   simulation drives, and say how we made it and what that copy can prove:
 
-    sandbox_build    — code at a pinned commit, built and run in our sandbox
+    sandbox_build    — code at a pinned commit, built fresh from source and
+                       run in our sandbox, its tools answered by the seeded
+                       world (sealed)
+    adapter_call     — a framework agent served by our adapter at a URL we
+                       don't control, with no repository linked: we call it
+                       where serve() runs (Deployed by you)
     provider_clone   — Vapi: a test copy of the assistant in the customer's
                        account, called with its real tools (Phase 1, live)
     platform_draft   — Retell: a draft version called with that version
@@ -18,6 +23,9 @@
                        Built-in platform actions (transfers) still run for real
     project_call     — LiveKit or Pipecat connected by project: we call the
                        running agent; a fix goes through its code
+    local_sdk        — local code through our SDK: it runs on the customer's
+                       machine and checks in with its commit and a fingerprint
+                       of uncommitted changes (Run on your machine)
     exported_mocked  — kept for saved records: a key that can't create a copy,
                        so each test call overrides the live assistant's
                        settings for that one call
@@ -36,15 +44,22 @@
   Stored on the agent's values (all optional — defaults derive from source):
     values.replicationMode  — an override, e.g. exported_mocked after a key
                               without create scope
-    values.runLocation      — "sdk" | "hosted" (code agents only)
+    values.runLocation      — "hosted" (code we build) or "sdk" (the
+                              customer's own machine, through our SDK). "sdk"
+                              counts only with values.localSdk — the agent
+                              checked in from that machine; an older stored
+                              "sdk" without it reads as hosted.
+    values.localSdk         — set when the SDK checked in (framework agents)
     values.endpointConsent  — { acknowledgedAt, webhookAt|null } (endpoints)
 */
-import { sourceKindOf } from "./agentRegistry";
-import { PLATFORM_TESTING, proofKindOf, retellPinStateOf } from "./rsiModel";
+import { definitionOf, sourceKindOf } from "./agentRegistry";
+import { PLATFORM_TESTING, isLocalSdkAgent, proofKindOf, retellPinStateOf } from "./rsiModel";
 
 /* Vapi makes a test copy, which needs a key with create scope. */
 const CLONE_PROVIDERS = new Set(["vapi"]);
 const BRANCH_PROVIDERS = new Set(["elevenlabs", "bland"]);
+/* Platforms that hold unpublished draft versions of an agent. */
+const VERSION_PROVIDERS = new Set(["telnyx", "google_cx", "voiceflow", "agentforce", "copilot_studio"]);
 /* Code frameworks connected by their project — called, not copied. */
 const PROJECT_PROVIDERS = new Set(["livekit", "pipecat"]);
 
@@ -54,16 +69,20 @@ export const isPhoneAgent = (agent) => !!(agent?.values?.phoneNumber || agent?.v
 export const REPLICATION_MODES = {
   sandbox_build: {
     label: "Sandbox build",
-    how: "Built from a read-only snapshot of your code at the pinned commit, and run in an isolated sandbox.",
-    /* Same copy, run in-process instead — the run location says which. */
-    howSdk: "Your code at the pinned commit, run in-process through our SDK and instrumented there.",
-    untouched: "Nothing — we only read the repository.",
+    how: "Built fresh from a read-only snapshot of your code at the pinned commit, and run in our sandbox. Its tools answer from the environment's seeded world, so side effects stay inside.",
+    untouched: "Nothing — we only read the code.",
     fidelity: "real-state",
+  },
+  adapter_call: {
+    label: "Called where it runs",
+    how: "We call the agent where serve() runs, so its real tools run. We can't build it ourselves — link its repository to get it built fresh in our sandbox.",
+    untouched: "Your agent's code and deployment — we only call it.",
+    fidelity: "live",
   },
   provider_clone: {
     label: "Test copy",
     how: "A test copy of the assistant in your account, called with its real tools. Where a copy can't be made, we override its settings for one call instead.",
-    untouched: "Your live assistant — its config hash is checked before and after every run.",
+    untouched: "Your live assistant — its settings are checked unchanged before and after every run.",
     fidelity: "live",
   },
   platform_draft: {
@@ -71,6 +90,12 @@ export const REPLICATION_MODES = {
     how: "A draft version in your Retell account, called with that version pinned and its real tools.",
     howUnpinned: "Your live numbers still follow the newest version, so a new draft would take real calls. Until they're pinned to a released version, each test call runs the agent with its settings overridden for that one call.",
     untouched: "Your live numbers — they stay on the released version they're pinned to.",
+    fidelity: "live",
+  },
+  platform_version: {
+    label: "Draft version",
+    how: "An unpublished draft version of the agent in your account, called with its real tools. Nothing is published until you publish it.",
+    untouched: "Your live agent — the draft isn't published.",
     fidelity: "live",
   },
   platform_branch: {
@@ -91,6 +116,12 @@ export const REPLICATION_MODES = {
     how: "Connected by its project, so we call the running agent and its real tools run. A fix goes through its code — connect the repository to get proven changes.",
     untouched: "Your agent's code and deployment — we only place calls.",
     fidelity: "live",
+  },
+  local_sdk: {
+    label: "Run on your machine",
+    how: "Our SDK runs your local code on your machine against the environment's scenarios, and reports the commit it's on plus a fingerprint of uncommitted changes. We score every conversation.",
+    untouched: "Your code — your own coding agent makes the changes; we send scenarios and score.",
+    fidelity: "local",
   },
   exported_mocked: {
     label: "Settings overridden for one call",
@@ -121,28 +152,36 @@ export const REPLICATION_MODES = {
 export const RUN_FIDELITY = {
   "real-state": { label: "Real state", note: "Tools read and write the environment's world." },
   live: { label: "Live", note: "Runs in your account and its tools reach your real systems. We see the conversation and the tool calls the platform reports." },
+  local: { label: "On your machine", note: "Runs where your code runs, with whatever its tools reach there. We see the conversation and the tool calls our SDK reports." },
   mocked: { label: "Mocked", note: "Tools answer from mocks — results can't show what a real backend would have done." },
   "observed-only": { label: "Observed only", note: "We see the conversation, not the tool calls behind it." },
   "observed+webhook": { label: "Observed + webhook", note: "Call and tool events are mirrored to us by the webhook you added." },
 };
 
+/* Where a code agent runs: built by us in the hosted sandbox, or on the
+   customer's own machine through our SDK (connected from the framework flow). */
 export const RUN_LOCATIONS = {
-  sdk: { label: "Locally, through the SDK", short: "SDK", note: "Fast and instrumented in-process. Nothing metered." },
-  hosted: { label: "Hosted sandbox", short: "Hosted", note: "Runs real tools against a real filesystem, browser or VM, isolated from production. Metered in sandbox minutes." },
+  hosted: { label: "Hosted sandbox", short: "Hosted", note: "We build the agent fresh from its code for every run. Its tools answer from the environment's seeded world, so nothing reaches your real systems. Metered in sandbox minutes." },
+  sdk: { label: "Run on your machine", short: "Your machine", note: "Our SDK runs your local code on your machine and reports the commit plus a fingerprint of uncommitted changes. Your own coding agent makes changes; we prove them with our scenarios and scoring." },
 };
 
-/** Code agents choose where they run; everything else runs where it is copied. */
-export const choosesRunLocation = (agent) => ["repo", "framework", "upload"].includes(sourceKindOf(agent));
-
-/** voice/chat → SDK; coding, browser, computer-use → hosted. */
-export const recommendedRunLocation = (agent, env) => {
-  const surface = env?.surface || agent?.surface || agent?.values?.surface;
-  return ["browser", "computer", "cli", "coding", "sim"].includes(surface) ? "hosted" : "sdk";
+/* A framework agent with a linked repository can be built from it; one only
+   served by the adapter is called where it runs. */
+const builtFromCode = (agent) => {
+  const kind = sourceKindOf(agent);
+  return kind === "repo" || kind === "upload" || (kind === "framework" && !!definitionOf(agent).repoUrl);
 };
+
+/** Code agents say where they run; everything else runs where it is copied. */
+export const choosesRunLocation = (agent) => builtFromCode(agent) || isLocalSdkAgent(agent);
+
+/** Your own machine once the SDK checked in from it; otherwise the hosted sandbox. */
+export const recommendedRunLocation = (agent) => (isLocalSdkAgent(agent) ? "sdk" : "hosted");
 
 /* How each hosted platform tests a candidate (PRD Phase 1 and 2). */
 const platformMode = (provider) => (provider === "retell" ? "platform_draft"
   : BRANCH_PROVIDERS.has(provider) ? "platform_branch"
+  : VERSION_PROVIDERS.has(provider) ? "platform_version"
     : PROJECT_PROVIDERS.has(provider) ? "project_call"
       : "provider_clone");
 
@@ -161,6 +200,8 @@ const defaultMode = (agent) => {
   if (kind === "builtin" || kind === "prompt" || v.provider === "other") return "run_here";
   if (kind === "platform") return platformMode(v.provider);
   if (kind === "endpoint") return "wrapped_endpoint";
+  if (isLocalSdkAgent(agent)) return "local_sdk";
+  if (kind === "framework" && !builtFromCode(agent)) return "adapter_call";
   return "sandbox_build";
 };
 
@@ -175,13 +216,14 @@ export const replicationOf = (agent, env) => {
   const meta = REPLICATION_MODES[mode] || REPLICATION_MODES.sandbox_build;
   const consent = v.endpointConsent || null;
   const fidelity = mode === "wrapped_endpoint" && consent?.webhookAt ? "observed+webhook" : meta.fidelity;
-  const runLocation = choosesRunLocation(agent) ? (v.runLocation || recommendedRunLocation(agent, env)) : null;
+  /* A stored "sdk" without the SDK's check-in reads as the hosted sandbox —
+     we build it from the code ourselves. */
+  const runLocation = choosesRunLocation(agent) ? recommendedRunLocation(agent, env) : null;
   const proof = proofKindOf(agent);
   /* Retell: a draft only once the live numbers are pinned. */
   const pins = mode === "platform_draft" ? retellPinStateOf(agent) : null;
   const platform = PLATFORM_TESTING[v.provider] || null;
-  const how = mode === "sandbox_build" && runLocation === "sdk" ? meta.howSdk
-    : mode === "platform_draft" && pins && !pins.pinned ? meta.howUnpinned
+  const how = mode === "platform_draft" && pins && !pins.pinned ? meta.howUnpinned
       : mode === "platform_branch" && platform ? `${meta.how} ${platform.tests}.${platform.needsVersioning ? " Needs versioning switched on for the agent." : ""}`
         : meta.how;
   return {
@@ -210,11 +252,14 @@ export const replicationOf = (agent, env) => {
 /* Icons for the copy and what it can prove — neutral; the label carries it. */
 export const MODE_ICONS = {
   sandbox_build: "solar:server-square-linear",
+  adapter_call: "solar:plug-circle-linear",
   provider_clone: "solar:copy-linear",
   platform_draft: "solar:pin-linear",
   platform_branch: "solar:branching-paths-up-linear",
+  platform_version: "solar:document-add-linear",
   imported_copy: "solar:box-linear",
   project_call: "solar:phone-calling-rounded-linear",
+  local_sdk: "solar:laptop-2-linear",
   exported_mocked: "solar:tuning-2-linear",
   phone_call: "solar:phone-linear",
   run_here: "solar:widget-add-linear",
@@ -223,6 +268,7 @@ export const MODE_ICONS = {
 export const FIDELITY_ICONS = {
   "real-state": "solar:database-linear",
   live: "solar:pulse-2-linear",
+  local: "solar:laptop-2-linear",
   mocked: "solar:test-tube-linear",
   "observed-only": "solar:eye-linear",
   "observed+webhook": "solar:eye-linear",
@@ -238,10 +284,10 @@ export const canCloneProvider = (provider) => CLONE_PROVIDERS.has(provider);
  */
 export const keyLacksCreateScope = (key) => /read[-_]?only|(^|[^a-z])ro_/i.test(String(key || ""));
 
-/** Why the recommended run location is the recommended one. */
-export const runLocationReason = (location) => (location === "hosted"
-  ? "Recommended for coding, browser and computer-use agents"
-  : "Recommended for voice and chat agents");
+/** Why a code agent runs where it does. */
+export const runLocationReason = (location = "hosted") => (location === "sdk"
+  ? "Your agent checks in from your machine with the commit it's on plus a fingerprint of uncommitted changes — we score what it runs"
+  : "We build it fresh from the code for every run. To run it on your own machine instead, connect it through our SDK");
 
 const slug = (s) => String(s || "env").toLowerCase().replace(/\s+environment$/, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "env";
 const shortHash = (s) => {

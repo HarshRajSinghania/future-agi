@@ -118,6 +118,13 @@ const pinnedByRun = (envState) => {
   return (envState?.runs || []).some((r) => !r.envVersion || r.envVersion === label);
 };
 
+/**
+ * Still a draft: nothing has made a version yet — no run has pinned one and
+ * none was saved — so edits land in place. The first run makes it v1.
+ */
+export const isEnvDraft = (envState) => !(envState?.runs || []).some((r) => !r.synthetic)
+  && (envState?.envVersions || []).length <= 1 && !pendingEnvChanges(envState).length;
+
 /** Patch fragment that records one edit — `{}` while no run pins the version. */
 export const envChangePatch = (envState, kind, detail) => (pinnedByRun(envState)
   ? { unsavedEnvChanges: [...pendingEnvChanges(envState), { kind, detail, at: new Date().toISOString() }] }
@@ -125,40 +132,87 @@ export const envChangePatch = (envState, kind, detail) => (pinnedByRun(envState)
 
 /** Save the pending edits as the next version, which runs then use. */
 export const saveEnvChangesPatch = (env, envState) => {
-  const pending = pendingEnvChanges(envState);
   const list = envState?.envVersions?.length
     ? envState.envVersions
     : [...environmentVersions(env, envState)].reverse();
-  const minted = nextEnvVersion(env, envState, {
-    changed: [...new Set(pending.map((c) => c.kind))],
-    note: pending.map((c) => c.detail).filter(Boolean).slice(0, 3).join("; ") || "World changed.",
-  });
+  const minted = nextEnvVersion(env, envState);
   return { envVersions: [...list, minted], activeEnvVersion: minted.label, unsavedEnvChanges: [] };
 };
 
 /** The next environment version, given what already exists. */
-export const nextEnvVersion = (env, envState, { changed = [], note, now, from } = {}) => {
+export const nextEnvVersion = (env, envState, { changed = [], note, now, from, revertedTo, tools } = {}) => {
   const list = environmentVersions(env, envState);
   const n = list.length + 1;
   /* A new version starts from the world it replaces — the pinned one unless
      told otherwise — so tools the world learned in a rebuild are not lost to
      a rules change made afterwards. */
   const base = (from && list.find((v) => v.label === from)) || list.find((v) => v.current) || list[0];
+  /* One draft per environment: hand edits still unsaved are part of
+     whatever version is made next, whoever makes it. The caller clears them
+     (`unsavedEnvChanges: []`). */
+  const pending = pendingEnvChanges(envState);
   return {
-    ...(base?.tools && { tools: base.tools }),
+    ...((tools || base?.tools) && { tools: tools || base.tools }),
     builtFor: base?.builtFor || "v1",
     id: `${env?.id}-v${n}`,
     label: `v${n}`,
     createdAt: now || new Date().toISOString(),
-    note: note || "World changed.",
+    note: [note || (pending.length ? null : "World changed."), ...pending.map((c) => c.detail).filter(Boolean)].filter(Boolean).slice(0, 3).join("; "),
     scenarios: envState?.scenarios?.length || 0,
-    changed,
+    changed: [...new Set([...changed, ...pending.map((c) => c.kind)])],
+    /* Where it came from: the version before it, or the one it rolls back to. */
+    ...(base?.label && { from: base.label }),
+    ...(revertedTo && { revertedTo }),
+    /* The world's settings as they stand — what a rollback to it restores. */
+    config: worldConfigOf(envState),
     /* Minted after the scenarios existed. Marked, because a proof cannot be
        retroactively made against a version that did not exist when it was
        proved — see provedAgainst in proofs.js. */
     minted: true,
   };
 };
+
+/*
+  The world's settings that aren't tools or contract text: how each tool
+  answers and fails, which tools share data, the actors and their edits, the
+  seed, what a run may never call, whether the sandbox resets. Kept on every
+  version, so rolling back restores them too.
+*/
+export const WORLD_CONFIG_KEYS = ["toolEnv", "toolLinks", "actors", "actorEdits", "twinBacking", "twinResetBetween", "toolArgEdits"];
+export const worldConfigOf = (envState) => Object.fromEntries(WORLD_CONFIG_KEYS
+  .filter((k) => envState?.[k] !== undefined)
+  .map((k) => [k, envState[k]]));
+
+/**
+ * The versions whose contract changes hold in `label` (default: the current
+ * one) — itself, then back through each version's parent. A rollback's parent
+ * is the version it rolled back to, so what changed in between stops
+ * applying, while the history itself stays.
+ */
+export const envLineage = (env, envState, label) => {
+  const list = environmentVersions(env, envState);
+  const byLabel = new Map(list.map((v) => [v.label, v]));
+  const out = new Set();
+  let cur = byLabel.get(label || (list.find((v) => v.current) || list[0])?.label);
+  while (cur && !out.has(cur.label)) {
+    out.add(cur.label);
+    cur = byLabel.get(cur.revertedTo || `v${versionNumber(cur.label) - 1}`);
+  }
+  return { has: (l) => out.has(l), known: (l) => byLabel.has(l) };
+};
+
+/** Does a logged contract change (rule, use case, argument) hold now? Unversioned or unknown entries always do. */
+export const holdsInEnv = (lineage, envVersion) => !envVersion || !lineage.known(envVersion) || lineage.has(envVersion);
+
+/**
+ * The scenarios in the set at an environment version — what a run takes and
+ * every count means: not archived, not a proposal waiting to be added, and
+ * added by that version. One selector, so Overview, the tab and the version
+ * bar can't disagree.
+ */
+export const scenariosInSet = (envState, envLabel) => (envState?.scenarios || []).filter((sc) => !sc.proposed
+  && !sc.archived && !sc.retired
+  && (!sc.addedInEnv || !envLabel || versionNumber(sc.addedInEnv) <= versionNumber(envLabel)));
 
 /* ── agent versions ──────────────────────────────────────────────────────── */
 
@@ -195,14 +249,60 @@ export const agentVersions = (envState) => {
   return envState?.agent ? [firstAgentVersion()] : [];
 };
 
-/** The one the next run will use — the active pin if set, else the newest.
+/*
+  Which agent version an environment tests. By default it follows the agent's
+  production version — the newest that isn't an unreleased draft, or the one
+  an admin made active — so every push is tested against the same suite with
+  no switching. Pinning (an explicit switch to another version) holds it on
+  that version until someone follows production again. A draft an
+  improvement made is never followed: it isn't live until it's released.
+*/
+const releasedIn = (envState) => new Set((envState?.releases || []).map((r) => r.version));
+const isLive = (v, released) => v.status !== "draft" || released.has(v.label);
+
+/** The environment's production version. Undefined when there's no agent. */
+export const productionAgentVersion = (envState) => {
+  const list = agentVersions(envState);
+  if (!list.length) return undefined;
+  const made = envState?.agent?.values?.activeVersion?.label;
+  const madeActive = made && list.find((v) => v.label === made);
+  if (madeActive) return madeActive;
+  const released = releasedIn(envState);
+  return [...list].reverse().find((v) => isLive(v, released)) || list[list.length - 1];
+};
+
+/** Is the environment held on one version rather than following production? */
+export const isAgentPinned = (envState) => !!envState?.agentVersionPinned && !!envState?.activeAgentVersion
+  && agentVersions(envState).some((v) => v.label === envState.activeAgentVersion);
+
+/** The one the next run will use — the pin if there is one, else production.
     Undefined when there's no agent. */
 export const currentAgentVersion = (envState) => {
   const list = agentVersions(envState);
   if (!list.length) return undefined;
-  const activeLabel = envState?.activeAgentVersion;
-  if (activeLabel) return list.find((v) => v.label === activeLabel) || list[list.length - 1];
-  return list[list.length - 1];
+  if (isAgentPinned(envState)) return list.find((v) => v.label === envState.activeAgentVersion);
+  return productionAgentVersion(envState);
+};
+
+/** Is `label` a draft that hasn't been released? Registry copies carry the
+    answer (`pendingDraft`); environment copies carry the status. */
+export const isPendingDraft = (envState, label) => {
+  const v = agentVersions(envState).find((x) => x.label === label);
+  if (!v) return false;
+  if (v.pendingDraft !== undefined) return !!v.pendingDraft;
+  return !isLive(v, releasedIn(envState));
+};
+
+/**
+ * The patch for testing `label` here: following production when it is the
+ * production version (or none is given), else pinned to it. A draft is never
+ * what an environment tests — asked to pin one, it follows production.
+ */
+export const agentPinPatch = (envState, label) => {
+  const prod = productionAgentVersion(envState)?.label || null;
+  return !label || label === prod || isPendingDraft(envState, label)
+    ? { activeAgentVersion: prod, agentVersionPinned: false }
+    : { activeAgentVersion: label, agentVersionPinned: true };
 };
 
 /**
@@ -251,9 +351,12 @@ export const nextAgentVersion = (envState, {
 /** Newest first, with each version's run history attached — for list UIs. */
 export const agentVersionsWithRuns = (envState) => {
   const runs = envState?.runs || [];
-  return [...agentVersions(envState)].reverse().map((v, i) => ({
+  /* "current" is the one the next run tests — the pin, or production —
+     never simply the newest (which can be an unreleased draft). */
+  const next = currentAgentVersion(envState)?.label;
+  return [...agentVersions(envState)].reverse().map((v) => ({
     ...v,
-    current: i === 0,
+    current: v.label === next,
     runs: runs.filter((r) => r.agentVersion === v.label).length,
   }));
 };

@@ -2,7 +2,7 @@ import PropTypes from "prop-types";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Stack, Tooltip, Typography } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
-import { previousRunOf, runStatsOf, sharedDeltaOf } from "../_mock/runCompare";
+import { previousRunOf, runStatsOf, sharedDeltaOf, sameEnvVersion } from "../_mock/runCompare";
 import { clickable } from "../components/clickable";
 
 const RED = "#DC2626";
@@ -18,7 +18,7 @@ const signed = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n)}`;
  * how it moved, and the pass rate across every run — with the checks as small
  * toggles that draw themselves on the line.
  */
-export default function RunsOverview({ runs, evals, referenceVersion, onOpenRun, headline = null }) {
+export default function RunsOverview({ runs, evals, referenceVersion, onOpenRun, headline = null, versionOf = undefined }) {
   /* Runs someone started, oldest first — candidates are read by their improvement. */
   const main = useMemo(() => runs.filter((r) => r.kind !== "trial"), [runs]);
   const finished = useMemo(() => main.filter((r) => r.finishedAt && statsOf(r).measured > 0), [main]);
@@ -26,11 +26,12 @@ export default function RunsOverview({ runs, evals, referenceVersion, onOpenRun,
   const [focusEval, setFocusEval] = useState(null);
 
   /* Read against the reference version when the latest run is on another
-     one; else against the run before it. */
+     one; else against the run before it. Either way only on the same
+     environment version — across versions there is no delta. */
   const refRun = referenceVersion && latest && latest.agentVersion !== referenceVersion
-    ? [...finished].reverse().find((r) => r.agentVersion === referenceVersion) || null
+    ? [...finished].reverse().find((r) => r.agentVersion === referenceVersion && sameEnvVersion(r, latest, versionOf)) || null
     : null;
-  const base = refRun || previousRunOf(finished, latest);
+  const base = refRun || previousRunOf(finished, latest, versionOf);
   const delta = latest && base ? sharedDeltaOf(latest, base) : null;
   const stats = latest ? statsOf(latest) : null;
   /* A caller can headline a run other than the latest — an improvement's
@@ -104,6 +105,8 @@ RunsOverview.propTypes = {
   onOpenRun: PropTypes.func,
   /* { run, label, metric?, delta: deltaAgainst(...), against } — headline this run instead of the latest. */
   headline: PropTypes.object,
+  /* (run) → its environment version; deltas only within one version. */
+  versionOf: PropTypes.func,
 };
 
 /* ── the trend ──────────────────────────────────────────────────────────── */

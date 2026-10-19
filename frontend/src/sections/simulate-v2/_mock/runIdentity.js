@@ -31,7 +31,11 @@ export const improvementOf = (run, envState) => {
     return record ? { record, role: "trial" } : null;
   }
   const record = records.find((o) => (o.verifyRunIds || []).includes(id));
-  return record ? { record, role: "winner" } : null;
+  if (record) return { record, role: "winner" };
+  /* A fix's first step measures today as a run of the environment — the
+     version in production, unchanged — and names the fix it was for. */
+  const measuredFor = run?.measuredFor ? records.find((o) => o.fromRunId === id) : null;
+  return measuredFor ? { record: measuredFor, role: "baseline" } : null;
 };
 
 /**

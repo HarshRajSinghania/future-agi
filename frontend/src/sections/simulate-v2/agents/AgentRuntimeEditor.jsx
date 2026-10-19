@@ -9,18 +9,17 @@ const MONO = "ui-monospace, Menlo, monospace";
 const valid = (u) => /^(https?|wss?):\/\/\S+$/i.test(u.trim());
 
 /**
- * Where the SDK serves the agent — the URL a simulation calls on every turn.
- * An agent read from code (repository, upload) that runs locally through the
- * SDK can be connected before serve() is running, so this can be missing;
- * until it's set (or the agent moves to the hosted sandbox, where we build it
- * ourselves), it can be versioned and read but not simulated.
+ * Where our adapter's serve() runs the agent — the URL a simulation calls on
+ * every turn. A framework agent can be connected before serve() is running,
+ * so this can be missing; until it's set (or its repository is linked, so we
+ * build it ourselves), it can be versioned and read but not simulated.
  *
  * variant "prompt": the agent page's call-out when it's missing.
  * variant "embedded": the same, inside an environment's test-subject card.
  * variant "inline": the editor inside the Connection tab.
  */
 export default function AgentRuntimeEditor({ agent, current, variant = "prompt", onDone }) {
-  const { setAgentRuntime, setAgentValues } = useConnectedAgents();
+  const { setAgentRuntime } = useConnectedAgents();
   const { enqueueSnackbar } = useSnackbar();
   const [value, setValue] = useState(current || "");
   const ok = valid(value);
@@ -28,12 +27,6 @@ export default function AgentRuntimeEditor({ agent, current, variant = "prompt",
   const save = () => {
     setAgentRuntime(agent.key, value.trim());
     enqueueSnackbar(`${agent.name} runs at ${value.trim()} — ready to simulate`, { variant: "success" });
-    onDone?.();
-  };
-  /* The other way out: let the platform build and run it (Story 6). */
-  const moveToSandbox = () => {
-    setAgentValues(agent.key, { runLocation: "hosted" });
-    enqueueSnackbar(`${agent.name} now runs in the hosted sandbox — we build it from its code for each run.`, { variant: "success" });
     onDone?.();
   };
 
@@ -63,19 +56,11 @@ export default function AgentRuntimeEditor({ agent, current, variant = "prompt",
       <Stack direction="row" spacing={1.5} alignItems="flex-start" sx={{ mb: 1.25 }}>
         <Iconify icon="solar:danger-triangle-linear" width={18} sx={{ color: "#CA8A04", mt: 0.125, flexShrink: 0 }} />
         <Box>
-          <Typography sx={{ typography: "s2", fontWeight: 700 }}>Add where the SDK serves this agent</Typography>
+          <Typography sx={{ typography: "s2", fontWeight: 700 }}>Add where serve() runs this agent</Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
             {variant === "embedded"
-              ? "It's set to run locally through the SDK, so a simulation calls the address serve() answers on — runs stay blocked until it has one. It applies wherever this agent is tested."
-              : "It's set to run locally through the SDK, so simulations need the address serve() answers on. Until then it can be versioned and inspected, not run."}
-          </Typography>
-          <Typography
-            role="button" tabIndex={0}
-            onClick={moveToSandbox}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); moveToSandbox(); } }}
-            sx={{ typography: "s3", color: "text.subtitle", cursor: "pointer", mt: 0.5, width: "fit-content", "&:hover": { color: "text.primary", textDecoration: "underline" } }}
-          >
-            Or run it in the hosted sandbox — we build it from the code, metered in sandbox minutes
+              ? "A simulation calls the address our adapter's serve() answers on — runs stay blocked until it has one. It applies wherever this agent is tested."
+              : "Simulations call the address our adapter's serve() answers on. Until then it can be versioned and inspected, not run."}
           </Typography>
         </Box>
       </Stack>

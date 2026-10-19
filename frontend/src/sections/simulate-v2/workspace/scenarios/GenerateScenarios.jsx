@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Button, TextField, Switch, FormControlLabel,
@@ -8,6 +8,7 @@ import Iconify from "src/components/iconify";
 import { FORCED_O_CELLS, O_TYPES } from "../../_mock/coverage";
 import { generatedSubGoals } from "../../_mock/scenarioSubGoals";
 import { clickable, focusRing } from "../../components/clickable";
+import { generatedPool, goalLabel } from "../../_mock/scenarios";
 
 /**
  * AI generate — the PRD's six-axis scenario pipeline surfaced as one
@@ -77,8 +78,15 @@ export default function GenerateScenarios({ env, envState, onAdd, selected }) {
      commit — a rough AC-10.9 budget hint. */
   const totalSize = size + forcedCount;
 
+  /* A short "writing and checking" beat, so the batch doesn't just appear. */
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
   const generate = () => {
     setGenerating(true);
+    timer.current = setTimeout(writeBatch, 1500);
+  };
+
+  const writeBatch = () => {
     /* Mock generation — compose stub scenarios so the batch shows up
        in the timeline with real names, personas and sub-goals. The
        real generator lives behind the same interface: this function
@@ -90,13 +98,28 @@ export default function GenerateScenarios({ env, envState, onAdd, selected }) {
     /* The table and editor read the pass condition from `expected` /
        `outcome`; `idealOutcome` stays for the coverage check. */
     const passCondition = (text) => ({ expected: text, outcome: text, idealOutcome: text });
-    const baseRows = Array.from({ length: size }).map((_, i) => ({
+    /* Real situations and callers from this environment's own pool, so a
+       generated batch reads like the scenarios around it. */
+    const pool = generatedPool(env);
+    const steer = focus.trim();
+    const baseRows = Array.from({ length: size }).map((_, i) => {
+      const from = pool.length ? pool[(i * 7 + Date.now()) % pool.length] : null;
+      /* Titled the way the builder titles a scenario: the goal it tests,
+         then the caller's variation — never a tool name or a table row. The
+         goal is the steer when there is one, so Group by goal holds them. */
+      const goal = steer
+        ? steer.charAt(0).toUpperCase() + steer.slice(1).replace(/[.\s]+$/, "")
+        : goalLabel(from?.useCase) || "Complete the caller's request end to end";
+      const summary = from?.summary || "A mix of task, caller, mood and call conditions";
+      return ({
       id: `gen-${Date.now().toString(36)}-${i}`,
       name: `generated-${focusWord.toLowerCase()}-${(i + 1).toString().padStart(2, "0")}`,
-      title: `Generated scenario ${i + 1}${focus ? ` · ${focus}` : ""}`,
-      task: focus || "Complete the user's request end-to-end.",
-      situation: focus ? `Leans toward: ${focus}` : "A mix of task, caller, mood and call conditions",
-      persona: { name: "Sampled Persona", role: "adult", age: 40 },
+      useCase: goal,
+      summary,
+      title: `${goal} — ${summary.charAt(0).toLowerCase()}${summary.slice(1)}`,
+      task: steer || from?.task || "Complete the user's request end-to-end.",
+      situation: steer ? `Leans toward: ${steer}` : from?.situation || "A mix of task, caller, mood and call conditions",
+      persona: from?.persona || { name: "A caller", role: "adult", age: 40 },
       /* 2–7, derived from the scenario — not the same three on every row. */
       subGoals: generatedSubGoals(`${focusWord}-${i}-${Date.now().toString(36)}`, env, focus),
       ...passCondition("Agent completes the task under the sampled conditions."),
@@ -104,7 +127,8 @@ export default function GenerateScenarios({ env, envState, onAdd, selected }) {
       turns: 4,
       surface,
       critical: false,
-    }));
+      });
+    });
     /* Forced red-team overlays: one scenario per FORCED_O_CELLS entry
        so the coverage panel shows them present (AC-9.9). Names embed
        the overlay id so overlayOf() classifies them correctly. */
@@ -114,6 +138,8 @@ export default function GenerateScenarios({ env, envState, onAdd, selected }) {
           return {
             id: `gen-${Date.now().toString(36)}-red-${i}`,
             name: `${oId}-forced-overlay-${i + 1}`,
+            useCase: `Resist ${oLabel.toLowerCase()} from the caller`,
+            summary: "Rare but high-risk — always included",
             title: `${oLabel} — safety test`,
             task: `A caller who tests the agent with ${oLabel.toLowerCase()}.`,
             situation: `Safety test: ${oLabel}. A rare but high-risk case that is always included, even when a random mix would skip it.`,
@@ -253,12 +279,12 @@ export default function GenerateScenarios({ env, envState, onAdd, selected }) {
             "&:hover": { bgcolor: "text.primary", opacity: 0.92, boxShadow: "none" },
           }}
         >
-          {generating ? "Generating…" : `Generate ${totalSize} candidates`}
+          {generating ? "Writing and checking the batch…" : `Generate ${totalSize} scenario${totalSize === 1 ? "" : "s"}`}
         </Button>
         <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
           {size} at {chosen.label.toLowerCase()} depth
           {redTeam ? ` + ${forcedCount} safety tests` : ""}
-          {" · they land as exploration proposals and join the set once you approve them"}
+          {" · they arrive as proposals and join the environment once you add them"}
         </Typography>
       </Stack>
     </Box>

@@ -64,7 +64,8 @@ export const candidateRouteOf = (agent) => {
   if (kind === "platform" && TEST_COPY[v.provider]) {
     const label = PROVIDER_LABELS[v.provider] || "the platform";
     return {
-      id: "settings", tier: "future-agi",
+      /* A live assistant isn't ours to control; a sealed imported copy is. */
+      id: "settings", tier: v.importedCopy ? "future-agi" : "deployed",
       submits: `a settings patch — the ${label} settings the change policy allows`,
       tested: `We apply it to ${TEST_COPY[v.provider]} in your ${label} account — never the live assistant — and run it next to the live settings.`,
       ships: SHIPS_AS[v.provider],
@@ -87,18 +88,19 @@ export const candidateRouteOf = (agent) => {
 };
 
 /** The brief's "Submit a candidate" step, in the words of the route. */
-export const submitStepOf = (agent, envId = "<environment>") => {
+export const submitStepOf = (agent) => {
   const r = candidateRouteOf(agent);
-  const key = agent?.key || "<agent>";
+  /* Every route goes through the same MCP tool — our MCP server or the
+     Claude Code plugin — never a CLI of ours. */
   const how = {
-    commit: `Push a branch, then call \`submit_candidate\` with the commit (or run \`fagi improve submit --agent ${key} --env ${envId} --commit <sha>\`).`,
-    archive: `Call \`submit_candidate\` with an archive of the patched code (or run \`fagi improve submit --agent ${key} --env ${envId} --archive <file>\`).`,
-    settings: "Call `submit_candidate` with the settings you changed, as a patch. Don't edit the live assistant — we apply your patch to a test copy.",
-    version: "Call `submit_candidate` with the new prompt or agent definition. It's saved as a draft, never made active.",
-    deployed: "Deploy your change, then call `submit_candidate` with its address or version.",
-    local: `Run \`fagi improve submit --agent ${key} --env ${envId} --local\` from your working copy.`,
+    commit: "Push a branch, then call the `submit_candidate` tool with the commit.",
+    archive: "Call the `submit_candidate` tool with an archive of the patched code.",
+    settings: "Call the `submit_candidate` tool with the settings you changed, as a patch. Don't edit the live assistant — we apply your patch to a test copy.",
+    version: "Call the `submit_candidate` tool with the new prompt or agent definition. It's saved as a draft, never made active.",
+    deployed: "Deploy your change, then call the `submit_candidate` tool with its address or version.",
+    local: "Call the `submit_candidate` tool from your working copy with the commit you're on.",
   }[r.id];
-  return `${how} ${r.tested} Future AGI computes the verdict.`;
+  return `${how} (The tool comes with the Future AGI MCP server and Claude Code plugin.) ${r.tested} Future AGI computes the verdict — read it with \`get_verdict\`.`;
 };
 
 /** The same, for the three ways listed on the Coding agents page. */
@@ -107,5 +109,6 @@ export const CANDIDATE_ROUTES = [
   { source: "Uploaded code", submits: "An archive of the patched code", tested: "Stored as a snapshot, run next to today's version" },
   { source: "Vapi, Retell and other hosted platforms", submits: "A settings patch, through submit_candidate", tested: "Applied to a test copy or draft version in your account — never the live assistant" },
   { source: "Built in Future AGI", submits: "A draft prompt or agent version", tested: "Saved as a draft, never active, run next to the active version" },
+  { source: "Local code through our SDK", submits: "The commit it's on, plus a fingerprint of uncommitted changes", tested: "Our SDK runs it on your machine against the same scenarios; we score it — the proof says Run on your machine" },
   { source: "Endpoint or phone number", submits: "The address or version it deployed", tested: "Our scenarios against it — the proof says Deployed by you" },
 ];

@@ -4,6 +4,7 @@ import { Box, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { behaviourDiff } from "../_mock/compareView";
 import { runIdentityOf } from "../_mock/runIdentity";
+import { creditsLabel } from "../_mock/metering";
 import { twinTimelineFor, twinById } from "../_mock/twins";
 import { Verdict } from "../components/primitives";
 import { textTone } from "../components/textTone";
@@ -210,7 +211,7 @@ function Cell({ cell, baselineCell, evals, envState, twinBacked, view, onOpen })
           <Stat label="Tokens" value={cell.task ? `${cell.tokens}` : "—"} delta={cell.tokensDelta} lowerIsBetter />
         )}
         {view.columns.cost && (
-          <Stat label="Cost" value={`$${(cell.cost || 0).toFixed(3)}`} />
+          <Stat label="Cost" value={!cell.task ? "—" : cell.costUnverified ? "unverified" : creditsLabel(cell.cost || 0)} />
         )}
         {twinBacked && twinWrites != null && !/^OPT-\d+-t\d+$/.test(cell.runId || "") && (
           <TwinWritesStat

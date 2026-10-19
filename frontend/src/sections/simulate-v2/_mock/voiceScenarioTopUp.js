@@ -5,7 +5,7 @@
   some — so grouped by goal the table read as a list of one-row sections.
   Each goal is topped up to five with the same task under a different kind
   of caller: the variations a team writes once the first draft of a suite
-  holds up. Canaries stay as they are (impossible by design, two is the set).
+  holds up.
 
   The new scenarios are appended to every stored run's scenario list, at the
   end, so the scenarios already there keep the outcomes they had and the new
@@ -72,7 +72,7 @@ export const withFiveAGoal = (env, es) => {
         situation: [tpl.situation || tpl.task, v.detail].filter(Boolean).join(" "),
         task: [tpl.task, v.detail].filter(Boolean).join(" "),
         persona: { ...persona, ...who },
-        /* Must-pass and the anchor core stay with the scenarios someone chose. */
+        /* Must-pass stays with the scenarios someone chose. */
         critical: false,
         tier: "core",
         seededAs: "topup",

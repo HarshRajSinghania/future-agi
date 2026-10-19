@@ -45,8 +45,10 @@ const HOW = {
 
 const who = (b) => b.meta.addedBy?.name || "System";
 const plural = (n) => `${n} scenario${n === 1 ? "" : "s"}`;
-/* "Arjun Kapoor added 3 scenarios" / "Vel built the environment". */
-const headline = (b) => (b.meta.source === "derived" ? `${who(b)} built the environment` : `${who(b)} added ${plural(b.rows.length)}`);
+/* "Arjun Kapoor added 3 scenarios" / "System proposed 4 scenarios" / "Vel built the environment". */
+const headline = (b) => (b.meta.source === "derived"
+  ? `${who(b)} built the environment`
+  : `${who(b)} ${b.rows.length && b.rows.every((r) => r.proposed) ? "proposed" : "added"} ${plural(b.rows.length)}`);
 const howAndWhen = (b) => [
   b.meta.source === "derived" ? "written from the agent" : HOW[b.meta.source],
   b.meta.note,
@@ -351,7 +353,9 @@ export function BatchHistoryPanel({ batches, runs = [], versions = [], total, as
             const m = e.m;
             const b = { meta: m, rows: m.scenarios };
             const n = m.scenarios.length;
-            const blockers = m.scenarios.filter((r) => r.critical).length;
+            const blockers = m.scenarios.filter((r) => r.critical && !r.proposed).length;
+            /* Proposed in chat and not added yet: said so, not counted as the set. */
+            const proposed = m.scenarios.filter((r) => r.proposed).length;
             const viewing = asOf === m.batchId;
             const later = asOf && at(m.addedAt) > at(batches.find((x) => x.batchId === asOf)?.addedAt);
             return (
@@ -384,8 +388,8 @@ export function BatchHistoryPanel({ batches, runs = [], versions = [], total, as
                     <Typography noWrap sx={{ typography: "s3", color: "text.secondary" }}>{who(b)}</Typography>
                   </Stack>
                   <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-                    {m.source === "derived" ? `Built the environment · ${n}` : `+${n} ${HOW[m.source] || ""}`.trim()}
-                    {blockers ? ` · ${blockers} blocker${blockers === 1 ? "" : "s"}` : ""}
+                    {m.source === "derived" ? `Built the environment · ${n}` : proposed === n ? `${n} proposed ${HOW[m.source] || ""}`.trim() : `+${n - proposed} ${HOW[m.source] || ""}`.trim()}
+                    {blockers ? ` · ${blockers} must-pass` : ""}
                   </Typography>
                 </Box>
               </Stack>

@@ -60,9 +60,6 @@ export const demoFaultRun = (env, envState, now = Date.now()) => {
     /* Suite, catalogue, evals and caller as they stand; the tool dial with
        the two fault profiles on. */
     ...pinsForNewRun(env, faultDial(envState)),
-    /* Seeded history: its outcome was chosen without cheat checks, and saves
-       made before they existed hold it that way — keep both the same. */
-    cheatChecks: 0,
     evals: envState.evals || [],
     scenarioIds,
     repeats: 3,
@@ -120,7 +117,6 @@ export const withPassingRun = (env, envState, now = Date.now(), id = PASS_RUN_ID
     agentVersion: "v3",
     envVersion: tmpl.envVersion,
     ...pinsForNewRun(env, envState),
-    cheatChecks: 0,
     evals: tmpl.evals || envState.evals || [],
     scenarioIds: tmpl.scenarioIds,
     repeats: tmpl.repeats || 3,

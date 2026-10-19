@@ -14,10 +14,10 @@ const ago = (iso) => {
 
 /**
  * A message as it lands in Slack — so the person setting up routing sees
- * exactly what their team will see. `onAction` makes the buttons live in the
- * prototype (approve a fix from "Slack").
+ * exactly what their team will see. `onAction` makes the buttons live: each
+ * one opens what the message is about.
  */
-export default function SlackMessage({ msg, onAction, actionState }) {
+export default function SlackMessage({ msg, onAction }) {
   return (
     <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: (t) => (t.palette.mode === "dark" ? "#1A1D21" : "#FFFFFF"), border: "1px solid", borderColor: "divider" }}>
       <Stack direction="row" spacing={1.25}>
@@ -37,29 +37,23 @@ export default function SlackMessage({ msg, onAction, actionState }) {
             <Typography key={l} sx={{ typography: "s2", color: "text.secondary" }}>{l}</Typography>
           ))}
           {msg.actions?.length > 0 && (
-            actionState ? (
-              <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>{actionState}</Typography>
-            ) : (
-              <Stack direction="row" spacing={0.75} sx={{ mt: 1 }} flexWrap="wrap" rowGap={0.75}>
-                {msg.actions.map((a, i) => (
-                  <Box
-                    key={a}
-                    {...clickable(onAction ? () => onAction(a) : undefined)}
-                    sx={{
-                      ...focusRing,
-                      px: 1.25, height: 28, display: "inline-flex", alignItems: "center", borderRadius: 0.75,
-                      border: "1px solid", cursor: onAction ? "pointer" : "default",
-                      borderColor: i === 0 && msg.approvalId ? "#007A5A" : "divider",
-                      bgcolor: i === 0 && msg.approvalId ? "#007A5A" : "transparent",
-                      color: i === 0 && msg.approvalId ? "#fff" : "text.primary",
-                      "&:hover": onAction ? { opacity: 0.85 } : {},
-                    }}
-                  >
-                    <Typography sx={{ typography: "s3", fontWeight: 700, color: "inherit" }}>{a}</Typography>
-                  </Box>
-                ))}
-              </Stack>
-            )
+            <Stack direction="row" spacing={0.75} sx={{ mt: 1 }} flexWrap="wrap" rowGap={0.75}>
+              {msg.actions.map((a) => (
+                <Box
+                  key={a}
+                  {...clickable(onAction ? () => onAction(a) : undefined)}
+                  sx={{
+                    ...focusRing,
+                    px: 1.25, height: 28, display: "inline-flex", alignItems: "center", borderRadius: 0.75,
+                    border: "1px solid", cursor: onAction ? "pointer" : "default",
+                    borderColor: "divider", bgcolor: "transparent", color: "text.primary",
+                    "&:hover": onAction ? { opacity: 0.85 } : {},
+                  }}
+                >
+                  <Typography sx={{ typography: "s3", fontWeight: 700, color: "inherit" }}>{a}</Typography>
+                </Box>
+              ))}
+            </Stack>
           )}
         </Box>
       </Stack>
@@ -67,4 +61,4 @@ export default function SlackMessage({ msg, onAction, actionState }) {
   );
 }
 
-SlackMessage.propTypes = { msg: PropTypes.object.isRequired, onAction: PropTypes.func, actionState: PropTypes.node };
+SlackMessage.propTypes = { msg: PropTypes.object.isRequired, onAction: PropTypes.func };

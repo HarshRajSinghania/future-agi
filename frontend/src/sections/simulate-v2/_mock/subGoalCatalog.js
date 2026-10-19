@@ -105,7 +105,7 @@ export const SUBGOAL_EDIT_KINDS = {
     label: "Grader fix",
     short: "Fix",
     ask: "A bug in the check — same intent",
-    note: "Scenarios using it move up a minor version; past runs are re-graded from stored traces and stay comparable.",
+    note: "Past runs are re-graded from stored traces and stay comparable.",
   },
   policy: {
     label: "Policy change",

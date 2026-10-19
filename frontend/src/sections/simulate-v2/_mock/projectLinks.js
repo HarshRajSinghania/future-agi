@@ -18,8 +18,8 @@
   (PRD Flow 3): the connect flow opens with the project already linked.
 
   One project feeds at most one agent (a squad that works as one counts as
-  one); an agent can have several projects — production and staging, a voice
-  line and a chat window.
+  one), and an agent has one Observe project: linking another replaces the
+  link it had (observeProject.js's link, the connect flow, Finish setting up).
 
   Where the link comes from (`how`):
     set        — linked when the agent was connected, or from its Connections tab
@@ -58,7 +58,8 @@ export const projectLinkOf = (project, state, agents = []) => {
   return { ...base, status: "unlinked" };
 };
 
-/** Every project this agent's traces land in, with how each is linked. */
+/** The projects linked to this agent, with how each is linked — one once
+    its link is set; a read-only list for older stored state that held more. */
 export const projectsOfAgent = (agent, state, agents = []) => {
   if (!agent) return [];
   const ids = new Set([

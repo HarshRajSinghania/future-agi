@@ -105,15 +105,20 @@ export const versionPinsOf = ({ agent, source, toolsOf }) => {
   const promptRev = [];
   const configRev = [];
   const toolsFp = [];
+  const toolsCount = [];
 
   versions.forEach((v, i) => {
     const p = parentIndex(versions, i);
 
     /* Tools: a version that didn't change them carries its parent's
        fingerprint, whatever else changed. */
-    if (v.tools) toolsFp[i] = toolsFingerprint(v.tools);
-    else if (p >= 0) toolsFp[i] = toolsFp[p];
-    else toolsFp[i] = toolsFingerprint(toolsOf?.(v.label) || agent?.definition?.tools || []);
+    if (v.tools) { toolsFp[i] = toolsFingerprint(v.tools); toolsCount[i] = v.tools.length; }
+    else if (p >= 0) { toolsFp[i] = toolsFp[p]; toolsCount[i] = toolsCount[p]; }
+    else {
+      const list = toolsOf?.(v.label) || agent?.definition?.tools || [];
+      toolsFp[i] = toolsFingerprint(list);
+      toolsCount[i] = list.length;
+    }
     const toolsSame = p >= 0 && toolsFp[p] === toolsFp[i];
 
     /* Revisions are one line even when versions branch: an edit made on top
@@ -141,7 +146,9 @@ export const versionPinsOf = ({ agent, source, toolsOf }) => {
     } else if (kind === "builtin" || kind === "prompt") {
       code = { id: "code", label: "prompt", value: `v${promptRev[i]}`, text: `prompt v${promptRev[i]}` };
     }
-    const tools = { id: "tools", label: "tools", value: toolsFp[i], text: `tools ${toolsFp[i]}` };
+    /* The fingerprint tells versions apart; people see how many tools it has. */
+    const nTools = `${toolsCount[i]} tool${toolsCount[i] === 1 ? "" : "s"}`;
+    const tools = { id: "tools", label: "tools", value: toolsFp[i], text: nTools };
     const commit = linkedRepo
       ? (() => { const sha = v.commit?.sha || hex(`${key}:${v.label}:commit`, 7); return { id: "commit", label: "commit", value: sha, text: `commit ${sha}` }; })()
       : null;
@@ -159,8 +166,8 @@ export const versionPinsOf = ({ agent, source, toolsOf }) => {
           : code.label === "prompt" ? `prompt revision ${code.value}`
             : code.text;
     const toolsTip = toolsSame
-      ? `tool definitions ${tools.value}, unchanged from ${versions[p].label}`
-      : `tool definitions ${tools.value}`;
+      ? `its ${nTools}, unchanged from ${versions[p].label}`
+      : `its ${nTools}`;
     const extraTips = [
       commit && `the linked repository at commit ${commit.value}`,
       ...fagi.map((fp) => `the Future AGI prompt "${fp.label}" at ${fp.value}`),
@@ -169,7 +176,7 @@ export const versionPinsOf = ({ agent, source, toolsOf }) => {
     out[v.label] = {
       pins,
       text: pins.map((x) => x.text).join(" · "),
-      tip: `Pins ${tips.length > 2 ? `${tips.slice(0, -1).join(", ")} and ${tips[tips.length - 1]}` : tips.join(" and ")}. The tools fingerprint changes only when a tool is added, removed or redescribed.`,
+      tip: `Pins ${tips.length > 2 ? `${tips.slice(0, -1).join(", ")} and ${tips[tips.length - 1]}` : tips.join(" and ")}. The tool definitions change only when a tool is added, removed or redescribed.`,
     };
   });
   return out;

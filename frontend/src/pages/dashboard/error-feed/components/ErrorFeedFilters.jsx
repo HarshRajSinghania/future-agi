@@ -27,7 +27,6 @@ const STATUS_OPTIONS = [
   { value: "acknowledged", label: "Acknowledged" },
   { value: "for_review", label: "For review" },
   { value: "resolved", label: "Resolved" },
-  { value: "ignored", label: "Ignored" },
 ];
 
 const SEVERITY_OPTIONS = [
@@ -271,7 +270,7 @@ export default function ErrorFeedFilters({ selected, onClearSelection }) {
           <OutlinedInput
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search errors"
+            placeholder="Search errors or IDs"
             size="small"
             startAdornment={
               <InputAdornment position="start">

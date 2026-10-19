@@ -358,10 +358,6 @@ const SimulatedRuns = lazyWithRetry(
 const SimImprovementsPage = lazyWithRetry(
   () => import("src/pages/dashboard/simulate-v2/ImprovementsPage"),
 );
-/* Improvements level 2 — one environment's (or dataset's) improvement runs. */
-const SimImprovementDataset = lazyWithRetry(
-  () => import("src/sections/simulate-v2/improvements/ImprovementDatasetView"),
-);
 /* One improvement on its own page — reopened directly, whatever started it. */
 const SimImprovementRunPage = lazyWithRetry(
   () => import("src/sections/simulate-v2/improvements/ImprovementRunPage"),
@@ -1450,9 +1446,10 @@ export const dashboardRoutes = (
               element: <Navigate to="/dashboard/simulate/improvements" replace />,
             },
             {
-              /* Improvements level 2 — a dataset (Coming soon). */
+              /* Datasets are a scenario source, not something to improve on
+                 (RSI PRD) — old links land on the list. */
               path: "improvements/dataset/:datasetId",
-              element: <SimImprovementDataset />,
+              element: <Navigate to="/dashboard/simulate/improvements" replace />,
             },
             {
               /* Improvements — one improvement run, by environment and id.

@@ -34,7 +34,6 @@ export const FILE_FOR_KIND = {
   Memory:              { path: (env) => `${env?.id || "agent"}/state/memory.py`, language: "python" },
   Architecture:        { path: (env) => `${env?.id || "agent"}/graph.py`, language: "python" },
   "Agent setting":     { path: (env) => `${env?.id || "agent"}/agent.yaml`, language: "yaml" },
-  "Tool code":         { path: (env, p) => `${env?.id || "agent"}/tools-api/${(p?.step || "tool").toLowerCase()}.py`, language: "python" },
 };
 
 /* The prompt section a System-prompt change edits — what a protected
@@ -191,7 +190,7 @@ export const proposalsFor = (env, failing = [], measured = []) => {
       id: "memory-carry",
       kind: "Memory",
       title: "Carry the verified facts forward instead of re-deriving them",
-      why: `${forgot.length} long ${forgot.length === 1 ? "episode" : "episodes"} lost track of what had already been established and closed on a claim instead of a result.`,
+      why: `${forgot.length} long ${forgot.length === 1 ? "conversation" : "conversations"} lost track of what had already been established and closed on a claim instead of a result.`,
       diff: [
         { type: "add", text: "Working memory: { verified_identity, tools_called, results_returned } — written after every tool result, read before every claim." },
       ],
@@ -206,7 +205,7 @@ export const proposalsFor = (env, failing = [], measured = []) => {
       id: "architecture-gate",
       kind: "Architecture",
       title: "Add a verification step before the closing turn",
-      why: `${skipped.length} episodes reached their closing statement with a required tool uncalled. A prompt line asks the agent not to; a step in the graph does not let it.`,
+      why: `${skipped.length} conversations reached their closing statement with a required tool uncalled. A prompt line asks the agent not to; a step in the graph does not let it.`,
       diff: [
         { type: "add", text: "before_finish: assert every required tool for this scenario returned successfully — otherwise route to the recovery branch instead of closing." },
       ],
@@ -253,33 +252,6 @@ export const proposalsFor = (env, failing = [], measured = []) => {
       addresses: policy.map((t) => t.id),
       step: "model_settings",
     });
-  }
-
-  /*
-    Tool code — the world's side. A tool that answers with less than the
-    agent needs (the lookup that omits the active booking) is fixed in its
-    handler, not in the prompt. It changes the world that grades the agent,
-    so it is only tried when tool code is allowed, and verified on a
-    re-proved candidate world.
-  */
-  const handlerTool = (env?.tools || []).find((t) => /lookup|status|get|search/i.test(t.name));
-  if (handlerTool) {
-    const thin = failing.filter((t) => hashOf(`toolcode:${t.id}`) % 5 === 0);
-    if (thin.length) {
-      out.push({
-        id: `toolcode-${handlerTool.name}`,
-        kind: "Tool code",
-        title: `Return the full record from ${handlerTool.name}`,
-        why: `${thin.length} ${thin.length === 1 ? "call" : "calls"} failed because ${handlerTool.name} answers without the fields the next step needs — the agent can't ask for what the tool never returns.`,
-        diff: [
-          { type: "remove", text: `return {"id": row.id, "status": row.status}` },
-          { type: "add", text: `return {"id": row.id, "status": row.status, "active": row.active_booking, "updated_at": row.updated_at}` },
-        ],
-        addresses: thin.map((t) => t.id),
-        step: handlerTool.name,
-        worldChange: true,
-      });
-    }
   }
 
   /* Weights are deliberately not a lever here: closed models cannot be tuned,
@@ -566,10 +538,10 @@ const VERIFIER_FIXES = {
   "unsupported-claim": {
     title: "Require tool evidence before task success can pass",
     kind: "Verifier",
-    why: "Task success currently reads the closing sentence. An episode that says the booking was moved scores the same as one that moved it.",
+    why: "Task success currently reads the closing sentence. A conversation that says the booking was moved scores the same as one that moved it.",
     diff: [
       { type: "remove", text: "task_success: the response confirms the caller's request was handled." },
-      { type: "add", text: "task_success: the response confirms the request AND the tool that performs it returned successfully in this episode." },
+      { type: "add", text: "task_success: the response confirms the request AND the tool that performs it returned successfully in this conversation." },
     ],
   },
   "hollow-pass": {
@@ -581,7 +553,7 @@ const VERIFIER_FIXES = {
     ],
   },
   "efficiency-exploit": {
-    title: "Pay the efficiency term only on episodes that succeeded",
+    title: "Pay the efficiency term only on conversations that succeeded",
     kind: "Reward spec",
     why: "The efficiency bonus is paid for finishing under the reference length. Episodes that got there by skipping the work collected it.",
     diff: [
@@ -646,13 +618,6 @@ export const generalisesTo = (proposal, task) => {
     return (task.steps || []).length > 6 && !!task.callLog?.unsupportedClaim;
   }
   if (proposal.id === "architecture-gate") return missing.length > 0;
-  /* A handler fix helps where the handler was the cause — the same pairs, by id. */
-  if (proposal.id.startsWith("toolcode-") && task.status === "failed") {
-    let h = 0;
-    const key = `${proposal.id}:${task.id}`;
-    for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    return h % 5 === 0;
-  }
   /* A setting helps the scenarios it helps — the same pairs, by id. */
   if (proposal.id.startsWith("setting-") && task.status === "failed") {
     let h = 0;

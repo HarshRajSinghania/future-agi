@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
 import {
-  Box, Button, Chip, Dialog, IconButton, ListSubheader, MenuItem, Select, Stack, TextField, Tooltip, Typography,
+  Box, Button, Chip, Dialog, IconButton, ListSubheader, MenuItem, Select, Stack, Switch, TextField, Tooltip, Typography,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { clickable, focusRing } from "../../components/clickable";
@@ -11,17 +11,18 @@ import { connectedAgentPath } from "../../improvements/improvementNav";
 import { useSimStore, useConnectedAgents } from "../../store";
 import { agentDefinitionOf } from "../../_mock/agentRegistry";
 import { getEval } from "../../_mock/evals";
-import { currentAgentVersion } from "../../_mock/versions";
+import { agentVersions, currentAgentVersion, productionAgentVersion } from "../../_mock/versions";
 import { limitRows, OPTIMIZER_MODELS } from "../../_mock/optimizationRuns";
 import { OPTIMIZERS, goalWords, improvementRunName } from "../../_mock/optimizer";
 import { baseRunOf, budgetsWithin, improvementEstimate, outcomeMetricsOf, planSearch } from "../../_mock/improvementStart";
+import { measureTodayRun, measuredSummaryOf } from "../../_mock/measureToday";
 import { agentStatusOf } from "../../_mock/agentLifecycle";
 import { runIdentityOf } from "../../_mock/runIdentity";
-import { DEFAULT_METHOD } from "./improvementView";
+import { DEFAULT_METHOD, methodLabelOf } from "./improvementView";
 import { limitsOf } from "../../agents/agentLimits";
 import { rereadFor, textSearchDefault } from "../../_mock/improvementPolicy";
 import { recordOutsideChange } from "../../_mock/nudgeEffects";
-import { creditsLabel } from "../../_mock/metering";
+import { creditsForUsd, creditsLabel } from "../../_mock/metering";
 
 const ACCENT = "#7857FC";
 /* "Raise the pass rate", "Raise booking success rate", "Raise Policy adherence". */
@@ -30,7 +31,8 @@ const fieldLabel = { typography: "s2", fontWeight: 700, mb: 0.875 };
 const selectSx = { height: 34, typography: "s2", "& .MuiSelect-select": { typography: "s2", py: 0.75 } };
 
 /**
- * Improve my agent — the step between a run's Fix my agent diagnosis and
+ * New improvement (from Improvements) or Run self improvement (from a run's
+ * Debug failures) — the step between a run's Fix my agent diagnosis and
  * the search. The same smallest set of decisions it always asked for (a name,
  * an optimizer, the model doing the improving), plus the two the search can't
  * guess: the goal and what it may spend. The agent's constraints come along
@@ -53,9 +55,20 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
   const [model, setModel] = useState(OPTIMIZER_MODELS[0].id);
   const [goal, setGoal] = useState("pass-rate");
   const [budget, setBudget] = useState(null);
+  /* The agent's other environments can add their must-pass sets (RSI PRD:
+     "Targets come from one environment; the others add their must-pass
+     sets"), and the search can try earlier versions' changes again. */
+  const [alsoIn, setAlsoIn] = useState([]);
+  const [acrossLineage, setAcrossLineage] = useState(false);
+  /* The search method and the improving model sit in an advanced panel,
+     with defaults applied — most people never open it. */
+  const [advanced, setAdvanced] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    setAdvanced(false);
+    setAlsoIn([]);
+    setAcrossLineage(false);
     setName(improvementRunName(es, null));
     setOptimizerId(DEFAULT_METHOD);
     setModel(OPTIMIZER_MODELS[0].id);
@@ -80,10 +93,33 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
   const goalOf = goals.find((g) => g.id === goal) || goals[0];
   const goalArg = goalOf ? { id: goalOf.id, label: goalOf.label, group: goalOf.group } : undefined;
 
-  const base = useMemo(() => (main ? baseRunOf(main, es) : null), [main, es]);
-  const searchTasks = tasks || base?.tasks;
+  /* From the version in production. A goal improvement measures today
+     itself — its first step runs the environment on that version, recorded
+     as a run — so nothing is run by hand first; one opened from a run's
+     Debug failures starts from that run. */
+  const prodLabel = es ? productionAgentVersion(es)?.label || null : null;
   const seed = `goal-${main?.id}-${(es?.optimizations || []).length}`;
-  const envIds = main ? [main.id] : [];
+  const today = useMemo(
+    () => (main && preset?.fromGoal && !tasks ? measureTodayRun(main, es, { key: seed, measuredFor: { kind: "goal" }, startedBy: "Improvement · goal" }) : null),
+    [main, es, preset?.fromGoal, tasks, seed],
+  );
+  const base = useMemo(
+    () => (today ? measuredSummaryOf(main, es, today) : main ? baseRunOf(main, es, prodLabel) || baseRunOf(main, es) : null),
+    [today, main, es, prodLabel],
+  );
+  const others = useMemo(() => (agent?.usedIn || [])
+    .filter((u) => u.envId !== main?.id)
+    .map((u) => state.myEnvironments.find((e) => e.id === u.envId))
+    .filter(Boolean), [agent, main, state.myEnvironments]);
+  const mustPassIn = (e) => (state.byEnv[e.id]?.scenarios || []).filter((r) => !r.archived && !r.retired && (r.critical || r.regressionMemory)).length;
+  const lineageVersions = useMemo(() => {
+    const list = agentVersions(es);
+    const from = base?.agentVersion || prodLabel;
+    const at = list.findIndex((v) => v.label === from);
+    return (at > 0 ? list.slice(0, at) : []).filter((v) => (v.changes || []).length);
+  }, [es, base, prodLabel]);
+  const searchTasks = tasks || base?.tasks;
+  const envIds = main ? [main.id, ...alsoIn] : [];
   const preview = useMemo(
     () => (main && searchTasks ? planSearch({ env: main, es, agentVersion: base?.agentVersion || currentAgentVersion(es)?.label || null, tasks: searchTasks, limits, seed, textSearch: inText, goal: goalArg, optimizerId, state, regressionEnvIds: envIds }) : null),
     [main, es, base, searchTasks, limits, seed, inText, goalArg?.id, optimizerId, state], // eslint-disable-line react-hooks/exhaustive-deps
@@ -92,7 +128,11 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
   const status = agent ? agentStatusOf(agent) : null;
   const blocked = status && status.status !== "connected" ? status.reason : null;
   const identity = main && es ? runIdentityOf({ agentVersion: base?.agentVersion || currentAgentVersion(es)?.label || null, envVersion: base?.envVersion || null }, es, main).label : null;
-  const estimate = improvementEstimate({ preview, surface: main?.surface, extraScenarios: 0 });
+  const estimate = improvementEstimate({
+    preview, surface: main?.surface, extraScenarios: others.filter((e) => alsoIn.includes(e.id)).reduce((n, e) => n + mustPassIn(e), 0),
+    /* Measuring today is part of what it spends. */
+    firstConversations: today ? (today.scenarioIds || []).length * (today.repeats || 1) : 0,
+  });
   const budgets = budgetsWithin(limits.budget.dollars);
   const spend = budget ?? budgets[budgets.length - 1];
   const overBudget = estimate.likely > spend;
@@ -102,10 +142,14 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
     const def = agentDefinitionOf({ agent, env: main, envState: es });
     return def.model?.visible ? def.model.name : null;
   }, [agent, main, es]);
-  const constraints = limitRows(limits, agentModel).filter((c) => c.id !== "budget").map((c) => `${c.label}: ${c.value}`).join(" · ");
-
   const train = preview?.trainMeasured || 0;
   const held = preview?.heldMeasured || 0;
+  /* Must-pass in the main environment, plus each other environment checked. */
+  const mustPassMain = preview?.mustPassMeasured ?? preview?.mustPass?.total ?? 0;
+  const mustPassAll = mustPassMain + others.filter((e) => alsoIn.includes(e.id)).reduce((n, e) => n + mustPassIn(e), 0);
+  /* Every constraint the search is held to, the time cap and must-pass
+     included; the budget has its own picker above. */
+  const constraints = limitRows(limits, agentModel, { mustPass: mustPassAll }).filter((c) => c.id !== "budget").map((c) => `${c.label}: ${c.value}`).join(" · ");
   const trials = preview?.trials?.length || 0;
   const ready = !!(agent && main && searchTasks && !blocked && !nothing && name.trim());
 
@@ -117,6 +161,7 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
     onStart({
       name: name.trim(), model, optimizerId,
       agent, env: main, envIds, goal: goalOf, budget: spend, limits, seed, reread, textSearch: inText,
+      lineage: acrossLineage ? lineageVersions : undefined, base, today,
     });
   };
 
@@ -124,7 +169,7 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 1.5, backgroundImage: "none" } }}>
       <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider" }}>
         <Box flex={1}>
-          <Typography sx={{ typography: "s1", fontWeight: 700 }}>Improve my agent</Typography>
+          <Typography sx={{ typography: "s1", fontWeight: 700 }}>{preset?.fromGoal ? "New improvement" : "Run self improvement"}</Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
             {`Searches for a better ${agent?.name ? `${agent.name}` : "agent"}, scored by this environment`}
           </Typography>
@@ -138,66 +183,85 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
           <TextField size="small" fullWidth value={name} onChange={(e) => setName(e.target.value)} sx={{ "& .MuiInputBase-input": { typography: "s2" } }} />
         </Box>
 
+        {/* Optimiser names sit in an advanced panel; the defaults apply until someone opens it. */}
         <Box>
-          <Typography sx={fieldLabel}>Search method</Typography>
-          <Stack direction="row" spacing={1} flexWrap="wrap" rowGap={1} useFlexGap role="radiogroup" aria-label="Search method">
-            {OPTIMIZERS.map((o) => {
-              const active = o.id === optimizerId;
-              return (
-                <Tooltip key={o.id} arrow title={o.fit}>
-                  <Box
-                    {...clickable(() => setOptimizerId(o.id), { role: "radio", checked: active })}
-                    sx={{
-                      ...focusRing,
-                      px: 1.5, py: 1.125, borderRadius: 1, cursor: "pointer", flex: "1 1 46%", minWidth: 190,
-                      border: "1px solid", borderColor: active ? ACCENT : "divider",
-                      bgcolor: (t) => (active ? alpha(ACCENT, t.palette.mode === "dark" ? 0.1 : 0.05) : "transparent"),
-                      "&:hover": { borderColor: active ? ACCENT : "text.disabled" },
-                    }}
-                  >
-                    <Stack direction="row" alignItems="center" spacing={0.75}>
-                      <Iconify icon={active ? "solar:check-circle-bold" : "solar:circle-linear"} width={14} sx={{ color: active ? ACCENT : "text.disabled" }} />
-                      {/* How many runs it tries is in Cost below — set by the budget, not the card. */}
-                      <Typography sx={{ typography: "s2", fontWeight: 700 }}>{o.label}</Typography>
-                    </Stack>
-                    <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{o.desc}</Typography>
-                  </Box>
-                </Tooltip>
-              );
-            })}
+          <Stack
+            direction="row" alignItems="center" spacing={0.75}
+            {...clickable(() => setAdvanced((v) => !v), { expanded: advanced })}
+            sx={{ ...focusRing, cursor: "pointer", width: "fit-content" }}
+          >
+            <Iconify icon={advanced ? "eva:arrow-ios-downward-fill" : "eva:arrow-ios-forward-fill"} width={14} sx={{ color: "text.subtitle" }} />
+            <Typography sx={{ typography: "s2", fontWeight: 700 }}>Advanced</Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+              {`${methodLabelOf(optimizerId)} search (${OPTIMIZERS.find((o) => o.id === optimizerId)?.label || optimizerId}) · changes written by ${OPTIMIZER_MODELS.find((m) => m.id === model)?.label || model}${optimizerId === DEFAULT_METHOD && model === OPTIMIZER_MODELS[0].id ? " — the defaults" : ""}`}
+            </Typography>
           </Stack>
-        </Box>
-
-        <Box>
-          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.875 }}>
-            <Typography sx={{ typography: "s2", fontWeight: 700 }}>Model</Typography>
-            <Tooltip arrow title="The model doing the improving — reading failures and writing the changes each run tries. Not the model your agent runs on.">
-              <Box component="span" sx={{ display: "flex" }}>
-                <Iconify icon="solar:info-circle-linear" width={13} sx={{ color: "text.disabled" }} />
+          {advanced && (
+            <Stack spacing={2.5} sx={{ mt: 1.5 }}>
+              <Box>
+                <Typography sx={fieldLabel}>Search method</Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" rowGap={1} useFlexGap role="radiogroup" aria-label="Search method">
+                  {OPTIMIZERS.map((o) => {
+                    const active = o.id === optimizerId;
+                    return (
+                      <Tooltip key={o.id} arrow title={o.fit}>
+                        <Box
+                          {...clickable(() => setOptimizerId(o.id), { role: "radio", checked: active })}
+                          sx={{
+                            ...focusRing,
+                            px: 1.5, py: 1.125, borderRadius: 1, cursor: "pointer", flex: "1 1 46%", minWidth: 190,
+                            border: "1px solid", borderColor: active ? ACCENT : "divider",
+                            bgcolor: (t) => (active ? alpha(ACCENT, t.palette.mode === "dark" ? 0.1 : 0.05) : "transparent"),
+                            "&:hover": { borderColor: active ? ACCENT : "text.disabled" },
+                          }}
+                        >
+                          <Stack direction="row" alignItems="center" spacing={0.75}>
+                            <Iconify icon={active ? "solar:check-circle-bold" : "solar:circle-linear"} width={14} sx={{ color: active ? ACCENT : "text.disabled" }} />
+                            {/* How many runs it tries is in Cost below — set by the budget, not the card. */}
+                            {/* One name for the method everywhere: plain words, the optimiser's in brackets. */}
+                            <Typography sx={{ typography: "s2", fontWeight: 700 }}>{`${methodLabelOf(o.id)} search (${o.label})`}</Typography>
+                          </Stack>
+                          <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{o.desc}</Typography>
+                        </Box>
+                      </Tooltip>
+                    );
+                  })}
+                </Stack>
               </Box>
-            </Tooltip>
-          </Stack>
-          <Stack direction="row" spacing={0.875} flexWrap="wrap" rowGap={0.875} useFlexGap>
-            {OPTIMIZER_MODELS.map((m) => {
-              const active = m.id === model;
-              return (
-                <Tooltip key={m.id} arrow title={m.note}>
-                  <Chip
-                    label={m.label}
-                    onClick={() => setModel(m.id)}
-                    sx={{
-                      height: 27, borderRadius: 0.75, border: "1px solid",
-                      borderColor: active ? ACCENT : "divider",
-                      bgcolor: (t) => (active ? alpha(ACCENT, t.palette.mode === "dark" ? 0.12 : 0.06) : "transparent"),
-                      color: active ? "text.primary" : "text.secondary",
-                      "& .MuiChip-label": { px: 1.125, typography: "s2", fontWeight: 600 },
-                      "&:hover": { bgcolor: (t) => alpha(ACCENT, t.palette.mode === "dark" ? 0.12 : 0.06) },
-                    }}
-                  />
-                </Tooltip>
-              );
-            })}
-          </Stack>
+
+              <Box>
+                <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.875 }}>
+                  <Typography sx={{ typography: "s2", fontWeight: 700 }}>Model</Typography>
+                  <Tooltip arrow title="The model doing the improving — reading failures and writing the changes each run tries. Not the model your agent runs on.">
+                    <Box component="span" sx={{ display: "flex" }}>
+                      <Iconify icon="solar:info-circle-linear" width={13} sx={{ color: "text.disabled" }} />
+                    </Box>
+                  </Tooltip>
+                </Stack>
+                <Stack direction="row" spacing={0.875} flexWrap="wrap" rowGap={0.875} useFlexGap>
+                  {OPTIMIZER_MODELS.map((m) => {
+                    const active = m.id === model;
+                    return (
+                      <Tooltip key={m.id} arrow title={m.note}>
+                        <Chip
+                          label={m.label}
+                          onClick={() => setModel(m.id)}
+                          sx={{
+                            height: 27, borderRadius: 0.75, border: "1px solid",
+                            borderColor: active ? ACCENT : "divider",
+                            bgcolor: (t) => (active ? alpha(ACCENT, t.palette.mode === "dark" ? 0.12 : 0.06) : "transparent"),
+                            color: active ? "text.primary" : "text.secondary",
+                            "& .MuiChip-label": { px: 1.125, typography: "s2", fontWeight: 600 },
+                            "&:hover": { bgcolor: (t) => alpha(ACCENT, t.palette.mode === "dark" ? 0.12 : 0.06) },
+                          }}
+                        />
+                      </Tooltip>
+                    );
+                  })}
+                </Stack>
+              </Box>
+            </Stack>
+          )}
         </Box>
 
         {/* The two things the search can't guess — what to aim at, what it may spend. */}
@@ -232,24 +296,67 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
           </Box>
         )}
 
+        {/* Where else it must hold, and whether to try earlier versions' changes. */}
+        {main && (others.length > 0 || lineageVersions.length > 0) && (
+          <Stack spacing={1.5}>
+            {others.length > 0 && (
+              <Box>
+                <Typography sx={fieldLabel}>Also check must-pass in</Typography>
+                <Stack spacing={0.25}>
+                  {others.map((e) => {
+                    const on = alsoIn.includes(e.id);
+                    const n = mustPassIn(e);
+                    return (
+                      <Stack
+                        key={e.id} direction="row" alignItems="center" spacing={1}
+                        {...clickable(() => setAlsoIn((ids) => (on ? ids.filter((x) => x !== e.id) : [...ids, e.id])), { role: "checkbox", checked: on })}
+                        sx={{ ...focusRing, px: 1, py: 0.75, borderRadius: 1, cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                      >
+                        <Iconify icon={on ? "solar:check-square-bold" : "solar:stop-linear"} width={16} sx={{ color: on ? "text.primary" : "text.subtitle", flexShrink: 0 }} />
+                        <Typography noWrap sx={{ typography: "s2", flex: 1, minWidth: 0 }}>{e.name}</Typography>
+                        <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>{n ? `${n} must-pass` : "No must-pass yet"}</Typography>
+                      </Stack>
+                    );
+                  })}
+                </Stack>
+              </Box>
+            )}
+            {lineageVersions.length > 0 && (
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Box flex={1} minWidth={0}>
+                  <Typography sx={{ typography: "s2", fontWeight: 600 }}>Search across earlier versions</Typography>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                    {`Also tries the changes ${lineageVersions[0].label}–${lineageVersions[lineageVersions.length - 1].label} made. Checked the same way as every other proposed change.`}
+                  </Typography>
+                </Box>
+                <Switch size="small" checked={acrossLineage} onChange={(e) => setAcrossLineage(e.target.checked)} />
+              </Stack>
+            )}
+          </Stack>
+        )}
+
         {/* What the search starts from, what it's never allowed to see, and what it costs. */}
         {main && (
           <Box sx={{ px: 2, py: 1.75, borderRadius: 1, border: "1px solid", borderColor: "divider", bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.03 : 0.015) }}>
             <Stack spacing={1.25}>
               <Row
                 label="Starts from"
-                value={`${identity || "the current version"} · ${included.length} ${included.length === 1 ? "change" : "changes"} you included`}
-                note={included.length ? "Every run is built from these, so each one can be read line by line." : "Nothing included — the search explores every change the diagnosis found."}
+                value={preset?.fromGoal
+                  ? `${identity || "the version in production"} · aimed at ${goalWords(goalOf)}`
+                  : `${identity || "the current version"} · ${included.length} ${included.length === 1 ? "change" : "changes"} you included`}
+                note={preset?.fromGoal
+                  ? "The search tries changes on the scenarios short of the goal, and proves the winner on held-back ones."
+                  : included.length ? "Every run is built from these, so each one can be read line by line." : "Nothing included — the search explores every change the diagnosis found."}
               />
               <Row
                 label="Scenarios"
-                value={`${train} training · ${held} held back`}
-                note="The headline number comes from the held-back scenarios, which are never shown while searching."
+                value={`${train} target · ${held} held back · ${mustPassAll} must-pass`}
+                note="The search sees target scenarios in full and must-pass ones as pass or fail only. The headline number comes from the held-back scenarios, which are never shown while searching."
               />
               <Row
                 label="Cost"
-                value={`${trials} runs × ${train} scenarios · likely ${creditsLabel(estimate.likely)} · about ${estimate.minutes} min`}
-                note={inText ? "Runs as text conversations; only the finalists are confirmed as real calls." : "A run is a full pass through the real tools, not a dataset lookup."}
+                value={`Likely ${creditsLabel(estimate.likely)} · between ${creditsForUsd(estimate.low).toLocaleString()} and ${creditsForUsd(estimate.high).toLocaleString()} · about ${estimate.minutes} min`}
+                note={`${trials} runs × ${train} target scenarios, then the finalists on held-back and must-pass. ${inText ? "Runs as text conversations; only the finalists are confirmed as real calls." : "A run is a full pass through the real tools, not a dataset lookup."}`}
               />
               <Row
                 label="Limits"
@@ -264,7 +371,7 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
 
       <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 2, borderTop: "1px solid", borderColor: "divider" }}>
         <Typography sx={{ typography: "s3", color: blocked ? "#DC2626" : "text.subtitle", flex: 1 }}>
-          {blocked || (main && !searchTasks ? `${main.name} hasn't been run yet — run it once to set the baseline.` : "Nothing ships on its own — a winner comes back as a draft.")}
+          {blocked || (main && !searchTasks ? `${main.name} has no scenarios to run yet.` : today ? "It runs the environment on today's version first. Nothing ships on its own — a winner comes back as a draft." : "Nothing ships on its own — a winner comes back as a draft.")}
         </Typography>
         <Button onClick={onClose} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
         <Button
@@ -282,7 +389,7 @@ export default function ImprovementSetup({ open, onClose, preset, tasks, include
 ImprovementSetup.propTypes = {
   open: PropTypes.bool,
   onClose: PropTypes.func.isRequired,
-  preset: PropTypes.shape({ agentKey: PropTypes.string, envId: PropTypes.string }).isRequired,
+  preset: PropTypes.shape({ agentKey: PropTypes.string, envId: PropTypes.string, fromGoal: PropTypes.bool }).isRequired,
   tasks: PropTypes.array,
   /* The diagnosis changes ticked in Fix my agent. */
   included: PropTypes.array,

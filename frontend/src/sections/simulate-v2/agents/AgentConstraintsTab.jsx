@@ -1,4 +1,8 @@
 import PropTypes from "prop-types";
+import { mainEnvOf } from "../_mock/agentLifecycle";
+import { manualImprovementFor } from "../_mock/scheduledImprovements";
+import { PLATFORM_TESTING } from "../_mock/rsiModel";
+import { improvementPath } from "../improvements/improvementNav";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { improvementUrl } from "../improvements/improvementNav";
@@ -7,7 +11,6 @@ import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import { ceilingLabel, improvementOutcome } from "../_mock/optimizationRuns";
 import { PROVIDER_LABELS, definitionOf, sourceKindOf } from "../_mock/agentRegistry";
-import { observabilityOf } from "../_mock/observability";
 import { improvementRunName } from "../_mock/optimizer";
 import { useSimStore } from "../store";
 import { heldShortOf } from "../improvements/improvementRows";
@@ -43,8 +46,8 @@ const toggleSx = segmentedToggleSx;
  * is held to these: a candidate that breaks one is rejected, however much it
  * helps. Saved as you change them.
  */
-/* Code and tool code are switches of their own, listed with the areas. */
-const CODE_SURFACES = ["code", "toolcode"];
+/* Code is a switch of its own, listed with the areas. */
+const CODE_SURFACES = ["code"];
 
 export default function AgentConstraintsTab({ agent, files, model, mustPass, speech, onBuildEnv }) {
   const { state } = useSimStore();
@@ -68,7 +71,7 @@ export default function AgentConstraintsTab({ agent, files, model, mustPass, spe
     <Stack spacing={0}>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ pb: 2 }}>
         <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1 }}>
-          <HintLine hint="A candidate that breaks one is rejected, however much it helps — from the Error Feed, Debug failures or a goal.">
+          <HintLine hint="A proposed change that breaks one is rejected, however much it helps — from the Error Feed, Debug failures or a goal.">
             Every improvement is held to these. Nothing ships without approval.
           </HintLine>
         </Typography>
@@ -88,7 +91,7 @@ export default function AgentConstraintsTab({ agent, files, model, mustPass, spe
                 <Typography sx={{ typography: "s2", fontWeight: 600 }}>Never edited</Typography>
               </Box>
               <Typography noWrap sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0, display: { xs: "none", md: "block" } }}>
-                Files, tools or prompt sections no candidate may touch
+                Files, tools or prompt sections no proposed change may touch
               </Typography>
             </Stack>
             <Box sx={{ mt: 0.75 }}>
@@ -99,7 +102,7 @@ export default function AgentConstraintsTab({ agent, files, model, mustPass, spe
         </AgentConfigAreasCard>
       </SettingsSection>
 
-      <SettingsSection title="Guardrails" sub="A candidate that breaks one is rejected.">
+      <SettingsSection title="Guardrails" sub="A proposed change that breaks one is rejected.">
         <Card>
           <Row
             title="Model"
@@ -138,8 +141,8 @@ export default function AgentConstraintsTab({ agent, files, model, mustPass, spe
               ? (measured != null ? `Today ≈ ${dollarsLabel(measured)}` : "A fixed ceiling")
               : "Compared with today's agent"}
             hint={costMode === "abs"
-              ? "Measured on every candidate — none may cost more than this, whatever today's agent costs."
-              : "Measured on every candidate against today's agent."}
+              ? "Measured on every proposed change — none may cost more than this, whatever today's agent costs."
+              : "Measured on every proposed change against today's agent."}
           >
             <Stack direction="row" alignItems="center" spacing={1}>
               <ToggleButtonGroup
@@ -186,7 +189,15 @@ export default function AgentConstraintsTab({ agent, files, model, mustPass, spe
       </SettingsSection>
 
       <SettingsSection title="Automatic improvements" sub="When one starts without anyone starting it.">
-        <AutomaticCard agent={agent} schedule={limits.schedule} onChange={(patch) => set({ schedule: { ...limits.schedule, ...patch } })} onBuildEnv={onBuildEnv} />
+        <AutomaticCard
+          agent={agent} schedule={limits.schedule} onBuildEnv={onBuildEnv}
+          onChange={(patch) => {
+            const next = { ...limits.schedule, ...patch };
+            /* A new day, time or mode books the next slot from now. */
+            const timing = "mode" in patch || "day" in patch || "time" in patch;
+            set({ schedule: timing ? { ...next, nextAt: next.mode === "weekly" ? nextScheduledAt(next).toISOString() : undefined } : next });
+          }}
+        />
       </SettingsSection>
     </Stack>
   );
@@ -325,8 +336,12 @@ Row.propTypes = { title: PropTypes.node, body: PropTypes.node, hint: PropTypes.n
 const draftWhere = (agent) => {
   const kind = sourceKindOf(agent);
   const provider = PROVIDER_LABELS[agent?.values?.provider];
-  if (kind === "repo" || kind === "upload" || (kind === "framework" && definitionOf(agent).repoUrl)) return "Opens a draft pull request on its repository";
-  if (kind === "platform") return `Creates an unpublished draft version${provider ? ` on ${provider}` : ""}`;
+  const platform = PLATFORM_TESTING[agent?.values?.provider];
+  if (kind === "repo" || (kind === "framework" && definitionOf(agent).repoUrl)) return "Opens a draft pull request on its repository";
+  if (kind === "upload") return "Writes the change up as a patch for your upload — someone applies it";
+  /* What each platform calls a draft: a Vapi copy, an ElevenLabs or Bland
+     branch, an unpublished Retell version. */
+  if (kind === "platform" && platform) return `${provider ? `On ${provider}, creates` : "Creates"} ${platform.ships.charAt(0).toLowerCase()}${platform.ships.slice(1)}`;
   if (kind === "builtin") return "Saves a draft Future AGI version";
   return "Writes the change up as a patch — we don't hold this agent, so someone applies it";
 };
@@ -338,30 +353,36 @@ const draftWhere = (agent) => {
  * every call always waits for a person.
  */
 function AutomaticCard({ agent, schedule, onChange, onBuildEnv }) {
-  const { state } = useSimStore();
+  /* commit, not dispatch: Run now leaves Agents for the improvement page, a
+     different store — the record has to be saved before this one unmounts. */
+  const { state, commit } = useSimStore();
   const navigate = useNavigate();
   const inEnv = (agent.usedIn || []).length > 0;
-  const watched = !!observabilityOf(agent).on;
   const canary = canarySupported(agent);
   const provider = PROVIDER_LABELS[agent.values?.provider] || "This platform";
-  const mode = inEnv ? schedule.mode : "off";
-  /* Canary is Phase 3 — a saved choice of it reads as drafts until then. */
+  /* Scheduled runs only (RSI PRD) — an older "new issue" choice reads as off. */
+  const mode = inEnv && schedule.mode === "weekly" ? "weekly" : "off";
+  /* A canary sends real calls to a change, so a person starts it — an
+     automatic run stops at drafts (RSI PRD: "A person always approves").
+     A saved choice of "canary" reads as drafts. */
   const autonomy = schedule.autonomy === "canary" ? "drafts" : schedule.autonomy;
   const last = useMemo(() => lastAutomaticRun(state, agent), [state, agent]);
+  /* "Run now": the improvement the schedule starts — in the agent's main
+     environment, measuring production's version first — started by this person, so
+     it's theirs to review: nothing is drafted on its own. */
+  const main = useMemo(() => mainEnvOf(agent, state), [agent, state]);
+  const runNow = () => {
+    const started = manualImprovementFor(agent, state);
+    if (!started) return;
+    if (started.today) commit({ type: "recordRun", envId: started.env.id, run: started.today });
+    commit({ type: "patchEnvState", envId: started.env.id, patch: { optimizations: [...(started.es.optimizations || []), started.record] } });
+    navigate(improvementPath(started.env.id, started.record.id));
+  };
+  const canRunNow = inEnv && !!main?.env;
 
   const levels = [
     { id: "propose", title: "Propose only", body: "Waits in Improvements for a review", hint: "Runs and waits — the proven change sits in Improvements until someone reviews it." },
     { id: "drafts", title: "Open drafts", body: "Nothing goes live", hint: `${draftWhere(agent)} as soon as a change is proven. Nothing goes live.` },
-    {
-      id: "canary",
-      title: "Canary release",
-      body: "A share of calls, a person promotes",
-      hint: canary
-        ? `Sends a small share of ${provider} calls to the draft and watches them against today's agent. A person promotes it. Not available yet, so nothing deploys on its own.`
-        : `${provider} can't split traffic between versions, so a draft can't be tried on a share of calls.`,
-      off: true,
-      tag: "Coming soon",
-    },
   ];
 
   const lastLine = (() => {
@@ -374,7 +395,9 @@ function AutomaticCard({ agent, schedule, onChange, onBuildEnv }) {
       improvementRunName(es, record),
       record.createdAt ? scheduleTimeLabel(record.createdAt) : null,
       outcome.ending.key === "ready" && held ? held.text : outcome.ending.label,
-      draft ? `draft opened on ${draft.where}` : null,
+      /* What "Open drafts" did with it — or why it couldn't. */
+      record.autoDraft?.where ? `draft opened · ${record.autoDraft.where}` : draft ? `draft opened on ${draft.where}` : null,
+      record.autoDraft?.skipped ? `no draft — ${record.autoDraft.skipped}` : null,
     ].filter(Boolean).join(" · ");
   })();
 
@@ -391,8 +414,7 @@ function AutomaticCard({ agent, schedule, onChange, onBuildEnv }) {
               </Box>
             </>
           ) : "Needs an environment — build one first")
-          : { off: "Only when someone starts one", weekly: "Every week, on the newest run's scenarios", "new-issue": "When the Error Feed confirms a new issue" }[mode]}
-        hint={inEnv && mode === "off" && !watched ? "Starting on a new issue needs production traces — the Error Feed only sees an agent it watches." : null}
+          : { off: "Only when someone starts one", weekly: "Every week, on the newest run's scenarios" }[mode]}
       >
         <ToggleButtonGroup
           size="small" exclusive value={mode} disabled={!inEnv}
@@ -401,13 +423,16 @@ function AutomaticCard({ agent, schedule, onChange, onBuildEnv }) {
         >
           <ToggleButton value="off">Off</ToggleButton>
           <ToggleButton value="weekly">Weekly</ToggleButton>
-          {/* Not wrapped for a tooltip — the group styles its direct children. */}
-          <ToggleButton value="new-issue" disabled={!watched}>New issue</ToggleButton>
         </ToggleButtonGroup>
+        {canRunNow && (
+          <Button size="small" variant="outlined" onClick={runNow} startIcon={<Iconify icon="solar:play-linear" width={14} />} sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}>
+            Run now
+          </Button>
+        )}
       </Row>
 
       {mode === "weekly" && (
-        <Row title="Every" body={`Next run · ${scheduleTimeLabel(nextScheduledAt(schedule))}`}>
+        <Row title="Every" body={`Next run · ${scheduleTimeLabel(schedule.nextAt || nextScheduledAt(schedule))}`}>
           <Stack direction="row" spacing={1}>
             <Select size="small" value={schedule.day} onChange={(e) => onChange({ day: e.target.value })} sx={{ ...selectSx, minWidth: 120 }}>
               {SCHEDULE_DAYS.map((d) => <MenuItem key={d.id} value={d.id} sx={{ typography: "s2" }}>{d.label}</MenuItem>)}
@@ -427,7 +452,7 @@ function AutomaticCard({ agent, schedule, onChange, onBuildEnv }) {
         <Box sx={{ borderTop: "1px solid", borderColor: "divider" }}>
           <Box sx={{ px: 2, pt: 1.25, pb: 0.5 }}>
             <Typography sx={{ typography: "s2", fontWeight: 600 }}>
-              <HintLine hint="Each level includes the ones before it. Full release is never automatic — a person always promotes a change to every call.">Most it may do on its own</HintLine>
+              <HintLine hint="Each level includes the ones before it. Nothing reaches real calls on its own — a person always approves a release.">Most it may do on its own</HintLine>
             </Typography>
           </Box>
           {levels.map((l) => {
@@ -452,7 +477,12 @@ function AutomaticCard({ agent, schedule, onChange, onBuildEnv }) {
               </Stack>
             );
           })}
-          <Box sx={{ pb: 0.75 }} />
+          {/* Canaries reach real calls, so a person starts them. */}
+          <Typography sx={{ typography: "s3", color: "text.subtitle", px: 2, pt: 0.5, pb: 1 }}>
+            {canary
+              ? `Canary releases on ${provider} — a share of real calls on the draft — are started by a person from the improvement, never by a schedule.`
+              : `${provider} can't split traffic between versions, so a canary release isn't available for this agent.`}
+          </Typography>
         </Box>
       )}
 

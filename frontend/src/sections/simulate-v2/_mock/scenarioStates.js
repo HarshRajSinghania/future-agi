@@ -1,12 +1,13 @@
 /**
  * The Scenarios tab's reading of the versioning doc's scenario states
- * (PRD v7 AC-14.2): valid · re-check · outdated · not applicable · archived.
+ * valid · re-check · outdated · stale · archived.
  *
  * `scenarioStateOf` (envModel.js) answers the doc's two questions from what a
  * row already carries — its proof, a confirmed spec change. This refines it:
  *   · archived — a hand edit, reversible (`row.archived = { at, note }`)
- *   · not applicable — for the selected agent version, by an approved
- *     applicability rule (decoupled.js `applicabilityOf`), with the reason
+ *   · stale — an agent change removed a tool the scenario needs (RSI PRD;
+ *     decoupled.js `staleForAgentOf`). It still runs, but counts toward no
+ *     decision until it is updated or archived.
  *   · a rule added (or re-worded) on a flow the scenario walks through: the
  *     scenario still stages and passes its reference solution, but that
  *     solution was written before the rule existed — Re-check, not Valid,
@@ -19,9 +20,9 @@
 import { scenarioStateOf, SCENARIO_STATES, rulesOf, ruleOfScenario, isConnectOnly } from "./envModel";
 import { subTasksFor, validate } from "./contract";
 import { reproved } from "./proofs";
-import { environmentVersions } from "./versions";
+import { environmentVersions, envLineage, holdsInEnv } from "./versions";
 import { admissionGatesOf, declineKindOf, evidenceGateOf, failedAdmissionGate } from "./admissionGates";
-import { applicabilityOf } from "./decoupled";
+import { staleForAgentOf } from "./decoupled";
 
 /* Outdated is the one state that earns colour — the existing red, used
    sparingly. Everything else stays neutral. */
@@ -30,7 +31,7 @@ export const STATE_TONE = { outdated: "#DC2626" };
 /* The states this tab adds to the doc's. */
 export const EXTRA_STATES = {
   archived: { label: "Archived", note: "kept in the set, not run or counted" },
-  na: { label: "Not applicable", note: "not run for this agent version" },
+  stale: { label: "Stale", note: "an agent change removed a tool it needs" },
   /* Viewing an older environment version: added after it. Not a state the
      filter offers — "new" is a compare band, not a scenario state. */
   later: { label: "Later version", note: "added after this environment version" },
@@ -39,7 +40,7 @@ export const EXTRA_STATES = {
 /* The filter's state choices, in the doc's order. */
 export const STATE_CHOICES = [
   SCENARIO_STATES.valid.label, SCENARIO_STATES.recheck.label, SCENARIO_STATES.outdated.label,
-  EXTRA_STATES.na.label, EXTRA_STATES.archived.label,
+  EXTRA_STATES.stale.label, EXTRA_STATES.archived.label,
 ];
 
 /** Archived by hand — or retired before v7, which reads the same. */
@@ -85,7 +86,8 @@ const ruleNamesTool = (change, tool) => {
  * tests is `outdatedBy` — Outdated, handled before this is asked.
  */
 export const ruleChangesOnFlow = (row, { env, envState, tools } = {}) => {
-  const changes = (envState?.ruleChanges || []).filter((c) => c.kind === "added" || c.kind === "changed");
+  const lineage = envLineage(env, envState);
+  const changes = (envState?.ruleChanges || []).filter((c) => (c.kind === "added" || c.kind === "changed") && holdsInEnv(lineage, c.envVersion));
   if (!changes.length || !row) return [];
   const checked = new Set(row.ruleChecked || []);
   const flow = toolsOnFlow(row, env, tools);
@@ -99,8 +101,8 @@ export const ruleChangesOnFlow = (row, { env, envState, tools } = {}) => {
 };
 
 /**
- * The state the tab shows: archived, then not applicable for the agent
- * version (`ctx.agentLabel`), then the doc's state refined by rule changes on
+ * The state the tab shows: archived, then stale for the agent version
+ * (`ctx.agentLabel`), then the doc's state refined by rule changes on
  * the scenario's flow. `ctx` = { env, envState, tools (the ones it needs),
  * agentLabel }.
  */
@@ -113,12 +115,12 @@ export const scenarioStateFor = (row, status, ctx = {}) => {
     };
   }
   if (ctx.agentLabel && ctx.env && ctx.envState) {
-    const app = applicabilityOf(row, ctx.agentLabel, ctx.env, ctx.envState);
-    if (!app.applies) {
+    const st = staleForAgentOf(row, ctx.agentLabel, ctx.env, ctx.envState);
+    if (st.stale) {
       return {
-        id: "na", ...EXTRA_STATES.na, canRun: false, correct: null, proof: status,
-        capability: app.capability,
-        why: `${app.reason || `Needs ${app.capability}`}. It stays in the set and comes back if ${app.capability} returns.`,
+        id: "stale", ...EXTRA_STATES.stale, canRun: true, correct: null, proof: status,
+        capability: st.capability,
+        why: `${st.reason}. Update it so it no longer needs ${st.capability}, or archive it.`,
       };
     }
   }
@@ -155,16 +157,16 @@ export const scenarioStateFor = (row, status, ctx = {}) => {
   };
 };
 
-/** Waiting on someone: Outdated, or Re-check that isn't mid-build. */
-export const needsReview = (state) => (state.id === "outdated" || state.id === "recheck") && state.proof?.id !== "checking";
+/** Waiting on someone: Outdated, Stale, or Re-check that isn't mid-build. */
+export const needsReview = (state) => (state.id === "outdated" || state.id === "stale" || state.id === "recheck") && state.proof?.id !== "checking";
 
 /*
-  Stale scenarios count toward no decision (RSI PRD). An Outdated or Re-check
-  scenario still runs, but its result is left out of the run's summary and
+  Stale scenarios count toward no decision (RSI PRD). An Outdated, Re-check or
+  Stale scenario still runs, but its result is left out of the run's summary and
   of what an improvement decides on, until it is updated or archived.
 */
 export const NO_DECISION_NOTE = "Still runs, but counts toward no decision until it's updated or archived.";
-export const countsTowardNoDecision = (state) => !!state && (state.id === "outdated" || state.id === "recheck");
+export const countsTowardNoDecision = (state) => !!state && (state.id === "outdated" || state.id === "recheck" || state.id === "stale");
 
 /**
  * The one thing each state asks for. A quarantined scenario can't be proved
@@ -173,6 +175,8 @@ export const countsTowardNoDecision = (state) => !!state && (state.id === "outda
 export const stateActionOf = (state) => {
   if (state.id === "archived") return "restore";
   if (state.id === "outdated") return "rewrite";
+  /* Stale: update it so it no longer needs the removed tool — the editor. */
+  if (state.id === "stale") return "edit";
   if (state.id === "recheck") {
     if (state.proof?.id === "checking") return null;
     return state.proof?.id === "quarantined" ? "rewrite" : "reprove";
@@ -180,7 +184,7 @@ export const stateActionOf = (state) => {
   return null;
 };
 
-export const STATE_ACTION_LABEL = { reprove: "Re-prove", rewrite: "Rewrite", restore: "Restore" };
+export const STATE_ACTION_LABEL = { reprove: "Re-prove", rewrite: "Rewrite", edit: "Update", restore: "Restore" };
 
 /* ── archive, restore, re-prove, rewrite ─────────────────────────────── */
 
@@ -237,12 +241,9 @@ const GATE_OF_REASON = { seed: "ready", contract: "solvable", checks: "vacuous" 
  * transcript graded by the judge, and "ready" means the fixture's caller
  * account exists.
  *
- * Two swaps (PRD v7 §4.10.9):
- *   · a refusal, guardrail or transfer scenario — where declining is
- *     correct — can't use "an empty run fails it". It needs positive
- *     evidence instead: a required utterance or a transfer call (AC-9.23).
- *   · a canary has no legitimate solution by design, so "solvable" reads
- *     "impossible by design": no valid path reaches its goal.
+ * One swap: a refusal, guardrail or transfer scenario — where declining is
+ * correct — can't use "an empty run fails it". It needs positive evidence
+ * instead: a required utterance or a transfer call.
  *
  * Each gate is `ok` (true), failed (false) or unknown (null, not yet proved
  * on this version). `broken` is the row breaking on the pinned world.
@@ -268,9 +269,6 @@ export const proofGatesOf = (row, env, { stale, broken } = {}) => {
       { id: "solvable", label: "Solvable", detail: "A reference solution passes every check." },
       { id: "vacuous", label: "Not vacuous", detail: "An empty run fails it." },
     ]).map((g) => {
-    if (g.id === "solvable" && row?.canary) {
-      return { ...g, id: "impossible", label: "Impossible by design", detail: "No valid path reaches its goal — the world proves it, so reaching it means a forbidden path was used." };
-    }
     if (g.id === "vacuous" && decline) {
       const ev = evidenceGateOf(decline, connect);
       return { ...g, id: "evidence", label: ev.label, detail: ev.detail, file: ev.file, failedReason: failed?.gate === "evidence" ? failed.reason : null };
@@ -278,7 +276,7 @@ export const proofGatesOf = (row, env, { stale, broken } = {}) => {
     return g;
   });
   return core.map(({ failedReason, ...g }) => {
-    const ok = g.id === "impossible" ? result("solvable") : result(g.id === "evidence" ? "vacuous" : g.id);
+    const ok = result(g.id === "evidence" ? "vacuous" : g.id);
     if (failedReason && ok !== null) return { ...g, core: true, ok: false, reason: failedReason };
     return { ...g, core: true, ok };
   }).concat(admissionGatesOf(row, env, { stale, broken }));

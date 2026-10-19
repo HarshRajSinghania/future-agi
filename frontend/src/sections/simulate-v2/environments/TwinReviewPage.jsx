@@ -69,7 +69,7 @@ export default function TwinReviewPage() {
   return (
     <>
       <Helmet>
-        <title>{env.name} · {provisioning ? "Provisioning" : "Review"} | Future AGI</title>
+        <title>{env.name} · {provisioning ? "Setting up" : "Review"} | Future AGI</title>
       </Helmet>
       <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {provisioning ? (
@@ -98,7 +98,7 @@ export default function TwinReviewPage() {
                 steps: [
                   {
                     kind: "note",
-                    text: `Clone sandbox is up. Review the ${env.name} setup on the right — tweak on the left, then Run simulation when ready.`,
+                    text: `The sandbox is up. Review ${env.name} on the right — ask here about it or for more scenarios — then Run simulation when ready.`,
                   },
                 ],
               },

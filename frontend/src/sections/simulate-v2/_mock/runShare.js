@@ -9,11 +9,31 @@
 */
 import { paths } from "src/routes/paths";
 import { hashSeed } from "./runStream";
-import { runPinsOf } from "./envModel";
 
+/* Key order never changes the stamp. */
+const stable = (v) => {
+  if (v == null) return "";
+  if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
+  if (typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${k}:${stable(v[k])}`).join(",")}}`;
+  return String(v);
+};
+
+/*
+  Only what the run stored about itself — never the environment as it stands
+  now and never display text. Runs that didn't pin a version (seeded history)
+  used to fall back to the current suite / sub-goal / eval version, so
+  archiving a scenario or editing an eval broke every link already shared.
+  The stored record is read from envState.runs, not the summary row (whose
+  agent version can be a positional fallback).
+*/
 const stampOf = (run, env, envState) => {
-  const p = runPinsOf(run, env, envState);
-  return [env?.id, run?.id, p.env, p.agent, p.suite, p.catalog, p.eval, p.simulator].join("|");
+  const r = (envState?.runs || []).find((x) => x.id === run?.id) || run || {};
+  const evals = (r.evals || []).map((e) => (typeof e === "string" ? e : `${e?.id || ""}@${e?.version ?? ""}`));
+  return [
+    env?.id, r.id, r.agentVersion, r.envVersion, r.envSnapshot,
+    r.suiteVersion, r.catalogVersion, r.evalVersion, r.simulator?.label,
+    (r.scenarioIds || []).join(","), stable(r.scenarioVersions), evals.join(","), stable(r.secrets),
+  ].map((x) => x ?? "").join("|");
 };
 
 /** `shr_` + a short provenance fingerprint. Deterministic for the same run and pins. */

@@ -15,6 +15,7 @@ import ActorsPanel from "./ActorsPanel";
 import { firstSnapshotOfWorld, nextSnapshotLabel } from "../_mock/envSnapshot";
 import BuildStreamNote from "../environments/BuildStreamNote";
 import ToolArgsGrid from "./ToolArgsGrid";
+import { goalLabel } from "../_mock/scenarios";
 
 const MONO = "ui-monospace, Menlo, monospace";
 
@@ -127,7 +128,7 @@ export default function RlContractPanel({ env, envState, patch, onGo, locked = f
               <Box key={u.id} sx={{ display: "grid", gridTemplateColumns: "72px 1fr auto", columnGap: 1.5, px: 2.5, py: 1.25, alignItems: "baseline", "&:hover .row-edit": { opacity: 1 } }}>
                 <Typography sx={{ typography: "s3", fontFamily: MONO, color: "text.subtitle" }}>{u.id}</Typography>
                 <Box minWidth={0}>
-                  <Typography sx={{ typography: "s2" }}>{u.text}</Typography>
+                  <Typography sx={{ typography: "s2" }}>{goalLabel(u.text)}</Typography>
                   {u.changedIn && (
                     <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
                       {u.original ? "Reworded" : "Added"} in environment {worldShown(u.changedIn)} · spec change
@@ -146,10 +147,10 @@ export default function RlContractPanel({ env, envState, patch, onGo, locked = f
         </SectionCard>
       )}
 
-      {/* ── run end conditions ────────────────────────────────────────── */}
+      {/* ── when a conversation ends ───────────────────────────────────── */}
       <SectionCard
-        title="Run end conditions"
-        subtitle="When a run is over, and which kind of over it was"
+        title="When a conversation ends"
+        subtitle="What ends a conversation, and what that means for its result"
         sx={{ mb: 2 }}
       >
         <Box sx={{
@@ -158,9 +159,9 @@ export default function RlContractPanel({ env, envState, patch, onGo, locked = f
           bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.09 : 0.07),
         }}>
           <Box sx={{ p: 2.5, bgcolor: "background.paper" }}>
-            <Label>Terminate</Label>
+            <Label>It ends</Label>
             <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1.25 }}>
-              The episode has a value. Goal verifiers settle.
+              The conversation is over, and its checks decide the result.
             </Typography>
             <Stack spacing={1}>
               {episode.terminate.map((e) => (
@@ -172,9 +173,9 @@ export default function RlContractPanel({ env, envState, patch, onGo, locked = f
             </Stack>
           </Box>
           <Box sx={{ p: 2.5, bgcolor: "background.paper" }}>
-            <Label>Truncate</Label>
+            <Label>It&apos;s cut off</Label>
             <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1.25 }}>
-              Not a failure, and not terminal — bootstrap from the last state.
+              A limit stops the conversation before it&apos;s over.
             </Typography>
             <Stack spacing={1}>
               {episode.truncate.map((e) => (
@@ -190,14 +191,14 @@ export default function RlContractPanel({ env, envState, patch, onGo, locked = f
           <Stack direction="row" spacing={1.75} sx={{ px: 2.5, py: 1.75 }} alignItems="flex-start">
             <Iconify icon="solar:clock-circle-linear" width={16} sx={{ color: "text.subtitle", flexShrink: 0, mt: "1px" }} />
             <Box>
-              <Typography sx={{ typography: "s2", fontWeight: 700 }}>Clock · {episode.clock.mode}</Typography>
+              <Typography sx={{ typography: "s2", fontWeight: 700 }}>Time · {episode.clock.mode}</Typography>
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>{episode.clock.note}</Typography>
             </Box>
           </Stack>
           <Stack direction="row" spacing={1.75} sx={{ px: 2.5, py: 1.75 }} alignItems="flex-start">
             <Iconify icon="solar:dice-linear" width={16} sx={{ color: "text.subtitle", flexShrink: 0, mt: "1px" }} />
             <Box>
-              <Typography sx={{ typography: "s2", fontWeight: 700 }}>Deterministic seed</Typography>
+              <Typography sx={{ typography: "s2", fontWeight: 700 }}>Same starting data every time</Typography>
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>{episode.seed.note}</Typography>
             </Box>
           </Stack>

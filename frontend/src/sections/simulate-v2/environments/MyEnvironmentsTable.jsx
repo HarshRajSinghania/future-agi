@@ -12,7 +12,7 @@ import { paths } from "src/routes/paths";
 import { DataTable } from "src/components/data-table";
 import DataTablePagination from "src/components/data-table/DataTablePagination";
 import Iconify from "src/components/iconify";
-import { subTasksFor } from "../_mock/contract";
+import { subGoalCatalogOf } from "../_mock/envModel";
 import { runReadiness } from "../_mock/setupGaps";
 import { protoRunId } from "../_mock/executionAdapter";
 import { useSimStore } from "../store";
@@ -22,45 +22,31 @@ import { runSummaries } from "../_mock/comparison";
 import { previousRunOf, runStatsOf, sharedDeltaOf } from "../_mock/runCompare";
 import { currentEnvVersion, currentAgentVersion } from "../_mock/versions";
 import { envLabelOf } from "../_mock/envVersionKinds";
-import { agentSourceOf } from "../_mock/agentRegistry";
-import { getEnvironment } from "../_mock/environments";
+import { agentSourceOf, connectedAgentsFrom, envAgentKey } from "../_mock/agentRegistry";
+import { mainEnvOf, proofKindOf } from "../_mock/rsiModel";
 import { identityOf } from "../agents/agentProfile";
+import { QuietTag } from "./LandingBits";
 
 /*
-  The old table read the raw `agentType` id off each env and looked it
-  up in AGENT_TYPES — which returned platform-specific labels like
-  "Voice platform" or "Twin-backed agent" that didn't line up with
-  the seven modalities the product actually talks about.
-
-  Categorise every env into one of the canonical modalities the CEO
-  picked — voice, chat, computer use, code, robotics, games & worlds,
-  tools & protocols. Derived from what we already know: twin backing
-  (real Slack / Notion / Salesforce clone → tools & protocols), the
-  env's surface field (voice / chat / coding / browser), and a fallback
-  keyword scan of the name + description for the rarer modalities.
+  Every environment is filed under the agent type it tests — the agent
+  types Agents defines: voice and chat, with computer use for the browser
+  worlds already built. Derived from the env's surface field, then a
+  keyword scan of the name and description; anything else reads as chat
+  (a code agent is a chat or voice agent whose source is code).
 */
 const MODALITY = {
   voice:       { id: "voice",       label: "Voice",              icon: "solar:microphone-3-linear" },
   chat:        { id: "chat",        label: "Chat",               icon: "solar:chat-round-line-linear" },
   computer:    { id: "computer",    label: "Computer use",       icon: "solar:monitor-linear" },
-  code:        { id: "code",        label: "Code",               icon: "solar:code-square-linear" },
-  robotics:    { id: "robotics",    label: "Robotics",           icon: "solar:bicycling-linear" },
-  world:       { id: "world",       label: "Games & worlds",     icon: "solar:gamepad-linear" },
-  tools:       { id: "tools",       label: "Tools & protocols",  icon: "solar:widget-6-linear" },
 };
 
 
-const modalityForEnv = (env, envState) => {
+const modalityForEnv = (env) => {
   const surface = String(env?.surface || "").toLowerCase();
-  const twin = envState?.twinBacking || env?.twinBacking;
   const hay = `${env?.name || ""} ${env?.description || ""} ${env?.tagline || ""}`.toLowerCase();
 
-  if (twin) return MODALITY.tools;
   if (surface === "voice" || /\bvoice|phone|call\b/.test(hay)) return MODALITY.voice;
   if (surface === "browser" || /browser|screen|desktop|computer.use/.test(hay)) return MODALITY.computer;
-  if (surface === "coding" || surface === "code" || /\bcode|repo|pull request|\bpr\b|github\b/.test(hay)) return MODALITY.code;
-  if (/robot|drone|actuator|manipulator/.test(hay)) return MODALITY.robotics;
-  if (/\bgame|world|unity|unreal|npc|simulation env/.test(hay)) return MODALITY.world;
   return MODALITY.chat;
 };
 
@@ -80,8 +66,6 @@ const compactInputSx = {
   "& .MuiOutlinedInput-input": { py: 0 },
 };
 const selectSx = { ...compactInputSx, minWidth: 170, "& .MuiSelect-select": { typography: "s2", py: 0 } };
-/* "Vapi · Customer Support Line agent" → "Vapi"; none → "No agent". */
-const sourceGroupOf = (row) => (row.source ? row.source.split(" · ")[0] : "No agent");
 
 export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, withToolbar = false }) {
   const { state, dispatch } = useSimStore();
@@ -125,6 +109,10 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
     setConfirmDelete(null);
   };
 
+  /* Every environment belongs to one agent in Agents — the same merged list
+     Agents shows, so the name and the main environment agree with it. */
+  const agents = useMemo(() => connectedAgentsFrom(state), [state]);
+
   /*
     Flatten envState-derived counts into each row up front, so column
     accessors stay simple and MUI X can sort on them without a valueGetter.
@@ -155,10 +143,9 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
           return "completed";
         })(),
         buildProgress: env.buildProgress,
-        /* Canonical modality — voice / chat / computer use / code / robotics
-           / games & worlds / tools & protocols. Sortable and filterable
+        /* Canonical agent type — voice / chat / computer use. Sortable and filterable
            because it's flattened onto the row instead of derived in cell. */
-        agentType: modalityForEnv(env, envState).id,
+        agentType: modalityForEnv(env).id,
         /* Tools count. Templates + user-connected agents ship a
            `tools` array. Twin/clone envs don't populate `tools`; their
            tool surface is the services they wrap (each service is a
@@ -168,10 +155,14 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
           || envState?.twinBacking?.services?.length
           || env.builtFrom?.services?.length
           || 0,
-        subgoals: scenarios.reduce(
-          (n, s) => n + (s.subTasks?.length ?? subTasksFor(s, env).length),
-          0,
-        ),
+        /* Distinct named sub-goals, as the Sub-goals tab and the build log
+           count them — not each scenario's checks added up. Proposals don't
+           count until someone adds them. */
+        subgoals: (() => {
+          try {
+            return subGoalCatalogOf(env, { ...envState, scenarios: scenarios.filter((r) => !r.proposed) }).length;
+          } catch { return 0; }
+        })(),
         scenarios: scenarios.length,
         /* Building the env counts as its own first run — the reducer
            seeds a synthetic entry in envState.runs when the env is
@@ -186,13 +177,21 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
           const v = currentEnvVersion(env, envState)?.label;
           return v ? envLabelOf(env, envState, v) : null;
         })(),
-        /* Where the agent it tests comes from — "Vapi · Customer Support
-           Line agent" — or the prebuilt world it was made from. */
-        source: (() => {
-          const agent = envState?.agent;
-          if (agent && !agent.seeded) return `${agentSourceOf(agent).label} · ${agent.name || `${env.name} agent`}`;
-          if (getEnvironment(env.id)) return `Prebuilt world · ${getEnvironment(env.id).name}`;
-          return null;
+        /* The agent it belongs to — its name in Agents, whether this is its
+           main environment (where Fix runs), and whether its proofs are
+           Sealed or Live. A template's stand-in isn't anyone's agent. */
+        ...(() => {
+          const own = envState?.agent && !envState.agent.seeded ? envState.agent : null;
+          const key = own ? envAgentKey(own, env.id) : null;
+          const agent = key ? agents.find((a) => a.key === key) : null;
+          if (!own) return { agentName: null, agentSource: null, isMain: false, proof: null };
+          const proof = proofKindOf(own);
+          return {
+            agentName: agent?.name || own.name || `${env.name} agent`,
+            agentSource: agentSourceOf(own).label,
+            isMain: !!agent && mainEnvOf(agent, state)?.envId === env.id,
+            proof: proof ? { kind: proof.kind, label: proof.label, note: proof.note } : null,
+          };
         })(),
         /* The latest finished run: its scenario pass rate, and how it moved
            against the run before it on the scenarios both scored. */
@@ -216,7 +215,7 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
         twinBacking: envState?.twinBacking || null,
       };
     }),
-    [envs, state.byEnv],
+    [envs, state, agents],
   );
 
   const columns = useMemo(
@@ -290,18 +289,31 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
         },
       },
       {
-        id: "source",
-        accessorKey: "source",
-        header: "Source",
-        size: 200,
-        enableSorting: false,
-        cell: ({ getValue }) => (
-          <Tooltip arrow title={getValue() || ""} enterDelay={400}>
-            <Typography noWrap sx={{ typography: "s2", color: getValue() ? "text.secondary" : "text.disabled" }}>
-              {getValue() || "No agent yet"}
-            </Typography>
-          </Tooltip>
-        ),
+        id: "agent",
+        accessorKey: "agentName",
+        header: "Agent",
+        size: 240,
+        cell: ({ row }) => {
+          const r = row.original;
+          if (!r.agentName) return <Typography sx={{ typography: "s2", color: "text.disabled" }}>—</Typography>;
+          return (
+            <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0, width: "100%" }}>
+              <Tooltip arrow title={r.agentSource || ""} enterDelay={400}>
+                <Typography noWrap sx={{ typography: "s2", color: "text.secondary", minWidth: 0 }}>{r.agentName}</Typography>
+              </Tooltip>
+              {r.isMain && (
+                <Tooltip arrow title="The agent's main environment — Fix runs here by default.">
+                  <Box component="span" sx={{ display: "inline-flex" }}><QuietTag>Main</QuietTag></Box>
+                </Tooltip>
+              )}
+              {r.proof && (
+                <Tooltip arrow title={r.proof.note || ""}>
+                  <Box component="span" sx={{ display: "inline-flex" }}><QuietTag>{r.proof.label}</QuietTag></Box>
+                </Tooltip>
+              )}
+            </Stack>
+          );
+        },
       },
       {
         id: "lastRun",
@@ -438,22 +450,22 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
     pagination bar sits flush with the last row. ResizeObserver
     keeps it accurate through resizes and sidebar toggles.
   */
-  /* Search, status, agent type and source — the toolbar above the table. */
+  /* Search, status, agent type and agent — the toolbar above the table. */
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [sourceFilter, setSourceFilter] = useState("all");
+  const [agentFilter, setAgentFilter] = useState("all");
   const statusCounts = useMemo(() => rows.reduce((m, r) => ({ ...m, [r.status]: (m[r.status] || 0) + 1 }), {}), [rows]);
   const typeChoices = useMemo(() => [...new Set(rows.map((r) => r.agentType))], [rows]);
-  const sourceChoices = useMemo(() => [...new Set(rows.map(sourceGroupOf))].sort(), [rows]);
+  const agentChoices = useMemo(() => [...new Set(rows.map((r) => r.agentName).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [rows]);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter((r) => (!q || `${r.name} ${r.description} ${r.source || ""} ${STATUS_META[r.status]?.label || ""}`.toLowerCase().includes(q))
+    return rows.filter((r) => (!q || `${r.name} ${r.description} ${r.agentName || ""} ${r.agentSource || ""} ${STATUS_META[r.status]?.label || ""}`.toLowerCase().includes(q))
       && (statusFilter === "all" || r.status === statusFilter)
       && (typeFilter === "all" || r.agentType === typeFilter)
-      && (sourceFilter === "all" || sourceGroupOf(r) === sourceFilter));
-  }, [rows, query, statusFilter, typeFilter, sourceFilter]);
-  const filtering = !!query.trim() || statusFilter !== "all" || typeFilter !== "all" || sourceFilter !== "all";
+      && (agentFilter === "all" || r.agentName === agentFilter));
+  }, [rows, query, statusFilter, typeFilter, agentFilter]);
+  const filtering = !!query.trim() || statusFilter !== "all" || typeFilter !== "all" || agentFilter !== "all";
 
   const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(0);
@@ -478,7 +490,7 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
           <TextField
             size="small" value={query}
             onChange={(e) => { setQuery(e.target.value); setPage(0); }}
-            placeholder="Search by name, source or status"
+            placeholder="Search by name, agent or status"
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -511,14 +523,14 @@ export default function MyEnvironmentsTable({ envs, onOpen, hideStatus = false, 
             <MenuItem value="all" sx={{ typography: "s2" }}>All agent types</MenuItem>
             {typeChoices.map((t) => <MenuItem key={t} value={t} sx={{ typography: "s2" }}>{(MODALITY[t] || MODALITY.chat).label}</MenuItem>)}
           </TextField>
-          <TextField select size="small" value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setPage(0); }} sx={selectSx}>
-            <MenuItem value="all" sx={{ typography: "s2" }}>All sources</MenuItem>
-            {sourceChoices.map((c) => <MenuItem key={c} value={c} sx={{ typography: "s2" }}>{c}</MenuItem>)}
+          <TextField select size="small" value={agentFilter} onChange={(e) => { setAgentFilter(e.target.value); setPage(0); }} inputProps={{ "aria-label": "Agent" }} sx={selectSx}>
+            <MenuItem value="all" sx={{ typography: "s2" }}>All agents</MenuItem>
+            {agentChoices.map((c) => <MenuItem key={c} value={c} sx={{ typography: "s2" }}>{c}</MenuItem>)}
           </TextField>
           {filtering && (
             <Button
               size="small"
-              onClick={() => { setQuery(""); setStatusFilter("all"); setTypeFilter("all"); setSourceFilter("all"); setPage(0); }}
+              onClick={() => { setQuery(""); setStatusFilter("all"); setTypeFilter("all"); setAgentFilter("all"); setPage(0); }}
               sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}
             >
               {`Clear · ${shown.length} of ${rows.length}`}
@@ -619,7 +631,7 @@ MyEnvironmentsTable.propTypes = {
   envs: PropTypes.array.isRequired,
   onOpen: PropTypes.func,
   hideStatus: PropTypes.bool,
-  /* Search, status, agent type and source above the table. */
+  /* Search, status, agent type and agent above the table. */
   withToolbar: PropTypes.bool,
 };
 

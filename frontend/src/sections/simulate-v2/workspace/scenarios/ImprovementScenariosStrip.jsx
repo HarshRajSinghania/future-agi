@@ -7,6 +7,7 @@ import {
 import Iconify from "src/components/iconify";
 import { pendingImprovementScenarios, addImprovementScenariosPatch } from "../../_mock/improvementScenarios";
 import SourceBadge from "./SourceBadge";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 const CHECKBOX_SX = { p: 0.5, color: "text.disabled", "&.Mui-checked": { color: "text.primary" } };
 
@@ -16,7 +17,7 @@ const CHECKBOX_SX = { p: 0.5, color: "text.disabled", "&.Mui-checked": { color: 
  * Scenarios an improvement wrote (to reproduce what it was fixing) are the
  * improvement's own until someone adds them. A quiet strip says how many are
  * waiting; Review lists them by improvement, and Add to environment brings
- * the picked ones in as proposed exploration rows with their source badge —
+ * the picked ones in, with their source badge —
  * the same write the improvement page makes.
  */
 export default function ImprovementScenariosStrip({ envState, patch, locked = false }) {
@@ -84,7 +85,7 @@ export function ImprovementScenariosDialog({ envState, patch, locked = false, op
     });
     if (merged.scenarios) patch(merged);
     onClose();
-    enqueueSnackbar(`Added ${count} scenario${count === 1 ? "" : "s"} — proposed, in exploration until approved`, { variant: "success" });
+    enqueueSnackbar(`Added ${count} scenario${count === 1 ? "" : "s"} — ${count === 1 ? "it runs" : "they run"} from the next run`, { variant: "success" });
   };
 
   return (
@@ -92,7 +93,7 @@ export function ImprovementScenariosDialog({ envState, patch, locked = false, op
       <DialogTitle sx={{ typography: "m2", fontWeight: 600 }}>Scenarios from improvements</DialogTitle>
       <DialogContent>
         <Typography sx={{ typography: "s2", color: "text.secondary", mb: 1.5 }}>
-          Added ones join as proposals in exploration, with their source badge. They run and report separately until you approve them.
+          Added ones join the environment with their source badge, and run from the next run.
         </Typography>
         <Stack spacing={1.5}>
           {groups.map(({ record, rows }) => (
@@ -102,7 +103,7 @@ export function ImprovementScenariosDialog({ envState, patch, locked = false, op
                   {record.name || record.trigger?.issueTitle || record.id}
                 </Typography>
                 <Typography sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-                  {`${record.id} · ${rows.length}`}
+                  {`${rows.length} scenario${rows.length === 1 ? "" : "s"}`}
                 </Typography>
               </Stack>
               {rows.map((r) => (
@@ -119,7 +120,7 @@ export function ImprovementScenariosDialog({ envState, patch, locked = false, op
                     sx={CHECKBOX_SX}
                   />
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography noWrap sx={{ typography: "s2", fontWeight: 500 }}>{r.title || r.name}</Typography>
+                    <Typography noWrap sx={{ typography: "s2", fontWeight: 500 }}>{scenarioTitle(r.title) || r.name}</Typography>
                     <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{r.summary || r.situation}</Typography>
                   </Box>
                   <SourceBadge scenario={{ ...r, fromImprovement: r.fromImprovement || { id: record.id, name: record.name } }} />

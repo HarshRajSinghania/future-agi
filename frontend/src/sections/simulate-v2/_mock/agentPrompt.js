@@ -17,11 +17,14 @@ const ORIGIN_BY_KIND = {
   platform: "the assistant's system prompt",
 };
 
+const chatOf = (env) => env?.surface === "chat" || /chat/.test(env?.agentType || "") || env?.channel === "chat";
+
 const composed = (env) => {
   const tools = (env?.tools || []).map((t) => `- ${t.name}${t.args?.length ? `(${t.args.join(", ")})` : "()"} — ${t.desc || ""}`.trim());
   const rules = (env?.rules || []).map((r) => `- ${r}`);
   return [
-    `You are the ${env?.surface === "chat" ? "chat" : "voice"} agent for ${env?.name ? `the ${env.name.toLowerCase()}` : "customer support"}.`,
+    /* Named for what it serves, not the environment testing it. */
+    `You are the ${chatOf(env) ? "chat" : "voice"} agent for ${env?.name ? `the ${env.name.replace(/\s+environment$/i, "").toLowerCase()}` : "customer support"}.`,
     env?.description || "",
     "",
     "## Tools",

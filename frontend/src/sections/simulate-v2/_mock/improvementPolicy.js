@@ -115,7 +115,7 @@ export const isProtectedMember = (m, limits) => {
 export const targetableMembers = (agent, limits) => membersOf(agent).filter((m) => !isProtectedMember(m, limits));
 
 /* Kinds of change that sit in parts every member and channel shares. */
-const SHARED_KINDS = ["Tool description", "Architecture", "Tool code", "Model"];
+const SHARED_KINDS = ["Tool description", "Architecture", "Model"];
 
 /**
  * Which member each proposal changes. A targeted improvement changes the

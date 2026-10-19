@@ -25,69 +25,98 @@ export const PLATFORM_LOGOS = {
 
 /* Hosted-platform providers grouped by agent type — the platform roster
    only makes sense once we know what kind of agent is being connected.
-   Voice mirrors the `voice_platform` provider list in _mock/agentTypes.js;
-   the other types round out the pattern with the platforms teams
-   actually reach for in each space. Adding a provider here (or a whole
-   new agent type) is the extension point when the product grows. */
+   Agents supports voice and chat; computer-use agents are listed as
+   Coming soon. Frameworks (LangGraph, CrewAI, Claude Agent SDK,
+   OpenAI Agents SDK…) aren't hosted platforms: they come in as code,
+   through a repository or an upload. */
 export const AGENT_TYPES = [
   { id: "voice", label: "Voice", icon: "solar:phone-calling-rounded-linear" },
   { id: "chat", label: "Chat", icon: "solar:chat-round-linear" },
   { id: "computer", label: "Computer use", icon: "solar:monitor-linear", comingSoon: true },
-  { id: "code", label: "Code", icon: "solar:code-square-linear", comingSoon: true },
-  { id: "robotics", label: "Robotics", icon: "solar:cpu-bolt-linear", comingSoon: true },
 ];
+
+/*
+  `icon` on a platform without a bundled logo is its brand mark from
+  Iconify (or a generic one when none exists), shown in the platform chip.
+  `chatChannels` — the chat channels one agent on that platform can be
+  tested through; the one picked is recorded on the agent.
+*/
+const TELNYX = { id: "telnyx", name: "Telnyx", icon: "solar:phone-calling-linear", brand: "#00C08B", idLabel: "Assistant ID", idPlaceholder: "assistant-7c1e9a42…", keyLabel: "Telnyx API key" };
+const GOOGLE_CX = { id: "google_cx", name: "Google CX Agent Studio", icon: "simple-icons:dialogflow", brand: "#FF9800", idLabel: "Agent resource name", idPlaceholder: "projects/acme/locations/global/agents/…", keyLabel: "Service account key", idNote: "Dialogflow CX agents. The resource name is on the agent's settings page." };
+const VOICEFLOW = { id: "voiceflow", name: "Voiceflow", icon: "solar:routing-2-linear", brand: "#1E1E1E", idLabel: "Project ID", idPlaceholder: "66f2c1d9e7…", keyLabel: "Voiceflow API key" };
+const AGENTFORCE = { id: "agentforce", name: "Salesforce Agentforce", icon: "simple-icons:salesforce", brand: "#00A1E0", idLabel: "Agent API name", idPlaceholder: "Service_Agent", keyLabel: "Connected app credentials" };
+const COPILOT_STUDIO = { id: "copilot_studio", name: "Microsoft Copilot Studio", icon: "simple-icons:microsoft", brand: "#5E5E5E", idLabel: "Agent schema name", idPlaceholder: "cr4f2_supportAgent", keyLabel: "Entra app credentials" };
 
 export const HOSTED_PLATFORMS_BY_TYPE = {
   voice: [
     { id: "vapi", name: "Vapi", icon: "solar:phone-calling-rounded-linear", brand: "#12A594", idLabel: "Assistant ID", idPlaceholder: "asst_9f2c…", keyLabel: "Vapi API key" },
     { id: "retell", name: "Retell AI", icon: "solar:microphone-3-linear", brand: "#635BFF", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", keyLabel: "Retell API key" },
-    /* Bland's new agent model: agents, not pathways. Pathway agents follow
-       after Bland's 15 Nov migration deadline. */
-    { id: "bland", name: "Bland.ai", icon: "solar:phone-linear", brand: "#F26D5B", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", idNote: "Bland's new agent model. Still on a pathway? Pathway agents can connect after Bland's 15 Nov migration.", keyLabel: "Bland API key" },
+    /* Bland's new agent model: agents, not pathways. */
+    { id: "bland", name: "Bland.ai", icon: "solar:phone-linear", brand: "#F26D5B", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", idNote: "Agents on Bland's agent model. A pathway agent connects once it has moved to that model.", keyLabel: "Bland API key" },
     { id: "elevenlabs", name: "ElevenLabs", icon: "solar:soundwave-linear", brand: "#111111", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", keyLabel: "ElevenLabs API key" },
-    { id: "livekit", name: "LiveKit", icon: "solar:server-minimalistic-linear", brand: "#1FD5F9", idLabel: "Agent name", idPlaceholder: "returns-line-agent", keyLabel: "LiveKit API key" },
+    /* Test only: LiveKit Agents is a code framework, so improvements come
+       through the code. A running agent connected by its LiveKit project is
+       tested and gets a suggested fix (rsiModel fixDepthOf). */
+    {
+      id: "livekit", name: "LiveKit", icon: "solar:server-minimalistic-linear", brand: "#1FD5F9", idLabel: "Agent name", idPlaceholder: "returns-line-agent", keyLabel: "LiveKit API key",
+      idNote: "Test only — connected by its LiveKit project, it gets a suggested fix. LiveKit Agents is a code framework, so proven changes come through its code: connect the agent's repository from New agent → GitHub.",
+    },
+    /* Full configuration through their APIs; a change ships as a draft version. */
+    TELNYX,
+    GOOGLE_CX,
+    VOICEFLOW,
     /* No platform — a pasted system prompt we run against the LLM directly. */
     { id: "other", name: "Others", icon: "solar:menu-dots-linear", isOther: true },
   ],
-  /* Vapi assistants take chat as well as calls. OpenAI Assistants is gone —
-     retired by OpenAI; an Agents SDK agent comes in as code. */
+  /* The same assistants over chat — Vapi and Retell chat agents, ElevenLabs
+     chat and WhatsApp agents, Bland's messaging agents — and the platforms
+     that are chat first. OpenAI Assistants is gone — retired by OpenAI; an
+     Agents SDK agent comes in as code, as do LangGraph, CrewAI and Claude
+     Agent SDK agents. */
   chat: [
     { id: "vapi", name: "Vapi", icon: "solar:chat-round-linear", brand: "#12A594", idLabel: "Assistant ID", idPlaceholder: "asst_9f2c…", keyLabel: "Vapi API key" },
-    { id: "langgraph", name: "LangGraph Cloud", icon: "solar:diagram-up-linear", idLabel: "Deployment URL", idPlaceholder: "https://…", keyLabel: "LangSmith API key", comingSoon: true },
-    { id: "crewai", name: "CrewAI", icon: "solar:users-group-rounded-linear", idLabel: "Crew ID", idPlaceholder: "crew_9f2c…", keyLabel: "CrewAI API key", comingSoon: true },
-    { id: "claude_agents", name: "Claude Agents", icon: "solar:atom-linear", idLabel: "Agent name", idPlaceholder: "support-agent", keyLabel: "Anthropic API key", comingSoon: true },
+    { id: "retell", name: "Retell AI", icon: "solar:chat-round-linear", brand: "#635BFF", idLabel: "Chat agent ID", idPlaceholder: "agent_9f2c…", keyLabel: "Retell API key" },
+    {
+      id: "elevenlabs", name: "ElevenLabs", icon: "solar:chat-round-linear", brand: "#111111", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", keyLabel: "ElevenLabs API key",
+      chatChannels: [{ id: "chat", label: "Chat" }, { id: "whatsapp", label: "WhatsApp", icon: "simple-icons:whatsapp" }],
+    },
+    {
+      id: "bland", name: "Bland.ai", icon: "solar:chat-round-linear", brand: "#F26D5B", idLabel: "Agent ID", idPlaceholder: "agent_9f2c…", keyLabel: "Bland API key",
+      chatChannels: [{ id: "messaging", label: "Messaging" }],
+    },
+    GOOGLE_CX,
+    VOICEFLOW,
+    AGENTFORCE,
+    COPILOT_STUDIO,
   ],
   computer: [
     { id: "browserbase", name: "Browserbase", icon: "solar:global-linear", idLabel: "Session template ID", idPlaceholder: "sess_9f2c…", keyLabel: "Browserbase API key" },
     { id: "anthropic_cu", name: "Anthropic Computer Use", icon: "solar:monitor-linear", idLabel: "Agent name", idPlaceholder: "returns-agent", keyLabel: "Anthropic API key" },
     { id: "skyvern", name: "Skyvern", icon: "solar:mouse-linear", idLabel: "Task template ID", idPlaceholder: "tmpl_9f2c…", keyLabel: "Skyvern API key" },
   ],
-  code: [
-    { id: "devin", name: "Devin", icon: "solar:code-linear", idLabel: "Agent slug", idPlaceholder: "acme/refactor-bot", keyLabel: "Cognition API key" },
-    { id: "replit_agent", name: "Replit Agent", icon: "solar:code-square-linear", idLabel: "Repl URL", idPlaceholder: "https://replit.com/@…", keyLabel: "Replit API key" },
-    { id: "cursor_bg", name: "Cursor background agent", icon: "solar:cursor-linear", idLabel: "Agent ID", idPlaceholder: "cursor_9f2c…", keyLabel: "Cursor API key" },
-  ],
-  robotics: [
-    { id: "gr00t", name: "NVIDIA GR00T Cloud", icon: "solar:cpu-bolt-linear", idLabel: "Policy ID", idPlaceholder: "policy_9f2c…", keyLabel: "NVIDIA API key" },
-    { id: "physical_intelligence", name: "Physical Intelligence π₀", icon: "solar:reorder-linear", idLabel: "Model name", idPlaceholder: "pi0-generalist", keyLabel: "PI API key" },
-  ],
 };
 
-/* Platforms we'll connect later — shown so nobody wonders whether theirs
-   is missing, never selectable. Same row for voice and chat. */
-export const LATER_PLATFORMS = [
-  { id: "telnyx", name: "Telnyx", icon: "solar:phone-calling-linear" },
-  { id: "google_cx", name: "Google CX Agent Studio", icon: "solar:cloud-linear" },
-  { id: "voiceflow", name: "Voiceflow", icon: "solar:routing-2-linear" },
-  { id: "agentforce", name: "Agentforce", icon: "solar:cloud-linear" },
-  { id: "copilot_studio", name: "Copilot Studio", icon: "solar:chat-square-linear" },
-];
+/*
+  Closed platforms (Sierra, Decagon, Intercom Fin, Zendesk) don't expose
+  their agents' settings, so they're test only — through their phone line,
+  their chat channel, or a conversation API where one exists. Each lists the
+  ways it can be reached; `api` names what the conversation API is called.
+*/
+export const CLOSED_PLATFORM_REACH = {
+  sierra: { icon: "solar:chat-round-dots-linear", ways: ["phone", "chat"], chatPlaceholder: "https://acme.sierra.chat/agent" },
+  decagon: { icon: "solar:chat-round-dots-linear", ways: ["phone", "chat", "api"], api: "Conversation API", apiPlaceholder: "https://api.decagon.ai/conversation", chatPlaceholder: "https://acme.decagon.ai/chat" },
+  intercom_fin: { icon: "simple-icons:intercom", ways: ["chat", "api"], api: "Conversations API", apiPlaceholder: "https://api.intercom.io/conversations", chatPlaceholder: "https://acme.intercom.help/messenger" },
+  zendesk: { icon: "simple-icons:zendesk", ways: ["phone", "chat", "api"], api: "Sunshine Conversations API", apiPlaceholder: "https://api.smooch.io/v2/apps/…/conversations", chatPlaceholder: "https://acme.zendesk.com/chat" },
+};
+export const CLOSED_REACH_LABELS = { phone: "Phone line", chat: "Chat channel", api: "Conversation API" };
 
 /* What a platform API key is used for — said where the key is entered. */
 export const PLATFORM_KEY_SCOPE = "This key reads your agent, creates test copies or drafts and places test calls. We never edit, publish or delete your live agent.";
+/* The key field's own line: how it's kept and what it's for (RSI PRD, "Credentials"). */
+export const PLATFORM_KEY_HELPER = "Stored encrypted. Used only to read the agent, make test copies and place test calls — never shown again, never sent to the improver.";
 
 /* Retired, so it's said in the framework path. */
-export const OPENAI_AGENT_BUILDER_NOTE = "OpenAI Agent Builder is shutting down — bring Agents SDK agents in as code.";
+export const OPENAI_AGENT_BUILDER_NOTE = "OpenAI agents come in as code, through the Agents SDK.";
 export const TRACEAI_FRAMEWORK_NOTE = "traceAI traces every framework here except Microsoft Agent Framework.";
 
 export const isLivePlatform = (p) => !!p && !p.comingSoon && !p.later;

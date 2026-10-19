@@ -13,7 +13,7 @@ import { Events, PropertyName, trackEvent } from "src/utils/Mixpanel";
 import { useAuthContext } from "src/auth/hooks";
 import { useWorkspace } from "src/contexts/WorkspaceContext";
 import { useDeploymentMode } from "src/hooks/useDeploymentMode";
-/* Agent improvement is a design partner preview behind a workspace flag. */
+/* Agent improvement sits behind an internal workspace flag (RSI PRD rollout). */
 import { useAgentImprovementFlag } from "src/sections/simulate-v2/_mock/featureFlags";
 import {
   ROLES,
@@ -224,8 +224,8 @@ export function useNavData() {
           },
           /* Improvements — workspace-wide runs surface. Each row is
              one source (an env or a dataset); clicking drills into
-             that source's runs summary. A design partner preview:
-             hidden when the workspace's agentImprovement flag is off. */
+             that source's runs summary. Hidden when the workspace's
+             internal agentImprovement flag is off. */
           ...(improving ? [{
             title: "Improvements",
             path: paths.dashboard.simulate.improvements,

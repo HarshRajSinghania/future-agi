@@ -16,7 +16,7 @@ import {
 } from "@mui/material";
 import PropTypes from "prop-types";
 import { enqueueSnackbar } from "notistack";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Iconify from "src/components/iconify";
 import {
   useErrorFeedDetail,
@@ -34,13 +34,14 @@ import AnalyzeTab from "./components/AnalyzeTab";
 import { useErrorFeedStore } from "./store";
 import FixSheet from "src/sections/simulate-v2/errorFeed/FixSheet";
 import IssueStatusChip from "./components/IssueStatusChip";
+import ErrorStatusChip from "./components/ErrorStatusChip";
 import useIssueRootCause from "./useIssueRootCause";
 import ReopenedBanner from "src/sections/simulate-v2/errorFeed/ReopenedBanner";
 import RegressionMemoryRow from "src/sections/simulate-v2/errorFeed/RegressionMemoryRow";
 import FixButton from "src/sections/simulate-v2/errorFeed/FixButton";
 import IssueProjectLine from "src/sections/simulate-v2/errorFeed/IssueProjectLine";
 import { useIssueFix } from "src/sections/simulate-v2/errorFeed/issueFix";
-import { fixTriageRulesOf } from "src/sections/simulate-v2/errorFeed/issueFixModel";
+import { triageFixEffect } from "src/sections/simulate-v2/errorFeed/issueFixModel";
 import { useAnalyzeRunner } from "./useAnalyzeRunner";
 import IssueBriefButton from "./IssueBriefButton";
 
@@ -140,6 +141,14 @@ export default function ErrorFeedDetailView() {
   };
   /* The sheet belongs to one issue — leaving it closes the sheet. */
   useEffect(() => () => setFixSheetOpen(false), [id, setFixSheetOpen]);
+  /* Back from building the agent's environment (Continue fixing): Fix opens
+     where the person left it. The flag is read once, then cleared. */
+  const location = useLocation();
+  useEffect(() => {
+    if (!location.state?.openFix) return;
+    setFixSheetOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state?.openFix]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const currentError = useMemo(() => {
     if (!detail?.row) return null;
@@ -154,14 +163,11 @@ export default function ErrorFeedDetailView() {
 
   useAnalyzeRunner(currentError?.cluster_id, currentError);
   /* Fix needs to know which agent the issue came from. */
-  const { agent: fixAgent, status: fixStatus } = useIssueFix(currentError);
+  const { agent: fixAgent, status: fixStatus, setReopened } = useIssueFix(currentError);
   /* Fix and Copy for coding agent carry the same root cause. */
   const rootCause = useIssueRootCause(currentError);
-  /* Once a fix is under way it drives the issue's status — Resolve and
-     Acknowledge say so instead of competing with it. The rail's Status
-     follows the same rules. */
-  const fixKey = fixStatus?.key || null;
-  const { resolveNote, resolveDisabled, ackNote, ackDisabled } = fixTriageRulesOf(fixKey);
+  /* Triage is the issue's own; the fix's status shows beside it, never in
+     its place, so nothing here is locked by a fix. */
 
   if (isLoading || !currentError) {
     return <DetailSkeleton />;
@@ -256,7 +262,8 @@ export default function ErrorFeedDetailView() {
               </Typography>
               {/* status · severity · what kind · how big · how recent */}
               <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
-                {/* One status: the fix's once there is one, else the issue's own. */}
+                {/* The issue's own status, then its fix's (RSI PRD fix-status chip). */}
+                <ErrorStatusChip status={currentError.status} />
                 <IssueStatusChip issue={currentError} />
                 <ErrorSeverityBadge severity={currentError.severity} />
                 <Typography typography="s2" color="text.secondary" sx={{ ml: 0.5 }}>
@@ -301,15 +308,9 @@ export default function ErrorFeedDetailView() {
                 slotProps={{ paper: { sx: { width: 280, mt: 0.5 } } }}
               >
                 {[
-                  {
-                    key: "resolved",
-                    icon: "mdi:check",
-                    label: fixKey === "watching" ? "Resolve now" : "Resolve",
-                    note: resolveNote,
-                    disabled: resolveDisabled,
-                  },
-                  { key: "acknowledged", icon: "mdi:check-circle-outline", label: "Acknowledge", note: ackNote, disabled: ackDisabled },
-                  { key: "ignored", icon: "mdi:eye-off-outline", label: "Ignore issue", note: "", disabled: currentError?.status === "ignored" },
+                  { key: "acknowledged", icon: "mdi:check-circle-outline", label: "Acknowledge", note: "", disabled: currentError?.status === "acknowledged" },
+                  { key: "for_review", icon: "mdi:eye-outline", label: "Mark for review", note: "", disabled: currentError?.status === "for_review" },
+                  { key: "resolved", icon: "mdi:check", label: "Resolve", note: triageFixEffect(fixStatus, "resolved")?.note || "", disabled: currentError?.status === "resolved" },
                 ].map((t) => (
                   <MenuItem
                     key={t.key}
@@ -317,6 +318,8 @@ export default function ErrorFeedDetailView() {
                     onClick={() => {
                       setTriageAnchor(null);
                       updateIssue.mutate({ clusterId: currentError.cluster_id, status: t.key });
+                      const effect = triageFixEffect(fixStatus, t.key);
+                      if (effect) setReopened(effect.reopen);
                     }}
                     sx={{ alignItems: "flex-start", gap: 1.25, py: 1 }}
                   >

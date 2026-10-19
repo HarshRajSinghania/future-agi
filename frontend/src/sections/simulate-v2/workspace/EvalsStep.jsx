@@ -12,7 +12,7 @@ import TwinEvalEditor from "./evals/TwinEvalEditor";
 import EditEvalDrawer from "./evals/EditEvalDrawer";
 import { canEditEval } from "./evals/canEditEval";
 import { worldToolsFor } from "../_mock/toolFit";
-import { runPlan } from "../_mock/proofs";
+import { runScopeOf } from "../_mock/runScope";
 import { evalCreditsPerRun, evalRailOf } from "../_mock/metering";
 
 /* The catalogue eval behind the "tool call evaluation" switch. */
@@ -53,9 +53,9 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
      scenarios a run would actually take — the same plan the Run button
      reads. */
   const runnable = useMemo(
-    () => runPlan(env, envState).run.length,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [env, envState.scenarios, envState.envVersions, envState.activeEnvVersion],
+    /* Less what sits out on an open question — the count the Run button uses. */
+    () => runScopeOf(env, envState).count,
+    [env, envState],
   );
   const creditsPerRun = evalCreditsPerRun({ evals: appliedEvals, scenarios: runnable, repeats });
   const meteredCount = appliedEvals.filter((e) => evalRailOf(e).metered).length;
@@ -158,7 +158,7 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
         action={appliedEvals.length > 0 && (
           <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
             {twinBacked && (
-              <Tooltip arrow title={locked ? "Fork this environment to author evals." : "Author a structured assertion against final clone state — deterministic, not a judge prompt."}>
+              <Tooltip arrow title={locked ? "Fork this environment to author evals." : "Write a check against the world's end state — deterministic, not a judge prompt."}>
                 <span>
                   <Button
                     variant="outlined"
@@ -173,7 +173,7 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
                       "&:hover": { borderColor: "text.disabled" },
                     }}
                   >
-                    Author clone eval
+                    Author sandbox eval
                   </Button>
                 </span>
               </Tooltip>
@@ -225,7 +225,7 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
                       "&:hover": { borderColor: "text.disabled" },
                     }}
                   >
-                    Author clone eval
+                    Author sandbox eval
                   </Button>
                 )}
                 <Button

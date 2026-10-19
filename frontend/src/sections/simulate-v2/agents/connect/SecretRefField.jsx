@@ -1,38 +1,28 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { Box, InputAdornment, TextField, Typography } from "@mui/material";
-import { DEMO_ANY_KEY, RAW_KEY_MESSAGE, isSecretRef, keyRefOf, looksLikeRawKey, storeOfRef, validateSecretRef } from "../../_mock/secretRefs";
+import { isSecretRef, storeOfRef, validateSecretRef } from "../../_mock/secretRefs";
 
 const MONO = "ui-monospace, Menlo, monospace";
-const HELPER = "A secret-manager path — the key never leaves it.";
+/* What happens to a credential, truthfully (RSI PRD, "Credentials"). A
+   platform key's own use is said by the field that asks for it. */
+const HELPER = "Stored encrypted and used only by Future AGI — never shown again, never sent to the improver.";
 
 /**
- * A credential field in a connect form (AC-6.12): it takes a reference into
- * the team's secret manager, never the value. A pasted key is refused where
- * it lands — the field keeps what it had and says why — so it never reaches
- * the form's state, let alone the record. The same rule as SecretRefEditor,
- * shaped as a form field rather than an inline save.
+ * A credential field in a connect form: it takes the key itself, or a
+ * reference into the team's secret manager (vault://…, aws-sm://…). A typed
+ * key is stored encrypted and read back only where a test needs it; a
+ * reference is resolved the same way. Either way the record keeps where it's
+ * held, never the value, and it never reaches a PR, brief, scenario or log.
  */
 export default function SecretRefField({ label, required, value, onChange, placeholder, helper, fullWidth, dense }) {
-  const [refused, setRefused] = useState(false);
   const [touched, setTouched] = useState(false);
   const text = value || "";
   const store = isSecretRef(text) ? storeOfRef(text.trim()) : null;
-  /* A half-typed path isn't wrong yet — only say so once the field is left. */
-  /* Demo: a typed key is taken, and recorded as the field's own slot. */
-  const demoRef = DEMO_ANY_KEY && text.trim() && !store ? keyRefOf(text, placeholder) : "";
-  const formatError = touched && text.trim() && !store && !demoRef ? validateSecretRef(text).error : null;
-
-  const take = (next) => {
-    /* Something that starts like a scheme is a reference being edited, not
-       a pasted key — it gets the format check on blur instead. */
-    if (!DEMO_ANY_KEY && looksLikeRawKey(next) && !/^[a-z][a-z-]*:/i.test(next.trim())) {
-      setRefused(true);
-      return;
-    }
-    setRefused(false);
-    onChange(next);
-  };
+  /* Only something written like a reference (a scheme and ://) can be a
+     malformed one — anything else is the key itself. A half-typed path
+     isn't wrong yet, so it's said once the field is left. */
+  const formatError = touched && !store && /:\/\//.test(text) ? validateSecretRef(text).error : null;
 
   return (
     <Box sx={{ flex: fullWidth ? 1 : undefined, minWidth: 0 }}>
@@ -46,11 +36,11 @@ export default function SecretRefField({ label, required, value, onChange, place
         fullWidth
         size="small"
         value={text}
-        placeholder={placeholder || "vault://acme/sim/api_key"}
-        onChange={(e) => take(e.target.value)}
+        placeholder={`Paste the key, or ${placeholder || "vault://acme/sim/api_key"}`}
+        onChange={(e) => onChange(e.target.value)}
         onBlur={() => setTouched(true)}
-        error={refused}
-        inputProps={{ spellCheck: false, autoComplete: "off", "aria-label": typeof label === "string" ? `${label} reference` : "Secret reference" }}
+        error={!!formatError}
+        inputProps={{ spellCheck: false, autoComplete: "off", "aria-label": typeof label === "string" ? label : "Key or secret reference" }}
         InputProps={store ? {
           endAdornment: (
             <InputAdornment position="end">
@@ -60,11 +50,9 @@ export default function SecretRefField({ label, required, value, onChange, place
         } : undefined}
         sx={{ "& .MuiInputBase-input": { typography: "s2", fontFamily: MONO } }}
       />
-      {refused ? (
-        <Typography role="alert" sx={{ typography: "s3", color: "error.main", mt: 0.5 }}>{RAW_KEY_MESSAGE}</Typography>
-      ) : dense && !formatError ? null : (
-        <Typography sx={{ typography: "s3", color: formatError ? "text.secondary" : "text.subtitle", mt: 0.5 }}>
-          {demoRef ? `Saved as ${demoRef} — the key you typed isn't kept.` : formatError || helper || HELPER}
+      {dense && !formatError ? null : (
+        <Typography role={formatError ? "alert" : undefined} sx={{ typography: "s3", color: formatError ? "error.main" : "text.subtitle", mt: 0.5 }}>
+          {formatError || helper || HELPER}
         </Typography>
       )}
     </Box>

@@ -5,7 +5,7 @@ export default function NewTwinEnvironmentPage() {
   return (
     <>
       <Helmet>
-        <title>New twin-backed environment | Future AGI</title>
+        <title>New environment | Future AGI</title>
       </Helmet>
       <NewTwinEnvironment />
     </>

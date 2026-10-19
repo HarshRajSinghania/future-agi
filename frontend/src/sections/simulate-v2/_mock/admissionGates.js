@@ -77,8 +77,8 @@ export const ADMISSION_GATES = [
     label: "Exploit agent scores 0",
     worldOnly: false,
     since: 3,
-    detail: "A scripted agent told to cheat — an off-limits tool, claiming success, talking to the judge or the caller — fails it.",
-    connectDetail: "A scripted agent told to cheat — claiming success, talking to the judge or the caller — fails the judge.",
+    detail: "A scripted agent told to game the test — claiming success, talking to the judge or the caller — fails it.",
+    connectDetail: "A scripted agent told to game the test — claiming success, talking to the judge or the caller — fails the judge.",
     file: "exploit_control.py",
   },
 ];

@@ -94,7 +94,7 @@ export function SecretRefEditor({ initial = "", placeholder, onSave, onCancel, s
         <Typography role="alert" sx={{ typography: "s3", color: "error.main" }}>{error}</Typography>
       ) : (
         <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          A path in your secret manager — vault://, aws-sm://, gcp-sm://, azure-kv://, op:// or doppler://. The key itself never leaves it.
+          The key, or a path in your secret manager — vault://, aws-sm://, gcp-sm://, azure-kv://, op:// or doppler://. Stored encrypted and used only by Future AGI — never shown again, never sent to the improver.
         </Typography>
       )}
     </Stack>
@@ -140,7 +140,7 @@ export function PreflightLine({ check, sx }) {
             <>
               Access OK ·{" "}
               <Box component="span" sx={{ color: "text.primary", fontWeight: 600 }}>{check.line}</Box>
-              <Box component="span" sx={{ color: "text.subtitle" }}> · nothing rebuilt, no new version</Box>
+              <Box component="span" sx={{ color: "text.subtitle" }}> · nothing rebuilt</Box>
             </>
           ) : check.line}
         </Typography>

@@ -5,18 +5,18 @@ import {
   IconButton, Tooltip, Checkbox,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { subTasksFor } from "../../_mock/contract";
+import { subGoalsOfScenario } from "../../_mock/envModel";
 import { admissionOf } from "../../_mock/coverage";
 import { versionNumber } from "../../_mock/versions";
 import { ScenarioRowContext } from "./scenarioRowContext";
 import BlockerFlag from "./BlockerFlag";
-import { StateChip, ArchiveControl, TextAction, TierBadge, CanaryBadge, PriorityPicker } from "./ScenarioStateBits";
-import { goalKeyOf } from "../../_mock/mustPassProtection";
+import SourceBadge from "./SourceBadge";
+import { StateChip, ArchiveControl, TextAction, ProposedBadge } from "./ScenarioStateBits";
 import { stateActionOf, STATE_ACTION_LABEL, archivedOf } from "../../_mock/scenarioStates";
-import { isAnchor } from "../../_mock/tiers";
 import { subGoalResultsOf } from "../../_mock/scenarioSubGoals";
 import { envLabelOf } from "../../_mock/envVersionKinds";
 import { clickable, focusRing } from "../../components/clickable";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 /* Neutral white-on-selected checkbox — no primary colour, keeps the
    table's monochrome treatment. */
@@ -39,7 +39,7 @@ const onHover = { opacity: 0, transition: "opacity .12s ease", ".MuiTableRow-roo
  *
  * The row answers "which scenario is this, who calls, can I trust it, and how
  * has it been doing": its name, the caller, its state when it needs
- * attention, whether it's must-pass or in the anchor core, and its last runs.
+ * attention, whether it's must-pass, and its last runs.
  * Everything else — the situation, sub-goals, tools, ideal outcome, proof —
  * is one click away in the scenario itself. Edit, archive and delete sit on
  * the row's hover.
@@ -54,7 +54,6 @@ const COLUMNS = [
   { id: "scenario", label: "Scenario", tip: "A status shows only when the scenario needs something" },
   { id: "persona", label: "Persona", w: 180 },
   { id: "subgoals", label: "Sub-goals", w: 88, align: "right", tip: "Sub-goals met in the scenario's latest run, of all it's graded on" },
-  { id: "priority", label: "Priority", w: 84, tip: "What a quick run takes, and what goes first when a run is capped. Must-pass scenarios are always high." },
   { id: "mustPass", label: "Must-pass", w: 84, align: "center", tip: "An improvement that breaks a must-pass scenario is rejected" },
   { id: "runs", label: "Last runs", w: 116, tip: "This scenario in the environment's last runs, oldest to latest" },
   { id: "actions", w: 104 },
@@ -82,24 +81,19 @@ function StatusCell({ row, state, onAction, locked }) {
 }
 StatusCell.propTypes = { row: PropTypes.object.isRequired, state: PropTypes.object, onAction: PropTypes.func, locked: PropTypes.bool };
 
-/*
-  A tier worth saying on the row: exploration, or a proposal with its Approve.
-  Anchor core and core sit in the scenario itself and in Filter.
-*/
-function TierTag({ row, onAction, locked }) {
-  if (row.proposed) {
-    return (
-      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ flexShrink: 0 }}>
-        <TierBadge row={row} compact />
-        {onAction && !locked && (
-          <TextAction onClick={(e) => { e.stopPropagation(); onAction("approve", row); }}>Approve</TextAction>
-        )}
-      </Stack>
-    );
-  }
-  return row.tier === "exploration" ? <Box sx={{ display: "inline-flex", flexShrink: 0 }}><TierBadge row={row} compact /></Box> : null;
+/* A proposed scenario waits for someone to add it — the review step. */
+function ProposedTag({ row, onAction, locked }) {
+  if (!row.proposed) return null;
+  return (
+    <Stack direction="row" alignItems="center" spacing={0.75} sx={{ flexShrink: 0 }}>
+      <ProposedBadge />
+      {onAction && !locked && (
+        <TextAction onClick={(e) => { e.stopPropagation(); onAction("approve", row); }}>Add</TextAction>
+      )}
+    </Stack>
+  );
 }
-TierTag.propTypes = { row: PropTypes.object.isRequired, onAction: PropTypes.func, locked: PropTypes.bool };
+ProposedTag.propTypes = { row: PropTypes.object.isRequired, onAction: PropTypes.func, locked: PropTypes.bool };
 
 /* "2/3" — sub-goals met in the latest run the scenario was in, each one on
    hover. No run yet: just how many it has. */
@@ -171,7 +165,6 @@ RunDots.propTypes = { history: PropTypes.array };
 
 export default function ScenarioTable({
   rows, groups, env, envState, envVersion, onEdit, onRemove, selectedIds, onSelectionChange, locked = false,
-  goalActions = false, mustPassGoals = [],
 }) {
   /* Stored env labels read as major.minor ("v3" → "v2.1"). */
   const vl = (label) => (envState ? envLabelOf(env, envState, label) : label);
@@ -279,34 +272,10 @@ export default function ScenarioTable({
           {sections.map((section) => (
             <Fragment key={section.id}>
               {section.label && (
-                <TableRow sx={{ "&:hover .goal-act, & .goal-act:focus-within": { opacity: 1 } }}>
+                <TableRow>
                   <TableCell colSpan={columns.length} sx={{ borderBottom: "1px solid", borderColor: "divider", py: 1, px: 2 }}>
                     <Stack direction="row" alignItems="center" spacing={1.25}>
                       <Typography noWrap sx={{ typography: "s2", fontWeight: 600, flex: 1, minWidth: 0 }}>{section.label}</Typography>
-                      {/* A goal marked must-pass covers every scenario in it, and ones added later. */}
-                      {goalActions && goalKeyOf(section.rows[0]) && (() => {
-                        const key = goalKeyOf(section.rows[0]);
-                        const on = mustPassGoals.includes(key);
-                        return (
-                          <>
-                            {on && (
-                              <Tooltip arrow title="Every scenario in this goal is must-pass, and scenarios added to it join. An improvement that breaks one is rejected.">
-                                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0 }}>
-                                  <Iconify icon="solar:shield-check-bold" width={13} sx={{ color: "text.primary" }} />
-                                  <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}>Must-pass goal</Typography>
-                                </Stack>
-                              </Tooltip>
-                            )}
-                            {onStateAction && !locked && (
-                              <Box className="goal-act" sx={{ opacity: 0, transition: "opacity .12s ease", flexShrink: 0 }}>
-                                <TextAction onClick={() => onStateAction("goal-blocker", section.rows[0], !on)}>
-                                  {on ? "Remove goal must-pass" : "Mark goal must-pass"}
-                                </TextAction>
-                              </Box>
-                            )}
-                          </>
-                        );
-                      })()}
                       <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
                         {section.rows.length}
                       </Typography>
@@ -320,8 +289,11 @@ export default function ScenarioTable({
                 const idx = counter;
                 const p = row.persona;
                 const archived = !!archivedOf(row);
-                const goals = (row.subTasks?.length ? row.subTasks : subTasksFor(row, env)) || [];
-                const headline = row.summary || row.title || row.name;
+                /* The sub-goals it's graded on — a stored list (a generated or edited
+                   scenario) wins, the same list a run scores, so the count before a
+                   run is the denominator after it. */
+                const goals = (row.subTasks?.length ? row.subTasks : subGoalsOfScenario(row, env, envState)) || [];
+                const headline = row.summary || scenarioTitle(row.title) || row.name;
                 const adm = admissionOf(row, env);
                 const personaMeta = [p?.ageGroup, !p?.ageGroup && p?.role].filter(Boolean).join(" · ");
                 const open = onOpen ? () => onOpen(row) : undefined;
@@ -367,10 +339,11 @@ export default function ScenarioTable({
                             </Typography>
                           </Tooltip>
                         )}
-                        {row.canary && <CanaryBadge />}
-                        <TierTag row={row} onAction={onStateAction} locked={locked} />
+                        {/* Where it came from — links back when there is somewhere to go. */}
+                        <SourceBadge scenario={row} env={env} envState={envState} />
+                        <ProposedTag row={row} onAction={onStateAction} locked={locked} />
                         {!adm.admitted && (
-                          <Tooltip arrow title={`Quarantined — ${adm.reason}`}>
+                          <Tooltip arrow title={`Set aside — ${adm.reason}`}>
                             <Box sx={{ display: "flex", flexShrink: 0 }}>
                               <Iconify icon="solar:shield-cross-bold" width={13} sx={{ color: FAIL }} />
                             </Box>
@@ -404,15 +377,6 @@ export default function ScenarioTable({
                     {/* SUB-GOALS — met in the latest run, of all. */}
                     <TableCell align="right" sx={cellSx}>
                       <SubGoalsCell total={goals.length} latest={latestOf ? latestOf(row) : null} env={env} envState={envState} />
-                    </TableCell>
-
-                    {/* PRIORITY — plain text, changed in place. */}
-                    <TableCell sx={cellSx} onClick={stop}>
-                      <PriorityPicker
-                        row={row}
-                        locked={locked}
-                        onChange={onStateAction ? (p) => onStateAction("priority", row, p) : undefined}
-                      />
                     </TableCell>
 
                     {/* MUST-PASS — the triangle, toggled in place; hollow on hover. */}
@@ -451,7 +415,7 @@ export default function ScenarioTable({
                             </span>
                           </Tooltip>
                         ) : (
-                          <ArchiveControl disabled={locked} anchor={isAnchor(row)} onArchive={(note) => onStateAction?.("archive", row, note)} />
+                          <ArchiveControl disabled={locked} onArchive={(note) => onStateAction?.("archive", row, note)} />
                         )}
                         <Tooltip arrow title={locked ? "Fork this environment to edit." : "Remove from this environment"}>
                           <span>
@@ -474,8 +438,6 @@ export default function ScenarioTable({
 }
 
 ScenarioTable.propTypes = {
-  goalActions: PropTypes.bool,
-  mustPassGoals: PropTypes.array,
   rows: PropTypes.array.isRequired,
   rowHeight: PropTypes.string,
   groups: PropTypes.array,

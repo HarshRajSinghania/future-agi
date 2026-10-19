@@ -19,6 +19,7 @@ import { limitsOf, surfaceAvailability } from "../../agents/agentLimits";
 import { fixScope, codingAgentBrief } from "../../_mock/codingAgentBrief";
 import { decidingMoment } from "../../_mock/comparison";
 import { runIdentityOf } from "../../_mock/runIdentity";
+import { scenarioTitle } from "../../_mock/scenarios";
 
 /**
  * What is wrong, and what to change about it.
@@ -112,8 +113,9 @@ TabButton.propTypes = {
 };
 
 /*
-  Which of the agent's constraints a fix touches, in one quiet line. A fix
-  the constraints rule out stays on the list — it is still what the evidence
+  Which of the agent's constraints a fix touches, in one quiet line — each
+  named, with what the fix does to it and whether that's allowed. A fix the
+  constraints rule out stays on the list — it is still what the evidence
   says — with the reason and the way to change it, rather than vanishing.
 */
 function ScopeLine({ scope, available, onChangeConstraints }) {
@@ -129,17 +131,22 @@ function ScopeLine({ scope, available, onChangeConstraints }) {
       </Box>
     </>
   );
-  let detail;
-  if (scope.environment) detail = null;
-  else if (!scope.allowed) detail = <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>not allowed for this agent</Box>;
-  else if (scope.protected) {
-    detail = (
-      <>
-        edits <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{scope.path}</Box>,{" "}
-        <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>which this agent protects</Box>
-      </>
-    );
-  } else detail = available?.ok === false ? `allowed · ${available.why.charAt(0).toLowerCase()}${available.why.slice(1)}` : "allowed";
+  /* Allowed, but this agent can't take that kind of change yet (no code
+     connected) — said after the verdict. */
+  const unavailable = available?.ok === false ? available.why : null;
+  const checks = (scope.checks || []).map((c, i) => (
+    <Box component="span" key={c.id}>
+      {i > 0 && " · "}
+      {c.constraint}
+      {c.ceiling ? ` (${c.ceiling})` : ""}
+      {": "}
+      {c.says}
+      {c.path && <>{" "}<Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{c.path}</Box></>}
+      {" — "}
+      <Box component="span" sx={c.blocked ? { color: "text.secondary", fontWeight: 600 } : undefined}>{c.verdict}</Box>
+      {c.id === "changes" && !c.blocked && unavailable && ` · ${unavailable.charAt(0).toLowerCase()}${unavailable.slice(1)}`}
+    </Box>
+  ));
 
   return (
     <Tooltip
@@ -152,8 +159,7 @@ function ScopeLine({ scope, available, onChangeConstraints }) {
           width={13} sx={{ color: "text.disabled", flexShrink: 0, mt: "2px" }}
         />
         <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          {scope.label}
-          {detail && <>{" · "}{detail}</>}
+          {scope.environment ? scope.label : checks}
           {link}
         </Typography>
       </Stack>
@@ -211,7 +217,7 @@ export default function DiagnosisPane({
   const included = proposals.filter((p) => applied[p.id]);
   /* Nothing failed, so there is nothing to search for. The refactor into a
      drawer dropped this branch and left an empty recommendation list under a
-     live "Run improvement" button — a search over an empty candidate pool
+     live "Run self improvement" button — a search over an empty candidate pool
      that would have burned episodes to re-confirm the score it started from. */
   const nothingToFix = !failing.length;
 
@@ -333,8 +339,8 @@ export default function DiagnosisPane({
       pairing: runPairing,
       rootCause: [verdict, ...flagged.map((a) => `- ${a.label}: ${a.headline}`)].join("\n"),
       suggestedFix: sorted.map((p) => ({ ...p, scope: fixScope(p, { env, limits }) })),
-      evidence: byTop.map((t) => ({ source: t.title || t.id, text: decidingMoment(t).text })),
-      failingScenarios: failing.map((t) => t.title || t.id),
+      evidence: byTop.map((t) => ({ source: scenarioTitle(t.title) || t.id, text: decidingMoment(t).text })),
+      failingScenarios: failing.map((t) => scenarioTitle(t.title) || t.id),
       limits,
       model,
     });
@@ -353,8 +359,8 @@ export default function DiagnosisPane({
       pairing: runPairing,
       rootCause: p.why,
       suggestedFix: [{ ...p, scope: fixScope(p, { env, limits }) }],
-      evidence: visible.map((t) => ({ source: t.title || t.id, text: decidingMoment(t).text })),
-      failingScenarios: visible.filter((t) => t.status !== "passed").map((t) => t.title || t.id),
+      evidence: visible.map((t) => ({ source: scenarioTitle(t.title) || t.id, text: decidingMoment(t).text })),
+      failingScenarios: visible.filter((t) => t.status !== "passed").map((t) => scenarioTitle(t.title) || t.id),
       limits,
       model,
     });
@@ -504,7 +510,7 @@ export default function DiagnosisPane({
           <Typography sx={{ typography: "s1", fontWeight: 700 }}>Nothing to fix</Typography>
           <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
             Every measured scenario passed and no analyzer found a problem with the measurement. Improving
-            against this run would spend episodes confirming the score it started from — add harder scenarios
+            against this run would spend conversations confirming the score it started from — add harder scenarios
             to find the edges instead.
           </Typography>
         </Stack>
@@ -613,7 +619,7 @@ export default function DiagnosisPane({
                   })}
                 </Stack>
                 <Box sx={{ mt: 0.5, mx: -1 }}>
-                  <RunTraceLog label={`Read ${tasks.length} episodes`} steps={trace} />
+                  <RunTraceLog label={`Read ${tasks.length} conversations`} steps={trace} />
                 </Box>
               </Collapse>
             </Box>
@@ -654,6 +660,13 @@ export default function DiagnosisPane({
             */}
             {!running && (handoff || handoffProps?.landedVersion) && !!included.length && (
               <Box sx={{ px: 2.5, pt: 2.5 }}>
+                {/* Never blocked — but never passed off as checked either. */}
+                <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 1.25 }}>
+                  <Iconify icon="solar:info-circle-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0, mt: "2px" }} />
+                  <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                    Not searched and not checked against your must-pass scenarios. Re-run it once it lands, before you release it.
+                  </Typography>
+                </Stack>
                 <OmegaHandoff
                   env={env}
                   envState={envState}
@@ -873,7 +886,7 @@ export default function DiagnosisPane({
                   startIcon={<Iconify icon="solar:magic-stick-3-bold" width={16} />}
                   sx={{ typography: "s2", fontWeight: 700 }}
                 >
-                  Run improvement
+                  Run self improvement
                 </Button>
               </Box>
             </Tooltip>

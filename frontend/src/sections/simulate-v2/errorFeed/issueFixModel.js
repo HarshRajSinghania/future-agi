@@ -5,14 +5,16 @@
   of it next to the hook; the seed reads it from here so it can build its
   Error Feed fixes the same way a press of Start fix does.
 */
-import { PER_CONVERSATION, REPEATS, improvementOutcome } from "../_mock/optimizationRuns";
+import { PER_CONVERSATION, REPEATS, improvementOutcome, improvementPhaseOf } from "../_mock/optimizationRuns";
 import { baseRunOf, buildImprovement, improvementEstimate, planSearch, COMPAT_CHECK } from "../_mock/improvementStart";
 import { improvementRunName } from "../_mock/optimizer";
-import { currentAgentVersion } from "../_mock/versions";
+import { currentAgentVersion, productionAgentVersion } from "../_mock/versions";
+import { measureTodayRun, measuredSummaryOf } from "../_mock/measureToday";
 import { isComingSoon, needsLiveConsent } from "../_mock/rsiModel";
 import { agentStatusFor, mainEnvFor } from "../_mock/improvementPolicy";
 import { errorFeedScenarios } from "../_mock/scenarioSources";
 import { projectLinkOf, projectsOfAgent } from "../_mock/projectLinks";
+import { mockCluster } from "src/api/errorFeed/mockAdapter";
 import { paths } from "src/routes/paths";
 
 /* The feed finds an issue's agent through its Observe project — the one
@@ -57,6 +59,18 @@ const ISSUE_CASES = {
     "Caller asks to cancel and keep a partial benefit",
     "Caller cancels after a price-match promise",
   ],
+  "ISS-4366": [
+    "Caller asks for a refund on an order outside the return window",
+    "Caller asks for a refund on an item they say they wore once",
+    "Caller asks for a refund on a discontinued product",
+    "Caller asks for a refund and a return label in one go",
+  ],
+  "ISS-4431": [
+    "Caller changes the address after the parcel left the warehouse",
+    "Caller changes the address on the day of dispatch",
+    "Caller asks to redirect a parcel already with the carrier",
+    "Caller corrects one line of the address after dispatch",
+  ],
   "ISS-4536": [
     "Passenger asks for a rebooking summary after one leg of the trip was cancelled",
     "Two passengers on one booking, one with no checked bags",
@@ -81,6 +95,60 @@ const ISSUE_CASES = {
     "Caller gives the wrong date of birth, then corrects it",
     "Caller cancels on behalf of a family member",
   ],
+  "ISS-4563": [
+    "Caller asks for the loyalty discount without saying their tier",
+    "Caller insists they are gold tier when the account says silver",
+    "Caller asks for a member code on someone else's order",
+    "Caller asks for the discount twice in one call",
+  ],
+  "ISS-4566": [
+    "Caller asks for a return label and label creation fails",
+    "Caller says the last label never arrived and asks again",
+    "Caller asks for a label for an order outside the return window",
+    "Caller asks for the label by text instead of email",
+  ],
+  "ISS-4571": [
+    "Guest asks for the deposit on a group of fourteen in spring",
+    "Guest asks for a private-room deposit after prices changed",
+    "Guest compares this year's deposit with last year's",
+    "Guest changes the party size after hearing the deposit",
+  ],
+  "ISS-4574": [
+    "Traveller asks to be rebooked onto a partner flight with an aisle seat",
+    "Traveller keeps a window seat request after a cancellation",
+    "Traveller asks for any flight tonight but needs an aisle",
+    "Traveller with a paid seat is moved to a partner airline",
+  ],
+  "ISS-4578": [
+    "Caller asks for a slot the calendar shows as taken",
+    "Caller asks for the earliest slot when the first one is gone",
+    "Caller books for a family member in a held slot",
+    "Caller reschedules into a slot freed a minute ago",
+  ],
+  "ISS-4582": [
+    "Caller asks for a refund on a broken item",
+    "Caller refuses store credit and asks for the money back",
+    "Caller asks for a refund on a final-sale item",
+    "Caller asks which refund options they have",
+  ],
+  "ISS-4585": [
+    "Customer asks why a late fee was charged",
+    "Customer asks for the invoice with every charge included",
+    "Customer asks for the total after being told about the fee",
+    "Customer disputes the late fee and asks for the total without it",
+  ],
+  "ISS-4593": [
+    "Traveller asks to move to a later, pricier flight",
+    "Traveller asks for any flight before noon and accepts the first",
+    "Traveller asks whether switching costs anything",
+    "Traveller accepts a rebooking, then asks for the receipt",
+  ],
+  "ISS-4589": [
+    "Customer asks what cancelling would cost",
+    "Customer asks about the cancellation fee on one order",
+    "Customer asks whether a cancellation is refunded in full",
+    "Customer asks to cancel, then changes their mind",
+  ],
 };
 
 /* Which cases are variations of one another — a group always lands on one
@@ -90,10 +158,21 @@ const ISSUE_GROUPS = {
   "ISS-4520": [1, 1, 2, 3],
   "ISS-4478": [1, 2, 1, 3],
   "ISS-4402": [1, 2, 2, 3],
+  "ISS-4366": [1, 2, 2, 3],
+  "ISS-4431": [1, 2, 1, 3],
   "ISS-4536": [1, 2, 3, 3],
   "ISS-4529": [1, 2, 1, 3],
   "ISS-4552": [1, 2, 1, 3],
   "ISS-4557": [1, 2, 3, 3],
+  "ISS-4563": [1, 2, 1, 3],
+  "ISS-4566": [1, 1, 2, 3],
+  "ISS-4571": [1, 2, 1, 3],
+  "ISS-4574": [1, 1, 1, 2],
+  "ISS-4578": [1, 2, 3, 2],
+  "ISS-4582": [1, 1, 2, 3],
+  "ISS-4585": [1, 2, 2, 3],
+  "ISS-4589": [1, 1, 2, 3],
+  "ISS-4593": [1, 2, 1, 3],
 };
 
 const hash = (s) => {
@@ -138,23 +217,23 @@ export const envsForAgent = (agent, state) => {
 };
 
 /**
- * Which version of the agent is in production, and how we know: the newest
- * release recorded in any environment testing it (detected from the
- * platform or traces, or marked by hand), else the version the issue's
- * traces were recorded on. With neither, it's only the version the
- * environment tests now — and it says so instead of claiming production.
- *   { label, source: "release" | "traces" | "current", line }
+ * Which version of the agent is in production — the one answer the Agents
+ * page gives too: the version an admin made active, else the newest that
+ * isn't an unreleased draft (synced, pushed or released). A fix improves
+ * that version. When the issue's traces were recorded on another version,
+ * the line says so.
+ *   { label, source: "production" | "traces" | "current", line }
  */
 export const productionVersionOf = (agent, state, issue, fallbackEs) => {
-  const releases = (agent?.usedIn || [])
-    .flatMap((u) => (state?.byEnv?.[u.envId]?.releases || []))
-    .filter((r) => r?.version && r.at)
-    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  if (releases[0]) return { label: releases[0].version, source: "release", line: `${releases[0].version} · latest released version, running in production` };
-  const traced = issue?.agent_version || ISSUE_TRACE_VERSIONS[issue?.cluster_id];
+  const traced = issue?.agent_version || ISSUE_TRACE_VERSIONS[issue?.cluster_id] || null;
+  const prod = (fallbackEs && productionAgentVersion(fallbackEs)?.label) || agent?.production || null;
+  if (prod) {
+    const also = traced && traced !== prod ? ` — this issue's traces were recorded on ${traced}` : "";
+    return { label: prod, source: "production", line: `${prod} · running in production${also}` };
+  }
   if (traced) return { label: traced, source: "traces", line: `${traced} · the version this issue's traces were recorded on` };
   const current = fallbackEs ? currentAgentVersion(fallbackEs)?.label : agent?.latest;
-  return { label: current || null, source: "current", line: `${current || "Current version"} · current version — no release recorded yet` };
+  return { label: current || null, source: "current", line: `${current || "Current version"} · current version` };
 };
 
 /**
@@ -187,25 +266,22 @@ export const fixGateOf = (agent, env) => {
 };
 
 /**
- * Fix starts on confirmed issues only (RSI PRD, Risks: "Fix only on confirmed
- * issues"). An emerging, unresolved or dismissed one says why it waits and
- * what confirms it. Null when the issue is confirmed.
+ * How sure the feed is about an issue — said, never a gate. Fix's first step
+ * reproduces the issue, which is the real confirmation: a noisy issue stops
+ * at "Could not reproduce" before any search is spent on it. (A deliberate
+ * step away from the PRD's "Fix only on confirmed issues", agreed with the
+ * user.) Null when the issue is confirmed.
  */
 export const evidenceGateOf = (issue) => {
   const e = issue?.evidence_state;
   if (!e || e === "confirmed") return null;
-  if (e === "emerging") {
-    return {
-      key: "emerging",
-      title: "Still emerging",
-      body: `${issue.trace_count || "A few"} traces so far — the pattern is consistent but not confirmed yet. Fix opens once the feed confirms it from more traces.`,
-    };
-  }
-  if (e === "dismissed") return { key: "dismissed", title: "Dismissed", body: "This issue was dismissed. If it comes back, the feed confirms it again and Fix opens." };
+  const why = e === "emerging"
+    ? `The pattern is still emerging (${issue.trace_count || "a few"} traces so far).`
+    : e === "dismissed" ? "This issue was dismissed once." : "The feed couldn't confirm it from its traces yet.";
   return {
-    key: "unresolved",
-    title: "Not confirmed",
-    body: "The feed couldn't confirm this issue from its traces, so a fix might chase noise. Fix opens once it's confirmed.",
+    key: e,
+    title: "Not confirmed yet",
+    body: `${why} Fix reproduces it first — if it can't, it stops at Could not reproduce before any search is spent.`,
   };
 };
 
@@ -283,10 +359,21 @@ const ISSUE_MECHANISM = {
   "ISS-4520": { unsupportedClaim: true },
   "ISS-4478": { missing: "check_inventory", match: /inventory|stock|availability/i },
   "ISS-4402": { missing: "cancel_order", match: /cancel/i, unsupportedClaim: true },
+  "ISS-4366": { missing: "check_return_eligibility", match: /eligib/i },
+  "ISS-4431": { missing: "shipment_status", match: /shipment/i, unsupportedClaim: true },
   "ISS-4536": { missing: "lookup_booking", match: /lookup_booking/i, unsupportedClaim: true },
   "ISS-4529": { missing: "modify_booking", match: /modify/i },
   "ISS-4552": { unsupportedClaim: true },
   "ISS-4557": { unsupportedClaim: true },
+  "ISS-4563": { missing: "check_loyalty_status", match: /loyalty|tier/i },
+  "ISS-4566": { unsupportedClaim: true },
+  "ISS-4571": { unsupportedClaim: true },
+  "ISS-4574": { unsupportedClaim: true },
+  "ISS-4578": { unsupportedClaim: true },
+  "ISS-4582": { unsupportedClaim: true },
+  "ISS-4585": { unsupportedClaim: true },
+  "ISS-4589": { unsupportedClaim: true },
+  "ISS-4593": { unsupportedClaim: true },
 };
 
 /**
@@ -322,6 +409,13 @@ export const issueTasks = (issue, drafts, repro, env) => {
 
 export const fixSeed = (es, issueId) => `fix-${issueId}-${(es?.optimizations || []).length}`;
 
+/* Measure today, for a fix: the environment's scenarios on the version in
+   production, recorded as a run named for the issue (measureToday.js). */
+export const todayRunFor = (env, es, issueId, now = new Date()) => (issueId
+  ? measureTodayRun(env, es, { key: fixSeed(es, issueId), measuredFor: { kind: "fix", issueId }, startedBy: `Fix · ${issueId}`, now })
+  : null);
+const summaryOf = measuredSummaryOf;
+
 /**
  * The improvement record a Fix writes, for Start fix and for the seed alike:
  * the environment's newest run plus the issue's scenarios, reproduced first
@@ -331,24 +425,31 @@ export const fixSeed = (es, issueId) => `fix-${issueId}-${(es?.optimizations || 
  */
 export const issueFixRecord = ({
   issue, env, es, drafts, limits, budget, regressionEnvIds, seed, state, reread, textSearch, targetMember, compatCheck = COMPAT_CHECK,
-  rootCause = null,
+  rootCause = null, lineage, today = null,
 }) => {
   const issueId = issue.cluster_id;
-  const base = baseRunOf(env, es);
+  /* A production issue is fixed on the production version: the search
+     starts from today's measurement of it (`today`, made as the fix starts)
+     — else, for fixes written before that, the newest run on it. */
+  const prodLabel = productionAgentVersion(es)?.label || null;
+  const base = today ? summaryOf(env, es, today) : baseRunOf(env, es, prodLabel) || baseRunOf(env, es);
   const repro = reproduceOf(issue, drafts);
   return buildImprovement({
     env, es, tasks: base ? [...base.tasks, ...issueTasks(issue, drafts, repro, env)] : null, seed: seed || fixSeed(es, issueId),
     fromRunId: base?.id || null,
-    baseAgentVersion: base?.agentVersion || currentAgentVersion(es)?.label || null,
+    baseAgentVersion: prodLabel || base?.agentVersion || currentAgentVersion(es)?.label || null,
     trigger: { kind: "error-feed", issueId, issueTitle: issue.error?.name, severity: issue.severity },
     limits,
     budget,
     regressionEnvIds,
-    spentFirst: drafts.length * REPEATS * PER_CONVERSATION[env.surface === "voice" ? "voice" : "chat"],
+    spentFirst: (drafts.length + (today?.scenarioIds?.length || 0)) * (today?.repeats || REPEATS) * PER_CONVERSATION[env.surface === "voice" ? "voice" : "chat"],
     hold: !repro.reproduced,
     state,
     reread,
     textSearch,
+    /* Earlier versions' changes offered to the search again (RSI PRD:
+       "Search across a lineage of versions"). */
+    ...(lineage?.length && { lineage }),
     targetMember,
     compatCheck,
     /* Improvement-only until added from its page or the Scenarios tab. */
@@ -385,10 +486,12 @@ export const issueFixRecord = ({
  * issue scenario reproduces (the dearest case).
  */
 export const fixPreview = (env, es, issue, drafts, limits, { textSearch } = {}) => {
-  const base = env ? baseRunOf(env, es) : null;
-  if (!base || !issue) return { base, result: null };
+  /* What measuring today will find — the same run Start records. */
+  const today = env && issue ? todayRunFor(env, es, issue.cluster_id) : null;
+  const base = summaryOf(env, es, today);
+  if (!base || !issue) return { base, today, result: null };
   const tasks = [...base.tasks, ...issueTasks(issue, drafts, null, env)];
-  return { base, result: planSearch({ env, es, agentVersion: base.agentVersion || currentAgentVersion(es)?.label || null, tasks, limits, seed: fixSeed(es, issue.cluster_id), textSearch }) };
+  return { base, today, result: planSearch({ env, es, agentVersion: base.agentVersion || currentAgentVersion(es)?.label || null, tasks, limits, seed: fixSeed(es, issue.cluster_id), textSearch }) };
 };
 
 /**
@@ -397,7 +500,8 @@ export const fixPreview = (env, es, issue, drafts, limits, { textSearch } = {}) 
  * scenarios for the finalists — each repeated so a lucky run can't win.
  */
 export const fixEstimate = ({ preview, scenarioCount, regressionCount, surface }) => improvementEstimate({
-  preview: preview?.result, surface, extraScenarios: regressionCount, firstConversations: scenarioCount * REPEATS,
+  /* Measuring today covers the issue's scenarios and the environment's. */
+  preview: preview?.result, surface, extraScenarios: regressionCount, firstConversations: (scenarioCount + (preview?.today?.scenarioIds?.length || 0)) * (preview?.today?.repeats || REPEATS),
 });
 
 /* How long a released fix is watched before the issue counts as resolved —
@@ -405,39 +509,81 @@ export const fixEstimate = ({ preview, scenarioCount, regressionCount, surface }
 export const WATCH_DAYS = 30;
 const DAY = 24 * 60 * 60 * 1000;
 
-/* "Draft shipped · Vapi copy" — the draft's own name on its platform. */
+/* "Fix in review · Vapi copy" — the draft's own name on its platform. */
 /* Vapi has no drafts — a change ships as a copy of the assistant (RSI PRD). */
 const draftLabel = (draft) => `${draft.where} ${draft.kind || (/vapi/i.test(draft.where || "") ? "copy" : "draft")}`;
 
+const HOUR = 60 * 60 * 1000;
+
+/* The releases of this issue's fixes in one environment, oldest first. A
+   release names its issue; one recorded before releases did is matched
+   through the improvement it released. */
+const fixReleasesOf = (es, issueId) => (es?.releases || [])
+  .filter((r) => (r.issueId || (es?.optimizations || []).find((o) => o.id === r.optId)?.trigger?.issueId) === issueId)
+  .sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0));
+
 /**
- * Where an issue's fix stands, read from the improvement run it started:
- * Fixing → Ready for review / No safe improvement / Could not reproduce →
- * Draft shipped (· PR #n, or · Vapi copy) → Awaiting release → Watching for
- * 30 days → Resolved, or Reopened when the issue comes back on the fixed
- * version.
+ * Did the issue come back after this release? Read per release, not per
+ * issue: the feed records, for each fix released for an issue (first,
+ * second, …), whether and when it was seen again (`recurs_after` on the
+ * issue). So a first fix can reopen while the next one holds. Null when it
+ * hasn't come back (yet).
+ *   { at, version }
  */
+export const recurrenceOf = (record, es, now = Date.now()) => {
+  const issueId = record?.trigger?.issueId;
+  const landed = es?.handoffLandings?.[record?.id];
+  const release = landed ? (es?.releases || []).find((r) => r.version === landed) : null;
+  if (!issueId || !release) return null;
+  const seen = mockCluster(issueId)?.recurs_after || [];
+  if (!seen.length) return null;
+  const nth = fixReleasesOf(es, issueId).findIndex((r) => r.version === landed) + 1;
+  const hit = seen.find((x) => x.release === nth);
+  if (!hit) return null;
+  const at = (Date.parse(release.at) || 0) + (hit.after_hours || 0) * HOUR;
+  return at <= now ? { at: new Date(at).toISOString(), version: landed } : null;
+};
+
+/*
+  A shipped draft reads "Fix in review · PR #123" on an issue's fix (owner's
+  wording for the PRD's Draft shipped, from Flow 3's chip), "In review · …"
+  on any other improvement.
+*/
+const inReview = (record, via) => `${record?.trigger?.issueId ? "Fix in review" : "In review"} · ${via}`;
+
 /**
  * Where a shipped proposal is (RSI PRD, Part 3 "Improvement states": Draft
- * shipped → Released → Watching → Resolved or Reopened). Null until it ships.
- * The Error Feed's chip and the improvement page both read this, so they
- * never disagree.
+ * shipped — said "Fix in review" — → Released → Watching → Resolved or
+ * Reopened). Null until it ships.
+ * The Error Feed's chip, the issue page, the Improvements list and the
+ * improvement page all read this, and it works out recurrence itself — so
+ * no caller can pass something different and disagree. `recurs: true`
+ * still forces Reopened, for older callers.
  *   { key: "review" | "watching" | "resolved" | "reopened", label, detail?, change? }
  */
-export const shippedStateOf = (record, es, prs = [], { recurs = false, now = Date.now() } = {}) => {
+export const shippedStateOf = (record, es, prs = [], { recurs, now = Date.now() } = {}) => {
   if (!record) return null;
   const landed = es?.handoffLandings?.[record.id];
   if (landed) {
     const release = (es?.releases || []).find((r) => r.version === landed);
-    if (!release) return { key: "review", label: "Awaiting release", detail: landed };
-    if (recurs) {
+    /* Saved but not released yet: still a shipped draft (RSI PRD states). */
+    if (!release) return { key: "review", label: inReview(record, `draft version ${landed}`), detail: landed, via: landed, awaitingRelease: true };
+    /* Seen again in production reopens it on its own; a person escalating a
+       watched or resolved issue reopens it too (triageFixEffect). */
+    const byPerson = record.reopenedBy ? { at: record.reopenedBy.at, version: landed, by: record.reopenedBy.by } : null;
+    const back = recurrenceOf(record, es, now) || byPerson || (recurs === true ? { at: null, version: landed } : null);
+    if (back) {
       /* Reopened links to the change that was meant to fix it. */
       const pr = prs.find((p) => (p.handoffKey || p.meta?.handoffKey) === record.id);
       const draft = es?.handoffDrafts?.[record.id];
       return {
-        key: "reopened", label: "Reopened", detail: `seen again on ${landed}`,
+        key: "reopened", label: "Reopened", detail: back.by ? `by ${back.by}` : `seen again on ${landed}`,
+        ...(back.by && { byPerson: true }),
         change: {
           version: landed,
           releasedAt: release.at,
+          seenAt: back.at,
+          ...(back.by && { reopenedBy: back.by }),
           name: improvementRunName(es, record),
           via: pr ? `PR #${pr.number}` : draft ? draftLabel(draft) : null,
         },
@@ -450,10 +596,10 @@ export const shippedStateOf = (record, es, prs = [], { recurs = false, now = Dat
   }
   const pr = prs.find((p) => (p.handoffKey || p.meta?.handoffKey) === record.id && p.status !== "closed");
   /* One set of words for a fix's state on every surface: Ready for review →
-     Draft shipped → Awaiting release → Watching → Resolved | Reopened. */
-  if (pr) return { key: "review", label: `Draft shipped · PR #${pr.number}`, via: `PR #${pr.number}` };
+     Fix in review → Watching → Resolved | Reopened (RSI PRD). */
+  if (pr) return { key: "review", label: inReview(record, `PR #${pr.number}`), via: `PR #${pr.number}` };
   const draft = es?.handoffDrafts?.[record.id];
-  if (draft) return { key: "review", label: `Draft shipped · ${draftLabel(draft)}`, via: draftLabel(draft) };
+  if (draft) return { key: "review", label: inReview(record, draftLabel(draft)), via: draftLabel(draft) };
   return null;
 };
 
@@ -470,42 +616,30 @@ export const fixStatusOf = (issue, state, prs = [], now = Date.now()) => {
   if (!found) return null;
   const { record, env, es } = found;
   const at = { envId: env.id, optId: record.id, runId: record.fromRunId };
-  const { ending } = improvementOutcome(record);
-  if (ending.key === "running") return { ...at, key: "fixing", label: "Fixing" };
+  const { ending, beforeSearch } = improvementOutcome(record);
+  /* While it runs, the PRD's own phases: Reproducing → Searching → Verifying. */
+  if (ending.key === "running") return { ...at, key: "fixing", label: improvementPhaseOf(record, now)?.label || "Searching" };
   if (ending.key === "not-reproduced") {
     const inconclusive = record.reproduce?.inconclusive || 0;
     return { ...at, key: "not-reproduced", label: "Could not reproduce", ...(inconclusive && { detail: `${inconclusive} inconclusive` }) };
   }
   if (ending.key === "failed") return { ...at, key: "no-fix", label: "Failed for infrastructure reasons" };
   if (ending.key === "no-fix") return { ...at, key: "no-fix", label: "No safe improvement" };
-  const shipped = shippedStateOf(record, es, prs, { recurs: !!issue.recurs_after_fix, now });
+  /* Stopped at budget before searching: no change was tried, so there's
+     nothing to review — Fix again, with a bigger budget, is the way on. A
+     stop mid-search keeps its best so far and reads Ready below. */
+  if (ending.key === "budget" && beforeSearch) return { ...at, key: "over-budget", label: "Stopped at budget", detail: "before searching" };
+  /* Recurrence is the record's own (shippedStateOf reads it); a caller's
+     explicit flag still forces Reopened. */
+  const shipped = shippedStateOf(record, es, prs, { now, ...(issue?.recurs_after_fix === true && { recurs: true }) });
   if (shipped) return { ...at, ...shipped };
   if (ending.key === "budget") return { ...at, key: "ready", label: "Stopped at budget" };
   if (ending.key === "suggestion") return { ...at, key: "ready", label: "Suggestion only" };
+  /* The PRD's name. It sits in its own Fix column on the Error Feed, apart
+     from the issue's own triage status ("For review"). */
   return { ...at, key: "ready", label: "Ready for review" };
 };
 
-/**
- * What hand triage may do while the issue has a fix (the header's Triage menu
- * and the right rail's Status both read this, so they agree). Once a fix is
- * under way it drives the issue's status — Resolve and Acknowledge say so
- * instead of competing with it.
- */
-export const fixTriageRulesOf = (fixKey) => {
-  const fixActive = ["fixing", "ready", "review"].includes(fixKey);
-  const resolveNote = fixActive
-    ? `Resolves on its own once the fix ships and stays clean for ${WATCH_DAYS} days.`
-    : fixKey === "watching" ? `Ends the ${WATCH_DAYS}-day watch now and resolves the issue.`
-      : fixKey === "resolved" ? "Resolved by its fix." : "";
-  const ackNote = fixActive || fixKey === "watching" ? "A fix is already under way." : "";
-  return {
-    fixActive,
-    resolveNote,
-    resolveDisabled: fixActive || fixKey === "resolved",
-    ackNote,
-    ackDisabled: !!ackNote,
-  };
-};
 
 /**
  * An issue's fix, on the improvement's own page (RSI PRD, Flow 3: "Start.
@@ -517,3 +651,21 @@ export const issueFixNav = (at, issueId) => [
   `${paths.dashboard.simulate.improvements}/${at.envId}/${at.optId}`,
   issueId ? { state: { fromIssue: issueId } } : undefined,
 ];
+
+/**
+ * What changing an issue's triage status does to its fix. Escalating an
+ * issue whose fix is Watching or Resolved says it's back: the fix reopens
+ * and Fix again is offered. Resolving an issue a person reopened (before a
+ * new fix starts) takes the reopen back. Everything else leaves the fix alone.
+ *   → { note, reopen: true | false } or null
+ */
+export const triageFixEffect = (fix, status) => {
+  if (!fix) return null;
+  if (status === "escalating" && (fix.key === "watching" || fix.key === "resolved")) {
+    return { reopen: true, note: `Reopens the fix on ${fix.version}. Fix again starts a new one; this fix keeps its page.` };
+  }
+  if (status === "resolved" && fix.key === "reopened" && fix.byPerson) {
+    return { reopen: false, note: "Takes back the reopen." };
+  }
+  return null;
+};

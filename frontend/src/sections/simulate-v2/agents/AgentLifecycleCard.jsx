@@ -1,11 +1,13 @@
 import PropTypes from "prop-types";
-import { Box, Button, Dialog, MenuItem, Select, Stack, Switch, TextField, Typography } from "@mui/material";
+import { Box, Button, Dialog, MenuItem, Select, Stack, TextField, Tooltip, Typography } from "@mui/material";
 import { PROVIDER_LABELS, definitionOf, sourceKindOf } from "../_mock/agentRegistry";
 import {
-  agentStatusOf, deleteEffectOf, disconnectReasonFor, fixDepthOf, platformTestingOf, releaseDetectionOf,
+  agentStatusOf, disconnectReasonFor, fixDepthOf, platformTestingOf, releaseDetectionOf,
 } from "../_mock/rsiModel";
 import { InfoTip, KvRow, PanelCard } from "./AgentBits";
 import { ago, plural } from "./agentViewUtils";
+import { deleteBlockOf } from "./agentDelete";
+import { useDemoMode } from "./demoMode";
 
 /**
  * What can happen to the agent next — reconnect, archive or restore, delete.
@@ -14,10 +16,22 @@ import { ago, plural } from "./agentViewUtils";
  */
 export function LifecycleCard({ agent, onSaveValues, onArchive, onDelete }) {
   const status = agentStatusOf(agent);
-  const effect = deleteEffectOf(agent);
+  /* Deleted only once it has no environments left. */
+  const blocked = deleteBlockOf(agent);
   const archived = status.status === "archived";
   const disconnected = status.status === "disconnected";
   const reconnect = () => onSaveValues({ disconnected: null }, `${agent.name} is connected again.`);
+
+  /* A deleted agent is kept for its history only — nothing left to do to it. */
+  if (status.status === "deleted") {
+    return (
+      <PanelCard bare>
+        <KvRow label="Deleted" first hint={status.at ? ago(status.at) : null}>
+          <Typography sx={{ typography: "s2" }}>{status.reason}</Typography>
+        </KvRow>
+      </PanelCard>
+    );
+  }
 
   return (
     <PanelCard bare>
@@ -47,10 +61,14 @@ export function LifecycleCard({ agent, onSaveValues, onArchive, onDelete }) {
         </ActionRow>
         <ActionRow
           title="Delete"
-          body="Removes it from Connected agents"
-          hint={effect || "Runs stay with the environments that ran them."}
+          body={blocked ? `Not while it has ${plural(agent.usedIn.length, "environment")}` : "Takes it off Agents and every picker"}
+          hint={blocked || "Its versions, and the runs, improvements and proofs that name it, are kept — they still open its history."}
         >
-          <Button size="small" variant="outlined" onClick={onDelete} sx={{ ...btnSx, color: "#DC2626", borderColor: "rgba(220,38,38,0.4)" }}>Delete</Button>
+          <Tooltip arrow title={blocked || ""}>
+            <span>
+              <Button size="small" variant="outlined" disabled={!!blocked} onClick={onDelete} sx={{ ...btnSx, color: "#DC2626", borderColor: "rgba(220,38,38,0.4)" }}>Delete</Button>
+            </span>
+          </Tooltip>
         </ActionRow>
       </Stack>
     </PanelCard>
@@ -61,12 +79,13 @@ LifecycleCard.propTypes = {
 };
 
 /**
- * Prototype-only: make the states the product reaches on its own — a revoked
- * key, an edit made outside Future AGI — so they can be shown.
+ * Staging only (?demo=1): make the states the product reaches on its own —
+ * a revoked key, an edit made outside Future AGI — so they can be shown.
  */
 export function PrototypeControlsCard({ agent, onSaveValues }) {
+  const demo = useDemoMode();
   const status = agentStatusOf(agent);
-  if (status.status === "archived" || status.status === "disconnected") return null;
+  if (!demo || status.status === "archived" || status.status === "disconnected") return null;
   const isPlatform = sourceKindOf(agent) === "platform" || (agent.values?.provider && agent.values?.agentId);
   const pending = !!agent.values?.pendingOutsideChange?.at;
   return (
@@ -138,7 +157,7 @@ export function ArchiveDialog({ open, agent, copies = [], onClose, onConfirm }) 
         <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.75 }}>
           {archived
             ? "Runs and improvements can start again. Its versions, environments, runs and proofs are as they were."
-            : `New runs and improvements stop. Its ${plural(agent.versions.length, "version")}, ${plural(agent.usedIn.length, "environment")}, runs and proofs stay. Restore it any time.`}
+            : `New runs and improvements stop. Its ${[plural(agent.versions.length, "version"), agent.usedIn.length ? plural(agent.usedIn.length, "environment") : null, "runs and proofs"].filter(Boolean).join(", ")} stay. Restore it any time.`}
         </Typography>
         {!archived && copies.length > 0 && (
           <Box sx={{ mt: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden" }}>
@@ -163,20 +182,28 @@ export function ArchiveDialog({ open, agent, copies = [], onClose, onConfirm }) 
 ArchiveDialog.propTypes = { open: PropTypes.bool, agent: PropTypes.object.isRequired, copies: PropTypes.array, onClose: PropTypes.func, onConfirm: PropTypes.func };
 
 /**
- * Release detection (Phase 2): what "released" means for this agent, and —
- * for code — the branch or tag we watch, and a daily re-read.
- *   values.releaseDetection = { watch, ref, dailySync }
+ * Release detection: what "released" means for this agent and — for code —
+ * the release branch or tag we watch. Re-reads aren't a setting; the Sync
+ * card says when they happen.
+ *   values.releaseDetection = { watch, ref }
  */
 export function ReleaseDetectionCard({ agent, onSaveValues }) {
   const kind = sourceKindOf(agent);
-  const code = kind === "repo" || kind === "upload" || (kind === "framework" && !!definitionOf(agent).repoUrl);
+  /* Code in a repository is released by a merge on the branch or tag we
+     watch; an upload has no branch — it's released when the patched code is
+     uploaded (RSI PRD, Versions and releases). */
+  const branchWatched = kind === "repo" || (kind === "framework" && !!definitionOf(agent).repoUrl);
   const platform = platformTestingOf(agent);
   const rd = releaseDetectionOf(agent);
   const fix = fixDepthOf(agent);
   const save = (patch, msg) => onSaveValues({ releaseDetection: { ...rd, ...patch } }, msg);
   const releasedWhen = platform?.released
-    || (code ? `Released when the change is merged into ${rd.watch === "tag" ? `the commit tagged ${rd.ref}` : rd.ref}.` : null)
-    || (fix.depth === "suggestion" ? "Released when you apply the suggested fix and mark the new version released." : "Released when the new version is saved here.");
+    || (branchWatched ? `Released when the change is merged into ${rd.watch === "tag" ? `the commit tagged ${rd.ref}` : rd.ref}.` : null)
+    || (kind === "upload" ? "Released when you upload the patched code." : null)
+    || (kind === "builtin" ? "Released when a workspace admin makes it the active version." : null)
+    || (fix.depth === "suggestion" ? "Released when you apply the suggested fix and mark the new version released."
+      : fix.depth === "coding-agent" ? "Released when you deploy the change and mark the new version released."
+        : "Released when a workspace admin makes it the active version.");
 
   return (
     <PanelCard title="Release detection">
@@ -184,7 +211,7 @@ export function ReleaseDetectionCard({ agent, onSaveValues }) {
       <KvRow label="Released when" first hint={releasedWhen.split(/[,.—]/)[0].trim().length < releasedWhen.replace(/\.$/, "").length ? releasedWhen : null}>
         {releasedWhen.split(/[,.—]/)[0].trim().replace(/^Released when /, "When ")}
       </KvRow>
-      {code && (
+      {branchWatched && (
         <KvRow label="We watch" align="center">
           <Stack direction="row" spacing={1} alignItems="center">
             <Select
@@ -203,19 +230,6 @@ export function ReleaseDetectionCard({ agent, onSaveValues }) {
           </Stack>
         </KvRow>
       )}
-      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2, py: 1, borderTop: "1px solid", borderColor: "divider" }}>
-        <Box flex={1} minWidth={0}>
-          <Typography sx={{ typography: "s2", fontWeight: 600 }}>Daily sync</Typography>
-          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            {code ? "Once a day and when the release branch moves" : "Once a day"}
-            <InfoTip text={code ? null : "Anything changed outside Future AGI is saved as a new version."} />
-          </Typography>
-        </Box>
-        <Switch
-          size="small" checked={rd.dailySync}
-          onChange={(e) => save({ dailySync: e.target.checked }, e.target.checked ? "Daily sync on." : "Daily sync off — use Sync to check by hand.")}
-        />
-      </Stack>
     </PanelCard>
   );
 }

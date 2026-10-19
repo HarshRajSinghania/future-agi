@@ -25,6 +25,7 @@ import { runInputs, toolFit } from "./toolFit";
 import { gradedRuleIds } from "./provenance";
 import { rebuildRun } from "./comparison";
 import { outcomeTally } from "../run/taskOutcome";
+import { pinsForNewRun } from "./envModel";
 
 /* The same lookup the run page uses, so a member's numbers here match its own page. */
 export const envOf = (state, envId) =>
@@ -82,6 +83,10 @@ export const planRunGroup = (state, envId, otherEnvIds, { trials = 3, now = new 
     return {
       envId: m.envId,
       run: {
+        /* Everything a run holds fixed — suite, sub-goals, evals, caller,
+           scenario versions, the secret references it resolves — recorded
+           like any run started on its own. */
+        ...pinsForNewRun(env, es, { trials, rules: true }),
         id: m.runId,
         label: `${m.envName} · run group`,
         status: "running",
@@ -131,6 +136,35 @@ export const settledRun = (env, envState, run, now = new Date()) => {
     failed: t.failed,
     flaky: t.flaky,
     unmeasured: t.unmeasured,
+  };
+};
+
+/*
+  A run keeps going after its page closes — it runs on our side, not in the
+  tab. Only an open run page used to finish one, so a run left mid-way sat
+  on "running" for weeks. On load, a run started over half an hour ago is
+  read back finished, with the outcome it would have recorded, at the time
+  it would have finished.
+*/
+const ABANDONED_MS = 30 * 60 * 1000;
+export const settleAbandonedRuns = (state, envId, es, now = Date.now()) => {
+  const runs = es?.runs || [];
+  const stuck = (r) => r.status === "running" && now - (Date.parse(r.startedAt || "") || now) > ABANDONED_MS;
+  if (!runs.some(stuck)) return es;
+  const env = envOf(state, envId);
+  if (!env) return es;
+  return {
+    ...es,
+    runs: runs.map((r) => {
+      if (!stuck(r)) return r;
+      const started = Date.parse(r.startedAt);
+      const took = Math.min(15 * 60000, Math.max(60000, (r.total || (r.scenarioIds || []).length * (r.repeats || 1) || 10) * 5000));
+      try {
+        return settledRun(env, es, r, new Date(started + took));
+      } catch {
+        return r;
+      }
+    }),
   };
 };
 

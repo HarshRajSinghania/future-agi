@@ -215,3 +215,29 @@ export function MembersPreview({ members, title = "Members", note }) {
   );
 }
 MembersPreview.propTypes = { members: PropTypes.array, title: PropTypes.string, note: PropTypes.node };
+
+/*
+  What improvements can change for this framework, as a two-row spec sheet:
+  what the improver edits (the tuning table) and whether its production
+  traces reach the Error Feed through traceAI. `tuning` is
+  frameworkTuningOf(…); nothing renders for a framework we don't know.
+*/
+export function FrameworkTuning({ tuning, structure }) {
+  if (!tuning) return null;
+  const rows = [
+    ["Improvements edit", tuning.edits],
+    ...(structure ? [["Structure", `${structure} — read by the adapter, changed only with a written rationale`]] : []),
+    ["Production traces", tuning.traced ? "Through traceAI, into the Error Feed" : "traceAI doesn't instrument it — failures come from simulations"],
+  ];
+  return (
+    <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+      {rows.map(([label, value], i) => (
+        <Stack key={label} direction="row" spacing={1.5} sx={{ px: 1.5, py: 0.875, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+          <Typography sx={{ typography: "s3", color: "text.subtitle", width: 128, flexShrink: 0 }}>{label}</Typography>
+          <Typography sx={{ typography: "s3", color: "text.primary", flex: 1, minWidth: 0 }}>{value}</Typography>
+        </Stack>
+      ))}
+    </Box>
+  );
+}
+FrameworkTuning.propTypes = { tuning: PropTypes.object, structure: PropTypes.string };

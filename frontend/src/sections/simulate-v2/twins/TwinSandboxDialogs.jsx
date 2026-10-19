@@ -195,7 +195,7 @@ function stubOpenApiFor(twin, endpoint) {
     info: {
       title: `${twin.name} sandbox`,
       version: "1.0.0",
-      description: `Clone-backed sandbox for ${twin.name}. Auth via per-run bearer token.`,
+      description: `Sandbox for ${twin.name}. Auth via per-run bearer token.`,
     },
     servers: [{ url: endpoint || `https://${twin.id}.sandbox.futureagi.com` }],
     paths: Object.fromEntries(endpoints.map((e) => [

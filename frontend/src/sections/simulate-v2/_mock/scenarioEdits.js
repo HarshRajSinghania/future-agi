@@ -15,7 +15,10 @@
   scenario's content: they move S, not the scenario.
 */
 import { bumpScenario, SCENARIO_BUMPS } from "./decoupled";
-import { BUMP_RANK } from "./suiteLog";
+import { BUMP_RANK, suiteLogPatch } from "./suiteLog";
+import { archiveScenario, archivedOf, restoreScenario } from "./scenarioStates";
+import { setBlocker } from "./releaseBlocker";
+import { scenarioTitle } from "./scenarios";
 
 const COSMETIC = ["name", "title", "summary", "description", "labels", "tags"];
 const GRADER = ["expected", "outcome", "idealOutcome", "subGoals", "subGoalMarks", "checks"];
@@ -78,10 +81,77 @@ const bumpOf = (before, after, intent) => {
 export const editBumpOf = (before, after, { intent = "same" } = {}) => ({ ...bumpOf(before, after, intent), prior: before || null });
 
 /** What the bump does, in a sentence — the line shown before Save. */
-export const bumpNote = (level) => (level ? SCENARIO_BUMPS[level].note : "Only how the set treats it changed — the scenario keeps its version.");
+export const bumpNote = (level) => (level ? SCENARIO_BUMPS[level].note : "Only how the set treats it changed — the scenario itself is the same.");
 
 /** The row with its bump applied, or as it is when nothing bumped. The
  *  replaced version is snapshotted into the log entry (see bumpScenario). */
 export const applyEditBump = (after, bump) => (bump?.level ? bumpScenario(after, bump.level, bump.why, bump.prior || undefined) : after);
 
 export const biggest = (levels = []) => levels.reduce((m, l) => ((BUMP_RANK[l] || 0) > (BUMP_RANK[m] || 0) ? l : m), null);
+
+/* ── acting on a selection from the chat ──────────────────────────────────── */
+
+/* Named the way the Scenarios table names a row (summary, then title), so
+   three rows of one goal don't all read as the goal. Long ones are cut at a
+   word with an ellipsis. */
+const clip = (t, max = 48) => {
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  return `${cut.slice(0, cut.lastIndexOf(" ") > 24 ? cut.lastIndexOf(" ") : max).replace(/[\s,;:—-]+$/, "")}…`;
+};
+const rowName = (r) => `"${clip(String(r.summary || scenarioTitle(r.title) || r.name || "scenario"))}"`;
+const namesOf = (rows) => {
+  const shown = rows.slice(0, 3).map(rowName).join(", ");
+  return rows.length > 3 ? `${shown} and ${rows.length - 3} more` : shown;
+};
+const scenarios = (n) => `${n} scenario${n === 1 ? "" : "s"}`;
+
+/**
+ * What a chat message asks of the scenarios selected on the Scenarios tab.
+ * Only what the tab itself can do to a selection is done here — archive,
+ * restore, must-pass on or off — through the same row helpers, as the next
+ * scenario-set version. Anything else is answered plainly: it can't be done
+ * from chat yet, and where to do it. Never a reply that claims an edit.
+ *
+ * → { patch?, reply }
+ */
+export const selectionEditOf = (text, rows, envState, { by = null } = {}) => {
+  const t = String(text || "").toLowerCase();
+  const ids = new Set((rows || []).map((r) => r.id));
+  const current = (envState?.scenarios || []).filter((r) => ids.has(r.id));
+  const write = (targets, change, summary) => {
+    const byId = new Map(targets.map((r) => [r.id, change(r)]));
+    return suiteLogPatch(envState, {
+      scenarios: (envState?.scenarios || []).map((r) => byId.get(r.id) || r),
+    }, { summary, by });
+  };
+
+  if (/\b(restore|unarchive|bring back)\b/.test(t)) {
+    const targets = current.filter((r) => archivedOf(r));
+    if (!targets.length) return { reply: "None of the selected scenarios are archived — nothing to restore." };
+    return {
+      patch: write(targets, restoreScenario, `Restored ${scenarios(targets.length)}`),
+      reply: `Restored ${scenarios(targets.length)} — ${namesOf(targets)}. They run and count again, as the next scenario-set version.`,
+    };
+  }
+  if (/\b(archive|drop|remove|delete|retire)\b/.test(t)) {
+    const targets = current.filter((r) => !archivedOf(r) && !r.proposed);
+    if (!targets.length) return { reply: "The selected scenarios are already archived or still proposals — nothing to archive." };
+    return {
+      patch: write(targets, (r) => archiveScenario(r, "Archived from chat"), `Archived ${scenarios(targets.length)}`),
+      reply: `Archived ${scenarios(targets.length)} — ${namesOf(targets)}. They stay listed (filter Archived) but won't run or count. Restore them from the Scenarios tab, or ask me to.`,
+    };
+  }
+  if (/must[- ]?pass/.test(t)) {
+    const on = !/\b(not|no longer|unmark|remove|off|clear)\b/.test(t);
+    const targets = current.filter((r) => !!r.critical !== on && !archivedOf(r));
+    if (!targets.length) return { reply: on ? "The selected scenarios are already must-pass." : "None of the selected scenarios are must-pass." };
+    return {
+      patch: write(targets, (r) => setBlocker(r, on), `${scenarios(targets.length)} ${on ? "marked must-pass" : "no longer must-pass"}`),
+      reply: `${scenarios(targets.length)} ${on ? "marked must-pass — an improvement that breaks one is rejected" : "no longer must-pass"}: ${namesOf(targets)}.`,
+    };
+  }
+  return {
+    reply: `I can't rewrite the ${scenarios(current.length)} you selected from chat yet. Open one on the Scenarios tab to edit it — each edit is a new scenario version, and you'll see what it does to past results before saving. For a selection I can archive, restore, or mark them must-pass.`,
+  };
+};

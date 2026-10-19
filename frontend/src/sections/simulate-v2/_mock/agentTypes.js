@@ -40,7 +40,7 @@ export const AGENT_TYPES = [
     id: "voice_platform",
     group: "Voice & chat",
     label: "Voice agent (platform)",
-    blurb: "Vapi, Retell, Bland, ElevenLabs, LiveKit — connect with an API key.",
+    blurb: "Vapi, Retell, Bland, ElevenLabs — connect with an API key.",
     icon: "solar:phone-calling-rounded-linear",
     color: "#7857FC",
     surfaces: ["voice"],
@@ -246,7 +246,7 @@ export const AGENT_TYPES = [
     handshake: ["Provisioning desktop VM", "Installing seed apps", "Starting VNC", "Streaming first frame"],
     fields: [
       { key: "os", label: "Operating system", type: FIELD.SELECT, required: true, options: [
-        { value: "ubuntu", label: "Ubuntu 24.04" }, { value: "windows", label: "Windows 11" }, { value: "macos", label: "macOS (beta)" },
+        { value: "ubuntu", label: "Ubuntu 24.04" }, { value: "windows", label: "Windows 11" }, { value: "macos", label: "macOS" },
       ] },
       { key: "apps", label: "Pre-installed apps", type: FIELD.TEXT, placeholder: "libreoffice, firefox, thunderbird" },
       { key: "resolution", label: "Resolution", type: FIELD.SELECT, options: [

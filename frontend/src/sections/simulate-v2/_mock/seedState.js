@@ -641,9 +641,7 @@ export function seededState() {
   seeded.byEnv[voice.id] = withDemoFaultRun(voice, seeded.byEnv[voice.id]);
   /* …and one run that passes the release gate, on the returns line. */
   seeded.byEnv[built.id] = withPassingRun(built, seeded.byEnv[built.id]);
-  /* PRD v7: tiers (anchor · core · exploration), the impossible-scenario
-     canaries and each environment's off-limits tools. Added after every run
-     is built — the runs pin their scenario ids, so none of them change. */
+  /* The scenario set read through its migration (retired → archived). */
   Object.keys(seeded.byEnv).forEach((id) => { seeded.byEnv[id] = withScenarioSetSeed(id, seeded.byEnv[id]); });
   /* Seed 19 (RSI PRD exit criteria): Error Feed issues that reach a reviewed
      proposal — a code fix, a Vapi copy, a Retell draft, one that couldn't be

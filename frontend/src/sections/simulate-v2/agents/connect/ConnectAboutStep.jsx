@@ -7,7 +7,6 @@ import { useConnectedAgents, useSimStore } from "../../store";
 import { LANGUAGE_OPTIONS, observeProjectById, observeSlugOf, resolveObserve } from "../../_mock/connectAgent";
 import { knownProjects, projectLinkOf } from "../../_mock/projectLinks";
 import { ChipCard, Field, SegmentedToggle } from "../../environments/StartEnvironment";
-import ConnectConstraintsStep from "./ConnectConstraintsStep";
 import { HintLine } from "./replicationBits";
 
 const MONO = "ui-monospace, Menlo, monospace";
@@ -187,12 +186,12 @@ export function ObserveLinkedRow({ project, on }) {
         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
           {on
             ? `${p ? p.name : "Created with the agent"} · its Error Feed issues are found and fixed here`
-            : "Not linked — turn on Watch production calls."}
+            : "Not linked — link a project on the agent's Connections tab."}
         </Typography>
       </Box>
       <Stack direction="row" alignItems="center" spacing={0.5} sx={{ color: on ? "text.primary" : "text.subtitle", flexShrink: 0 }}>
         <Iconify icon={on ? "solar:link-circle-linear" : "solar:link-broken-linear"} width={14} />
-        <Typography noWrap sx={{ typography: "s3", fontWeight: 600 }}>{on ? "Linked · call logs on" : "Not linked"}</Typography>
+        <Typography noWrap sx={{ typography: "s3", fontWeight: 600 }}>{on ? "Linked" : "Not linked"}</Typography>
       </Stack>
     </Stack>
   );
@@ -350,35 +349,6 @@ AgentAboutFields.propTypes = {
   /* { owner, languages, description, channels, reach } — see emptyProfile(). */
   value: PropTypes.object.isRequired,
   onChange: PropTypes.func.isRequired,
-  defaultChannel: PropTypes.oneOf(["voice", "chat"]),
-  reachLocked: PropTypes.bool,
-};
-
-/**
- * The last step of every New agent flow: who the agent is and how it's
- * reached, then what improvements may change.
- */
-export function ConnectFinalStep({ agent, model, limits, onLimits, profile, onProfile, defaultChannel, reachLocked }) {
-  return (
-    <Stack spacing={2.5}>
-      <Box>
-        <Typography sx={{ ...HEAD, mb: 1 }}>About this agent</Typography>
-        <AgentAboutFields value={profile} onChange={onProfile} defaultChannel={defaultChannel} reachLocked={reachLocked} />
-      </Box>
-      <Box>
-        <Typography sx={{ ...HEAD, mb: 1 }}>Constraints</Typography>
-        <ConnectConstraintsStep agent={agent} model={model} limits={limits} onChange={onLimits} />
-      </Box>
-    </Stack>
-  );
-}
-ConnectFinalStep.propTypes = {
-  agent: PropTypes.object,
-  model: PropTypes.string,
-  limits: PropTypes.object.isRequired,
-  onLimits: PropTypes.func.isRequired,
-  profile: PropTypes.object.isRequired,
-  onProfile: PropTypes.func.isRequired,
   defaultChannel: PropTypes.oneOf(["voice", "chat"]),
   reachLocked: PropTypes.bool,
 };

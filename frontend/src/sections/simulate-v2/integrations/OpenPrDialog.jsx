@@ -1,55 +1,65 @@
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Box, Button, CircularProgress, Dialog, IconButton, MenuItem, Select, Stack, Switch, TextField, Typography,
+  Box, Button, CircularProgress, Dialog, IconButton, MenuItem, Select, Stack, TextField, Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { definitionOf, envAgentKey, agentNameOf } from "../_mock/agentRegistry";
 import { linkedRepoOf } from "../agents/agentLimits";
 import { useConnectedAgents } from "../store";
 import {
-  GITHUB_WRITE_PERMISSIONS, canWriteTo, grantGithubWrite, installationOfRepo, installedRepos, openPr, repoNameOf,
-  requestApproval, useIntegrations,
+  GITHUB_WRITE_PERMISSIONS, GIT_HOST_META, canWriteTo, gitHostConnection, gitHostRepos, grantGitHostWrite, grantGithubWrite,
+  hostRepoNameOf, hostRepoUrlOf, installationOfRepo, installedRepos, openPr, repoNameOf, reviewNounOf, useIntegrations,
 } from "../_mock/integrations";
+import { gitHostOf } from "../agents/agentProfile";
+import { GitHostConnectForm } from "../agents/connect/GitHostRepoPicker";
 import BrandMark from "./BrandMark";
 import GithubInstallDialog from "./GithubInstallDialog";
-import SlackMessage from "./SlackMessage";
 
 const MONO = "ui-monospace, Menlo, monospace";
 const FILE_KIND = { prompt: "Prompt", code: "Tool code", tracing: "Tracing setup", deps: "Dependencies", entry: "Entry point", orchestration: "Orchestration", guardrail: "Guardrail" };
 /**
  * Turn a fix into a pull request on the agent's repository — prompts and
  * tool code alike. The description carries the evidence (which scenarios it
- * fixes, before/after) so a reviewer who wasn't here can judge it. With Slack
- * approvals on, it asks first; the PR opens once someone says yes.
+ * fixes, before/after) so a reviewer who wasn't here can judge it. It opens
+ * straight away: there is no approval step of ours — the team's own GitHub
+ * reviewers and branch protection decide what merges.
  *
  * The GitHub App is installed with read access only. The first PR on an
  * installation that can't write yet asks for write first (the "access"
  * step); not granting it leaves the patch to copy, which needs nothing.
  */
 export default function OpenPrDialog({
-  open, onClose, env, envState, agent, files, summary, onOpened, onRequested,
+  open, onClose, env, envState, agent, files, summary, onOpened,
   draft, kind = "fix", heading, subheading, meta, proof, patchText,
 }) {
   const integrations = useIntegrations();
-  const { github, slack } = integrations;
-  const repos = installedRepos(integrations);
   const [installOpen, setInstallOpen] = useState(false);
   const { setAgentValues } = useConnectedAgents();
 
   /* The agent may come from an environment or straight from the Agents page. */
   const theAgent = agent || envState?.agent;
   const def = definitionOf(theAgent);
+  /* Its git host — GitHub through the App; GitLab (merge requests) or
+     Bitbucket (pull requests) through the workspace's connection. */
+  const host = gitHostOf(theAgent).id;
+  const other = host === "gitlab" || host === "bitbucket";
+  const hostLabel = other ? GIT_HOST_META[host].label : "GitHub";
+  const review = reviewNounOf(host);
+  const connection = other ? gitHostConnection(host, integrations) : null;
+  const github = other ? connection : integrations.github;
+  const repos = other ? gitHostRepos(host, integrations) : installedRepos(integrations);
+  const canWrite = (name) => (other ? connection?.access === "write" : canWriteTo(name));
   /* The repository is the agent's (its Connections), never the environment's:
      a known one is fixed here, and one picked for a repo agent that has none
      yet is saved on the agent. A hosted or endpoint agent doesn't live in the
      repo picked here, so linking it would be a guess. */
   const isRepoAgent = def.kind === "repo" || def.kind === "framework";
-  const known = [linkedRepoOf(theAgent)].map(repoNameOf).find((n) => n && repos.some((r) => r.name === n));
+  const known = [linkedRepoOf(theAgent)].map(other ? hostRepoNameOf : repoNameOf).find((n) => n && repos.some((r) => r.name === n));
   const [repo, setRepo] = useState(known || "");
   const [base, setBase] = useState(def.ref || "main");
   const [title, setTitle] = useState("");
-  const [ask, setAsk] = useState(true);
   /* "access" asks for write before the form; `after` says whether granting
      goes back to the form or straight on to open the PR. */
   const [step, setStep] = useState("form");
@@ -64,8 +74,7 @@ export default function OpenPrDialog({
     setRepo(known || "");
     setBase(def.ref || "main");
     setTitle(draft?.title || (summary?.headline ? `Fix: ${summary.headline}` : `Fix ${files.length} issue${files.length === 1 ? "" : "s"} found in simulation`));
-    setAsk(!!slack?.approvals?.enabled);
-    setStep(known && !canWriteTo(known) ? "access" : "form");
+    setStep(known && !canWrite(known) ? "access" : "form");
     setAfter(null);
     setGranting(false);
     setCopied(false);
@@ -89,33 +98,22 @@ export default function OpenPrDialog({
     "_Opened by Future AGI as a draft. Nothing changes in your agent until you merge._",
   ].join("\n"), [files, summary, env, draft, proof]);
 
-  const approvalsOn = !!(slack?.approvals?.enabled);
   const pr = {
     repo, base, branch, title, body, files,
     check: summary?.fixes != null ? { before: summary.before, after: summary.after, scenarios: summary.scenarios } : null,
     envId: env?.id, envName: env?.name, agentKey: theAgent?.key || envAgentKey(theAgent, env?.id), agentName,
-    kind, ...(draft?.meta || {}), ...(meta || {}),
+    kind, host, ...(draft?.meta || {}), ...(meta || {}),
   };
-  const summaryLine = summary?.fixes
-    ? `${summary.headline || title} — fixes ${summary.fixes} failing scenario${summary.fixes === 1 ? "" : "s"} (${summary.before}% → ${summary.after}%)`
-    : (draft?.approvalLine || title);
 
   const send = () => {
     const agentKey = theAgent?.key || envAgentKey(theAgent, env?.id);
-    if (isRepoAgent && !known && repo && agentKey) setAgentValues(agentKey, { repoUrl: `https://github.com/${repo}` });
-    /* Not `onRequested?.(requestApproval(…))` — optional call skips its
-       argument too, so without a callback nothing would be requested. */
-    if (approvalsOn && ask) {
-      const id = requestApproval({ pr, summary: summaryLine });
-      onRequested?.(id);
-    } else {
-      const opened = openPr(pr);
-      onOpened?.(opened);
-    }
+    if (isRepoAgent && !known && repo && agentKey) setAgentValues(agentKey, { repoUrl: hostRepoUrlOf(host, repo) });
+    const opened = openPr(pr);
+    onOpened?.(opened);
     onClose();
   };
   const submit = () => {
-    if (!canWriteTo(repo)) { setStep("access"); setAfter("submit"); return; }
+    if (!canWrite(repo)) { setStep("access"); setAfter("submit"); return; }
     send();
   };
 
@@ -123,7 +121,8 @@ export default function OpenPrDialog({
   useEffect(() => {
     if (!granting) return undefined;
     const t = setTimeout(() => {
-      grantGithubWrite(repo);
+      if (other) grantGitHostWrite(host);
+      else grantGithubWrite(repo);
       setGranting(false);
       if (after === "submit") send();
       else setStep("form");
@@ -142,7 +141,7 @@ export default function OpenPrDialog({
     setCopied(true);
   };
   const asking = !!github && step === "access";
-  const account = installationOfRepo(repo)?.account;
+  const account = other ? connection?.account : installationOfRepo(repo)?.account;
 
   return (
     <Dialog
@@ -150,21 +149,25 @@ export default function OpenPrDialog({
       PaperProps={{ sx: { borderRadius: 2, maxWidth: 640, width: "100%", bgcolor: "background.paper", backgroundImage: "none", border: "1px solid", borderColor: "divider" } }}
     >
       <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, pt: 2.5, pb: 2 }}>
-        <BrandMark brand="github" size={36} />
+        {other ? <HostMark icon={GIT_HOST_META[host].icon} /> : <BrandMark brand="github" size={36} />}
         <Box flex={1} minWidth={0}>
           <Typography sx={{ typography: "m3", fontWeight: 700 }}>
-            {asking ? <>{"Allow Future AGI to open draft pull requests on "}<Box component="span" sx={{ fontFamily: MONO, fontSize: "0.92em" }}>{repo}</Box></> : heading || "Open a pull request"}
+            {asking ? <>{`Allow Future AGI to open draft ${review.long}s on `}<Box component="span" sx={{ fontFamily: MONO, fontSize: "0.92em" }}>{repo}</Box></> : heading || `Open a ${review.long}`}
           </Typography>
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
             {asking
-              ? "Asked once. The app was installed to read your code only — opening a draft PR needs write access to a new branch."
-              : subheading || "The fix goes to review on GitHub. Nothing changes in your agent until you merge."}
+              ? `Asked once. ${other ? `${hostLabel} was connected` : "The app was installed"} to read your code only — opening a draft ${review.short} needs write access to a new branch.`
+              : subheading || `The fix goes to review on ${hostLabel}. Nothing changes in your agent until you merge.`}
           </Typography>
         </Box>
         <IconButton size="small" onClick={onClose}><Iconify icon="eva:close-fill" width={18} /></IconButton>
       </Stack>
 
-      {!github ? (
+      {!github && other ? (
+        <Box sx={{ px: 3, pb: 3 }}>
+          <GitHostConnectForm host={host} />
+        </Box>
+      ) : !github ? (
         <Box sx={{ px: 3, pb: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1.5} sx={{ p: 1.75, borderRadius: 1.25, border: "1px dashed", borderColor: "divider" }}>
             <Box flex={1}>
@@ -179,11 +182,11 @@ export default function OpenPrDialog({
       ) : asking ? (
         <Stack spacing={1.75} sx={{ px: 3, pb: 2.5 }}>
           <Box>
-            <Label>Write access we&apos;ll ask GitHub for</Label>
+            <Label>{`Write access we'll ask ${hostLabel} for`}</Label>
             <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
-              {GITHUB_WRITE_PERMISSIONS.map((p, i) => (
+              {(other ? GIT_HOST_META[host].writeScopes : GITHUB_WRITE_PERMISSIONS).map((p, i) => (
                 <Stack key={p.scope} direction="row" spacing={1.5} sx={{ px: 1.5, py: 1, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
-                  <Typography sx={{ typography: "s2", fontWeight: 600, width: 110, flexShrink: 0 }}>{p.scope}</Typography>
+                  <Typography sx={{ typography: "s2", fontWeight: 600, width: 130, flexShrink: 0, ...(other && { fontFamily: MONO, fontWeight: 500 }) }}>{p.scope}</Typography>
                   <Typography sx={{ typography: "s2", width: 96, flexShrink: 0 }}>{p.access}</Typography>
                   <Typography sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>{p.why}</Typography>
                 </Stack>
@@ -192,8 +195,10 @@ export default function OpenPrDialog({
           </Box>
           <Stack spacing={0.5}>
             {[
-              ["solar:shield-check-linear", <>{"Never merges, and never pushes to "}<Box component="span" sx={{ fontFamily: MONO }}>{base || "main"}</Box>{" or any branch you made — every PR is a draft a person reviews."}</>],
-              ["solar:users-group-rounded-linear", `GitHub permissions belong to the installation, so this covers every repository the app sees on ${account || "this account"}.`],
+              ["solar:shield-check-linear", <>{"Never merges, and never pushes to "}<Box component="span" sx={{ fontFamily: MONO }}>{base || "main"}</Box>{` or any branch you made — every ${review.short} is a draft a person reviews.`}</>],
+              ["solar:users-group-rounded-linear", other
+                ? `The token's scopes belong to the ${hostLabel} connection, so this covers every repository it sees in ${account || "this account"}.`
+                : `GitHub permissions belong to the installation, so this covers every repository the app sees on ${account || "this account"}.`],
               ["solar:copy-linear", "Not now? Copy the patch instead and apply it yourself — that needs no write access."],
             ].map(([icon, text]) => (
               <Stack key={icon} direction="row" spacing={1} alignItems="flex-start">
@@ -233,7 +238,7 @@ export default function OpenPrDialog({
             {"From branch "}
             <Box component="span" sx={{ fontFamily: MONO }}>{branch}</Box>
             {known ? " · the repository this agent is read from" : isRepoAgent ? " · we'll remember this repository for the agent" : ""}
-            {repo && !canWriteTo(repo) ? " · read only so far — we'll ask for write access first" : ""}
+            {repo && !canWrite(repo) ? " · read only so far — we'll ask for write access first" : ""}
           </Typography>
 
           <Box>
@@ -271,24 +276,6 @@ export default function OpenPrDialog({
               {body}
             </Box>
           </Box>
-
-          {approvalsOn && (
-            <Box sx={{ p: 1.5, borderRadius: 1.25, border: "1px solid", borderColor: "divider" }}>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <BrandMark brand="slack" size={24} tile={false} />
-                <Box flex={1}>
-                  <Typography sx={{ typography: "s2", fontWeight: 700 }}>{`Ask for approval in ${slack.approvals.channel} first`}</Typography>
-                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Optional — your own rule. The pull request opens when someone approves it; Future AGI doesn&apos;t require it.</Typography>
-                </Box>
-                <Switch checked={ask} onChange={(e) => setAsk(e.target.checked)} />
-              </Stack>
-              {ask && (
-                <Box sx={{ mt: 1.25 }}>
-                  <SlackMessage msg={{ title: kind === "telemetry" ? `Approve adding tracing to ${agentName}?` : `Approve a fix for ${agentName}?`, lines: [summaryLine, `${files.length} file${files.length === 1 ? "" : "s"} in ${repo || "the agent's repository"}`], actions: ["Approve & open PR", "Decline", "Review in Future AGI"], approvalId: "preview", channel: slack.approvals.channel, at: new Date().toISOString() }} />
-                </Box>
-              )}
-            </Box>
-          )}
         </Stack>
       )}
 
@@ -304,10 +291,10 @@ export default function OpenPrDialog({
           <Box flex={1} />
           <Button
             size="small" variant="contained" color="primary" disabled={granting || !repo} onClick={() => setGranting(true)}
-            startIcon={granting ? <CircularProgress size={12} thickness={6} sx={{ color: "inherit" }} /> : <Iconify icon="mdi:github" width={15} />}
+            startIcon={granting ? <CircularProgress size={12} thickness={6} sx={{ color: "inherit" }} /> : <Iconify icon={other ? GIT_HOST_META[host].icon : "mdi:github"} width={15} />}
             sx={{ typography: "s2", fontWeight: 700 }}
           >
-            {granting ? "Updating on GitHub…" : "Grant write access"}
+            {granting ? `Updating on ${hostLabel}…` : "Grant write access"}
           </Button>
         </Stack>
       )}
@@ -315,11 +302,11 @@ export default function OpenPrDialog({
         <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ px: 3, py: 1.75, borderTop: "1px solid", borderColor: "divider" }}>
           <Button size="small" onClick={onClose} sx={{ typography: "s2", fontWeight: 700, color: "text.secondary" }}>Cancel</Button>
           <Button size="small" variant="contained" color="primary" disabled={!repo || !title.trim()} onClick={submit} sx={{ typography: "s2", fontWeight: 700 }}>
-            {approvalsOn && ask ? "Request approval" : "Open pull request"}
+            {`Open ${review.long}`}
           </Button>
         </Stack>
       )}
-      <GithubInstallDialog open={installOpen} onClose={() => setInstallOpen(false)} />
+      {!other && <GithubInstallDialog open={installOpen} onClose={() => setInstallOpen(false)} />}
     </Dialog>
   );
 }
@@ -334,7 +321,6 @@ OpenPrDialog.propTypes = {
   files: PropTypes.array.isRequired,
   summary: PropTypes.object,
   onOpened: PropTypes.func,
-  onRequested: PropTypes.func,
   agent: PropTypes.object,
   draft: PropTypes.object,
   kind: PropTypes.string,
@@ -342,6 +328,16 @@ OpenPrDialog.propTypes = {
   subheading: PropTypes.string,
   meta: PropTypes.object,
 };
+
+/* GitLab's and Bitbucket's marks on the same neutral tile as BrandMark. */
+function HostMark({ icon }) {
+  return (
+    <Box sx={{ width: 36, height: 36, borderRadius: 1.25, flexShrink: 0, display: "grid", placeItems: "center", border: "1px solid", borderColor: "divider", bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.04 : 0.02) }}>
+      <Iconify icon={icon} width={20} sx={{ color: "text.primary" }} />
+    </Box>
+  );
+}
+HostMark.propTypes = { icon: PropTypes.string };
 
 function Label({ children }) {
   return <Typography sx={{ typography: "s3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "text.subtitle", mb: 0.5 }}>{children}</Typography>;

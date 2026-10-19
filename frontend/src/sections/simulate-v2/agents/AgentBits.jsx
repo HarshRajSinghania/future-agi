@@ -1,6 +1,7 @@
 import PropTypes from "prop-types";
 import { Box, Stack, Tooltip, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { useDemoMode } from "./demoMode";
 
 /*
   Small pieces the agent page's newer cards share — the same card, row and
@@ -87,8 +88,10 @@ export function QuietTag({ children, tone, icon, title }) {
 }
 QuietTag.propTypes = { children: PropTypes.node, tone: PropTypes.oneOf(["error"]), icon: PropTypes.string, title: PropTypes.string };
 
-/** Marks a prototype-only control ("Simulate a push") so it doesn't read as a product action. */
+/** Marks a staging-only control ("Simulate a push") — shown only with ?demo=1. */
 export function DemoLabel() {
+  const demo = useDemoMode();
+  if (!demo) return null;
   return (
     <Typography component="span" sx={{ typography: "s3", fontWeight: 600, color: "text.disabled", mr: 0.75 }}>
       Demo

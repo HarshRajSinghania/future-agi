@@ -1,5 +1,5 @@
 import { versionNumber } from "../_mock/versions";
-import { sourceFromAgentRecord } from "../_mock/agentRegistry";
+import { needsFoundCheck, sourceFromAgentRecord } from "../_mock/agentRegistry";
 import { fixDepthOf } from "../_mock/rsiModel";
 
 export const MONO = "ui-monospace, Menlo, monospace";
@@ -28,6 +28,7 @@ export const ago = (iso) => {
 export const ORIGIN_LABEL = (v, source) => {
   if (v.origin === "sync") return `Synced from ${source.label}`;
   if (v.origin === "manual") return "Recorded by hand";
+  if (v.origin === "rollback") return "Roll back";
   if (v.origin === "push") return `Pushed ${v.commit?.sha || ""}`.trim();
   if (v.origin === "pr") return `Merged PR #${v.prNumber}`;
   if (v.applied?.length) return "From an improvement";
@@ -100,11 +101,12 @@ export const fixDepthLine = (agent) => {
 /**
  * Whether the agent page shows Finish setting up: an agent connected through
  * the one-step connect, or any agent that isn't tested anywhere yet — until
- * someone hides it.
+ * someone hides it. A code agent whose "Check what we found" is still open
+ * shows it regardless: that check is needed before it runs.
  */
 export const showsSetup = (agent) => !!agent
-  && !agent.values?.setupDismissedAt
-  && (!!agent.values?.setupStartedAt || !(agent.usedIn || []).length);
+  && (needsFoundCheck(agent) || (!agent.values?.setupDismissedAt
+    && (!!agent.values?.setupStartedAt || !(agent.usedIn || []).length)));
 
 /*
   Where an agent is tested, in one short line. One environment, or two with

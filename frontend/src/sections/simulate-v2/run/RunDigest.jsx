@@ -1,4 +1,5 @@
 import PropTypes from "prop-types";
+import { SHOW_INSIGHTS } from "../_mock/featureFlags";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
@@ -139,7 +140,7 @@ export function DigestPreview({ digest, destinations, sentAt, onNavigate }) {
                   </Typography>
                 ))}
                 {digest.more > 0 && (
-                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{`+${digest.more} more in Insights`}</Typography>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{`+${digest.more} more in ${SHOW_INSIGHTS ? "Insights" : "the run"}`}</Typography>
                 )}
               </Stack>
             )}

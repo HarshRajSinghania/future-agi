@@ -21,11 +21,15 @@ import { pinsForNewRun } from "./envModel";
 import { runSummaries } from "./comparison";
 import { frozenSnapshotOf } from "./envSnapshot";
 import {
-  optimizationId, OPT_STATUS, PER_CONVERSATION, REPEATS, RATE, searchSpend, searchMinutes, trialsWithin, costCeilingLabel, searchConversations, LEGACY_COST_CEILING, COST_NOISE, winnerEffect,
+  optimizationId, OPT_STATUS, PER_CONVERSATION, REPEATS, RATE, searchSpend, searchMinutes, trialsWithin, costCeilingLabel, searchConversations, limitGate,
 } from "./optimizationRuns";
 
-/** The newest finished run in an environment — what an improvement measures against. */
-export const baseRunOf = (env, es) => (env ? runSummaries(env, es) : [])
+/** The newest finished run in an environment — on `agentVersion` when given — what an improvement measures against. */
+export const baseRunOf = (env, es, agentVersion = null) => (env ? runSummaries(env, es) : [])
+  /* Finished only — a run still going (or queued) is no baseline. A finished
+     run's status is its outcome ("passed" / "failed"), and either counts. */
+  .filter((r) => r.status !== "running" && r.status !== "queued")
+  .filter((r) => !agentVersion || r.agentVersion === agentVersion)
   .sort((a, b) => Date.parse(b.finishedAt || 0) - Date.parse(a.finishedAt || 0))[0] || null;
 
 /*
@@ -39,9 +43,9 @@ export const issueFocusOf = (trigger) => (trigger?.source === "run-insights" && 
 
 /*
   The scenarios a search may use are the run's, read against the set as it
-  stands (`es`) for the agent version being improved: archived and
-  not-applicable ones don't run, canaries are cheat checks only, proposed
-  ones stay out unless they're a fix's own, and holdouts come from core.
+  stands (`es`) for the agent version being improved: archived and stale
+  ones count toward no decision, and proposed ones stay out unless they're
+  a fix's own.
   Without `es` every scenario the run played is used, as before.
 */
 /*
@@ -129,25 +133,9 @@ const engineConfig = ({ env, es, limits, agentVersion, state, regressionEnvIds, 
   };
 };
 
-/* The cost and latency ceilings, checked on every candidate as it runs — "No
-   increase" allows the ±2% two runs of one agent differ by. Cost only where
-   it can be measured. */
-const limitGateFor = (limits, env, es) => {
-  const costKnown = costMeasuredFor(es?.agent);
-  const ceiling = limits?.costCeiling ?? 0;
-  const tol = ceiling <= 0 ? COST_NOISE : 0;
-  const latency = limits?.latencyCeiling ?? 10;
-  const abs = limits?.costMode === "abs" && limits.costCeilingAbs != null ? limits.costCeilingAbs : null;
-  const today = PER_CONVERSATION[env?.surface === "voice" ? "voice" : "chat"];
-  const sign = (n) => `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n)}%`;
-  return (candidate, costSavings = 0) => {
-    const e = winnerEffect({ proposals: candidate, costSavings });
-    if (costKnown && abs != null && today * (1 + e.cost / 100) > abs) return { id: "cost", actual: `$${(today * (1 + e.cost / 100)).toFixed(3)} a conversation, over $${Number(abs).toFixed(2)}` };
-    if (costKnown && abs == null && e.cost > ceiling + tol) return { id: "cost", actual: `cost ${sign(e.cost)}, over ${ceiling <= 0 ? "no increase" : `+${ceiling}%`}` };
-    if (e.latency > latency) return { id: "latency", actual: `latency ${sign(e.latency)}, over +${latency}%` };
-    return null;
-  };
-};
+/* The cost and latency ceilings, checked on every candidate as it runs —
+   the one gate every screen uses (optimizationRuns.limitGate). */
+const limitGateFor = (limits, env, es) => limitGate({ limits, costKnown: costMeasuredFor(es?.agent), surface: env?.surface });
 
 export const planSearch = ({
   env, es, agentVersion, tasks, limits, seed, maxTrials, lineage, issue, textSearch, compatCheck = COMPAT_CHECK,
@@ -180,6 +168,11 @@ export const planSearch = ({
     ...(compatCheck ? { compat: compatFor(env, es) } : {}),
     /* Phase 2: a voice agent searched in text, finalists confirmed as real calls. */
     ...(env?.surface === "voice" && (textSearch ?? textSearchDefault(env?.surface)) ? { textSearch: true } : {}),
+    /* A voice search keeps a slice of the scenarios, but must-pass is the
+       whole suite's (RSI PRD: every scenario that passes all its repeats on
+       the current version) — run for finalists only, so it costs the
+       finalists, not every candidate. */
+    ...(eng?.voiceCap ? { mustPassPool: searchScope({ env, envState: es, tasks: tasks || [], agentVersion }).tasks } : {}),
   },
   seed,
   });
@@ -257,15 +250,14 @@ export const infraFailureOf = (env, es, trials) => {
  * is what was spent before the search (reproducing), taken off the budget.
  */
 export const buildImprovement = ({
-  env, es, tasks, fromRunId, baseAgentVersion, trigger, limits: given0, budget, regressionEnvIds, spentFirst = 0, seed, extra = {}, hold = false, lineage,
+  env, es, tasks, fromRunId, baseAgentVersion, trigger, limits, budget, regressionEnvIds, spentFirst = 0, seed, extra = {}, hold = false, lineage,
   state, textSearch, targetMember, issueScenarios, reread: given, compatCheck = COMPAT_CHECK, optimizerId,
 }) => {
   const records = es?.optimizations || [];
   const issue = issueFocusOf(trigger);
   const engine = compatCheck ? RSI_ENGINE : 0;
-  /* The default cost ceiling became "No increase"; an improvement recorded
-     before the newer engine was written against +5%, and keeps it. */
-  const limits = !engine && given0 && (given0.costCeiling ?? 0) === 0 && given0.costMode !== "abs" ? { ...given0, costCeiling: LEGACY_COST_CEILING } : given0;
+  /* Held to the agent's own limits, whichever engine searches — never a
+     ceiling the agent didn't set. */
   /* A goal improvement (or a run's failures) aims at its goal; a fix at its issue. */
   const goal = trigger?.kind === "error-feed" || trigger?.source === "run-insights" ? null : trigger?.goal || { id: "pass-rate", label: "Pass rate" };
   const engineArgs = engine ? { goal, optimizerId, state, regressionEnvIds } : { optimizerId };
@@ -285,14 +277,19 @@ export const buildImprovement = ({
   const maxMinutes = limits?.budget?.minutes || Infinity;
   const trialRate = RATE[env.surface === "voice" && !full.textSearch ? "voice" : "chat"];
   const finalRate = RATE[env.surface === "voice" ? "voice" : "chat"];
+  /* Zero when the finalists' checks alone take longer than the cap. */
   const kTime = minutesFor(full.trials.length) > maxMinutes
-    ? Math.max(1, Math.floor((((maxMinutes - 8) - ((full.finalists?.length || 1) * full.heldMeasured * reps + firstConversations) / finalRate) * trialRate) / (reps * Math.max(1, full.trainMeasured))))
+    ? Math.max(0, Math.floor((((maxMinutes - 8) - ((full.finalists?.length || 1) * full.heldMeasured * reps + (full.mustPassMeasured || 0) * (full.finalists?.length || 1) * reps + firstConversations) / finalRate) * trialRate) / (reps * Math.max(1, full.trainMeasured))))
     : Infinity;
   const k = Math.min(kMoney, kTime);
-  const result = k < full.trials.length ? planSearch({ env, es, agentVersion: baseVersion, tasks, limits, seed, maxTrials: k, lineage, issue, textSearch, compatCheck, ...engineArgs }) : full;
+  /* Checking the finalists alone would go over the budget or the time cap:
+     it stops at the budget before searching, never over it. */
+  const overBefore = k <= 0;
+  const result = !overBefore && k < full.trials.length ? planSearch({ env, es, agentVersion: baseVersion, tasks, limits, seed, maxTrials: k, lineage, issue, textSearch, compatCheck, ...engineArgs }) : full;
   /* Nothing falls short of the goal: the improvement ends before searching. */
   const nothing = !!engine && !hold && !!result.goal && result.goalTargets === 0;
   const by = kTime < kMoney ? "time" : "money";
+  const stopBefore = overBefore && !hold && !nothing;
   const infra = hold ? null : infraFailureOf(env, es, result.trials.length);
   const proof = proofKindOf(es?.agent);
   /* Fresh variations the held-back set wrote are the improvement's too. */
@@ -314,14 +311,22 @@ export const buildImprovement = ({
       critical: !!t.critical,
     });
   });
+  const ending = hold ? OPT_STATUS.NOT_REPRODUCED : nothing ? OPT_STATUS.NOTHING : stopBefore ? OPT_STATUS.OVER_BUDGET : infra ? OPT_STATUS.FAILED : OPT_STATUS.RUNNING;
+  /* An ending known before searching still reproduces first: the record
+     starts running and settles to it once Reproduce has played
+     (optimizationRuns.statusOf). Records kept exactly as seeded (no engine
+     stamp) end at once, as they always did. */
+  const pendingEnding = engine && ending !== OPT_STATUS.RUNNING ? ending : null;
+  const createdAt = new Date().toISOString();
   return {
     id: optimizationId(es),
     name: `Improvement ${records.length + 1}`,
     optimizerId: result.optimizer?.id || "protegi",
     model: "claude-opus-5",
-    status: hold ? OPT_STATUS.NOT_REPRODUCED : nothing ? OPT_STATUS.NOTHING : infra ? OPT_STATUS.FAILED : OPT_STATUS.RUNNING,
+    status: pendingEnding ? OPT_STATUS.RUNNING : ending,
+    ...(pendingEnding && { pendingEnding, startedAt: createdAt }),
     ...(nothing && { nothing: { goal: result.goal } }),
-    createdAt: new Date().toISOString(),
+    createdAt,
     fromRunId,
     baseAgentVersion: baseVersion,
     includedIds: [],
@@ -331,6 +336,8 @@ export const buildImprovement = ({
     trigger,
     limits,
     budget,
+    /* What ran before the search (reproducing an issue) — part of what it spent. */
+    spentFirst,
     regressionEnvIds,
     costMeasured: costMeasuredFor(es?.agent),
     /* How deep a fix can go: an agent we can only call ends in a suggestion. */
@@ -346,8 +353,10 @@ export const buildImprovement = ({
     surface: env.surface,
     /* What every verdict is computed against — frozen now, never edited. */
     frozen: {
-      scenarios: result.trainMeasured + result.heldMeasured,
+      scenarios: result.trainMeasured + result.heldMeasured + (result.mustPassMeasured || 0),
       held: result.heldMeasured,
+      /* The three sets, kept apart (new improvements). */
+      ...(result.mustPassMeasured != null && { targets: result.trainMeasured, mustPassSet: result.mustPassMeasured }),
       evaluations: (es?.evals || []).map((e) => (typeof e === "string" ? e : e.id)),
       /* Must-pass: marked, regression memory, and everything passing every repeat today. */
       mustPass: result.mustPass?.total ?? [...result.train, ...result.held].filter((t) => t.critical).length,
@@ -378,10 +387,12 @@ export const buildImprovement = ({
       rules: (env?.rules || []).length,
     },
     minutes: minutesFor(result.trials.length),
-    ...(result !== full ? { stoppedAtBudget: { budget, trials: result.trials.length, of: full.trials.length, by, minutes: limits?.budget?.minutes } } : {}),
+    ...(stopBefore
+      ? { stoppedAtBudget: { budget, trials: 0, of: full.trials.length, by, minutes: limits?.budget?.minutes } }
+      : result !== full ? { stoppedAtBudget: { budget, trials: result.trials.length, of: full.trials.length, by, minutes: limits?.budget?.minutes } } : {}),
     /* Held back when the run stops before searching — kept for "Continue anyway". */
     ...(result.calibration && { calibration: result.calibration }),
-    ...(hold || infra || nothing ? { result: null, pendingResult: result } : { result }),
+    ...(hold || infra || nothing || stopBefore ? { result: null, pendingResult: result } : { result }),
     ...(infra && { infra }),
     ...extra,
   };
@@ -396,6 +407,7 @@ const diagnosisFor = ({ env, tasks, extra }) => {
   }
   try {
     return omegaReport({ env, summary: { tasks: tasks || [] }, baseline: null })
+      .filter((a) => !a.nothing)
       .slice(0, 3)
       .map((a) => ({ id: a.id, label: a.label, headline: a.headline, severity: a.severity, source: "debug-failures" }));
   } catch (e) {

@@ -1,7 +1,7 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, Collapse, IconButton, Tooltip, Menu, MenuItem, Button, InputBase } from "@mui/material";
+import { Box, Stack, Typography, Collapse, IconButton, Tooltip, Menu, MenuItem, Button } from "@mui/material";
 import { useSnackbar } from "notistack";
 import Iconify from "src/components/iconify";
 import { SectionCard } from "../components/primitives";
@@ -12,7 +12,6 @@ import {
   toolEnvPatch, toolEnvSummaryWords, toolSettingOf, allowLivePatch, liveAdvisoryOf,
 } from "../_mock/toolEnv";
 import { TierDial, FaultsControl, SafeTargetPrompt, LiveAdvisory } from "./ToolDial";
-import { offLimitsOf, offLimitsKindOf, OFF_LIMITS_KINDS } from "../_mock/cheatControls";
 import { toolArgsOf } from "../_mock/rlContract";
 import ToolArgsGrid from "./ToolArgsGrid";
 import { clickable, focusRing } from "../components/clickable";
@@ -191,7 +190,7 @@ function ToolImplsCard({ env, tools, envState, patch }) {
       subtitle={(
         <>
           <Box component="span" sx={{ color: "text.primary", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{summary}</Box>
-          {" — how each tool answers during a run. A change is a world edit, so the next run is on a new minor version."}
+          {" — how each tool answers during a run. A change is a world edit, saved as the next environment version."}
         </>
       )}
       action={patch && (
@@ -285,7 +284,6 @@ function ToolImplsCard({ env, tools, envState, patch }) {
           );
         })}
       </Stack>
-      <OffLimits envState={envState} patch={patch} />
     </SectionCard>
   );
 }
@@ -304,96 +302,6 @@ function ToolArgs({ tool, envState }) {
   );
 }
 ToolArgs.propTypes = { tool: PropTypes.object.isRequired, envState: PropTypes.object };
-
-/* ── off-limits tools and paths (PRD v7 AC-12.24) ─────────────────────── */
-
-/*
-  What a run may never call: admin overrides, debug and test hooks, seed or
-  reset endpoints. The tool gateway logs any call to one, and the run scores
-  it fail · cheat. Editing the list is an environment edit.
-*/
-function OffLimits({ envState, patch }) {
-  const list = offLimitsOf(envState);
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [why, setWhy] = useState("");
-  const write = (next) => patch && patch({ offLimits: next });
-  const add = () => {
-    const n = name.trim();
-    if (!n || list.some((o) => o.name === n)) return;
-    write([...list, { name: n, why: why.trim() || `${OFF_LIMITS_KINDS.find((k) => k.id === offLimitsKindOf(n)).label}.` }]);
-    setName(""); setWhy(""); setAdding(false);
-  };
-  const field = {
-    px: 1, py: 0.25, borderRadius: 0.75, border: "1px solid", borderColor: "divider", typography: "s2", bgcolor: "background.paper",
-  };
-  return (
-    <Box sx={{ borderTop: "1px solid", borderColor: "divider" }}>
-      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, pt: 1.5, pb: 0.75 }}>
-        <Iconify icon="solar:forbidden-circle-linear" width={15} sx={{ color: "text.subtitle", flexShrink: 0 }} />
-        <Box flex={1} minWidth={0}>
-          <Typography sx={{ typography: "s2", fontWeight: 600 }}>{`Off-limits · ${list.length}`}</Typography>
-          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            Tools and paths no run may call — admin overrides, debug or test hooks, seed or reset endpoints. Any call is logged and scored fail · cheat.
-          </Typography>
-        </Box>
-        {patch && !adding && (
-          <Button
-            size="small"
-            onClick={() => setAdding(true)}
-            startIcon={<Iconify icon="solar:add-circle-linear" width={14} />}
-            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0 }}
-          >
-            Add
-          </Button>
-        )}
-      </Stack>
-      <Stack sx={{ pb: 1 }}>
-        {list.length === 0 && !adding && (
-          <Typography sx={{ px: 2.5, pl: 6.75, py: 0.75, typography: "s3", color: "text.subtitle" }}>
-            None declared — a run can&apos;t tell a shortcut from a legitimate call.
-          </Typography>
-        )}
-        {list.map((o) => (
-          <Stack key={o.name} direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, pl: 6.75, py: 0.5, "&:hover .ol-x": { opacity: 1 } }}>
-            <Typography noWrap sx={{ typography: "s2", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", width: 220, flexShrink: 0 }}>
-              {o.name}
-            </Typography>
-            <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>{o.why}</Typography>
-            {patch && (
-              <Tooltip arrow title="Remove — calls to it would no longer count as a cheat">
-                <IconButton size="small" className="ol-x" onClick={() => write(list.filter((x) => x.name !== o.name))} sx={{ opacity: 0, transition: "opacity .12s ease" }}>
-                  <Iconify icon="solar:close-circle-linear" width={14} sx={{ color: "text.subtitle" }} />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Stack>
-        ))}
-        {adding && (
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, pl: 6.75, py: 0.75 }}>
-            <InputBase
-              autoFocus value={name} onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }}
-              placeholder="admin_force_booking or /admin/*"
-              sx={{ ...field, width: 220, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}
-            />
-            <InputBase
-              value={why} onChange={(e) => setWhy(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }}
-              placeholder="Why it's off-limits (optional)"
-              sx={{ ...field, flex: 1 }}
-            />
-            <Button size="small" onClick={() => setAdding(false)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>Cancel</Button>
-            <Button size="small" variant="outlined" disabled={!name.trim()} onClick={add} sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}>
-              Add
-            </Button>
-          </Stack>
-        )}
-      </Stack>
-    </Box>
-  );
-}
-OffLimits.propTypes = { envState: PropTypes.object, patch: PropTypes.func };
 
 /* ── scenario checks ──────────────────────────────────────────────────── */
 
@@ -420,7 +328,7 @@ function ProofChecksCard({ onGo }) {
   return (
     <SectionCard
       title="Scenario checks"
-      subtitle="What proves each scenario before it runs — pass or fail on a run is decided by evaluations"
+      subtitle="What proves each scenario before it runs. On a run, sub-goals decide pass or fail; evaluations score each conversation"
       action={onGo && (
         <Typography
           {...clickable(() => onGo("evals"), { role: "link" })}

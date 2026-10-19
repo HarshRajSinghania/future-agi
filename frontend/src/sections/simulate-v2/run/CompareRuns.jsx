@@ -22,20 +22,33 @@ import {
   behaviourDiff, ROW_HEIGHTS, viewSnapshot, snapshotsEqual, newViewId,
 } from "../_mock/compareView";
 import { withPairs, bridgeOf, priceOf, priceLine } from "../_mock/pairs";
+import { creditsLabel, creditsForUsd } from "../_mock/metering";
 import { useEnvState, useSimStore } from "../store";
 import { SectionCard, EmptyState, PersonaBadge, Verdict, DomainChip } from "../components/primitives";
 import CallCompare from "./CallCompare";
 import CompareActions, { CompareSearchBar, SavedViews } from "./CompareControls";
 import CompareGrid from "./CompareGrid";
 import CompareSummary from "./CompareSummary";
+import CompareVerdict from "./CompareVerdict";
 import OutcomeChip from "./CompareOutcome";
 import { csatOf } from "./traceTableHelpers";
 import RuleChangeDialog from "../components/RuleChangeDialog";
 import { agentSourceOf } from "../_mock/agentRegistry";
 import { textTone } from "../components/textTone";
 import { versionOriginOf } from "../_mock/specChange";
-import { subGoalGroups } from "../_mock/compareHeld";
+import { subGoalGroups, heldFixedAcross } from "../_mock/compareHeld";
+import { snapshotOfRun, compareEnvHeadline } from "../_mock/envSnapshot";
 import { clickable, focusRing } from "../components/clickable";
+import { runStatsOf } from "../_mock/runCompare";
+
+/* "62% 67/108" — scenario pass and its fraction, from runStatsOf like the Runs
+   table's Scenario pass cell. An improvement's run is read from its own
+   per-scenario outcomes (trialTasks), even once Compare has hydrated it with
+   the source run's calls, so the menu, the pill and the table agree. */
+const scenarioPassText = (r) => {
+  const st = runStatsOf(r?.kind === "trial" && r.trialTasks?.length ? { ...r, tasks: r.trialTasks } : r);
+  return st.measured ? `${st.scenarioRate}% ${st.scenarioPassed}/${st.measured}` : `${r?.passRate ?? "—"}%`;
+};
 
 /**
  * Two or more runs of the same scenarios.
@@ -81,7 +94,7 @@ export default function CompareRuns() {
      the comparison is never held back for it. */
   const [answering, setAnswering] = useState(null);
   /* Rechecked pairs count in the delta unless this session leaves them out. */
-  const [excludeRechecked] = useState(false);
+  const [excludeRechecked, setExcludeRechecked] = useState(false);
   /*
     The view is derived from the saved default unless this session has changed
     it. Seeding state from `envState` instead would read the store before it
@@ -192,6 +205,19 @@ export default function CompareRuns() {
       : { comparison: comparisonRaw, read: null }),
     [comparisonRaw, env, envState, excludeRechecked],
   );
+  /* What each run pinned (this environment's runs only), and the two
+     environment versions the verdict sits on. */
+  const held = useMemo(() => {
+    const own = comparisonRaw.runs.filter((r) => !r._env);
+    return env && own.length >= 2 && own.length === comparisonRaw.runs.length ? heldFixedAcross(own, env, envState) : null;
+  }, [comparisonRaw.runs, env, envState]);
+  const envHeadline = useMemo(() => {
+    const runs = comparisonRaw.runs;
+    if (!env || !read || runs.length < 2 || runs.some((r) => r._env)) return null;
+    const a = snapshotOfRun(runs[0], env, envState);
+    const b = snapshotOfRun(runs[runs.length - 1], env, envState);
+    return compareEnvHeadline(a, b, read.counts, read.total);
+  }, [comparisonRaw.runs, env, envState, read]);
   /* Every runnable row this environment has — manual runs plus every
      improvement-run trial — with the unified numeric-chip identity
      applied so the Add-run picker matches the runs list badges. */
@@ -222,7 +248,8 @@ export default function CompareRuns() {
         .slice(0, related ? 5 : 1);
       done.forEach((r) => {
         const key = `${e.id}::${r.id}`;
-        if (!runIds.includes(key)) out.push({ key, related, envName: e.name, run: r });
+        /* Named the way its own environment names it — "agent v3 × environment v5". */
+        if (!runIds.includes(key)) out.push({ key, related, envName: e.name, run: r, label: runIdentityOf(r, state.byEnv?.[e.id], e).label });
       });
     });
     return out.sort((a, b) => (a.related === b.related ? 0 : a.related ? -1 : 1));
@@ -258,7 +285,8 @@ export default function CompareRuns() {
         comparedOn: read.sentence, delta: read.interval.delta, interval: [read.interval.lo, read.interval.hi], label: read.label.label,
       } : null,
       runs: comparison.runs.map((r) => ({
-        id: r.id, agentVersion: r.agentVersion, passRate: r.passRate, tokens: r.tokens, cost: r.cost,
+        id: r.id, agentVersion: r.agentVersion, passRate: r.passRate, tokens: r.tokens,
+        credits: creditsForUsd(r.cost || 0), costUnverified: r.costUnverified || 0,
       })),
       scenarios: rows.map((row) => ({
         scenario: row.title,
@@ -302,8 +330,8 @@ export default function CompareRuns() {
      not reporting the same quantity, and the header says so rather than
      letting two differently-sampled rates sit side by side as equals. */
   const sampleNote = comparison.coverage.repeats.length === 1
-    ? ` · ${comparison.coverage.repeats[0]} samples each`
-    : ` · samples per scenario differ (${comparison.coverage.repeats.join(", ")})`;
+    ? ` · ${comparison.coverage.repeats[0]} repeat${comparison.coverage.repeats[0] === 1 ? "" : "s"} each`
+    : ` · repeats per scenario differ (${comparison.coverage.repeats.join(", ")})`;
 
   /*
     Re-running is the loop closing. It starts a real run of exactly the rows
@@ -335,7 +363,8 @@ export default function CompareRuns() {
   };
   /* The offer on a band outside the delta: bridge the changed, backfill the new. */
   const bandAction = (group) => {
-    if (!read || !["changed", "new"].includes(group.cls) || read.relation !== "same") return null;
+    /* Across environment versions there is no delta to bring them into. */
+    if (!read || !["changed", "new"].includes(group.cls) || read.relation !== "same" || read.label.id === "side") return null;
     const agent = read.keys.a.agent;
     const bridge = bridgeOf(env, envState, agent);
     if (!bridge.can) return <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{bridge.why}</Typography>;
@@ -349,7 +378,7 @@ export default function CompareRuns() {
           startIcon={<Iconify icon="solar:play-linear" width={14} />}
           sx={{ flexShrink: 0, typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", py: 0.125, "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" } }}
         >
-          {`${group.cls === "new" ? "Backfill" : "Bridge"} on ${agent} · ${priceLine(priceOf(env, envState, ids.length, k))}`}
+          {`Run ${agent} on these · ${priceLine(priceOf(env, envState, ids.length, k))}`}
         </Button>
       </Tooltip>
     );
@@ -457,7 +486,7 @@ export default function CompareRuns() {
                     same shared set the summary does, and says so. */}
                 {comparison.coverage.notInAll > 0 && comparison.coverage.common > 0
                   ? ` · ${r.sharedPassRate ?? "—"}% on ${comparison.coverage.common} shared`
-                  : ` · ${r.passRate}%`}
+                  : ` · ${scenarioPassText(r)}`}
               </Typography>
               {i === 0 && <Typography sx={{ typography: "s3", color: "text.subtitle" }}>baseline</Typography>}
               {comparison.runs.length > 2 && (
@@ -556,19 +585,24 @@ export default function CompareRuns() {
                   </Box>
                 )}
               </Box>
-              <Box component="span" sx={{ color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
-                {r.passRate}%
-              </Box>
+              {/* Scenario pass with its fraction, from the same helper as the
+                  Runs table's Scenario pass cell (runStatsOf). An improvement's
+                  run that scored only its target scenarios says so — "0% 0/1"
+                  is a real result on one scenario, not an empty run. */}
+              <Tooltip arrow title={r.kind === "trial" && r.partial ? "Target scenarios only — held-back scenarios are checked on the change it picks." : ""}>
+                <Box component="span" sx={{ color: "text.subtitle", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{scenarioPassText(r)}</Box>
+              </Tooltip>
             </MenuItem>
           );
         })}
         {crossOthers.map((c, i) => {
           const picked = addStaging.includes(c.key);
-          const first = i === 0 || crossOthers[i - 1].related !== c.related;
+          /* Every other environment reads side by side — one heading. */
+          const first = i === 0;
           return [
             first && (
               <Typography key={`h-${c.key}`} sx={{ px: 2, pt: 1, pb: 0.5, typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.4 }}>
-                {c.related ? "Forked environments · cross-environment" : "Other environments · side by side, no delta"}
+                Other environments · side by side
               </Typography>
             ),
             <MenuItem
@@ -579,7 +613,7 @@ export default function CompareRuns() {
             >
               <Checkbox size="small" checked={picked} tabIndex={-1} sx={{ p: 0.5, mr: 0.5, pointerEvents: "none", ...neutralCheckboxSx }} />
               <Box component="span" sx={{ flex: 1, minWidth: 0, ml: 0.5 }}>
-                {`Run ${c.run.ordinal || ""} · agent ${c.run.agentVersion || "—"}`.replace("Run  ", "Run ")}
+                {`Run ${c.run.ordinal || ""} · ${c.label}`.replace("Run  ", "Run ")}
                 <Box component="span" sx={{ color: "text.subtitle" }}>{` · ${c.envName}`}</Box>
               </Box>
             </MenuItem>,
@@ -620,8 +654,29 @@ export default function CompareRuns() {
       </Menu>
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
-        {/* No verdict card above the distribution — the chips, the
-            distribution and the rows say how the runs differ. */}
+        {/* The verdict over the comparable pairs — or "side by side" when
+            the runs sit on different environment versions. */}
+        <CompareVerdict
+          read={read}
+          held={held}
+          runs={comparison.runs}
+          identityOf={identityOf}
+          envHeadline={envHeadline}
+          onExcludeRechecked={setExcludeRechecked}
+          onFix={(fix) => startFix(fix)}
+          onWarning={(w) => {
+            if (w.kind === "regrade" && read) {
+              /* Re-grading reads stored traces — recorded on the environment
+                 so the comparison reads both runs under one version. */
+              patch({ compareRegrades: [...(envState.compareRegrades || []), { a: read.baselineId, b: read.targetId, to: w.to }] });
+              enqueueSnackbar("Both runs re-graded from their stored traces — no calls were made", { variant: "success" });
+            } else if (w.kind === "bridge" && w.scenarioIds?.length) {
+              startFix({ agent: w.agent, scenarioIds: w.scenarioIds, repeats: w.repeats });
+            }
+          }}
+          questions={[]}
+          onAnswer={(v) => setAnswering(v)}
+        />
 
         {/* One card for both. The distribution is a summary of the rows
             underneath it, so a second border and a gap between them spends
@@ -968,7 +1023,7 @@ function TableView({ groups, view, rowPad, selected, onToggle, onOpen, evals, ba
                       view.columns.latency && { key: "latency", get: (c) => { const v = latencyOf(c.task); return v != null ? `${v}ms` : "—"; } },
                       view.columns.duration && { key: "duration", get: (c) => c.task ? `${(c.durationMs / 1000).toFixed(1)}s` : "—" },
                       view.columns.tokens && { key: "tokens", get: (c) => c.task ? c.tokens.toLocaleString() : "—" },
-                      view.columns.cost && { key: "cost", get: (c) => `$${(c.cost || 0).toFixed(3)}` },
+                      view.columns.cost && { key: "cost", get: (c) => (!c.task ? "—" : c.costUnverified ? "unverified" : creditsLabel(c.cost || 0)) },
                     ].filter(Boolean);
                     return row.cells.map((c) => (
                       <Box

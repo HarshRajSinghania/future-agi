@@ -7,6 +7,7 @@ import { clickable, focusRing } from "../components/clickable";
 import { paths } from "src/routes/paths";
 import { improvementOf } from "../_mock/runIdentity";
 import { improvementRunName, rejectedFor } from "../_mock/optimizer";
+import { chosenTrialOf, chosenVerified, projectedHeld } from "../_mock/optimizationRuns";
 
 const RED = "#DC2626";
 const signed = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n)}`;
@@ -44,21 +45,29 @@ export default function ImprovementRunStrip({ env, envState, runId, onOpenSearch
         : "Not kept — the search found no safe improvement.";
   const shippedNothing = !keptN;
 
-  /* Against the run it started from: the winner's held-back numbers on the
-     full suite, a trial's own on the scenarios it was scored on. */
+  /*
+    Against the run it started from. The kept run's held-back figure is its
+    own (the search's pick, a finalist) or projected until it's verified;
+    every fixed and broke count says which set it's from — the target
+    scenarios each run was scored on.
+  */
   const vs = fromRun ? `Run ${fromRun.ordinal || ""}`.trim() : "the agent as it was";
+  const chosen = chosenTrialOf(record);
+  const kept = chosen || winner;
+  const keptHeld = chosen ? projectedHeld(result, chosen) : result.heldScore;
+  const projected = !!chosen && !chosenVerified(record) && !(result.finalists || []).some((f) => f.n === chosen.n);
   const parts = role === "winner"
     ? [
-      result.heldBase != null && result.heldScore != null ? `${signed(result.heldScore - result.heldBase)} pts held back` : null,
-      winner ? `fixed ${winner.fixed || 0}` : null,
-      winner ? `broke ${winner.broke || 0}` : null,
+      result.heldBase != null && keptHeld != null ? `${projected ? "projected " : ""}${signed(keptHeld - result.heldBase)} pts held back` : null,
+      kept ? `target: fixed ${kept.fixed || 0}` : null,
+      kept ? `broke ${kept.broke || 0}` : null,
     ]
     : [
-      trial ? `${signed(trial.delta)} pts on training` : null,
-      trial ? `fixed ${trial.fixed || 0}` : null,
+      trial ? `${signed(trial.delta)} pts on the target scenarios` : null,
+      trial ? `target: fixed ${trial.fixed || 0}` : null,
       trial ? `broke ${trial.broke || 0}` : null,
     ];
-  const broke = role === "winner" ? winner?.broke : trial?.broke;
+  const broke = role === "winner" ? kept?.broke : trial?.broke;
   const compareHref = fromRun ? `${paths.dashboard.simulate.simulationCompare(env.id)}?runs=${fromRun.id},${runId}` : null;
 
   const link = (label, onClick) => (

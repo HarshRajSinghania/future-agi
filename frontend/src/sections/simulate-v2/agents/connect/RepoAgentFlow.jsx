@@ -4,26 +4,39 @@ import { alpha } from "@mui/material/styles";
 import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { FRAMEWORK_META } from "../../_mock/agentRegistry";
-import { installedRepos, repoUrlOf, useIntegrations } from "../../_mock/integrations";
-import { entryForTraces, folderForTraces, observeProjectById, readAgentFolder, repoBranches, repoChecksOf, repoDetectionOf, repoFolders, repoForTraces, traceMatchOf } from "../../_mock/connectAgent";
+import { GIT_HOST_META, gitHostOfUrl, gitHostRepos, hostRepoNameOf, hostRepoUrlOf, installedRepos, reviewNounOf, useIntegrations } from "../../_mock/integrations";
+import { entryForTraces, folderForTraces, frameworkTuningOf, observeProjectById, readAgentFolder, repoBranches, repoChecksOf, repoDetectionOf, repoFolders, repoForTraces, traceMatchOf } from "../../_mock/connectAgent";
 import { isSecretRef } from "../../_mock/secretRefs";
 import GithubRepoPicker from "../../integrations/GithubRepoPicker";
-import { Field } from "../../environments/StartEnvironment";
+import { ChipCard, Field, Label } from "../../environments/StartEnvironment";
 import ConnectSteps from "./ConnectSteps";
-import { TextLink } from "./connectBits";
+import { FrameworkTuning, TextLink } from "./connectBits";
+import GitHostRepoPicker from "./GitHostRepoPicker";
 import { HintLine } from "./replicationBits";
 import { recommendedRunLocation } from "../../_mock/replication";
 import { useConnectSubmitLabel } from "./connectSubmit";
 
 const MONO = "ui-monospace, Menlo, monospace";
 /* One screen: which agent, then Connect. What reading the code finds is
-   applied as it stands — the agent's page lists it to check, with the
-   Observe project, constraints and where it runs, in Finish setting up. */
+   applied as it stands — Finish setting up on the agent's Overview lists it
+   to confirm or correct ("Check what we found"), with the Observe project. */
 const STEPS = ["Connect"];
 
+/* The git host is one setting on the agent — each is a connection. */
+const HOSTS = [
+  { id: "github", label: "GitHub", icon: "mdi:github" },
+  { id: "gitlab", label: "GitLab", icon: "mdi:gitlab" },
+  { id: "bitbucket", label: "Bitbucket", icon: "mdi:bitbucket" },
+];
+const HOST_LABEL = { github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
+/* Code that calls the model APIs itself has no framework to find the agent
+   by, so the person names the function a conversation starts in. */
+const DIRECT = "Direct API calls";
+const ENTRY_EXAMPLE = "app/chat.py:handle_message";
 
 /**
- * A repository, in one step: the repository (through the GitHub App) and the
+ * A repository, in one step: the git host (GitHub through its App, GitLab or
+ * Bitbucket through the workspace's connection), the repository and the
  * agent the scan found in it — or, typed by hand, the folder its entry file
  * lives in. Connect reads that folder at the branch and saves the agent with
  * what it found; side-effect tools start stubbed, constraints start at the
@@ -44,9 +57,11 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
   const tracedCode = project?.traced?.via === "traceai" ? project.traced : null;
   const tracedFw = tracedCode ? FRAMEWORK_META[tracedCode.framework]?.label || tracedCode.framework : null;
   const suggestedRepo = tracedCode ? repoForTraces(tracedCode, installedRepos(integrations)) : null;
-  /* A pasted repository: picked from the GitHub App when it can see it, otherwise typed in. */
-  const pasted = initial?.repo || null;
-  const pastedVisible = !!pasted && installedRepos(integrations).some((r) => r.name.toLowerCase() === pasted.toLowerCase());
+  /* A pasted repository: picked from its host's connection when it can see it, otherwise typed in. */
+  const [host, setHost] = useState(initial?.host || gitHostOfUrl(initial?.repo) || "github");
+  const reposOn = (h) => (h === "github" ? installedRepos(integrations) : gitHostRepos(h, integrations));
+  const pasted = initial?.repo ? hostRepoNameOf(initial.repo) : null;
+  const pastedVisible = !!pasted && reposOn(host).some((r) => r.name.toLowerCase() === pasted.toLowerCase());
   const presetFolder = useMemo(() => {
     const repo = installedRepos(integrations).find((r) => r.name === preset?.repo);
     return repoFolders(repo).find((f) => (f.agents || []).some((a) => a.id === preset?.agent?.id))?.path || "";
@@ -64,27 +79,30 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
   const [reading, setReading] = useState(false);
   const [found, setFound] = useState(null);
   const [facts, setFacts] = useState({});
-  /* Where the SDK serves it — added later, on the agent's page. */
-  const endpoint = "";
   /* What must hold before it's simulated: tools that must never run for
-     real, the repository's own tests, and the test credentials to use. */
+     real and the repository's own tests. The test credentials to use are
+     added in "Check what we found" on the agent's Overview. */
   const [checks, setChecks] = useState(null);
   const [neverReal, setNeverReal] = useState([]);
   const [testsFact, setTestsFact] = useState("");
-  const credRef = "";
   /* The rest of what reading found (detected), and what the person settled
      (confirmed): which entry point when there are several, where prompts
      built at runtime come from, whether the model is chosen at runtime, the
      reference each credential key name resolves through. */
   const [detected, setDetected] = useState(null);
   const [entryId, setEntryId] = useState(preset?.agent?.id || null);
+  /* Where a direct-API agent starts, as the person named it. */
+  const [entryPoint, setEntryPoint] = useState(preset?.agent?.framework === DIRECT ? preset.agent.entry : "");
   const [pointers, setPointers] = useState({});
   const [modelAtRuntime, setModelAtRuntime] = useState(false);
   const [keyRefs, setKeyRefs] = useState({});
 
+  /* "github" mode is picking from the host's connection, whichever host. */
   const viaGithub = mode === "github";
+  const hostLabel = HOST_LABEL[host];
+  const review = reviewNounOf(host);
   const repo = viaGithub
-    ? installedRepos(integrations).find((r) => r.name === ghRepo) || null
+    ? reposOn(host).find((r) => r.name === ghRepo) || null
     : manualRepo.trim() ? { name: manualRepo.trim().replace(/^https?:\/\/[^/]+\//, ""), language: /\.ts|typescript|-web|-chat/i.test(manualRepo) ? "TypeScript" : "Python", agents: [] } : null;
   const branches = useMemo(() => repoBranches(repo), [repo?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -112,35 +130,41 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
     setNeverReal(c.sideEffects.value);
     setTestsFact(c.tests.value);
   };
-  const runLocation = recommendedRunLocation({ sourceKind: "repo" });
-  const livekit = /livekit/i.test(found?.framework || "");
+  /* We build it fresh from the code in our hosted sandbox. */
+  const runLocation = recommendedRunLocation();
+  const livekit = /livekit|pipecat/i.test(found?.framework || "");
+  /* The agent the scan found and the person picked, before anything is read. */
+  const pickedAgent = viaGithub ? (repo?.agents || []).find((a) => a.id === entryId) || null : null;
+  /* Opened as "no framework", or typed by hand: ask where it starts. */
+  const direct = pickedAgent ? pickedAgent.framework === DIRECT : !!repo && (!viaGithub || !!initial?.direct);
+  const typedUrl = manualRepo.trim();
+  const manualUrl = !typedUrl || host === "github" || gitHostOfUrl(typedUrl) ? typedUrl : hostRepoUrlOf(host, hostRepoNameOf(typedUrl));
   const source = {
     kind: "repo",
-    /* GitHub only for now — GitLab and Bitbucket are Later. */
-    provider: "github",
-    gitHost: "github",
-    /* The channel the traces show; else a LiveKit agent takes calls and
-       anything else defaults to chat. */
+    /* The git host is a setting on the agent, not a kind of agent. */
+    provider: host,
+    gitHost: host,
+    /* The channel the traces show; else a LiveKit or Pipecat agent takes
+       calls and anything else defaults to chat. */
     agentType: tracedCode?.channel || (livekit ? "voice" : "chat"),
-    value: viaGithub ? repoUrlOf(ghRepo) : manualRepo.trim(),
+    value: viaGithub ? hostRepoUrlOf(host, ghRepo) : manualUrl,
     ref: branch.trim() || "main",
     releaseDetection: { watch: "branch", ref: (branch || "main").trim() },
     folder: folder.trim(),
-    entry: facts.entry || "",
-    ...(viaGithub && { githubApp: true }),
+    entry: (direct && entryPoint.trim()) || facts.entry || "",
+    ...(viaGithub && host === "github" && { githubApp: true }),
+    ...(viaGithub && host !== "github" && { hostConnection: host }),
     framework: found?.framework,
     name: (facts.name || "").trim(),
     prompts: facts.prompts || [],
     tools: (facts.tools || []).map((name) => ({ name, desc: "", args: [] })),
     model: facts.model,
     runCommand: facts.run,
-    runtime: { endpoint: runLocation === "sdk" ? endpoint.trim() : "", tokenRef: "" },
     runLocation,
     ...(checks && {
       neverRunForReal: neverReal.filter((t) => (facts.tools || []).includes(t)),
       repoTests: { command: (testsFact || "").trim(), checks: checks.tests.checks },
     }),
-    ...(isSecretRef(credRef) && { testCredentialsRef: credRef.trim() }),
     ...(detected && {
       language: facts.language,
       installCommand: facts.install,
@@ -191,7 +215,7 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
   return (
     <ConnectSteps
       title={title}
-      subtitle="Pick the repository and the agent in it. We read the code when you connect — check what we found afterwards, on the agent's page."
+      subtitle="Pick the git host, the repository and the agent in it. We read the code when you connect — then confirm or correct what we found in Finish setting up, on the agent's Overview."
       steps={STEPS}
       active={0}
       next={next}
@@ -204,15 +228,43 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
               : <>{`None of the repositories the GitHub App can see matches ${project.name}'s traces — service `}<Box component="span" sx={{ fontFamily: MONO }}>{tracedCode.service}</Box>{` · ${tracedFw}. If its code is in another repository, give the app access with "Change access on GitHub" below.`}</>}
           </Typography>
         )}
-        {viaGithub ? (
+        <Box>
+          <Label>Git host</Label>
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
+            {HOSTS.map((h) => (
+              <ChipCard
+                key={h.id} icon={h.icon} label={h.label} on={host === h.id}
+                onClick={() => {
+                  if (h.id === host) return;
+                  setHost(h.id); setMode("github"); setGhRepo(""); setEntryId(null); setFolder(""); setFound(null); setEntryPoint("");
+                }}
+              />
+            ))}
+          </Box>
+        </Box>
+        {viaGithub && host !== "github" ? (
+          <GitHostRepoPicker
+            host={host}
+            repo={ghRepo}
+            agentId={entryId}
+            onPick={({ repo: r, agent: a }) => {
+              setGhRepo(r);
+              const picked = gitHostRepos(host, integrations).find((x) => x.name === r);
+              if (a) { setEntryId(a.id); setFolder(folderOfAgent(picked, a.id)); setEntryPoint(a.framework === DIRECT ? a.entry : ""); }
+              else { setEntryId(null); setFolder(""); setEntryPoint(""); }
+              setFound(null);
+            }}
+            onManual={(pre) => { setMode("manual"); if (pre?.repo) setManualRepo(pre.repo); }}
+          />
+        ) : viaGithub ? (
           <GithubRepoPicker
             repo={ghRepo}
             agentId={entryId}
             onPick={({ repo: r, agent: a }) => {
               setGhRepo(r);
               const picked = installedRepos(integrations).find((x) => x.name === r);
-              if (a) { setEntryId(a.id); setFolder(folderOfAgent(picked, a.id)); }
-              else { setEntryId(null); setFolder((tracedCode && folderForTraces(tracedCode, picked)) || ""); }
+              if (a) { setEntryId(a.id); setFolder(folderOfAgent(picked, a.id)); setEntryPoint(a.framework === DIRECT ? a.entry : ""); }
+              else { setEntryId(null); setFolder((tracedCode && folderForTraces(tracedCode, picked)) || ""); setEntryPoint(""); }
               setFound(null);
             }}
             onManual={(pre) => { setMode("manual"); if (pre?.repo) setManualRepo(pre.repo); }}
@@ -220,10 +272,12 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
         ) : (
           <Stack spacing={1.5}>
             <Field
-              label="GitHub repository" required mono
-              placeholder="owner/repo"
+              label={`${hostLabel} repository`} required mono
+              placeholder={host === "github" ? "owner/repo" : `${GIT_HOST_META[host].accountPlaceholder}/repo`}
               value={manualRepo} onChange={(v) => { setManualRepo(v); setFolder(""); }}
-              helper="Read once now — Sync and fix PRs need the GitHub App."
+              helper={host === "github"
+                ? "Read once now — Sync and fix PRs need the GitHub App."
+                : `Read once now — Sync and fix ${review.long}s need the ${hostLabel} connection.`}
             />
             <Field
               label="Agent folder" required mono
@@ -231,8 +285,23 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
               value={folder} onChange={setFolder}
               helper={<HintLine hint="A monorepo can hold several agents.">The folder the agent&apos;s entry file lives in.</HintLine>}
             />
-            <TextLink onClick={() => setMode("github")}>Pick from GitHub instead</TextLink>
+            <TextLink onClick={() => setMode("github")}>{`Pick from ${hostLabel} instead`}</TextLink>
           </Stack>
+        )}
+
+        {/* What improvements can change in the agent picked, before it's read. */}
+        {pickedAgent && <FrameworkTuning tuning={frameworkTuningOf(pickedAgent.framework)} />}
+        {direct && (
+          <Field
+            label={pickedAgent ? "Where the agent starts" : "Where the agent starts (when it uses no framework)"} mono
+            placeholder={ENTRY_EXAMPLE}
+            value={entryPoint} onChange={setEntryPoint}
+            helper={(
+              <HintLine hint="Code that calls the OpenAI, Anthropic or Gemini API itself has no framework to find the agent by. Name the file and function a conversation starts in — we read the prompts and tools it reaches from there.">
+                {pickedAgent ? `${pickedAgent.sdk || "Model API"} calls, no framework — check the function each conversation starts in.` : "File and function each conversation starts in."}
+              </HintLine>
+            )}
+          />
         )}
 
         {/* The branch is the one choice with a default worth stating. */}

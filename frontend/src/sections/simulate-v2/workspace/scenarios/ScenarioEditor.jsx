@@ -9,9 +9,7 @@ import Iconify from "src/components/iconify";
 import SideDrawer from "../../components/SideDrawer";
 import { emitBuilderPrompt } from "../../_mock/builderPromptBus";
 import { editBumpOf, bumpNote } from "../../_mock/scenarioEdits";
-import { scenarioVersionOf, SCENARIO_BUMPS } from "../../_mock/decoupled";
-import { TIERS, tierOf } from "../../_mock/tiers";
-import { CANARY_NOTE } from "../../_mock/cheatControls";
+import { EDIT_EFFECT } from "../../_mock/decoupled";
 import PersonaDrawer from "src/sections/persona/PersonaDrawer";
 import PersonaCreateEditDrawer from "src/sections/persona/PersonaCreateEdit/PersonaCreateEditDrawer";
 import {
@@ -42,13 +40,13 @@ import { clickable, focusRing } from "../../components/clickable";
  *     · Passes when
  *     · Sub-goals — 2–7, each critical or supporting. Changing them changes
  *       what a pass means, so the row can't be graded until re-proved.
- *     · Its place in the set — pinned to the anchor core or not, canary
+ *     · Must-pass — a mark on the set
  *
  * Nothing is rewritten in place (PRD v7 §4.10.3). The footer states, before
  * Save, the version the edit makes and what that does to past results:
  * patch (cosmetic — reused), minor (a grader fix — re-graded) or major (what
  * the caller does — re-run). A grader edit asks whether the intent stayed
- * the same. Tier and canary marks move the set, not the scenario.
+ * the same. The must-pass mark moves the set, not the scenario.
  *
  *   Voice / chat only
  *     · Caller — tone, style, accent, language
@@ -150,19 +148,15 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   /* What the edit does to the scenario's version — stated before Save. */
   const bump = editBumpOf(initial, draft, { intent });
-  /* Only the set's marks moved (tier, canary): the row as it was plus the
-     marks, rather than the derived defaults as an edit. The proof stands. */
+  /* Only the set's mark moved (must-pass): the row as it was plus the mark,
+     rather than the derived defaults as an edit. The proof stands. */
   const metaOnly = !bump.level;
-  /* Must-pass is a mark on the set, like tier and canary — set through
-     setBlocker so turning it back drops the override. */
+  /* Must-pass is a mark on the set — set through setBlocker so turning it
+     back drops the override. */
   const toggleMustPass = (on) => setDraft((d) => setBlocker(d, on));
   const save = () => {
-    const marks = {
-      ...(draft.tier !== initial.tier && { tier: draft.tier }),
-      ...(!!draft.canary !== !!initial.canary && { canary: !!draft.canary }),
-    };
     const mustPassMoved = !!draft.critical !== !!initial.critical;
-    const meta = mustPassMoved ? setBlocker({ ...row, ...marks }, !!draft.critical) : { ...row, ...marks };
+    const meta = mustPassMoved ? setBlocker({ ...row }, !!draft.critical) : { ...row };
     onSave(metaOnly ? meta : draft, { metaOnly, bump });
     onClose();
   };
@@ -219,12 +213,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             helperText="What a pass looks like. Evals grade against this."
             InputProps={{ sx: { typography: "s2" } }}
           />
-          <SetMarks
-            row={draft}
-            onTier={(tier) => setDraft((d) => ({ ...d, tier }))}
-            onCanary={(on) => setDraft((d) => ({ ...d, canary: on }))}
-            onMustPass={toggleMustPass}
-          />
+          <SetMarks row={draft} onMustPass={toggleMustPass} />
 
           {/* ─── Sub-goals ─── */}
           <SectionHeader
@@ -468,16 +457,16 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
           {envState?.twinBacking?.services?.length > 0 && (
             <>
               <SectionHeader
-                title="Clone seed override"
-                hint="Optional. Override the environment-level twin state for this scenario only — e.g. Slack starts with a specific DM thread, Notion starts with a specific page. Leave blank to inherit the environment default."
+                title="Starting state override"
+                hint="Optional. Override the world's starting state for this scenario only — e.g. Slack starts with a specific DM thread, Notion starts with a specific page. Leave blank to use the environment's default."
               />
               <TextField
                 size="small" multiline minRows={4}
-                label="Seed prompt (natural language)"
+                label="Starting state, in words"
                 value={draft.twinSeedPrompt || ""}
                 onChange={(e) => set("twinSeedPrompt")(e.target.value)}
                 placeholder="e.g. Slack #support has 3 messages from the same angry customer; the last one asks to escalate."
-                helperText="We resolve this into concrete twin state at run time. Each run starts from a fresh copy."
+                helperText="We turn this into the world's starting state at run time. Each run starts from a fresh copy."
                 InputProps={{ sx: { typography: "s2" } }}
               />
             </>
@@ -552,7 +541,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
           </Stack>
         </Stack>
 
-        {dirty && <BumpPreview row={row} bump={bump} intent={intent} onIntent={setIntent} />}
+        {dirty && <BumpPreview bump={bump} intent={intent} onIntent={setIntent} />}
         <Stack
           direction="row" justifyContent="flex-end" spacing={1}
           sx={{ px: 2.5, py: 1.75, borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}
@@ -565,7 +554,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             onClick={save}
             sx={{ typography: "s2", fontWeight: 700 }}
           >
-            {dirty && bump.level ? `Save as ${nextVersion(row, bump.level)}` : "Save scenario"}
+            Save scenario
           </Button>
         </Stack>
       </Stack>
@@ -621,29 +610,16 @@ ScenarioEditor.propTypes = {
   onBuilderPrompt: PropTypes.func,
 };
 
-const nextVersion = (row, level) => {
-  const [a, b, c] = String(scenarioVersionOf(row)).split(".").map((n) => parseInt(n, 10) || 0);
-  return level === "major" ? `${a + 1}.0.0` : level === "minor" ? `${a}.${b + 1}.0` : `${a}.${b}.${c + 1}`;
-};
-
 /*
-  The version this edit makes and what that does to past results, read
-  before the click that makes it true. A grader edit asks the one question
+  What this edit does to past results, read before the click that makes it
+  true. A grader edit asks the one question
   the fields can't answer: same intent, or a different test?
 */
-function BumpPreview({ row, bump, intent, onIntent }) {
-  const from = scenarioVersionOf(row);
+function BumpPreview({ bump, intent, onIntent }) {
   return (
     <Box sx={{ mx: 2.5, mb: 1.5, p: 1.5, borderRadius: 1, border: "1px solid", borderColor: "divider", bgcolor: "action.hover", flexShrink: 0 }}>
       <Typography sx={{ typography: "s2", fontWeight: 600 }}>
-        {bump.level
-          ? (
-            <>
-              <Box component="span" sx={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{`${from} → ${nextVersion(row, bump.level)}`}</Box>
-              {` · ${SCENARIO_BUMPS[bump.level].label} · past results ${SCENARIO_BUMPS[bump.level].past}`}
-            </>
-          )
-          : `Stays ${from} — the scenario set moves to a new version`}
+        {bump.level ? EDIT_EFFECT[bump.level] : "Past results still compare"}
       </Typography>
       <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.25 }}>
         {bump.why ? `${bump.why}. ` : ""}{bumpNote(bump.level)}
@@ -670,69 +646,33 @@ function BumpPreview({ row, bump, intent, onIntent }) {
     </Box>
   );
 }
-BumpPreview.propTypes = { row: PropTypes.object.isRequired, bump: PropTypes.object.isRequired, intent: PropTypes.string, onIntent: PropTypes.func };
+BumpPreview.propTypes = { bump: PropTypes.object.isRequired, intent: PropTypes.string, onIntent: PropTypes.func };
 
 /*
-  Where the scenario sits in the set. Pinning to the anchor core changes how
-  the set treats it, not what it tests — no scenario bump, no re-proof. A
-  canary has no legitimate solution; it only counts as a cheat check.
+  The must-pass mark — on the set, not the scenario: no scenario bump, no
+  re-proof.
 */
-function SetMarks({ row, onTier, onCanary, onMustPass }) {
-  const tier = tierOf(row);
-  const anchored = tier === "anchor";
+function SetMarks({ row, onMustPass }) {
+  if (!onMustPass) return null;
   return (
-    <Stack sx={{ borderRadius: 1.25, border: "1px solid", borderColor: "divider" }} divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
-      <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ p: 1.5 }}>
-        <Iconify icon="solar:pin-linear" width={16} sx={{ color: anchored ? "text.primary" : "text.disabled", mt: "2px", flexShrink: 0 }} />
-        <Box flex={1} minWidth={0}>
-          <Typography sx={{ typography: "s2", fontWeight: 600 }}>Pin to anchor core</Typography>
-          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            {anchored
-              ? "In the frozen slice every agent version is compared on. Taking it out, archiving it or marking it not applicable is logged."
-              : `${TIERS[tier].long} now. Pinned scenarios stay in every comparison, so overlap between agent versions never vanishes.`}
-          </Typography>
-        </Box>
-        <Switch
-          size="small" checked={anchored}
-          onChange={(e) => onTier(e.target.checked ? "anchor" : "core")}
-          inputProps={{ "aria-label": "Pin to anchor core" }}
-          sx={{ flexShrink: 0, mt: "-2px" }}
-        />
-      </Stack>
-      {onMustPass && (
-        <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ p: 1.5 }}>
-          <Iconify icon={row.critical ? "solar:shield-check-bold" : "solar:shield-check-linear"} width={16} sx={{ color: row.critical ? "text.primary" : "text.disabled", mt: "2px", flexShrink: 0 }} />
-          <Box flex={1} minWidth={0}>
-            <Typography sx={{ typography: "s2", fontWeight: 600 }}>Must-pass</Typography>
-            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-              An improvement that breaks it is rejected however much else it lifts. Results are reported; nothing here blocks a release. Moves the scenario set, not this scenario&apos;s version.
-            </Typography>
-          </Box>
-          <Switch
-            size="small" checked={!!row.critical}
-            onChange={(e) => onMustPass(e.target.checked)}
-            inputProps={{ "aria-label": "Must-pass" }}
-            sx={{ flexShrink: 0, mt: "-2px" }}
-          />
-        </Stack>
-      )}
-      <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ p: 1.5 }}>
-        <Iconify icon="solar:shield-warning-linear" width={16} sx={{ color: row.canary ? "text.primary" : "text.disabled", mt: "2px", flexShrink: 0 }} />
-        <Box flex={1} minWidth={0}>
-          <Typography sx={{ typography: "s2", fontWeight: 600 }}>Canary</Typography>
-          <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{CANARY_NOTE}</Typography>
-        </Box>
-        <Switch
-          size="small" checked={!!row.canary}
-          onChange={(e) => onCanary(e.target.checked)}
-          inputProps={{ "aria-label": "Canary" }}
-          sx={{ flexShrink: 0, mt: "-2px" }}
-        />
-      </Stack>
+    <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ p: 1.5, borderRadius: 1.25, border: "1px solid", borderColor: "divider" }}>
+      <Iconify icon={row.critical ? "solar:shield-check-bold" : "solar:shield-check-linear"} width={16} sx={{ color: row.critical ? "text.primary" : "text.disabled", mt: "2px", flexShrink: 0 }} />
+      <Box flex={1} minWidth={0}>
+        <Typography sx={{ typography: "s2", fontWeight: 600 }}>Must-pass</Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          An improvement that breaks it is rejected however much else it lifts. Results are reported; nothing here blocks a release. Moves the scenario set, not this scenario&apos;s version.
+        </Typography>
+      </Box>
+      <Switch
+        size="small" checked={!!row.critical}
+        onChange={(e) => onMustPass(e.target.checked)}
+        inputProps={{ "aria-label": "Must-pass" }}
+        sx={{ flexShrink: 0, mt: "-2px" }}
+      />
     </Stack>
   );
 }
-SetMarks.propTypes = { row: PropTypes.object.isRequired, onTier: PropTypes.func.isRequired, onCanary: PropTypes.func.isRequired, onMustPass: PropTypes.func };
+SetMarks.propTypes = { row: PropTypes.object.isRequired, onMustPass: PropTypes.func };
 
 /* A library persona's own call settings, said where they apply. */
 function LibrarySettingsNote({ name, line }) {

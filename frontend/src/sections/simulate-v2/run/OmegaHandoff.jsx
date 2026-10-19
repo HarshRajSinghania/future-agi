@@ -10,6 +10,7 @@ import PrCard from "../integrations/PrCard";
 import { prFilesOf, repoNameOf, useIntegrations } from "../_mock/integrations";
 import { changeFileFor } from "../_mock/optimize";
 import { agentSourceOf, definitionOf, agentIdOf, envAgentKey } from "../_mock/agentRegistry";
+import { fagiPromptsOf, gitHostOf } from "../agents/agentProfile";
 import { codingAgentBrief } from "../_mock/codingAgentBrief";
 import { releasePatch, rememberedFor, memoryCandidates, rememberPatch, declineMemoryPatch } from "../_mock/releaseFix";
 import { PLATFORM_TESTING } from "../_mock/rsiModel";
@@ -18,8 +19,10 @@ import { observabilityOf } from "../_mock/observability";
 import { KIND_SURFACE, improvementRunName } from "../_mock/optimizer";
 import { linkedRepoOf } from "../agents/agentLimits";
 import { draftVersionOf, draftVersionRecord } from "../agents/versionRelease";
+import { useDemoMode } from "../agents/demoMode";
 import { useOptionalSimStore } from "../store";
 import CopyBriefButton from "../components/CopyBriefButton";
+import { ago } from "../agents/agentViewUtils";
 
 /**
  * Handing a change over — never deployed by us, always a draft someone
@@ -37,7 +40,7 @@ import CopyBriefButton from "../components/CopyBriefButton";
  *               versions (LiveKit, Pipecat): a patch to apply. A
  *               Suggestion-only improvement always ships this way.
  *
- * Copy patch and Hand to my coding agent are always there. The moment a
+ * Copy patch and Copy for coding agent are always there. The moment a
  * proposal leaves — a draft PR opened, a platform draft made, a Future AGI
  * version created, a patch exported — a Draft agent version is recorded, so
  * the agent's history shows it at once (agents/versionRelease). When the
@@ -47,25 +50,32 @@ import CopyBriefButton from "../components/CopyBriefButton";
  * agent is released by uploading the patched code. Re-run never mints; it
  * tests whatever is current.
  *
- * Phase 1 has no approval step of ours and never deploys on its own: a
- * canary (a share of real calls on the draft) is Phase 3, shown disabled.
+ * There's no approval step of ours and nothing deploys on its own: a canary
+ * (a share of real calls on the draft) is started by a person, and promoted
+ * or rolled back by a person. Only a person releases — we record it when
+ * they mark it, or when we see it live: a platform draft seen live on the
+ * platform, a PR merged into the release branch the agent's Connections tab
+ * watches (PrCard).
  */
 
-/* How long the prototype takes to "detect" a release. */
+/* How long the demo takes to "detect" a release (only with ?demo=1). */
 const DETECT_AFTER_MS = 12000;
+/* Outside the demo, how long after a draft is made we see it live on the
+   platform — the prototype's stand-in for the platform reporting it. A draft
+   made earlier is seen on the next visit. */
+const SEEN_LIVE_AFTER_MS = 20000;
 
-/* Platforms that can split traffic between versions — a canary. Canary
-   releases are Phase 3 (PRD): shown, tagged and disabled until then. */
+/* Platforms that can split traffic between versions — a canary (RSI PRD:
+   "Canary releases where platforms support traffic splits"). */
 const CANARY_PLATFORMS = ["vapi", "retell"];
 const CANARY_SHARE = 10;
-const CANARY_PHASE = 3;
-const CANARY_NOTE = "Sending a share of real calls to the draft is coming soon. Nothing deploys on its own — you publish the draft yourself, then it's detected or you mark it released.";
+const CANARY_NOTE = "Sends a small share of real calls to the draft and reads them against everyone else, on the same evaluations. You promote it or roll it back — nothing goes further on its own.";
 
 /* Platforms a candidate can ship to without going live: Vapi and Retell in
    Phase 1, ElevenLabs and Bland branches in Phase 2. */
-const DRAFT_PLATFORMS = ["vapi", "retell", "elevenlabs", "bland"];
+const DRAFT_PLATFORMS = ["vapi", "retell", "elevenlabs", "bland", "telnyx", "google_cx", "voiceflow", "agentforce", "copilot_studio"];
 /* What a shipped draft is called on each platform. */
-const DRAFT_KIND = { vapi: "copy", retell: "draft", elevenlabs: "branch", bland: "branch" };
+const DRAFT_KIND = { vapi: "copy", retell: "draft", elevenlabs: "branch", bland: "branch", telnyx: "draft", google_cx: "draft", voiceflow: "draft", agentforce: "draft", copilot_studio: "draft" };
 
 const routeOf = (agent, suggestion) => {
   if (suggestion) return "recommend";
@@ -85,12 +95,13 @@ export default function OmegaHandoff({
 }) {
   const navigate = useNavigate();
   const store = useOptionalSimStore();
+  const demo = useDemoMode();
   const [prOpen, setPrOpen] = useState(false);
   const [done, setDone] = useState({});
   /* Mark as released lands the change first when it hasn't landed yet, then
      releases the version that landing saved. */
   const [releasing, setReleasing] = useState(false);
-  const { prs, approvals } = useIntegrations();
+  const { prs } = useIntegrations();
 
   const agent = envState?.agent;
   const route = routeOf(agent, suggestion);
@@ -122,8 +133,15 @@ export default function OmegaHandoff({
     goes out its own way; nothing in any of them is live until released.
   */
   const linkedRepo = route === "pr" ? null : repoNameOf(linkedRepoOf(agent) || envState?.agentRepo?.url || "") || null;
+  /* Code in a repository that loads its prompts from Future AGI (RSI PRD,
+     mixed sources): prompt changes ship as a draft prompt version, the rest
+     as the draft PR — one change in two parts. */
+  const loadsFagiPrompts = route === "pr" && fagiPromptsOf(agent).length > 0;
+  /* GitLab calls it a merge request; GitHub and Bitbucket a pull request. */
+  const review = gitHostOf(agent).review;
   const deliveryOf = (p) => {
     const surface = KIND_SURFACE[p.kind] || "code";
+    if (loadsFagiPrompts && surface === "prompt") return "prompt";
     if (route === "pr") return "pr";
     if (surface === "code" || surface === "structure") return linkedRepo ? "pr" : "patch";
     return route === "recommend" ? "patch" : route;
@@ -134,14 +152,21 @@ export default function OmegaHandoff({
   }, {})).map(([delivery, list]) => ({ delivery, list }));
   const mixed = parts.length > 1;
   const codePart = mixed ? parts.find((x) => x.delivery === "pr" || x.delivery === "patch")?.list || [] : [];
+  /* The prompt part of a code + Future AGI prompt change: a draft version of
+     the prompt the agent loads, saved when the PR opens. The agent version
+     the PR records pins both — one change (RSI PRD, mixed sources). */
+  const promptPart = loadsFagiPrompts && parts.some((x) => x.delivery === "prompt");
+  const promptDraftOf = () => {
+    const loaded = fagiPromptsOf(agent)[0];
+    if (!loaded) return null;
+    const n = (parseInt(String(loaded.version).replace(/\D/g, ""), 10) || 1) + 1;
+    return { promptId: loaded.promptId, name: loaded.name, version: `v${n}` };
+  };
   const prFiles = prFilesOf(env, mixed && codePart.length ? codePart : included, changeFileFor);
 
   /* The PR for this hand-off, if one was opened — found again after the
      drawer was closed, so the card doesn't offer a second one. */
   const pr = handoffKey ? prs.find((p) => p.handoffKey === handoffKey && p.status !== "closed") : null;
-  const approval = handoffKey && !pr
-    ? approvals.find((a) => a.pr?.handoffKey === handoffKey && a.status === "pending")
-    : null;
 
   /* `patchText`, not `patch` — the prop of that name is the state patcher. */
   const patchOf = (list) => list
@@ -154,10 +179,12 @@ export default function OmegaHandoff({
 
   const promptOnly = included.every((p) => p.kind === "System prompt");
   const intro = {
-    pr: `Opens a draft pull request on ${repo || "the agent's repository"}${included.some((p) => p.kind === "Architecture") ? ", with a written rationale for the structural change" : ""}. Merging it saves the next agent version — nothing changes before that.`,
+    pr: promptPart
+      ? `Opens a draft pull request on ${repo || "the agent's repository"} for the code, and saves the prompt changes as a draft prompt version in Future AGI — one change. Merging the PR releases both; nothing changes before that.`
+      : `Opens a draft pull request on ${repo || "the agent's repository"}${included.some((p) => p.kind === "Architecture") ? ", with a written rationale for the structural change" : ""}. Merging it saves the next agent version — nothing changes before that.`,
     draft: platform
       ? `${platform.ships} on ${source.label}. ${platform.note} ${platform.released}`
-      : `Creates an unpublished version on ${source.label}. It isn't live until someone publishes it there — then mark it released here.`,
+      : `Creates an unpublished version on ${source.label}. It isn't live until someone makes it live there — then mark it released here.`,
     builtin: `Saves the change as a new ${promptOnly ? "prompt" : "agent"} version here. It isn't live until you mark it released.`,
     recommend: suggestion
       ? "A suggested fix, not a proven one — we can only call this agent, so you apply it. Once it's live, mark the new version released, then re-run on the same environment version to prove it."
@@ -174,16 +201,23 @@ export default function OmegaHandoff({
   */
   const agentKey = envAgentKey(agent, env?.id);
   const draftVersion = draftVersionOf(envState, handoffKey);
-  const recordDraft = (draftSource, { where, prNumber } = {}) => {
+  const recordDraft = (draftSource, { where, prNumber, prompt } = {}) => {
     if (!handoffKey || !agentKey || !store || draftVersionOf(envState, handoffKey) || landedVersion) return;
     const record = (envState?.optimizations || []).find((o) => o.id === handoffKey);
-    const version = draftVersionRecord(envState, {
+    const drafted = draftVersionRecord(envState, {
       optId: handoffKey, envId: env?.id, source: draftSource,
       name: record ? improvementRunName(envState, record) : "Debug failures",
       issueId: record?.trigger?.issueId, where, prNumber, applied: included,
       fromRunId: provenance?.fromRunId || record?.fromRunId || null,
       basedOnVersion: provenance?.basedOnVersion || record?.baseAgentVersion || null,
     });
+    /* A mixed change: the version pins the PR's commit and the draft prompt
+       version together, so they land and release as one. */
+    const version = prompt ? {
+      ...drafted,
+      fagiPrompts: fagiPromptsOf(agent).map((p) => (p.promptId === prompt.promptId ? { ...p, version: prompt.version, draft: true } : p)),
+      draftOf: { ...drafted.draftOf, prompt },
+    } : drafted;
     /* The agent's, not this environment's — none of them switches to it. */
     store.dispatch({ type: "recordAgentVersion", key: agentKey, version });
   };
@@ -197,7 +231,10 @@ export default function OmegaHandoff({
     if (!landing || !draftVersion || landedVersion) return;
     const info = landing;
     setLanding(null);
-    setVersionState(draftVersion.label, { landedAt: new Date().toISOString(), ...(info.uploadedFile && { uploadedFile: info.uploadedFile }) }, true);
+    /* Landing records the draft; it doesn't change what this environment
+       tests. Re-runs and verify runs name the draft explicitly, and once it's
+       released every environment following production tests it. */
+    setVersionState(draftVersion.label, { landedAt: new Date().toISOString(), ...(info.uploadedFile && { uploadedFile: info.uploadedFile }) });
     onLand?.({ ...info, version: { ...draftVersion, ...(info.note && { note: info.note }) } });
   }, [landing, draftVersion, landedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const landWithDraft = (info, draftSource, extra) => {
@@ -206,9 +243,12 @@ export default function OmegaHandoff({
     if (!draftVersion) recordDraft(draftSource, extra);
     setLanding(info);
   };
-  /* A draft PR opened (here, or after a Slack approval) is a proposal leaving. */
+  /* A draft PR opened is a proposal leaving — with its draft prompt version
+     when the change has a prompt part. */
   useEffect(() => {
-    if (route === "pr" && pr && !draftVersion && !landedVersion) recordDraft("pr", { prNumber: pr.number, where: `PR #${pr.number}` });
+    if (route !== "pr" || !pr || draftVersion || landedVersion) return;
+    const prompt = promptPart ? promptDraftOf() : null;
+    recordDraft("pr", { prNumber: pr.number, where: prompt ? `PR #${pr.number} + ${prompt.name} ${prompt.version}` : `PR #${pr.number}`, prompt });
   }, [route, pr?.id, draftVersion, landedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const copy = () => {
@@ -249,17 +289,22 @@ export default function OmegaHandoff({
   };
 
   /*
-    Release detection. A draft published on the platform shows up through
-    its API; a merged PR shows up in production traces once it's deployed.
-    Either way the release is recorded on its own — Mark as released is the
-    fallback for anything we can't see. (The prototype detects it a few
-    seconds after the draft or merge.)
+    Release detection. Nothing deploys on its own and only a person
+    releases: Mark as released records it. A release is detected only when
+    the live agent uses the change — Retell's live numbers on the version
+    (publishing alone only freezes it), Vapi's live assistant matching the
+    copy, a PR merged into the watched release branch. A platform draft made
+    here is seen live SEEN_LIVE_AFTER_MS after it was made (Mark as released
+    stays available meanwhile). With ?demo=1 the demo stages it a few seconds
+    after the draft or merge, as before.
   */
   const traced = observabilityOf(agent).on;
+  const liveNote = provider === "retell"
+    ? `Live numbers now use ${draftVersion?.label || "the new version"}`
+    : provider === "vapi" ? "The live assistant now matches the copy" : `Live on ${source.label}`;
   /* A canary: the draft takes a small share of real calls, measured against
      the rest. A person promotes it or rolls it back — never automatic. */
-  /* Phase 3: a canary saved before it was tagged is read as a plain draft. */
-  const canary = CANARY_PHASE <= 1 && handoffKey ? envState?.handoffCanary?.[handoffKey] : null;
+  const canary = handoffKey ? envState?.handoffCanary?.[handoffKey] || null : null;
   const canCanary = route === "draft" && CANARY_PLATFORMS.includes(agent?.values?.provider);
   const setCanary = (value) => {
     const { [handoffKey]: _drop, ...rest } = envState?.handoffCanary || {};
@@ -271,18 +316,23 @@ export default function OmegaHandoff({
     const t = setInterval(() => setTick((n) => n + 1), 3000);
     return () => clearInterval(t);
   }, [canary, landedVersion]);
-  /* Detection is timed from when the draft was made: one made in this
-     session is "published" a few seconds later; an older draft (a scheduled
-     run's, say) stays a draft until someone publishes or releases it. */
+  /* Timed from when the draft was made. In the demo, one made in this
+     session goes "live" a few seconds later and an older one stays a draft.
+     Otherwise a draft made here (`watch`) is seen live SEEN_LIVE_AFTER_MS
+     later, on this visit or the next; a scheduled run's draft stays a draft
+     until someone marks it released. */
   const draftAge = draft ? Date.now() - Date.parse(draft.at) : Infinity;
-  const awaitingDraft = route === "draft" && !!draft && !landedVersion && !canary && draftAge < DETECT_AFTER_MS * 5;
-  const awaitingDeploy = route === "pr" && !!landedVersion && !released && traced;
+  const watchingDraft = route === "draft" && !!draft && !landedVersion && !canary;
+  const awaitingDraft = demo
+    ? watchingDraft && draftAge < DETECT_AFTER_MS * 5
+    : watchingDraft && !!draft.watch;
+  const awaitingDeploy = demo && route === "pr" && !!landedVersion && !released && traced && pr?.released !== false;
   useEffect(() => {
     if (!awaitingDraft && !awaitingDeploy) return undefined;
     const t = setTimeout(() => {
-      if (awaitingDraft) markReleased({ origin: "platform", note: `Published on ${source.label} — ${summaryLine}` }, { detected: true });
+      if (awaitingDraft) markReleased({ origin: "platform", note: `${liveNote} — ${summaryLine}` }, { detected: true });
       else release(landedVersion, { detected: true });
-    }, awaitingDraft ? Math.max(0, DETECT_AFTER_MS - draftAge) : DETECT_AFTER_MS);
+    }, awaitingDraft ? Math.max(0, (demo ? DETECT_AFTER_MS : SEEN_LIVE_AFTER_MS) - draftAge) : DETECT_AFTER_MS);
     return () => clearTimeout(t);
   }, [awaitingDraft, awaitingDeploy]); // eslint-disable-line react-hooks/exhaustive-deps
   const releaseEntry = released ? (envState?.releases || []).find((r) => r.version === landedVersion) : null;
@@ -291,12 +341,14 @@ export default function OmegaHandoff({
      every repeat are offered; ones still failing sometimes stay targets. */
   const memory = released ? memoryCandidates(envState, handoffKey) : { mustPass: [], targets: [] };
   const askMemory = !suggestion && memory.mustPass.length > 0 && !envState?.memoryDecisions?.[handoffKey];
+  /* An Error Feed fix keeps its issue's scenarios; any other improvement
+     keeps its own targets — worded for what each guards. */
+  const issueFix = !!(envState?.optimizations || []).find((o) => o.id === handoffKey)?.trigger?.issueId;
 
   /* The same change as a brief a coding agent can work from; the caller can
      pass a fuller one (the issue, the evidence, the constraints). */
   const codingAgent = (
     <CopyBriefButton
-      label="Hand to my coding agent"
       target={briefTarget}
       getBrief={brief || (() => codingAgentBrief({ agent, env, issue: summaryLine, suggestedFix: included }))}
       /* Every kind of agent: the brief says what to submit — a commit, a
@@ -329,30 +381,32 @@ export default function OmegaHandoff({
         {/* ── a mixed change: each part and how it ships ── */}
         {mixed && (
           <ShipParts
-            parts={parts} sourceLabel={source.label} repo={linkedRepo}
+            parts={parts} sourceLabel={source.label} repo={linkedRepo} reviewShort={review.short}
             pr={pr} onOpenPr={() => setPrOpen(true)}
+            promptDraft={draftVersion?.draftOf?.prompt ? { ...draftVersion.draftOf.prompt, released } : null}
             onCopyPart={(list) => { navigator.clipboard?.writeText(list.map((p) => [`# ${p.kind}: ${p.title}`, ...p.diff.map((d) => `${d.type === "add" ? "+" : "-"} ${d.text}`)].join("\n")).join("\n\n")).catch(() => {}); }}
           />
         )}
 
         {/* ── repo: the PR is the hand-off, and its card carries the merge ── */}
-        {route === "pr" && (pr || approval) && (
+        {route === "pr" && pr && (
           <PrCard
-            prId={pr?.id} approvalId={approval?.id} env={env} envState={envState}
-            onRerun={onRerun}
-            /* Merging is the user releasing it: the Draft version lands and is released. */
-            onMerged={(version) => markReleased({ version })}
+            prId={pr?.id} env={env} envState={envState}
+            onRerun={onRerun ? () => onRerun(landedVersion) : undefined}
+            /* Merged into the release branch: the Draft version lands and is
+               released. Merged elsewhere: it lands, not released. */
+            onMerged={(version, { released: rel = true } = {}) => (rel ? markReleased({ version }) : onLand?.({ version }))}
           />
         )}
-        {route === "pr" && !pr && !approval && (
+        {route === "pr" && !pr && (
           <Box>
             <Button
               size="small" variant="contained" color="primary"
               onClick={() => setPrOpen(true)}
-              startIcon={<Iconify icon="mdi:github" width={15} />}
+              startIcon={<Iconify icon={gitHostOf(agent).id === "gitlab" ? "mdi:gitlab" : gitHostOf(agent).id === "bitbucket" ? "mdi:bitbucket" : "mdi:github"} width={15} />}
               sx={{ typography: "s2", fontWeight: 700 }}
             >
-              Open draft PR
+              {`Open draft ${review.short}`}
             </Button>
           </Box>
         )}
@@ -371,19 +425,16 @@ export default function OmegaHandoff({
               <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1 }}>
                 {draftKind === "copy"
                   ? `Copy created on ${draft.where} — not live yet. Swap it in for the live assistant when you're ready; ${platform?.released ? platform.released.charAt(0).toLowerCase() + platform.released.slice(1) : "then mark it released."}`
-                  : `${draftKind === "branch" ? "Branch" : "Draft version"} created on ${draft.where} — not live yet. ${platform?.released || "When it's published there we'll detect it and start watching; or mark it released yourself."}`}
+                  : `${draftKind === "branch" ? "Branch" : "Draft version"} created on ${draft.where} — not live yet. ${platform?.released ? `${platform.released} Mark it released then.` : "Mark it released once it's live there."}`}
+                {draft.watch && !demo && ` We're watching ${source.label} for it to go live.`}
               </Typography>
               {canCanary && (
                 <Tooltip arrow title={CANARY_NOTE}>
                   <span>
                     <Button
-                      size="small" variant="outlined" disabled
+                      size="small" variant="outlined"
                       onClick={() => setCanary({ share: CANARY_SHARE, startedAt: new Date().toISOString() })}
-                      endIcon={(
-                        <Box component="span" sx={{ typography: "s3", fontWeight: 700, px: 0.5, borderRadius: 0.5, border: "1px solid", borderColor: "divider", lineHeight: 1.4 }}>
-                          Coming soon
-                        </Box>
-                      )}
+                      startIcon={<Iconify icon="solar:pie-chart-2-linear" width={14} />}
                       sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}
                     >
                       {`Canary to ${CANARY_SHARE}% of calls`}
@@ -393,7 +444,7 @@ export default function OmegaHandoff({
               )}
               <Button
                 size="small" variant="contained" color="primary"
-                onClick={() => markReleased({ origin: "platform", note: `Published on ${source.label} — ${summaryLine}` })}
+                onClick={() => markReleased({ origin: "platform", note: `Marked released on ${source.label} — ${summaryLine}` })}
                 startIcon={<Iconify icon="solar:check-read-linear" width={15} />}
                 sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}
               >
@@ -429,7 +480,8 @@ export default function OmegaHandoff({
               <Button
                 size="small" variant="contained" color="primary"
                 onClick={() => {
-                  patch?.({ handoffDrafts: { ...(envState?.handoffDrafts || {}), [handoffKey]: { where: source.label, kind: draftKind, at: new Date().toISOString() } } });
+                  /* `watch`: made here by a person, so we watch the platform for it going live. */
+                  patch?.({ handoffDrafts: { ...(envState?.handoffDrafts || {}), [handoffKey]: { where: source.label, kind: draftKind, at: new Date().toISOString(), watch: true } } });
                   /* The platform draft is the proposal leaving — a Draft version now. */
                   recordDraft("platform-draft", { where: `${source.label} ${draftKind}` });
                 }}
@@ -493,7 +545,7 @@ export default function OmegaHandoff({
         {/* The Draft version this proposal recorded — named, not live. */}
         {draftVersion && !landedVersion && (
           <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-            {`Recorded as Draft agent ${draftVersion.label}${draftVersion.draftOf?.where ? ` · ${draftVersion.draftOf.where}` : ""} — it becomes Released when ${route === "pr" ? "the PR merges" : route === "draft" ? "it goes live on the platform" : uploaded ? "you upload the patched code" : "you mark it released"}.`}
+            {`Recorded as Draft agent ${draftVersion.label}${draftVersion.draftOf?.where ? ` · ${draftVersion.draftOf.where}` : ""} — it becomes Released when ${route === "pr" ? "the PR merges" : route === "draft" ? "it goes live on the platform and you mark it released" : uploaded ? "you upload the patched code" : "you mark it released"}.`}
           </Typography>
         )}
 
@@ -503,9 +555,12 @@ export default function OmegaHandoff({
             <Iconify icon="solar:check-circle-bold" width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
             <Typography sx={{ typography: "s2", color: "text.secondary", flex: 1 }}>
               {released
-                ? `${releaseEntry?.detected ? "Release detected" : "Released"} as agent ${landedVersion} — the new baseline${remembered.length ? `. ${remembered.length} of ${remembered[0].regressionMemory.issueId}'s scenarios are now must-pass, so it can't quietly come back` : ""}.`
+                ? `${releaseEntry?.detected && route === "draft" ? `Seen live on ${source.label} ${ago(releaseEntry.at)} — released as agent ${landedVersion}, the new baseline` : `${releaseEntry?.detected ? "Release detected" : "Released"} as agent ${landedVersion} — the new baseline`}${!remembered.length ? ""
+                  : remembered[0].regressionMemory.fromImprovement || !issueFix
+                    ? `. ${remembered.length} of its scenarios are now must-pass, so this change can't quietly be undone`
+                    : `. ${remembered.length} of ${remembered[0].regressionMemory.issueId}'s scenarios are now must-pass, so it can't quietly come back`}.`
                 : awaitingDeploy
-                  ? `Merged as agent ${landedVersion}. We'll see it in production traces once it's deployed; or mark it released yourself.`
+                  ? `Merged as agent ${landedVersion}. Waiting to see it in production traces; or mark it released yourself.`
                   : `Saved as agent ${landedVersion}, not released yet. Mark it released once it's live.`}
             </Typography>
             {!released && (
@@ -517,7 +572,7 @@ export default function OmegaHandoff({
               </Button>
             )}
             <Button
-              size="small" variant={released ? "contained" : "text"} color="primary" onClick={onRerun}
+              size="small" variant={released ? "contained" : "text"} color="primary" onClick={() => onRerun?.(landedVersion)}
               startIcon={<Iconify icon="solar:play-bold" width={14} />}
               sx={{ typography: "s2", fontWeight: 700, flexShrink: 0 }}
             >
@@ -531,7 +586,9 @@ export default function OmegaHandoff({
           <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 0.25 }}>
             <Iconify icon="solar:shield-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
             <Typography sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>
-              {`Not kept as must-pass — ${memory.mustPass.length} ${memory.mustPass.length === 1 ? "scenario" : "scenarios"} from this fix could still guard against it coming back.`}
+              {issueFix
+                ? `Not kept as must-pass — ${memory.mustPass.length} ${memory.mustPass.length === 1 ? "scenario" : "scenarios"} from this fix could still guard against it coming back.`
+                : `Not kept as must-pass — ${memory.mustPass.length} ${memory.mustPass.length === 1 ? "scenario" : "scenarios"} from this improvement could still keep it from being undone.`}
             </Typography>
             <Button
               size="small" variant="outlined"
@@ -549,10 +606,10 @@ export default function OmegaHandoff({
             <Iconify icon="solar:shield-check-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
             <Box flex={1} minWidth={0}>
               <Typography sx={{ typography: "s2", fontWeight: 600 }}>
-                {`Keep ${memory.mustPass.length} ${memory.mustPass.length === 1 ? "scenario that passes" : "scenarios that pass"} every repeat on the released version as must-pass?`}
+                {`Keep ${memory.mustPass.length} ${memory.mustPass.length === 1 ? "scenario that passes" : "scenarios that pass"} every repeat on ${landedVersion || "the released version"} as must-pass?`}
               </Typography>
               <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-                {`From a confirmation run of the fix's targets on ${memory.confirmation?.version || landedVersion}, ${memory.confirmation?.of || 3} repeats each. Regression memory: a later change that fails one again is rejected, so the issue can't quietly come back.${memory.targets.length ? ` ${memory.targets.length} still ${memory.targets.length === 1 ? "fails" : "fail"} sometimes and ${memory.targets.length === 1 ? "stays a target" : "stay targets"}.` : ""}`}
+                {`From a confirmation run of the fix's targets on ${memory.confirmation?.version || landedVersion}, ${memory.confirmation?.of || 3} repeats each. A later change that fails one again is rejected, so ${issueFix ? "the issue can't quietly come back" : "this change can't quietly be undone"}.${memory.targets.length ? ` ${memory.targets.length} still ${memory.targets.length === 1 ? "fails" : "fail"} sometimes and ${memory.targets.length === 1 ? "stays a target" : "stay targets"}.` : ""}`}
               </Typography>
             </Box>
             <Button size="small" onClick={() => patch?.(declineMemoryPatch(envState, handoffKey))} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0 }}>
@@ -677,15 +734,16 @@ CanaryPanel.propTypes = {
 };
 
 const PART_LABEL = {
-  pr: (repo) => `Draft PR${repo ? ` on ${repo}` : ""}`,
+  pr: (repo, _, noun = "PR") => `Draft ${noun}${repo ? ` on ${repo}` : ""}`,
   draft: (_, where) => `Draft version on ${where}`,
   builtin: () => "New Future AGI version",
+  prompt: () => "Draft prompt version in Future AGI",
   patch: () => "Patch to apply",
 };
 const KINDS = (list) => [...new Set(list.map((p) => (p.kind === "Agent setting" ? "settings" : p.kind.toLowerCase())))].join(", ");
 
-/* The parts of a mixed change, each with how it ships. */
-function ShipParts({ parts, sourceLabel, repo, pr, onOpenPr, onCopyPart }) {
+/* The parts of a mixed change, each with how it ships and where it is. */
+function ShipParts({ parts, sourceLabel, repo, pr, onOpenPr, onCopyPart, promptDraft, reviewShort = "PR" }) {
   const [copied, setCopied] = useState(null);
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
@@ -695,14 +753,14 @@ function ShipParts({ parts, sourceLabel, repo, pr, onOpenPr, onCopyPart }) {
       {parts.map(({ delivery, list }, i) => (
         <Stack key={delivery} direction="row" alignItems="center" spacing={1.5} sx={{ px: 1.5, py: 1, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
           <Box flex={1} minWidth={0}>
-            <Typography sx={{ typography: "s2", fontWeight: 600 }}>{(PART_LABEL[delivery] || PART_LABEL.patch)(repo, sourceLabel)}</Typography>
+            <Typography sx={{ typography: "s2", fontWeight: 600 }}>{(PART_LABEL[delivery] || PART_LABEL.patch)(repo, sourceLabel, reviewShort)}</Typography>
             <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{`${KINDS(list)} · ${list.map((p) => p.title).join(" · ")}`}</Typography>
           </Box>
           {delivery === "pr" && (pr
-            ? <Typography sx={{ typography: "s3", color: "text.secondary", flexShrink: 0 }}>{`PR #${pr.number} open`}</Typography>
+            ? <Typography sx={{ typography: "s3", color: "text.secondary", flexShrink: 0 }}>{`${reviewShort} ${reviewShort === "MR" ? "!" : "#"}${pr.number} open`}</Typography>
             : (
               <Button size="small" variant="outlined" onClick={onOpenPr} startIcon={<Iconify icon="mdi:github" width={14} />} sx={{ typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", flexShrink: 0 }}>
-                Open draft PR
+                {`Open draft ${reviewShort}`}
               </Button>
             ))}
           {delivery === "patch" && (
@@ -713,12 +771,21 @@ function ShipParts({ parts, sourceLabel, repo, pr, onOpenPr, onCopyPart }) {
           {(delivery === "draft" || delivery === "builtin") && (
             <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>below</Typography>
           )}
+          {delivery === "prompt" && (
+            <Typography sx={{ typography: "s3", color: promptDraft ? "text.secondary" : "text.subtitle", flexShrink: 0 }}>
+              {!promptDraft
+                ? `Saved when the ${reviewShort} opens`
+                : promptDraft.released
+                  ? `${promptDraft.name} ${promptDraft.version} · released`
+                  : `${promptDraft.name} ${promptDraft.version} · draft, not live until released`}
+            </Typography>
+          )}
         </Stack>
       ))}
     </Box>
   );
 }
 ShipParts.propTypes = {
-  parts: PropTypes.array, sourceLabel: PropTypes.string, repo: PropTypes.string, pr: PropTypes.object,
-  onOpenPr: PropTypes.func, onCopyPart: PropTypes.func,
+  parts: PropTypes.array, sourceLabel: PropTypes.string, repo: PropTypes.string, pr: PropTypes.object, reviewShort: PropTypes.string,
+  onOpenPr: PropTypes.func, onCopyPart: PropTypes.func, promptDraft: PropTypes.object,
 };

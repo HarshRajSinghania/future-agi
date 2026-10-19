@@ -75,11 +75,11 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
           <Box>
             <Iconify icon="solar:server-square-linear" width={30} sx={{ color: "text.subtitle", mb: 1 }} />
             <Typography sx={{ typography: "s1", fontWeight: 700, mb: 0.5 }}>
-              This route needs a clone-backed environment
+              This needs a sandboxed-apps environment
             </Typography>
             <Typography sx={{ typography: "s2", color: "text.subtitle", maxWidth: 480, mx: "auto" }}>
-              Clone-aware scenarios are generated from the services your environment is backed by (Slack, Notion, …).{" "}
-              Create the environment from a service clone to unlock this route.
+              Sandbox scenarios are written from the apps your environment sandboxes (Slack, Notion, …).{" "}
+              Build the environment as a SaaS sandbox to use this route.
             </Typography>
           </Box>
         </Box>
@@ -89,11 +89,11 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
 
   return (
     <SectionCard
-      title="Clone-aware scenarios"
+      title="Sandbox scenarios"
       subtitle={
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
           <Typography component="span" sx={{ typography: "s2", color: "text.subtitle" }}>
-            Generated from your clone backing —
+            Written from your sandboxed apps —
           </Typography>
           {backing.services.map((sId) => {
             const t = twinById(sId);
@@ -121,7 +121,7 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
         sx={{ px: 2, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}
       >
         <TextField
-          size="small" placeholder="Search clone scenarios…"
+          size="small" placeholder="Search sandbox scenarios…"
           value={query} onChange={(e) => setQuery(e.target.value)}
           InputProps={{
             sx: { typography: "s2" },
@@ -149,7 +149,7 @@ export default function TwinScenarioPicker({ env, envState, selected, onAdd }) {
           <Box sx={{ p: 4, textAlign: "center" }}>
             <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
               {all.length === 0
-                ? "No clone-aware scenarios for this backing yet."
+                ? "No sandbox scenarios for these apps yet."
                 : "Nothing matches your filters."}
             </Typography>
           </Box>
