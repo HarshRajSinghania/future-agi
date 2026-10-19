@@ -32,8 +32,9 @@ read-only.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -240,6 +241,10 @@ _CUTOFF_SETTINGS = {
     "ignore_data_skipping_indices": "auto_minmax_index_created_at",
 }
 _FEED_TRACE_BATCH_SIZE = 1000
+# Ids bound into one statement of a remap-aware read. Parameters are inlined
+# (about 40 bytes a UUID) and ClickHouse parses at most max_query_size (256
+# KiB) of a statement; the bounded survivor map binds its list twice.
+_REMAP_ID_BATCH = 2500
 
 # FINAL merges every part covering the queried key range, so its cost tracks the
 # project's span volume, not the number of ids asked for. On dev: a 500-id heavy
@@ -296,18 +301,22 @@ def _dedup_sql(
     *,
     include_heavy: bool,
     read: tuple[str, ...] = _READ_COLUMNS,
+    latest_where: str = "",
 ) -> str:
     """ReplacingMergeTree resolved without ``FINAL``. Same column shape/order as
     the FINAL read, so ``_row_to_chspan`` decodes it unchanged.
 
     ``is_deleted = 0`` MUST stay on the outer query: filtered inside the dedup,
     a row whose newest version is deleted resurrects as its older live version.
+    For the same reason ``where`` may only filter columns every version of a
+    row shares; ``latest_where`` filters the newest version, after the dedup.
 
     ``read`` narrows only the OUTER projection: the dedup key spans columns no
     caller asks for (``service_name``, ``observation_type``), so the subquery
     keeps reading the full set.
     """
     projection = ", ".join(_output_name(col) for col in read)
+    latest = f" AND {latest_where}" if latest_where else ""
     aliases = ", ".join(
         f"{col} AS {alias}" for col, alias in _DEDUP_KEY_ALIASES.items()
     )
@@ -317,7 +326,7 @@ def _dedup_sql(
         f" FROM spans WHERE {where}"
         f" ORDER BY _version DESC"
         f" LIMIT 1 BY {_DEDUP_KEY}"
-        f") WHERE is_deleted = 0 {order_by}"
+        f") WHERE is_deleted = 0{latest} {order_by}"
     )
 
 
@@ -504,6 +513,15 @@ def _row_to_chspan(row: tuple) -> CHSpan:
     return CHSpan(**_row_to_dict(_DATA_KEYS, row))
 
 
+def _uuid_text(value: object) -> str:
+    """``value`` as ClickHouse's ``toString`` writes it, when it is a UUID."""
+    text = str(value).strip()
+    try:
+        return str(uuid.UUID(text))
+    except ValueError:
+        return text
+
+
 class CHSpanReader:
     """Read-only span fetcher backed by ClickHouse `spans FINAL`.
 
@@ -590,6 +608,134 @@ class CHSpanReader:
         ).result_rows
         id_to_survivor = {str(a): str(s) for (a, s) in rows}
         return {i: id_to_survivor.get(i, i) for i in ids}
+
+    def _remap_groups(self, remap_table: str, ids: Iterable[str]) -> dict[str, str]:
+        """``{raw id -> survivor}`` for every id in a ``remap_table`` group that
+        ``ids`` touch: the group's new id and each old id it consolidates. An
+        id no group holds is left out; it is its own survivor.
+
+        Only the touched groups are expanded (``bounded_survivor_map_subquery``):
+        the global survivor map is a window over the whole remap table, which
+        on production can pass the read memory ceiling by itself.
+        """
+        from tracer.services.clickhouse.v2.id_remap_sql import (
+            bounded_survivor_map_subquery,
+        )
+
+        ids = sorted({str(i) for i in ids if i})
+        bounded = bounded_survivor_map_subquery(remap_table, candidate_param="ids")
+        groups: dict[str, str] = {}
+        for start in range(0, len(ids), _REMAP_ID_BATCH):
+            rows = self._client.query(
+                f"SELECT toString(any_id), toString(survivor_id) FROM ({bounded})",
+                parameters={"ids": tuple(ids[start : start + _REMAP_ID_BATCH])},
+            ).result_rows
+            groups.update((str(a), str(s)) for a, s in rows)
+        return groups
+
+    def _roots_resolved(
+        self,
+        *,
+        column: str,
+        remap_table: str,
+        ids: list[str],
+        project_id: str,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[CHSpan]:
+        """Lean root spans whose ``column`` resolves through ``remap_table`` to
+        the survivor of an id in ``ids``, ordered by that id, then oldest first.
+        Each root comes back under every id asked for that resolves to its
+        survivor: a straddler's or a consolidated group's roots read under the
+        id asked for, and two ids of one group each get them. ``since`` and
+        ``until`` bound a root's start time.
+
+        No index can serve the resolved id, and a predicate on the raw id is
+        unsafe before versions are merged: it can drop a root's latest version
+        and keep an older one. So the read is narrowed to the traces holding a
+        root with a raw id that resolves to a survivor asked for, found among
+        all versions (a root whose id changed in a later version is still a
+        candidate). ``trace_id`` and ``parent_span_id`` are the same in every
+        version, so those traces' roots are reduced to their latest versions
+        with ``LIMIT 1 BY`` rather than FINAL (on 1,000 sessions, the same rows
+        at a fifth of FINAL's peak memory), and each root's latest raw id then
+        decides membership. Inside the dedup the time bounds apply by hour,
+        which every version of a row shares; exactly, to the latest version.
+        """
+        callers = list(dict.fromkeys(str(i) for i in ids if i))
+        if not callers:
+            return []
+        canonical = {caller: _uuid_text(caller) for caller in callers}
+        groups = self._remap_groups(remap_table, canonical.values())
+        askers: dict[str, list[str]] = {}
+        for caller in callers:
+            survivor = groups.get(canonical[caller], canonical[caller])
+            askers.setdefault(survivor, []).append(caller)
+        # Every raw id whose spans belong to a survivor asked for.
+        aliases = {raw: s for raw, s in groups.items() if s in askers}
+        for survivor in askers:
+            aliases.setdefault(survivor, survivor)
+        raw_ids = sorted(aliases)
+        params: dict[str, Any] = {"pid": str(project_id)}
+        exact, hourly = [], []
+        for op, name, bound in ((">=", "since", since), ("<=", "until", until)):
+            if bound is None:
+                continue
+            params[name] = bound.astimezone(UTC).replace(tzinfo=None)
+            params[f"{name}_hour"] = params[name].replace(
+                minute=0, second=0, microsecond=0
+            )
+            exact.append(f"start_time {op} %({name})s")
+            hourly.append(f"toStartOfHour(start_time) {op} %({name}_hour)s")
+        root = "(parent_span_id IS NULL OR parent_span_id = '')"
+        candidates = " AND ".join(
+            ["project_id = %(pid)s", f"{column} IN %(raw)s", root, *exact]
+        )
+        sql = _dedup_sql(
+            " AND ".join(
+                [
+                    "project_id = %(pid)s",
+                    root,
+                    *hourly,
+                    f"trace_id IN (SELECT trace_id FROM spans WHERE {candidates})",
+                ]
+            ),
+            "",
+            include_heavy=False,
+            latest_where=" AND ".join(exact),
+        )
+        out: list[CHSpan] = []
+        for start in range(0, len(raw_ids), _REMAP_ID_BATCH):
+            batch = raw_ids[start : start + _REMAP_ID_BATCH]
+            rows = self._client.query(
+                sql, parameters={**params, "raw": tuple(batch)}, settings={}
+            ).result_rows
+            # A root counts in the batch holding its latest id, so one whose id
+            # moved between two batches' ids is read once.
+            in_batch = set(batch)
+            for row in rows:
+                span = _row_to_chspan(row)
+                raw = getattr(span, column)
+                if raw in in_batch:
+                    out.extend(
+                        replace(span, **{column: caller})
+                        for caller in askers[aliases[raw]]
+                    )
+        out.sort(key=lambda s: (getattr(s, column), s.start_time, s.id))
+        return out
+
+    def _resolve_other(
+        self, spans: list[CHSpan], column: str, remap_table: str
+    ) -> list[CHSpan]:
+        """The same spans with ``column`` (the id the read didn't select by)
+        resolved to its survivor, so one session or user isn't read as two."""
+        groups = self._remap_groups(remap_table, (getattr(s, column) for s in spans))
+        return [
+            replace(s, **{column: groups[v]})
+            if (v := getattr(s, column)) in groups
+            else s
+            for s in spans
+        ]
 
     def _session_alias_ids(self, survivor_id: str) -> list[str]:
         """Every raw ``trace_session_id`` that resolves to ``survivor_id``: the
@@ -1009,23 +1155,19 @@ class CHSpanReader:
         self, session_ids: list[str], *, project_id: str
     ) -> list[CHSpan]:
         """Lean root spans of every trace in the given sessions, oldest first:
-        one read for N session transcripts (Analyse). Project-pinned, since
-        the spans table is multi-tenant."""
-        if not session_ids:
-            return []
-        sql = (
-            f"SELECT {_LEAN_SELECT_SQL} FROM spans FINAL "
-            "WHERE project_id = %(pid)s "
-            "AND trace_session_id IN %(sids)s "
-            "AND (parent_span_id IS NULL OR parent_span_id = '') "
-            "ORDER BY trace_session_id, start_time, id"
+        one read for N session transcripts (Insights, Instant eval).
+        Project-pinned, since the spans table is multi-tenant.
+
+        Remap-aware: a straddler's old- and new-id roots and a consolidated
+        group's roots all come back under the session id asked for, and each
+        root's user is resolved to its survivor."""
+        roots = self._roots_resolved(
+            column="trace_session_id",
+            remap_table="trace_session_id_remap",
+            ids=session_ids,
+            project_id=project_id,
         )
-        rows = self._client.query(
-            sql,
-            parameters={"pid": str(project_id), "sids": tuple(map(str, session_ids))},
-            settings=_FINAL_SKIP_INDEX_SETTINGS,
-        ).result_rows
-        return [_row_to_chspan(r) for r in rows]
+        return self._resolve_other(roots, "end_user_id", "end_user_id_remap")
 
     def roots_by_end_user_ids(
         self,
@@ -1036,33 +1178,21 @@ class CHSpanReader:
         until: datetime | None = None,
     ) -> list[CHSpan]:
         """Lean root spans of the given end users in one project, oldest
-        first, optionally bounded in time (Analyse at the user level)."""
-        if not end_user_ids:
-            return []
-        where = [
-            "project_id = %(pid)s",
-            "end_user_id IN %(uids)s",
-            "(parent_span_id IS NULL OR parent_span_id = '')",
-        ]
-        params: dict[str, Any] = {
-            "pid": str(project_id),
-            "uids": tuple(map(str, end_user_ids)),
-        }
-        if since is not None:
-            where.append("start_time >= %(since)s")
-            params["since"] = since.astimezone(UTC).replace(tzinfo=None)
-        if until is not None:
-            where.append("start_time <= %(until)s")
-            params["until"] = until.astimezone(UTC).replace(tzinfo=None)
-        sql = (
-            f"SELECT {_LEAN_SELECT_SQL} FROM spans FINAL "
-            f"WHERE {' AND '.join(where)} "
-            "ORDER BY end_user_id, start_time, id"
+        first, optionally bounded in time (Insights and Instant eval at the
+        user level).
+
+        Remap-aware: every root that resolves to a user asked for comes back
+        under that user's id, and each root's session is resolved to its
+        survivor, so a user's straddler session reads as one."""
+        roots = self._roots_resolved(
+            column="end_user_id",
+            remap_table="end_user_id_remap",
+            ids=end_user_ids,
+            project_id=project_id,
+            since=since,
+            until=until,
         )
-        rows = self._client.query(
-            sql, parameters=params, settings=_FINAL_SKIP_INDEX_SETTINGS
-        ).result_rows
-        return [_row_to_chspan(r) for r in rows]
+        return self._resolve_other(roots, "trace_session_id", "trace_session_id_remap")
 
     # ─── Per-trace rollups (latency / tokens) ─────────────────────────────────
     def totals_by_trace_ids(
