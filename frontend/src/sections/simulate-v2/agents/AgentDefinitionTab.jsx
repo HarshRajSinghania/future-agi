@@ -1,5 +1,6 @@
 import PropTypes from "prop-types";
 import { Box, Stack, Typography } from "@mui/material";
+import AgentFilesTab from "./AgentFilesTab";
 import AgentMembersCard from "./AgentMembersCard";
 import { memberAreasOf } from "./agentDefinitionSummary";
 import {
@@ -14,10 +15,11 @@ import { ActionText, KvRow, PanelCard } from "./AgentBits";
  * Links, for the version being viewed. For code, the version is a pointer
  * to a commit plus a snapshot of what we found there — not a copy of the
  * repository. Edits happen where they belong: identity and reach on
- * Connections, what may change on Constraints.
+ * Connections, what may change on Constraints. Below the record, the files
+ * it was read from, with what changed since the version before.
  */
 export default function AgentDefinitionTab({
-  agent, definition, source, files, label, latest, observeProject, onOpenEnv, onTab, protectedMembers,
+  agent, definition, source, files, prevFiles, label, prevLabel, latest, focusPath, diffOn, observeProject, onOpenEnv, onTab, protectedMembers,
 }) {
   const version = agent.versions.find((v) => v.label === label);
   const code = isCodeAgent(agent);
@@ -87,6 +89,18 @@ export default function AgentDefinitionTab({
           )}
         </KvRow>
       </Section>
+
+      {files?.length > 0 && (
+        <AgentFilesTab
+          files={files}
+          prevFiles={prevFiles}
+          label={label}
+          prevLabel={prevLabel}
+          sourceKind={source.kind}
+          focusPath={focusPath}
+          diffOn={diffOn}
+        />
+      )}
     </Stack>
   );
 }
@@ -96,8 +110,12 @@ AgentDefinitionTab.propTypes = {
   definition: PropTypes.object,
   source: PropTypes.object.isRequired,
   files: PropTypes.array,
+  prevFiles: PropTypes.array,
   label: PropTypes.string,
+  prevLabel: PropTypes.string,
   latest: PropTypes.string,
+  focusPath: PropTypes.string,
+  diffOn: PropTypes.bool,
   observeProject: PropTypes.object,
   onOpenEnv: PropTypes.func,
   onTab: PropTypes.func,

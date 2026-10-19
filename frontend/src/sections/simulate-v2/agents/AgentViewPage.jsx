@@ -86,6 +86,7 @@ import {
   buildPresetFor,
   fixDepthLine,
   isFinishedRun,
+  parentLabel,
   passRate,
   plural,
   runsOfAgent,
@@ -395,6 +396,10 @@ export default function AgentViewPage() {
     env,
     envState: ctxState,
   });
+  /* The version this one was made from — the Definition file view marks
+     what changed since it. */
+  const prevLabel = parentLabel(agent.versions, viewing);
+  const prevFiles = prevLabel ? filesOf(prevLabel) : null;
   /* Add version changes the latest, whichever version is being viewed. */
   const latestDefinition =
     viewing === agent.latest
@@ -840,8 +845,12 @@ export default function AgentViewPage() {
           definition={definition}
           source={source}
           files={files}
+          prevFiles={prevFiles}
           label={viewing}
+          prevLabel={prevLabel}
           latest={agent.latest}
+          focusPath={params.get("file")}
+          diffOn={params.get("diff") === "1"}
           observeProject={observeLink.project}
           onOpenEnv={(envId) => navigate(paths.dashboard.simulate.environmentDetail(envId))}
           onTab={(t) => setQuery({ tab: t })}
