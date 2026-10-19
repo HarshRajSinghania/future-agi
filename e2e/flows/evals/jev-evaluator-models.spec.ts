@@ -1,17 +1,28 @@
 import type { APIResponse, Locator, Page, Route } from '@playwright/test';
 import { test, expect } from '../../lib/fixtures';
 import type { StateProbe } from '../../lib/state-probe';
+import { E2E } from '../../lib/env';
 import { flowAnnotation } from '../../lib/flow-meta';
 
-// The isolated E2E stack is self-hosted with no Enterprise licence, and Jev is
-// oss_locked (futureagi/tfc/capabilities/registry.py FEATURE_JEV_MODELS): the
-// capability is denied and the template save gate answers 402
-// (tfc/ee_gates.py jev_gate_for_template). EVAL-E2E-006 asserts that denial with
-// nothing stubbed. EVAL-E2E-007..010 stub only the entitlement in the browser,
-// as FEED-E2E-001 does, and never need a real TypeSafe key. EVAL-E2E-008..010
-// also send a stand-in model id (STAND_IN below) in place of jev-latest on
-// template calls, since the real save gate refuses Jev here; responses read
-// jev-latest back. They prove the UI and storage round-trip, not a Jev save.
+// The isolated E2E stack runs the OSS image with no Enterprise licence. Jev is
+// oss_locked (futureagi/tfc/capabilities/registry.py FEATURE_JEV_MODELS), so the
+// capability is denied (LICENSE_MISSING) and any template save that sets a jev-*
+// model answers 402 ENTITLEMENT_DENIED (tfc/ee_gates.py jev_gate_for_template).
+//
+// EVAL-E2E-006 is the real thing: nothing is stubbed, and it asserts the locked
+// picker, the 402 and the unchanged Postgres row.
+//
+// EVAL-E2E-007..010 are NOT real Jev saves. They use fakes, each in one helper:
+//   FAKE 1 stubJevEntitlement    the browser's /api/capabilities/ read says jev_models
+//                                is allowed (007..010), as FEED-E2E-001 stubs error_feed.
+//   FAKE 2 stubTypesafeKeyOnFile the browser's provider-status read says a TypeSafe key
+//                                is on file, so the picker selects Jev (008..010). No key
+//                                is stored and nothing calls TypeSafe.
+//   FAKE 3 swapJevModelIdPastLicenceGate  this template's API calls send gpt-4o where the
+//                                page sent jev-latest and read jev-latest back where the
+//                                server stored gpt-4o (008..010). Everything else is the
+//                                real backend: Jev mapping validation, jsonb storage,
+//                                the V1 snapshot and the reload.
 
 // frontend/src/sections/evals/components/ModelSelector.jsx JEV_MODELS and row copy.
 const JEV_LABELS = ['Jev 1.13 (pinned)', 'Jev latest'];
@@ -27,11 +38,13 @@ const API_KEYS = '/model-hub/api-keys/';
 // EvalDetailPage reads <id>/detail/ and <id>/versions/.
 const TEMPLATES = '/model-hub/eval-templates/';
 const TEMPLATE_CALL = /^\/model-hub\/eval-templates\/[0-9a-f-]{36}\//;
-// The id the browser sends in place of jev-latest past the licence gate. The
-// update view stores model and config.model verbatim and validates a supplied
-// jev_mapping whatever the model (model_hub/utils/jev_templates.py
-// validate_jev_template_save; ee/jev/mapping.py never infers by model).
+// FAKE 3's stand-in for jev-latest. The update view stores model and config.model
+// verbatim and validates a supplied jev_mapping whatever the model
+// (model_hub/utils/jev_templates.py validate_jev_template_save; ee/jev/mapping.py
+// never infers compatibility from the model).
 const STAND_IN = 'gpt-4o';
+// A model the stack saves without a licence check at create (ALERT-E2E-002 uses it).
+const SAVEABLE_MODEL = 'turing_large';
 const PROMPT = 'Judge whether {{output}} answers the request.';
 // README's browser first-paint ceiling, not the default 10-second expect budget.
 const UI_READY = 60_000;
@@ -56,6 +69,8 @@ type TemplateRow = {
   config: { model?: string; output?: string; jev_mapping?: JevMapping };
 };
 type VersionRow = { model: string | null; config_snapshot: { model?: string; jev_mapping?: JevMapping } };
+type GateRow = { model: string | null; config: Record<string, unknown>; choice_scores: unknown;
+  output_type_normalized: string | null; updated_at: Date };
 type Exchange = { method: string; path: string; sentModel: unknown; status: number };
 
 const typesafe = (status: ProviderStatus) => {
@@ -72,8 +87,9 @@ async function fulfillEdited(route: Route, response: APIResponse, json: unknown)
   await route.fulfill({ status: response.status(), headers, json });
 }
 
-/** jev_models allowed in the browser's capability read; every other feature as the stack reports it. */
-async function entitleJevInBrowser(page: Page): Promise<void> {
+/** FAKE 1: jev_models allowed in the browser's capability read; every other
+ * feature as the stack reports it. The backend still denies Jev. */
+async function stubJevEntitlement(page: Page): Promise<void> {
   await page.route(url => url.pathname === CAPABILITIES, async route => {
     const response = await route.fetch();
     const body = await response.json() as Capabilities;
@@ -90,20 +106,27 @@ function renameModel(value: unknown, from: string, to: string): unknown {
     [key, key === 'model' && item === from ? to : renameModel(item, from, to)]));
 }
 
-/** The stack refuses to save a Jev model id (EVAL-E2E-006), so the browser carries
- * that one id across the licence gate: template calls send STAND_IN in place of
- * jev-latest and read jev-latest back. Mapping validation, jsonb storage, the V1
- * snapshot and the reload stay the real backend's. */
-async function crossLicenceGate(page: Page, exchanges: Exchange[]): Promise<void> {
-  await entitleJevInBrowser(page);
-  // The picker selects Jev only once a TypeSafe key is saved; no key is stored and
-  // nothing in these flows calls TypeSafe.
+/** FAKE 2: the browser's provider-status read shows a TypeSafe key on file,
+ * because the picker selects Jev only then. No key is stored and nothing in
+ * these flows calls TypeSafe. */
+async function stubTypesafeKeyOnFile(page: Page): Promise<void> {
   await page.route(url => url.pathname === PROVIDER_STATUS, async route => {
     const response = await route.fetch();
     const body = await response.json() as ProviderStatus;
     Object.assign(typesafe(body), { has_key: true, masked_key: 'e2e-****' });
     await fulfillEdited(route, response, body);
   });
+}
+
+/** FAKE 3. Why it exists: the E2E stack is the OSS image with no licence, so
+ * jev_models is locked and the backend answers 402 to any save that sets a jev-*
+ * model (EVAL-E2E-006 asserts exactly that, unstubbed). To let the round-trip
+ * flows save at all, every call on an eval template sends STAND_IN where the page
+ * sent jev-latest, and reads jev-latest back where the server stored STAND_IN.
+ * Nothing else is altered: the Jev mapping is validated and stored, jsonb orders
+ * the choice scores and the V1 snapshot is written by the real backend. A flow
+ * using this helper does not prove a Jev model id can be saved. */
+async function swapJevModelIdPastLicenceGate(page: Page, exchanges: Exchange[]): Promise<void> {
   await page.route(url => TEMPLATE_CALL.test(url.pathname), async route => {
     const request = route.request();
     const sent = request.postData() ? request.postDataJSON() as Record<string, unknown> : undefined;
@@ -142,9 +165,16 @@ async function openModelPicker(page: Page): Promise<Locator> {
 
 const jevRows = (picker: Locator) => picker.getByRole('menuitem').filter({ hasText: /^Jev / });
 
+/** All three fakes, for the round-trip flows 008..010. */
+async function fakeJevSaveOnUnlicensedStack(page: Page, exchanges: Exchange[]): Promise<void> {
+  await stubJevEntitlement(page);
+  await stubTypesafeKeyOnFile(page);
+  await swapJevModelIdPastLicenceGate(page, exchanges);
+}
+
 /** Drafts, names and prompts an LLM judge, chooses Jev latest, applies the
  * output configuration and publishes. Returns the template id and the body the
- * browser sent (before the licence gate swap). */
+ * browser sent (before FAKE 3's swap). */
 async function authorJevEvaluator(page: Page, name: string,
   configure: () => Promise<void>): Promise<{ id: string; sent: Published }> {
   const id = await openJudgeEditor(page);
@@ -181,8 +211,8 @@ async function stored(probe: StateProbe, id: string): Promise<{ row: TemplateRow
   return { row: rows[0], versions };
 }
 
-/** What every published Jev template shares: scope, the stand-in id the gate
- * swap sent, and a V1 snapshot holding the same validated mapping. */
+/** What every published Jev template shares: scope, FAKE 3's stand-in id, and a
+ * V1 snapshot holding the same validated mapping. */
 function expectPublishedJev(row: TemplateRow, versions: VersionRow[],
   actor: { organizationId: string; workspaceId: string }): void {
   expect(row).toMatchObject({ visible_ui: true, organization_id: actor.organizationId,
@@ -200,24 +230,26 @@ test('EVAL-E2E-006: Jev models are listed but locked on a self-hosted stack with
   tag: ['@flow'],
   annotation: flowAnnotation({
     id: 'EVAL-E2E-006', area: 'evals',
-    userGoal: 'See that Jev evaluator models exist but cannot be chosen or saved on an unlicensed self-hosted install',
+    userGoal: 'See, with nothing stubbed, that Jev evaluator models exist but cannot be chosen or saved on an unlicensed self-hosted install',
     steps: ['open the evaluator create page on the LLM-As-A-Judge tab',
       'open the model picker and read the Jev group', 'hover a locked Jev row',
+      'save a Turing-model evaluator through the create API, then try to switch it to jev-latest through the update API',
       'try to create a Jev evaluator through the create API'],
     backendChecks: [
       'the capabilities API denies jev_models, as it does turing_models, for the actor org',
       'the provider-status API lists TypeSafe with no key',
-      'create-v2 with jev-latest is refused 402 ENTITLEMENT_DENIED for feature jev and no template row with that name exists',
+      'the update to jev-latest is refused 402 ENTITLEMENT_DENIED for feature jev and the PG template row (model, config, scores, output type, updated_at) is unchanged',
+      'create-v2 with jev-latest is refused the same way and no template row with that name exists',
     ],
     browserChecks: [
       'the picker lists exactly Jev 1.13 (pinned) then Jev latest, below FutureAGI Models',
       'both Jev rows are disabled, prompt for a TypeSafe API key and explain "Not included in your plan"',
     ],
   }),
-}, async ({ page, actor, probe }, testInfo) => {
+}, async ({ page, actor, probe, request }, testInfo) => {
   test.setTimeout(240_000); // Three UI_READY browser stages (draft, picker, tooltip) 180 + API/PG reads and headroom 60.
   page.setDefaultTimeout(UI_READY);
-  const name = `e2e-jev-locked-${testInfo.workerIndex}-${Date.now().toString(36)}`;
+  const suffix = `${testInfo.workerIndex}-${Date.now().toString(36)}`;
 
   await test.step('backend check 1: the stack denies Jev to this org', async () => {
     const caps = await actor.api.get<Capabilities>(CAPABILITIES);
@@ -255,13 +287,42 @@ test('EVAL-E2E-006: Jev models are listed but locked on a self-hosted stack with
     await ui(page.getByRole('tooltip', { name: LOCKED, exact: true })).toBeVisible();
   });
 
-  await test.step('backend check 3: the save gate refuses a Jev model and stores nothing', async () => {
+  const denied = { code: 'ENTITLEMENT_DENIED', feature: 'jev', upgrade_required: true };
+  await test.step('backend check 3: switching a saved evaluator to Jev is refused and its row is unchanged', async () => {
     // Wire body per the harness cheatsheet's create-v2 shape.
+    const saved = await actor.api.post<Created>(`${TEMPLATES}create-v2/`, {
+      name: `e2e-jev-saved-${suffix}`, eval_type: 'llm', instructions: PROMPT, model: SAVEABLE_MODEL,
+      output_type: 'pass_fail', pass_threshold: 0.5,
+    });
+    const id = saved.result.id;
+    const read = () => probe.pg<GateRow>(
+      `SELECT model, config, choice_scores, output_type_normalized, updated_at
+         FROM model_hub_evaltemplate WHERE id = $1`, [id]);
+    const before = await read();
+    expect(before).toHaveLength(1);
+    expect(before[0].model).toBe(SAVEABLE_MODEL);
+    // ApiClient has no PUT, so send the bearer and scope headers it would send.
+    // The body is what EvalCreatePage publishes for a Jev pass/fail evaluator.
+    const response = await request.put(`${E2E.apiUrl}${TEMPLATES}${id}/update/`, {
+      headers: { Authorization: `Bearer ${actor.tokens.access}`,
+        'X-Organization-Id': actor.organizationId, 'X-Workspace-Id': actor.workspaceId },
+      data: { model: JEV_MODEL, output_type: 'pass_fail', jev_mapping: { revision: 'jev-map-v1',
+        question_type: 'noul', pass: { criteria_true: '', criteria_false: '' }, choice: null, score: null,
+        include_messages: false } },
+    });
+    const body = await response.json() as Record<string, unknown>;
+    await testInfo.attach('refused-update', { contentType: 'application/json',
+      body: JSON.stringify({ id, status: response.status(), body }) });
+    expect(response.status()).toBe(402);
+    expect(body).toMatchObject(denied);
+    expect(await read()).toEqual(before);
+  });
+  await test.step('backend check 4: creating a Jev evaluator is refused and stores nothing', async () => {
+    const name = `e2e-jev-refused-${suffix}`;
     await expect(actor.api.post(`${TEMPLATES}create-v2/`, {
       name, eval_type: 'llm', instructions: PROMPT, model: JEV_MODEL,
       output_type: 'pass_fail', pass_threshold: 0.5,
-    })).rejects.toMatchObject({ status: 402,
-      body: { code: 'ENTITLEMENT_DENIED', feature: 'jev', upgrade_required: true } });
+    })).rejects.toMatchObject({ status: 402, body: denied });
     const rows = await probe.pg<{ id: string }>(
       'SELECT id FROM model_hub_evaltemplate WHERE name = $1 AND organization_id = $2',
       [name, actor.organizationId]);
@@ -273,8 +334,8 @@ test('EVAL-E2E-007: choosing a Jev model without a TypeSafe key opens the keys d
   tag: ['@flow'],
   annotation: flowAnnotation({
     id: 'EVAL-E2E-007', area: 'evals',
-    userGoal: 'Choose a Jev evaluator model before saving a TypeSafe key and land in the keys drawer on TypeSafe',
-    steps: ['allow jev_models in the browser capability read only',
+    userGoal: 'Choose a Jev evaluator model before saving a TypeSafe key and land in the keys drawer on TypeSafe (Jev entitlement faked in the browser)',
+    steps: ['FAKE: stub the browser /api/capabilities/ read so jev_models is allowed; the stack itself denies it (EVAL-E2E-006)',
       'open the evaluator create page on the LLM-As-A-Judge tab and open the model picker',
       'choose Jev latest', 'type into the TypeSafe API key field without adding it'],
     backendChecks: [
@@ -295,7 +356,7 @@ test('EVAL-E2E-007: choosing a Jev model without a TypeSafe key opens the keys d
       keyWrites.push(`${request.method()} ${request.url()}`);
     }
   });
-  await entitleJevInBrowser(page);
+  await stubJevEntitlement(page);
   expect(typesafe(await actor.api.get<ProviderStatus>(PROVIDER_STATUS)).has_key).toBe(false);
 
   let picker: Locator | undefined;
@@ -346,12 +407,12 @@ test('EVAL-E2E-008: a Jev pass/fail evaluator keeps its model, output type and c
   tag: ['@flow'],
   annotation: flowAnnotation({
     id: 'EVAL-E2E-008', area: 'evals',
-    userGoal: 'Author a Jev pass/fail evaluator in the UI and find its model, output type and criteria intact after reload',
-    steps: ['allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate',
+    userGoal: 'Author a Jev pass/fail evaluator in the UI and find its model, output type and criteria intact after reload (Jev entitlement and model id faked)',
+    steps: ['FAKES, not a real Jev save: in the browser, stub jev_models allowed and a TypeSafe key on file, and swap jev-latest for gpt-4o on this template\'s API calls; a real Jev save answers 402 here (EVAL-E2E-006)',
       'author an LLM-As-A-Judge evaluator and choose Jev latest', 'keep Pass/fail and describe a pass and a fail',
       'save the evaluation', 'reload its detail page'],
     backendChecks: [
-      'PG keeps the validated noul mapping with both criteria, Pass/Fail output, org/workspace scope and an identical V1 snapshot; model holds the stand-in id',
+      'PG keeps the validated noul mapping with both criteria, Pass/Fail output, org/workspace scope and an identical V1 snapshot; model holds the faked stand-in gpt-4o',
     ],
     browserChecks: [
       'the publish request carries jev-latest, pass_fail and both criteria',
@@ -365,7 +426,7 @@ test('EVAL-E2E-008: a Jev pass/fail evaluator keeps its model, output type and c
   const name = `e2e-jev-pass-${suffix}`;
   const criteria = { criteria_true: `Answers the request ${suffix}`, criteria_false: `Misses the request ${suffix}` };
   const exchanges: Exchange[] = [];
-  await crossLicenceGate(page, exchanges);
+  await fakeJevSaveOnUnlicensedStack(page, exchanges);
 
   let authored: { id: string; sent: Published } | undefined;
   await test.step('UI: author and publish the pass/fail evaluator', async () => {
@@ -403,8 +464,8 @@ test('EVAL-E2E-009: a Jev choices evaluator keeps its authored label order and s
   tag: ['@flow'],
   annotation: flowAnnotation({
     id: 'EVAL-E2E-009', area: 'evals',
-    userGoal: 'Author a Jev choices evaluator whose labels are not shortest-first and find their order and scores intact after reload',
-    steps: ['allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate',
+    userGoal: 'Author a Jev choices evaluator whose labels are not shortest-first and find their order and scores intact after reload (Jev entitlement and model id faked)',
+    steps: ['FAKES, not a real Jev save: in the browser, stub jev_models allowed and a TypeSafe key on file, and swap jev-latest for gpt-4o on this template\'s API calls; a real Jev save answers 402 here (EVAL-E2E-006)',
       'author an LLM-As-A-Judge evaluator and choose Jev latest',
       'choose Choices and enter Resolved (Pass), Escalated (Neutral), No (Fail), describing Escalated',
       'save the evaluation', 'reload its detail page'],
@@ -427,7 +488,7 @@ test('EVAL-E2E-009: a Jev choices evaluator keeps its authored label order and s
   const scores = { Resolved: 1, Escalated: 0.5, No: 0 };
   const note = `Handed to a person ${suffix}`;
   const exchanges: Exchange[] = [];
-  await crossLicenceGate(page, exchanges);
+  await fakeJevSaveOnUnlicensedStack(page, exchanges);
   const names = page.getByPlaceholder('Choice name', { exact: true });
 
   let authored: { id: string; sent: Published } | undefined;
@@ -484,8 +545,8 @@ test('EVAL-E2E-010: a Jev scoring evaluator keeps its four ordered levels after 
   tag: ['@flow'],
   annotation: flowAnnotation({
     id: 'EVAL-E2E-010', area: 'evals',
-    userGoal: 'Author a Jev scoring evaluator with four ordered rubric levels and find them intact after reload',
-    steps: ['allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate',
+    userGoal: 'Author a Jev scoring evaluator with four ordered rubric levels and find them intact after reload (Jev entitlement and model id faked)',
+    steps: ['FAKES, not a real Jev save: in the browser, stub jev_models allowed and a TypeSafe key on file, and swap jev-latest for gpt-4o on this template\'s API calls; a real Jev save answers 402 here (EVAL-E2E-006)',
       'author an LLM-As-A-Judge evaluator and choose Jev latest', 'choose Scoring and add four ordered levels',
       'save the evaluation', 'reload its detail page'],
     backendChecks: [
@@ -503,7 +564,7 @@ test('EVAL-E2E-010: a Jev scoring evaluator keeps its four ordered levels after 
   const name = `e2e-jev-score-${suffix}`;
   const levels = ['Off topic', 'Partly answered', 'Answered', 'Answered with sources'].map(l => `${l} ${suffix}`);
   const exchanges: Exchange[] = [];
-  await crossLicenceGate(page, exchanges);
+  await fakeJevSaveOnUnlicensedStack(page, exchanges);
   // JevOutputConfig labels each level "Level <n>"; its move buttons say "Move level <n> ...".
   const levelInputs = page.getByLabel(/^Level \d+$/);
 

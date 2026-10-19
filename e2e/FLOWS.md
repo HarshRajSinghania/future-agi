@@ -912,8 +912,8 @@
 
 ### EVAL-E2E-006 — Jev models are listed but locked on a self-hosted stack without a licence
 
-**Goal:** See that Jev evaluator models exist but cannot be chosen or saved on an unlicensed self-hosted install  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:199`  
+**Goal:** See, with nothing stubbed, that Jev evaluator models exist but cannot be chosen or saved on an unlicensed self-hosted install  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:229`  
 **Tags:** —
 
 **User steps:**
@@ -921,13 +921,15 @@
 1. open the evaluator create page on the LLM-As-A-Judge tab
 2. open the model picker and read the Jev group
 3. hover a locked Jev row
-4. try to create a Jev evaluator through the create API
+4. save a Turing-model evaluator through the create API, then try to switch it to jev-latest through the update API
+5. try to create a Jev evaluator through the create API
 
 **Backend state verified:**
 
 - the capabilities API denies jev_models, as it does turing_models, for the actor org
 - the provider-status API lists TypeSafe with no key
-- create-v2 with jev-latest is refused 402 ENTITLEMENT_DENIED for feature jev and no template row with that name exists
+- the update to jev-latest is refused 402 ENTITLEMENT_DENIED for feature jev and the PG template row (model, config, scores, output type, updated_at) is unchanged
+- create-v2 with jev-latest is refused the same way and no template row with that name exists
 
 **Browser observations:**
 
@@ -936,13 +938,13 @@
 
 ### EVAL-E2E-007 — choosing a Jev model without a TypeSafe key opens the keys drawer on TypeSafe
 
-**Goal:** Choose a Jev evaluator model before saving a TypeSafe key and land in the keys drawer on TypeSafe  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:272`  
+**Goal:** Choose a Jev evaluator model before saving a TypeSafe key and land in the keys drawer on TypeSafe (Jev entitlement faked in the browser)  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:333`  
 **Tags:** —
 
 **User steps:**
 
-1. allow jev_models in the browser capability read only
+1. FAKE: stub the browser /api/capabilities/ read so jev_models is allowed; the stack itself denies it (EVAL-E2E-006)
 2. open the evaluator create page on the LLM-As-A-Judge tab and open the model picker
 3. choose Jev latest
 4. type into the TypeSafe API key field without adding it
@@ -959,13 +961,13 @@
 
 ### EVAL-E2E-008 — a Jev pass/fail evaluator keeps its model, output type and criteria after reload
 
-**Goal:** Author a Jev pass/fail evaluator in the UI and find its model, output type and criteria intact after reload  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:345`  
+**Goal:** Author a Jev pass/fail evaluator in the UI and find its model, output type and criteria intact after reload (Jev entitlement and model id faked)  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:406`  
 **Tags:** —
 
 **User steps:**
 
-1. allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate
+1. FAKES, not a real Jev save: in the browser, stub jev_models allowed and a TypeSafe key on file, and swap jev-latest for gpt-4o on this template's API calls; a real Jev save answers 402 here (EVAL-E2E-006)
 2. author an LLM-As-A-Judge evaluator and choose Jev latest
 3. keep Pass/fail and describe a pass and a fail
 4. save the evaluation
@@ -973,7 +975,7 @@
 
 **Backend state verified:**
 
-- PG keeps the validated noul mapping with both criteria, Pass/Fail output, org/workspace scope and an identical V1 snapshot; model holds the stand-in id
+- PG keeps the validated noul mapping with both criteria, Pass/Fail output, org/workspace scope and an identical V1 snapshot; model holds the faked stand-in gpt-4o
 
 **Browser observations:**
 
@@ -982,13 +984,13 @@
 
 ### EVAL-E2E-009 — a Jev choices evaluator keeps its authored label order and scores after reload
 
-**Goal:** Author a Jev choices evaluator whose labels are not shortest-first and find their order and scores intact after reload  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:402`  
+**Goal:** Author a Jev choices evaluator whose labels are not shortest-first and find their order and scores intact after reload (Jev entitlement and model id faked)  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:463`  
 **Tags:** —
 
 **User steps:**
 
-1. allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate
+1. FAKES, not a real Jev save: in the browser, stub jev_models allowed and a TypeSafe key on file, and swap jev-latest for gpt-4o on this template's API calls; a real Jev save answers 402 here (EVAL-E2E-006)
 2. author an LLM-As-A-Judge evaluator and choose Jev latest
 3. choose Choices and enter Resolved (Pass), Escalated (Neutral), No (Fail), describing Escalated
 4. save the evaluation
@@ -1005,13 +1007,13 @@
 
 ### EVAL-E2E-010 — a Jev scoring evaluator keeps its four ordered levels after reload
 
-**Goal:** Author a Jev scoring evaluator with four ordered rubric levels and find them intact after reload  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:483`  
+**Goal:** Author a Jev scoring evaluator with four ordered rubric levels and find them intact after reload (Jev entitlement and model id faked)  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:544`  
 **Tags:** —
 
 **User steps:**
 
-1. allow jev_models in the browser and show a TypeSafe key on file; template calls carry a stand-in id past the licence gate
+1. FAKES, not a real Jev save: in the browser, stub jev_models allowed and a TypeSafe key on file, and swap jev-latest for gpt-4o on this template's API calls; a real Jev save answers 402 here (EVAL-E2E-006)
 2. author an LLM-As-A-Judge evaluator and choose Jev latest
 3. choose Scoring and add four ordered levels
 4. save the evaluation
