@@ -97152,6 +97152,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "sample_size",
         "window",
         "sample_ids",
+        "credits_estimate",
+        "credit_limited",
+        "credits_left",
+        "credit_max_sample",
+        "credit_message",
       ],
       type: "object",
       properties: {
@@ -97177,6 +97182,30 @@ export const OPENAPI_CONTRACT = Object.freeze({
             type: "string",
             minLength: 1,
           },
+        },
+        credits_estimate: {
+          title: "Credits estimate",
+          type: "number",
+        },
+        credit_limited: {
+          title: "Credit limited",
+          type: "boolean",
+        },
+        credits_left: {
+          title: "Credits left",
+          type: "number",
+          "x-nullable": true,
+        },
+        credit_max_sample: {
+          title: "Credit max sample",
+          type: "integer",
+          "x-nullable": true,
+        },
+        credit_message: {
+          title: "Credit message",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
         },
       },
     },

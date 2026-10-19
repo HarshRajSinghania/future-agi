@@ -56586,6 +56586,11 @@ export const TracerInsightsEstimateCreateResponse = zod.object({
     sample_size: zod.number(),
     window: zod.object({}).passthrough(),
     sample_ids: zod.array(zod.string().min(1)),
+    credits_estimate: zod.number(),
+    credit_limited: zod.boolean(),
+    credits_left: zod.number(),
+    credit_max_sample: zod.number(),
+    credit_message: zod.string().min(1),
   }),
 });
 

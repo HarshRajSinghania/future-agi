@@ -26461,6 +26461,12 @@ export interface InsightEstimateResultApi {
   sample_size: number;
   window: InsightEstimateResultApiWindow;
   sample_ids: string[];
+  credits_estimate: number;
+  credit_limited: boolean;
+  credits_left: number;
+  credit_max_sample: number;
+  /** @minLength 1 */
+  credit_message: string;
 }
 
 export interface InsightEstimateResponseApi {
