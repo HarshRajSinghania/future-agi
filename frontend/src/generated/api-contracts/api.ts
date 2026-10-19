@@ -646,6 +646,8 @@ import type {
   InsightConfigResponseApi,
   InsightDraftApi,
   InsightDraftResponseApi,
+  InsightEstimateRequestApi,
+  InsightEstimateResponseApi,
   InsightPreviewApi,
   InsightPreviewResponseApi,
   InsightRunCreateApi,
@@ -72696,6 +72698,103 @@ export const tracerInsightsDraftCreate = async (
   );
 };
 
+export type tracerInsightsEstimateCreateResponse200 = {
+  data: InsightEstimateResponseApi;
+  status: 200;
+};
+
+export type tracerInsightsEstimateCreateResponse400 = {
+  data: ApiErrorResponseApi;
+  status: 400;
+};
+
+export type tracerInsightsEstimateCreateResponse402 = {
+  data: ApiErrorResponseApi;
+  status: 402;
+};
+
+export type tracerInsightsEstimateCreateResponse403 = {
+  data: ApiErrorResponseApi;
+  status: 403;
+};
+
+export type tracerInsightsEstimateCreateResponse404 = {
+  data: ApiErrorResponseApi;
+  status: 404;
+};
+
+export type tracerInsightsEstimateCreateResponse422 = {
+  data: ApiErrorResponseApi;
+  status: 422;
+};
+
+export type tracerInsightsEstimateCreateResponse429 = {
+  data: ApiErrorResponseApi;
+  status: 429;
+};
+
+export type tracerInsightsEstimateCreateResponse500 = {
+  data: ApiErrorResponseApi;
+  status: 500;
+};
+
+export type tracerInsightsEstimateCreateResponse503 = {
+  data: ApiErrorResponseApi;
+  status: 503;
+};
+
+export type tracerInsightsEstimateCreateResponseDefault = {
+  data: ManagementAPIErrorResponseApi;
+  status: Exclude<
+    HTTPStatusCodes,
+    200 | 400 | 402 | 403 | 404 | 422 | 429 | 500 | 503
+  >;
+};
+
+export type tracerInsightsEstimateCreateResponseSuccess =
+  tracerInsightsEstimateCreateResponse200 & {
+    headers: Headers;
+  };
+export type tracerInsightsEstimateCreateResponseError = (
+  | tracerInsightsEstimateCreateResponse400
+  | tracerInsightsEstimateCreateResponse402
+  | tracerInsightsEstimateCreateResponse403
+  | tracerInsightsEstimateCreateResponse404
+  | tracerInsightsEstimateCreateResponse422
+  | tracerInsightsEstimateCreateResponse429
+  | tracerInsightsEstimateCreateResponse500
+  | tracerInsightsEstimateCreateResponse503
+  | tracerInsightsEstimateCreateResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type tracerInsightsEstimateCreateResponse =
+  | tracerInsightsEstimateCreateResponseSuccess
+  | tracerInsightsEstimateCreateResponseError;
+
+export const getTracerInsightsEstimateCreateUrl = () => {
+  return `/tracer/insights/estimate/`;
+};
+
+/**
+ * How many units a scope holds, and how many a report on it reads.
+ */
+export const tracerInsightsEstimateCreate = async (
+  insightEstimateRequestApi: InsightEstimateRequestApi,
+  options?: RequestInit,
+): Promise<tracerInsightsEstimateCreateResponse> => {
+  return apiMutator<tracerInsightsEstimateCreateResponse>(
+    getTracerInsightsEstimateCreateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(insightEstimateRequestApi),
+    },
+  );
+};
+
 export type tracerInsightsPreviewCreateResponse200 = {
   data: InsightPreviewResponseApi;
   status: 200;
@@ -72861,7 +72960,8 @@ export const getTracerInsightsRunsCreateUrl = () => {
 };
 
 /**
- * Start a report run over a sampled population; creates the report when new.
+ * Start a report run over a sample of its scope (or the rows handed
+over); creates the report when new.
  */
 export const tracerInsightsRunsCreate = async (
   insightRunCreateApi: InsightRunCreateApi,
@@ -73525,7 +73625,9 @@ export const getTracerInstantEvalExportListUrl = (
 
 /**
  * Every row the filter selects, with each question's answer,
-confidence and explanation, streamed as CSV.
+confidence and explanation, streamed as CSV. A user question writes
+a line per user (their rolled-up answers and the sessions behind
+them), or with ``sessions`` a line per session of those users.
  */
 export const tracerInstantEvalExportList = async (
   params: TracerInstantEvalExportListParams,

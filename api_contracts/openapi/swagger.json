@@ -62918,6 +62918,90 @@
             },
             "parameters": []
         },
+        "/tracer/insights/estimate/": {
+            "post": {
+                "operationId": "tracer_insights_estimate_create",
+                "description": "How many units a scope holds, and how many a report on it reads.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/InsightEstimateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/InsightEstimateResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "tracer"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
         "/tracer/insights/preview/": {
             "post": {
                 "operationId": "tracer_insights_preview_create",
@@ -62999,7 +63083,7 @@
         "/tracer/insights/runs/": {
             "post": {
                 "operationId": "tracer_insights_runs_create",
-                "description": "Start a report run over a sampled population; creates the report when new.",
+                "description": "Start a report run over a sample of its scope (or the rows handed\nover); creates the report when new.",
                 "parameters": [
                     {
                         "name": "data",
@@ -63619,7 +63703,7 @@
         "/tracer/instant-eval/export/": {
             "get": {
                 "operationId": "tracer_instant-eval_export_list",
-                "description": "Every row the filter selects, with each question's answer,\nconfidence and explanation, streamed as CSV.",
+                "description": "Every row the filter selects, with each question's answer,\nconfidence and explanation, streamed as CSV. A user question writes\na line per user (their rolled-up answers and the sessions behind\nthem), or with ``sessions`` a line per session of those users.",
                 "parameters": [
                     {
                         "name": "project_id",
@@ -63785,6 +63869,13 @@
                             "confidence"
                         ],
                         "default": "-time"
+                    },
+                    {
+                        "name": "sessions",
+                        "in": "query",
+                        "required": false,
+                        "type": "boolean",
+                        "default": false
                     }
                 ],
                 "responses": {
@@ -146699,6 +146790,11 @@
                         "minLength": 1
                     },
                     "maxItems": 2
+                },
+                "search": {
+                    "title": "Search",
+                    "type": "string",
+                    "maxLength": 200
                 }
             }
         },
@@ -146873,6 +146969,90 @@
                 }
             }
         },
+        "InsightEstimateRequest": {
+            "required": [
+                "project_id",
+                "unit",
+                "scope"
+            ],
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "unit": {
+                    "title": "Unit",
+                    "type": "string",
+                    "enum": [
+                        "traces",
+                        "sessions",
+                        "users"
+                    ]
+                },
+                "scope": {
+                    "$ref": "#/definitions/InsightScope"
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer",
+                    "maximum": 1000,
+                    "minimum": 10
+                }
+            }
+        },
+        "InsightEstimateResult": {
+            "required": [
+                "population",
+                "population_is_lower_bound",
+                "sample_size",
+                "window",
+                "sample_ids"
+            ],
+            "type": "object",
+            "properties": {
+                "population": {
+                    "title": "Population",
+                    "type": "integer"
+                },
+                "population_is_lower_bound": {
+                    "title": "Population is lower bound",
+                    "type": "boolean"
+                },
+                "sample_size": {
+                    "title": "Sample size",
+                    "type": "integer"
+                },
+                "window": {
+                    "title": "Window",
+                    "type": "object"
+                },
+                "sample_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            }
+        },
+        "InsightEstimateResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/InsightEstimateResult"
+                }
+            }
+        },
         "InsightConfigInput": {
             "required": [
                 "name",
@@ -147022,8 +147202,7 @@
         },
         "InsightRunCreate": {
             "required": [
-                "project_id",
-                "population"
+                "project_id"
             ],
             "type": "object",
             "properties": {
@@ -147993,6 +148172,32 @@
                     "minimum": 1,
                     "x-nullable": true
                 },
+                "date_preset": {
+                    "title": "Date preset",
+                    "type": "string",
+                    "enum": [
+                        "Today",
+                        "Yesterday",
+                        "7D",
+                        "30D",
+                        "3M",
+                        "6M",
+                        "12M",
+                        "Custom"
+                    ],
+                    "x-nullable": true
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "maxLength": 300,
+                    "x-nullable": true
+                },
+                "search": {
+                    "title": "Search",
+                    "type": "string",
+                    "maxLength": 200
+                },
                 "questions": {
                     "title": "Questions",
                     "type": "integer",
@@ -148109,7 +148314,8 @@
                 "sessions_per_user",
                 "choices",
                 "credit_check",
-                "credit_max_sample"
+                "credit_max_sample",
+                "window"
             ],
             "type": "object",
             "properties": {
@@ -148172,6 +148378,10 @@
                     "title": "Credit max sample",
                     "type": "integer",
                     "x-nullable": true
+                },
+                "window": {
+                    "title": "Window",
+                    "type": "object"
                 }
             }
         },
@@ -148347,6 +148557,27 @@
                 "is_sample": {
                     "title": "Is sample",
                     "type": "boolean"
+                },
+                "date_preset": {
+                    "title": "Date preset",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "window": {
+                    "title": "Window",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "sessions": {
+                    "title": "Sessions",
+                    "type": "integer",
+                    "x-nullable": true
                 }
             }
         },
@@ -148495,6 +148726,32 @@
                     "minimum": 1,
                     "x-nullable": true
                 },
+                "date_preset": {
+                    "title": "Date preset",
+                    "type": "string",
+                    "enum": [
+                        "Today",
+                        "Yesterday",
+                        "7D",
+                        "30D",
+                        "3M",
+                        "6M",
+                        "12M",
+                        "Custom"
+                    ],
+                    "x-nullable": true
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "maxLength": 300,
+                    "x-nullable": true
+                },
+                "search": {
+                    "title": "Search",
+                    "type": "string",
+                    "maxLength": 200
+                },
                 "config_ids": {
                     "type": "array",
                     "items": {
@@ -148518,7 +148775,9 @@
                 "population",
                 "rows_requested",
                 "is_sample",
-                "credits_estimate"
+                "credits_estimate",
+                "date_preset",
+                "label"
             ],
             "type": "object",
             "properties": {
@@ -148547,6 +148806,17 @@
                 "credits_estimate": {
                     "title": "Credits estimate",
                     "type": "number"
+                },
+                "date_preset": {
+                    "title": "Date preset",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "label": {
+                    "title": "Label",
+                    "type": "string",
+                    "x-nullable": true
                 }
             }
         },
@@ -148820,6 +149090,11 @@
                 "cross": {
                     "title": "Cross",
                     "type": "object"
+                },
+                "sessions_read": {
+                    "title": "Sessions read",
+                    "type": "integer",
+                    "x-nullable": true
                 }
             }
         },
@@ -160185,6 +160460,7 @@
                         "protect_evaluator",
                         "protect_flash_evaluator",
                         "code_evaluator",
+                        "jev_evaluator",
                         "user_add",
                         "observe_add",
                         "prototype_add",

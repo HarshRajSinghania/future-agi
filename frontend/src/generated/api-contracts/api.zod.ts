@@ -55944,6 +55944,8 @@ export const tracerInsightsConfigsPartialUpdateBodyScopeWindowItemMax = 64;
 
 export const tracerInsightsConfigsPartialUpdateBodyScopeWindowMax = 2;
 
+export const tracerInsightsConfigsPartialUpdateBodyScopeSearchMax = 200;
+
 export const TracerInsightsConfigsPartialUpdateBody = zod.object({
   name: zod
     .string()
@@ -56015,6 +56017,10 @@ export const TracerInsightsConfigsPartialUpdateBody = zod.object({
             .max(tracerInsightsConfigsPartialUpdateBodyScopeWindowItemMax),
         )
         .max(tracerInsightsConfigsPartialUpdateBodyScopeWindowMax)
+        .optional(),
+      search: zod
+        .string()
+        .max(tracerInsightsConfigsPartialUpdateBodyScopeSearchMax)
         .optional(),
     })
     .optional(),
@@ -56176,6 +56182,71 @@ export const TracerInsightsDraftCreateResponse = zod.object({
 });
 
 /**
+ * How many units a scope holds, and how many a report on it reads.
+ */
+export const tracerInsightsEstimateCreateBodyScopeLabelMax = 300;
+
+export const tracerInsightsEstimateCreateBodyScopePresetMax = 16;
+
+export const tracerInsightsEstimateCreateBodyScopeWindowItemMax = 64;
+
+export const tracerInsightsEstimateCreateBodyScopeWindowMax = 2;
+
+export const tracerInsightsEstimateCreateBodyScopeSearchMax = 200;
+
+export const tracerInsightsEstimateCreateBodySampleSizeMin = 10;
+export const tracerInsightsEstimateCreateBodySampleSizeMax = 1000;
+
+export const TracerInsightsEstimateCreateBody = zod.object({
+  project_id: zod.string().uuid(),
+  unit: zod.enum(["traces", "sessions", "users"]),
+  scope: zod.object({
+    filters: zod.array(zod.object({}).passthrough()).optional(),
+    label: zod
+      .string()
+      .max(tracerInsightsEstimateCreateBodyScopeLabelMax)
+      .optional(),
+    preset: zod
+      .string()
+      .max(tracerInsightsEstimateCreateBodyScopePresetMax)
+      .optional(),
+    window: zod
+      .array(
+        zod
+          .string()
+          .min(1)
+          .max(tracerInsightsEstimateCreateBodyScopeWindowItemMax),
+      )
+      .max(tracerInsightsEstimateCreateBodyScopeWindowMax)
+      .optional(),
+    search: zod
+      .string()
+      .max(tracerInsightsEstimateCreateBodyScopeSearchMax)
+      .optional(),
+  }),
+  sample_size: zod
+    .number()
+    .min(tracerInsightsEstimateCreateBodySampleSizeMin)
+    .max(tracerInsightsEstimateCreateBodySampleSizeMax)
+    .optional(),
+});
+
+export const tracerInsightsEstimateCreateResponseStatusDefault = true;
+
+export const TracerInsightsEstimateCreateResponse = zod.object({
+  status: zod
+    .boolean()
+    .default(tracerInsightsEstimateCreateResponseStatusDefault),
+  result: zod.object({
+    population: zod.number(),
+    population_is_lower_bound: zod.boolean(),
+    sample_size: zod.number(),
+    window: zod.object({}).passthrough(),
+    sample_ids: zod.array(zod.string().min(1)),
+  }),
+});
+
+/**
  * Show what the report will read from up to three units before running it.
  */
 export const tracerInsightsPreviewCreateBodyConfigNameMax = 255;
@@ -56265,7 +56336,8 @@ export const TracerInsightsPreviewCreateResponse = zod.object({
 });
 
 /**
- * Start a report run over a sampled population; creates the report when new.
+ * Start a report run over a sample of its scope (or the rows handed
+over); creates the report when new.
  */
 export const tracerInsightsRunsCreateBodyConfigNameMax = 255;
 
@@ -56291,6 +56363,8 @@ export const tracerInsightsRunsCreateBodyScopePresetMax = 16;
 export const tracerInsightsRunsCreateBodyScopeWindowItemMax = 64;
 
 export const tracerInsightsRunsCreateBodyScopeWindowMax = 2;
+
+export const tracerInsightsRunsCreateBodyScopeSearchMax = 200;
 
 export const tracerInsightsRunsCreateBodyPopulationItemIdMax = 255;
 
@@ -56370,24 +56444,30 @@ export const TracerInsightsRunsCreateBody = zod.object({
         )
         .max(tracerInsightsRunsCreateBodyScopeWindowMax)
         .optional(),
+      search: zod
+        .string()
+        .max(tracerInsightsRunsCreateBodyScopeSearchMax)
+        .optional(),
     })
     .optional(),
-  population: zod.array(
-    zod.object({
-      id: zod
-        .string()
-        .min(1)
-        .max(tracerInsightsRunsCreateBodyPopulationItemIdMax),
-      time: zod
-        .string()
-        .max(tracerInsightsRunsCreateBodyPopulationItemTimeMax)
-        .optional(),
-      user_id: zod
-        .string()
-        .max(tracerInsightsRunsCreateBodyPopulationItemUserIdMax)
-        .optional(),
-    }),
-  ),
+  population: zod
+    .array(
+      zod.object({
+        id: zod
+          .string()
+          .min(1)
+          .max(tracerInsightsRunsCreateBodyPopulationItemIdMax),
+        time: zod
+          .string()
+          .max(tracerInsightsRunsCreateBodyPopulationItemTimeMax)
+          .optional(),
+        user_id: zod
+          .string()
+          .max(tracerInsightsRunsCreateBodyPopulationItemUserIdMax)
+          .optional(),
+      }),
+    )
+    .optional(),
   sample_size: zod
     .number()
     .min(tracerInsightsRunsCreateBodySampleSizeMin)
@@ -56673,6 +56753,10 @@ export const tracerInstantEvalEstimateCreateBodyIdsItemMax = 255;
 
 export const tracerInstantEvalEstimateCreateBodyIdsMax = 5000;
 
+export const tracerInstantEvalEstimateCreateBodyLabelMax = 300;
+
+export const tracerInstantEvalEstimateCreateBodySearchMax = 200;
+
 export const tracerInstantEvalEstimateCreateBodyQuestionsDefault = 1;
 export const tracerInstantEvalEstimateCreateBodyQuestionsMax = 5;
 
@@ -56745,6 +56829,17 @@ export const TracerInstantEvalEstimateCreateBody = zod.object({
     .max(tracerInstantEvalEstimateCreateBodyIdsMax)
     .optional(),
   sample_size: zod.number().min(1).optional(),
+  date_preset: zod
+    .enum(["Today", "Yesterday", "7D", "30D", "3M", "6M", "12M", "Custom"])
+    .optional(),
+  label: zod
+    .string()
+    .max(tracerInstantEvalEstimateCreateBodyLabelMax)
+    .optional(),
+  search: zod
+    .string()
+    .max(tracerInstantEvalEstimateCreateBodySearchMax)
+    .optional(),
   questions: zod
     .number()
     .min(1)
@@ -56791,12 +56886,15 @@ export const TracerInstantEvalEstimateCreateResponse = zod.object({
       message: zod.string().min(1),
     }),
     credit_max_sample: zod.number(),
+    window: zod.object({}).passthrough(),
   }),
 });
 
 /**
  * Every row the filter selects, with each question's answer,
-confidence and explanation, streamed as CSV.
+confidence and explanation, streamed as CSV. A user question writes
+a line per user (their rolled-up answers and the sessions behind
+them), or with ``sessions`` a line per session of those users.
  */
 export const tracerInstantEvalExportListQueryConfigIdsMax = 2000;
 
@@ -56829,6 +56927,7 @@ export const tracerInstantEvalExportListQueryPageSizeMax = 1500;
 
 export const tracerInstantEvalExportListQueryCompactDefault = false;
 export const tracerInstantEvalExportListQuerySortDefault = `-time`;
+export const tracerInstantEvalExportListQuerySessionsDefault = false;
 
 export const TracerInstantEvalExportListQueryParams = zod.object({
   project_id: zod.string().uuid(),
@@ -56898,6 +56997,9 @@ export const TracerInstantEvalExportListQueryParams = zod.object({
   sort: zod
     .enum(["time", "-time", "confidence"])
     .default(tracerInstantEvalExportListQuerySortDefault),
+  sessions: zod
+    .boolean()
+    .default(tracerInstantEvalExportListQuerySessionsDefault),
 });
 
 export const TracerInstantEvalExportListResponse = zod.string();
@@ -57067,6 +57169,10 @@ export const TracerInstantEvalRunsListResponse = zod.object({
         credits_estimate: zod.number().optional(),
         population: zod.number().optional(),
         is_sample: zod.boolean().optional(),
+        date_preset: zod.string().min(1).optional(),
+        label: zod.string().optional(),
+        window: zod.object({}).passthrough().optional(),
+        sessions: zod.number().optional(),
       }),
     ),
     has_more: zod.boolean(),
@@ -57082,6 +57188,10 @@ export const tracerInstantEvalStartCreateBodyFiltersDefault = [];
 export const tracerInstantEvalStartCreateBodyIdsItemMax = 255;
 
 export const tracerInstantEvalStartCreateBodyIdsMax = 5000;
+
+export const tracerInstantEvalStartCreateBodyLabelMax = 300;
+
+export const tracerInstantEvalStartCreateBodySearchMax = 200;
 
 export const tracerInstantEvalStartCreateBodyConfigIdsMax = 5;
 
@@ -57154,6 +57264,14 @@ export const TracerInstantEvalStartCreateBody = zod.object({
     .max(tracerInstantEvalStartCreateBodyIdsMax)
     .optional(),
   sample_size: zod.number().min(1).optional(),
+  date_preset: zod
+    .enum(["Today", "Yesterday", "7D", "30D", "3M", "6M", "12M", "Custom"])
+    .optional(),
+  label: zod.string().max(tracerInstantEvalStartCreateBodyLabelMax).optional(),
+  search: zod
+    .string()
+    .max(tracerInstantEvalStartCreateBodySearchMax)
+    .optional(),
   config_ids: zod
     .array(zod.string().uuid())
     .min(1)
@@ -57176,6 +57294,8 @@ export const TracerInstantEvalStartCreateResponse = zod.object({
     rows_requested: zod.number(),
     is_sample: zod.boolean(),
     credits_estimate: zod.number(),
+    date_preset: zod.string().min(1),
+    label: zod.string(),
   }),
 });
 
@@ -57258,6 +57378,7 @@ export const TracerInstantEvalSummaryListResponse = zod.object({
     timeline: zod.object({}).passthrough(),
     groups: zod.object({}).passthrough(),
     cross: zod.object({}).passthrough(),
+    sessions_read: zod.number().optional(),
   }),
 });
 
@@ -70175,6 +70296,7 @@ export const UsageApiCallTypeListResponse = zod.object({
         "protect_evaluator",
         "protect_flash_evaluator",
         "code_evaluator",
+        "jev_evaluator",
         "user_add",
         "observe_add",
         "prototype_add",

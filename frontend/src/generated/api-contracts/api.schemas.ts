@@ -26113,6 +26113,8 @@ export interface InsightScopeApi {
   preset?: string;
   /** @maxItems 2 */
   window?: string[];
+  /** @maxLength 200 */
+  search?: string;
 }
 
 export interface InsightConfigPatchApi {
@@ -26192,6 +26194,41 @@ export interface InsightDraftResultApi {
 export interface InsightDraftResponseApi {
   status?: boolean;
   result: InsightDraftResultApi;
+}
+
+export type InsightEstimateRequestApiUnit =
+  (typeof InsightEstimateRequestApiUnit)[keyof typeof InsightEstimateRequestApiUnit];
+
+export const InsightEstimateRequestApiUnit = {
+  traces: "traces",
+  sessions: "sessions",
+  users: "users",
+} as const;
+
+export interface InsightEstimateRequestApi {
+  project_id: string;
+  unit: InsightEstimateRequestApiUnit;
+  scope: InsightScopeApi;
+  /**
+   * @minimum 10
+   * @maximum 1000
+   */
+  sample_size?: number;
+}
+
+export type InsightEstimateResultApiWindow = { [key: string]: unknown };
+
+export interface InsightEstimateResultApi {
+  population: number;
+  population_is_lower_bound: boolean;
+  sample_size: number;
+  window: InsightEstimateResultApiWindow;
+  sample_ids: string[];
+}
+
+export interface InsightEstimateResponseApi {
+  status?: boolean;
+  result: InsightEstimateResultApi;
 }
 
 export type InsightConfigInputApiUnit =
@@ -26277,7 +26314,7 @@ export interface InsightRunCreateApi {
   config_id?: string;
   config?: InsightConfigInputApi;
   scope?: InsightScopeApi;
-  population: InsightPopulationItemApi[];
+  population?: InsightPopulationItemApi[];
   /**
    * @minimum 10
    * @maximum 1000
@@ -26589,6 +26626,20 @@ export type InstantEvalEstimateRequestApiFiltersItem = {
   filter_config: InstantEvalEstimateRequestApiFiltersItemFilterConfig;
 };
 
+export type InstantEvalEstimateRequestApiDatePreset =
+  (typeof InstantEvalEstimateRequestApiDatePreset)[keyof typeof InstantEvalEstimateRequestApiDatePreset];
+
+export const InstantEvalEstimateRequestApiDatePreset = {
+  Today: "Today",
+  Yesterday: "Yesterday",
+  "7D": "7D",
+  "30D": "30D",
+  "3M": "3M",
+  "6M": "6M",
+  "12M": "12M",
+  Custom: "Custom",
+} as const;
+
 export interface InstantEvalEstimateRequestApi {
   project_id: string;
   unit: InstantEvalEstimateRequestApiUnit;
@@ -26597,6 +26648,11 @@ export interface InstantEvalEstimateRequestApi {
   ids?: string[];
   /** @minimum 1 */
   sample_size?: number;
+  date_preset?: InstantEvalEstimateRequestApiDatePreset;
+  /** @maxLength 300 */
+  label?: string;
+  /** @maxLength 200 */
+  search?: string;
   /**
    * @minimum 1
    * @maximum 5
@@ -26626,6 +26682,8 @@ export interface InstantEvalCreditCheckApi {
   message: string;
 }
 
+export type InstantEvalEstimateApiWindow = { [key: string]: unknown };
+
 export interface InstantEvalEstimateApi {
   population: number;
   population_is_lower_bound: boolean;
@@ -26641,6 +26699,7 @@ export interface InstantEvalEstimateApi {
   choices: InstantEvalChoiceApi[];
   credit_check: InstantEvalCreditCheckApi;
   credit_max_sample: number;
+  window: InstantEvalEstimateApiWindow;
 }
 
 export interface InstantEvalEstimateResponseApi {
@@ -26665,6 +26724,8 @@ export interface InstantEvalRowsResponseApi {
 export type InstantEvalRunApiCounts = {
   [key: string]: { [key: string]: number };
 };
+
+export type InstantEvalRunApiWindow = { [key: string]: unknown };
 
 export interface InstantEvalRunApi {
   /** @minLength 1 */
@@ -26692,6 +26753,11 @@ export interface InstantEvalRunApi {
   credits_estimate?: number;
   population?: number;
   is_sample?: boolean;
+  /** @minLength 1 */
+  date_preset?: string;
+  label?: string;
+  window?: InstantEvalRunApiWindow;
+  sessions?: number;
 }
 
 export interface InstantEvalRunsResultApi {
@@ -26751,6 +26817,20 @@ export type InstantEvalStartRequestApiFiltersItem = {
   filter_config: InstantEvalStartRequestApiFiltersItemFilterConfig;
 };
 
+export type InstantEvalStartRequestApiDatePreset =
+  (typeof InstantEvalStartRequestApiDatePreset)[keyof typeof InstantEvalStartRequestApiDatePreset];
+
+export const InstantEvalStartRequestApiDatePreset = {
+  Today: "Today",
+  Yesterday: "Yesterday",
+  "7D": "7D",
+  "30D": "30D",
+  "3M": "3M",
+  "6M": "6M",
+  "12M": "12M",
+  Custom: "Custom",
+} as const;
+
 export interface InstantEvalStartRequestApi {
   project_id: string;
   unit: InstantEvalStartRequestApiUnit;
@@ -26759,6 +26839,11 @@ export interface InstantEvalStartRequestApi {
   ids?: string[];
   /** @minimum 1 */
   sample_size?: number;
+  date_preset?: InstantEvalStartRequestApiDatePreset;
+  /** @maxLength 300 */
+  label?: string;
+  /** @maxLength 200 */
+  search?: string;
   /**
    * @minItems 1
    * @maxItems 5
@@ -26776,6 +26861,9 @@ export interface InstantEvalStartApi {
   rows_requested: number;
   is_sample: boolean;
   credits_estimate: number;
+  /** @minLength 1 */
+  date_preset: string;
+  label: string;
 }
 
 export interface InstantEvalStartResponseApi {
@@ -26856,6 +26944,7 @@ export interface InstantEvalSummaryApi {
   timeline: InstantEvalSummaryApiTimeline;
   groups: InstantEvalSummaryApiGroups;
   cross: InstantEvalSummaryApiCross;
+  sessions_read?: number;
 }
 
 export interface InstantEvalSummaryResponseApi {
@@ -31940,6 +32029,7 @@ export const UsageAPICallTypeApiName = {
   protect_evaluator: "protect_evaluator",
   protect_flash_evaluator: "protect_flash_evaluator",
   code_evaluator: "code_evaluator",
+  jev_evaluator: "jev_evaluator",
   user_add: "user_add",
   observe_add: "observe_add",
   prototype_add: "prototype_add",
@@ -36902,6 +36992,7 @@ export type TracerInstantEvalExportListParams = {
   page_size?: number;
   compact?: boolean;
   sort?: TracerInstantEvalExportListSort;
+  sessions?: boolean;
 };
 
 export type TracerInstantEvalExportListUnit =

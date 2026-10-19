@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1081,
+  endpointCount: 1082,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -35055,6 +35055,49 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    "/tracer/insights/estimate/": {
+      post: {
+        operationId: "tracer_insights_estimate_create",
+        runtimeRequestValidation: true,
+        runtimeResponseValidation: true,
+        requestBody: {
+          $ref: "#/definitions/InsightEstimateRequest",
+        },
+        queryParameters: {},
+        responses: {
+          200: {
+            $ref: "#/definitions/InsightEstimateResponse",
+          },
+          400: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          402: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          403: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          404: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          422: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          429: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          500: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          503: {
+            $ref: "#/definitions/ApiErrorResponse",
+          },
+          default: {
+            $ref: "#/definitions/ManagementAPIErrorResponse",
+          },
+        },
+      },
+    },
     "/tracer/insights/preview/": {
       post: {
         operationId: "tracer_insights_preview_create",
@@ -35608,6 +35651,13 @@ export const OPENAPI_CONTRACT = Object.freeze({
               type: "string",
               enum: ["time", "-time", "confidence"],
               default: "-time",
+            },
+          },
+          sessions: {
+            required: false,
+            schema: {
+              type: "boolean",
+              default: false,
             },
           },
         },
@@ -65747,6 +65797,45 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
+    InsightEstimateRequest: {
+      required: ["project_id", "unit", "scope"],
+      type: "object",
+      properties: {
+        project_id: {
+          title: "Project id",
+          type: "string",
+          format: "uuid",
+        },
+        unit: {
+          title: "Unit",
+          type: "string",
+          enum: ["traces", "sessions", "users"],
+        },
+        scope: {
+          $ref: "#/definitions/InsightScope",
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+          maximum: 1000,
+          minimum: 10,
+        },
+      },
+    },
+    InsightEstimateResponse: {
+      required: ["result"],
+      type: "object",
+      properties: {
+        status: {
+          title: "Status",
+          type: "boolean",
+          default: true,
+        },
+        result: {
+          $ref: "#/definitions/InsightEstimateResult",
+        },
+      },
+    },
     InsightPreview: {
       required: ["project_id", "config", "unit_ids"],
       type: "object",
@@ -65786,7 +65875,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
       },
     },
     InsightRunCreate: {
-      required: ["project_id", "population"],
+      required: ["project_id"],
       type: "object",
       properties: {
         project_id: {
@@ -66020,6 +66109,32 @@ export const OPENAPI_CONTRACT = Object.freeze({
           minimum: 1,
           "x-nullable": true,
         },
+        date_preset: {
+          title: "Date preset",
+          type: "string",
+          enum: [
+            "Today",
+            "Yesterday",
+            "7D",
+            "30D",
+            "3M",
+            "6M",
+            "12M",
+            "Custom",
+          ],
+          "x-nullable": true,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          maxLength: 300,
+          "x-nullable": true,
+        },
+        search: {
+          title: "Search",
+          type: "string",
+          maxLength: 200,
+        },
         questions: {
           title: "Questions",
           type: "integer",
@@ -66207,6 +66322,32 @@ export const OPENAPI_CONTRACT = Object.freeze({
           type: "integer",
           minimum: 1,
           "x-nullable": true,
+        },
+        date_preset: {
+          title: "Date preset",
+          type: "string",
+          enum: [
+            "Today",
+            "Yesterday",
+            "7D",
+            "30D",
+            "3M",
+            "6M",
+            "12M",
+            "Custom",
+          ],
+          "x-nullable": true,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          maxLength: 300,
+          "x-nullable": true,
+        },
+        search: {
+          title: "Search",
+          type: "string",
+          maxLength: 200,
         },
         config_ids: {
           type: "array",
@@ -85554,6 +85695,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
             "protect_evaluator",
             "protect_flash_evaluator",
             "code_evaluator",
+            "jev_evaluator",
             "user_add",
             "observe_add",
             "prototype_add",
@@ -96153,6 +96295,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
           },
           maxItems: 2,
         },
+        search: {
+          title: "Search",
+          type: "string",
+          maxLength: 200,
+        },
       },
     },
     InsightConfigItem: {
@@ -96283,6 +96430,41 @@ export const OPENAPI_CONTRACT = Object.freeze({
         examples_read: {
           title: "Examples read",
           type: "integer",
+        },
+      },
+    },
+    InsightEstimateResult: {
+      required: [
+        "population",
+        "population_is_lower_bound",
+        "sample_size",
+        "window",
+        "sample_ids",
+      ],
+      type: "object",
+      properties: {
+        population: {
+          title: "Population",
+          type: "integer",
+        },
+        population_is_lower_bound: {
+          title: "Population is lower bound",
+          type: "boolean",
+        },
+        sample_size: {
+          title: "Sample size",
+          type: "integer",
+        },
+        window: {
+          title: "Window",
+          type: "object",
+        },
+        sample_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
         },
       },
     },
@@ -96610,6 +96792,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "choices",
         "credit_check",
         "credit_max_sample",
+        "window",
       ],
       type: "object",
       properties: {
@@ -96672,6 +96855,10 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Credit max sample",
           type: "integer",
           "x-nullable": true,
+        },
+        window: {
+          title: "Window",
+          type: "object",
         },
       },
     },
@@ -96761,6 +96948,8 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "rows_requested",
         "is_sample",
         "credits_estimate",
+        "date_preset",
+        "label",
       ],
       type: "object",
       properties: {
@@ -96789,6 +96978,17 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+        },
+        date_preset: {
+          title: "Date preset",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          "x-nullable": true,
         },
       },
     },
@@ -96948,6 +97148,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
         cross: {
           title: "Cross",
           type: "object",
+        },
+        sessions_read: {
+          title: "Sessions read",
+          type: "integer",
+          "x-nullable": true,
         },
       },
     },
@@ -113732,6 +113937,27 @@ export const OPENAPI_CONTRACT = Object.freeze({
         is_sample: {
           title: "Is sample",
           type: "boolean",
+        },
+        date_preset: {
+          title: "Date preset",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        label: {
+          title: "Label",
+          type: "string",
+          "x-nullable": true,
+        },
+        window: {
+          title: "Window",
+          type: "object",
+          "x-nullable": true,
+        },
+        sessions: {
+          title: "Sessions",
+          type: "integer",
+          "x-nullable": true,
         },
       },
     },
