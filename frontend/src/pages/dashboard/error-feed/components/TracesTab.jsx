@@ -15,6 +15,7 @@ import { useGetProjectDetails } from "src/api/project/project-detail";
 import { useVoiceCallDetail } from "src/sections/agents/helper";
 import { PROJECT_SOURCE } from "src/utils/constants";
 import TraceDetailDrawerV2 from "src/components/traceDetail/TraceDetailDrawerV2";
+import { coveredDrawerSx, useDrawerCovered } from "src/hooks/use-drawer-stack";
 import VoiceDetailDrawerV2 from "src/components/VoiceDetailDrawerV2/VoiceDetailDrawerV2";
 
 const EMPTY_AGG = {
@@ -263,6 +264,8 @@ export default function TracesTab({ error }) {
   const projectId = isMockClusterId(clusterId) ? null : error?.project_id;
   const { data, isLoading } = useErrorFeedTraces(clusterId, { limit: 200 });
   const [drawerTraceId, setDrawerTraceId] = useState(null);
+  /* Hidden while a drawer opened after it (the Fix sheet) is open. */
+  const traceCovered = useDrawerCovered(!!drawerTraceId);
 
   // Sim/voice projects need the VAPI call drawer, not the generic trace drawer.
   const { data: projectDetail } = useGetProjectDetails(projectId, !!projectId);
@@ -336,6 +339,7 @@ export default function TracesTab({ error }) {
           variant="persistent"
           open={!!drawerTraceId}
           onClose={() => setDrawerTraceId(null)}
+          sx={coveredDrawerSx(traceCovered)}
           PaperProps={{
             sx: {
               width: "auto",

@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 import { useQueryClient } from "@tanstack/react-query";
 import Iconify from "src/components/iconify";
+import { coveredDrawerSx, useDrawerCovered } from "src/hooks/use-drawer-stack";
 import { evalDetailQuery } from "src/sections/evals/hooks/useEvalDetail";
 import EvalPickerProvider from "./context/EvalPickerProvider";
 import { useEvalPickerContext } from "./context/EvalPickerContext";
@@ -350,6 +351,7 @@ const EvalPickerDrawer = ({
   paperSx = null,
 }) => {
   const [currentStep, setCurrentStep] = useState("list");
+  const covered = useDrawerCovered(open);
 
   return (
     <Drawer
@@ -381,7 +383,7 @@ const EvalPickerDrawer = ({
           },
         },
       }}
-      sx={paperSx ? { "&& .MuiDrawer-paper": paperSx } : undefined}
+      sx={{ ...(paperSx && { "&& .MuiDrawer-paper": paperSx }), ...coveredDrawerSx(covered) }}
     >
       <EvalPickerProvider
         key={initialEval?.userEvalId || initialEval?.id || "new"}

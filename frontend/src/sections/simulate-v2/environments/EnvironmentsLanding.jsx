@@ -78,9 +78,6 @@ export default function EnvironmentsLanding({ onPick, onBrowseWorlds, picked, ex
 
   return (
     <Stack spacing={4} sx={{ pb: 4 }}>
-      {/* Flow 2 starts here: pick the agent from Agents. */}
-      <YourAgentsSection />
-
       <PasteBar
         detect={detectPaste}
         onPick={(choice, prefill, meta) => {
@@ -99,6 +96,9 @@ export default function EnvironmentsLanding({ onPick, onBrowseWorlds, picked, ex
         onConnect={(item) => openConnect(item.kind, item.initial || null, item.id, { name: item.name, logo: item.logo, icon: item.icon })}
         onTools={() => onPick("mcp", null, "directory", "mcp", { name: "MCP server", logo: "mcp" })}
       />
+
+      {/* Or one already in Agents (Flow 2: pick the agent from Agents). */}
+      <YourAgentsSection />
 
       {/* The connect flow's drawer, opened in place. */}
       {connectReq && (
@@ -129,7 +129,7 @@ EnvironmentsLanding.propTypes = {
 
 const linkSx = { color: "text.primary", fontWeight: 600, cursor: "pointer", "&:hover": { textDecoration: "underline" } };
 
-/* Agents already connected are listed under Your agents, at the top. */
+/* Agents already connected are listed under Your agents, at the bottom. */
 /* The landing's columns for one agent type (or all): the same ways in as
    New agent — code first, built here on its own line — each opening with
    the type set. */

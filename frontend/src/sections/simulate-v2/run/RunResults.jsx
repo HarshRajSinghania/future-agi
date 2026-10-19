@@ -10,6 +10,7 @@ import {
   Popover, MenuItem, ListItemIcon, ListItemText, Switch,
 } from "@mui/material";
 import SideDrawer from "../components/SideDrawer";
+import { coveredDrawerSx, useDrawerCovered } from "src/hooks/use-drawer-stack";
 import { FilterPanel } from "src/components/filter-panel";
 import Iconify from "src/components/iconify";
 import { clickable, focusRing } from "../components/clickable";
@@ -228,6 +229,8 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
   });
   const [replaying, setReplaying] = useState(null);
   const [openTask, setOpenTask] = useState(null);
+  /* The call drawer hides while one opened from it (an eval, a fix) is open. */
+  const callCovered = useDrawerCovered(!!openTask);
   /* Which left pane the call drawer opens on — "trace" from Insights. */
   const [openPane, setOpenPane] = useState(null);
   /* A voice run's call drawer is Observe's; its trace opens on its own. */
@@ -1484,6 +1487,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, seed = 7 }
               onClose={closeTask}
               ModalProps={{ BackdropProps: { style: { backgroundColor: "transparent" } } }}
               sx={{
+                ...coveredDrawerSx(callCovered),
                 zIndex: (t) => t.zIndex.modal,
                 "&& .MuiDrawer-paper": {
                   width: "auto",

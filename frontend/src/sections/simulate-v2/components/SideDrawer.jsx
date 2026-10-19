@@ -1,5 +1,6 @@
 import PropTypes from "prop-types";
 import { Drawer } from "@mui/material";
+import { COVERED_DRAWER_SX, useDrawerCovered } from "src/hooks/use-drawer-stack";
 
 /**
  * The side drawer, matching the ones in Datasets.
@@ -20,8 +21,12 @@ import { Drawer } from "@mui/material";
  * content components, the surface is settled once here: `&&` lifts specificity
  * above the theme rule so the paper itself is `background.paper`, and the
  * theme's side borders and the reference drawer's shadow are kept.
+ *
+ * One drawer on screen at a time: one opened from inside this one hides it
+ * until it closes (src/hooks/use-drawer-stack).
  */
 export default function SideDrawer({ open, onClose, width = 480, keepMounted = false, persistent = false, children }) {
+  const covered = useDrawerCovered(open);
   return (
     <Drawer
       anchor="right"
@@ -42,6 +47,7 @@ export default function SideDrawer({ open, onClose, width = 480, keepMounted = f
           backgroundImage: "none",
           boxShadow: "-10px 0px 100px #00000035",
         },
+        ...(covered && COVERED_DRAWER_SX),
       }}
       ModalProps={{
         keepMounted,

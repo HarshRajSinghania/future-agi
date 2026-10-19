@@ -5,10 +5,12 @@ import { Box, Button, ButtonBase, IconButton, Stack, Typography } from "@mui/mat
 import Iconify from "src/components/iconify";
 import { useConnectedAgents } from "../store";
 import { agentSourceOf } from "../_mock/agentRegistry";
+import { agentChannelsOf } from "../_mock/agentLifecycle";
 import { useSaveConnectedAgent } from "../agents/connect/useSaveConnectedAgent";
 import { ConnectSubmitContext } from "../agents/connect/connectSubmit";
 import BuildEnvironmentDialog from "../agents/BuildEnvironmentDialog";
 import SideDrawer from "../components/SideDrawer";
+import ChipCard from "./ChipCard";
 import { SectionHead } from "./LandingBits";
 import { PANEL_SX, focusRing } from "./landingStyles";
 import { buildableAgentsOf, useBuildForAgent } from "./worldSource";
@@ -17,7 +19,7 @@ import { buildableAgentsOf, useBuildForAgent } from "./worldSource";
   Choosing the agent an environment belongs to (RSI PRD Flow 2, step 1:
   "Connect: pick the agent from Agents").
 
-  · YourAgentsSection — the top of the Environments landing: every agent in
+  · YourAgentsSection — the foot of the Environments landing: every agent in
     Agents, each opening the same Build environment dialog the agent page
     uses (name, version, 10–1,000 scenarios), then the builder.
   · WorldAgentPicker — where a world source (a prebuilt world, an MCP server,
@@ -40,42 +42,70 @@ const metaLine = (a) => {
 
 /* ── Your agents (landing) ──────────────────────────────────────────────── */
 
+/* Two rows of three before "Show all". */
 const FIRST_SHOWN = 6;
+
+/* The agent's type, as its Definition names it — the same chips as
+   Connect your agent above. "Voice and chat" only when an agent serves both. */
+const TYPE_CHIPS = [
+  { id: "voice", label: "Voice", icon: "solar:phone-calling-rounded-linear" },
+  { id: "chat", label: "Chat", icon: "solar:chat-round-linear" },
+  { id: "both", label: "Voice and chat", icon: "solar:chat-round-call-linear" },
+];
+const typeOf = (agent) => {
+  const ch = agentChannelsOf(agent);
+  if (ch.includes("voice") && ch.includes("chat")) return "both";
+  return ch.includes("voice") ? "voice" : "chat";
+};
 
 export function YourAgentsSection({ sectionRef }) {
   const { agents: all } = useConnectedAgents();
   const agents = useMemo(() => buildableAgentsOf(all), [all]);
+  const chips = useMemo(
+    () => TYPE_CHIPS
+      .map((t) => ({ ...t, count: agents.filter((a) => typeOf(a) === t.id).length }))
+      .filter((t) => t.count),
+    [agents],
+  );
+  const [type, setType] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [buildFor, setBuildFor] = useState(null);
   const build = useBuildForAgent();
-  const shown = showAll ? agents : agents.slice(0, FIRST_SHOWN);
+  const ofType = type ? agents.filter((a) => typeOf(a) === type) : agents;
+  const shown = showAll ? ofType : ofType.slice(0, FIRST_SHOWN);
+  const pick = (t) => { setType(t); setShowAll(false); };
 
   return (
     <Box ref={sectionRef} sx={{ scrollMarginTop: 16 }}>
       <SectionHead
         title="Your agents"
-        subtitle="Every environment belongs to one agent in Agents. Pick one to build an environment for it — the version to test and how many scenarios to start with come next."
-        action={agents.length > FIRST_SHOWN ? (
-          <Button size="small" onClick={() => setShowAll((v) => !v)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>
-            {showAll ? "Show fewer" : `Show all ${agents.length}`}
-          </Button>
-        ) : null}
+        subtitle="Pick one to build its environment. The version to test and how many scenarios to start with come next."
       />
       {agents.length ? (
         <Box sx={{ ...PANEL_SX, overflow: "hidden" }}>
-          {shown.map((a, i) => (
-            <AgentRow
-              key={a.id}
-              agent={a}
-              divider={i > 0}
-              action="Build environment"
-              onClick={() => setBuildFor(a)}
-            />
-          ))}
+          <Stack direction="row" alignItems="center" sx={{ px: 2, py: 1.5, borderBottom: "1px solid", borderColor: "divider" }}>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, flex: 1, minWidth: 0 }}>
+              <ChipCard label={<CountLabel label="All types" count={agents.length} />} on={!type} onClick={() => pick(null)} />
+              {chips.map((t) => (
+                <ChipCard key={t.id} icon={t.icon} label={<CountLabel label={t.label} count={t.count} />} on={type === t.id} onClick={() => pick(t.id)} />
+              ))}
+            </Box>
+            {ofType.length > FIRST_SHOWN && (
+              <Button size="small" onClick={() => setShowAll((v) => !v)} sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0 }}>
+                {showAll ? "Show fewer" : `Show all ${ofType.length}`}
+              </Button>
+            )}
+          </Stack>
+          {/* Three across, like the prebuilt worlds above. */}
+          <Box sx={{ p: 1, display: "grid", gap: 0.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(3, minmax(0, 1fr))" } }}>
+            {shown.map((a) => (
+              <AgentTile key={a.id} agent={a} onClick={() => setBuildFor(a)} />
+            ))}
+          </Box>
         </Box>
       ) : (
         <Typography sx={{ typography: "s2", color: "text.subtitle", px: 2, py: 1.5, border: "1px dashed", borderColor: "divider", borderRadius: 1 }}>
-          No agents in Agents yet. Connect one below — its environment builds next.
+          No agents in Agents yet. Connect one above — its environment builds next.
         </Typography>
       )}
       {buildFor && (
@@ -90,9 +120,45 @@ export function YourAgentsSection({ sectionRef }) {
     </Box>
   );
 }
+
+function CountLabel({ label, count }) {
+  return (
+    <>
+      {`${label} `}
+      <Box component="span" sx={{ fontWeight: 400, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>{count}</Box>
+    </>
+  );
+}
+CountLabel.propTypes = { label: PropTypes.string, count: PropTypes.number };
+
 YourAgentsSection.propTypes = { sectionRef: PropTypes.object };
 
-function AgentRow({ agent, divider, action, selected = false, onClick }) {
+/* One agent on the landing: the whole tile opens Build environment. */
+function AgentTile({ agent, onClick }) {
+  const src = agentSourceOf(agent);
+  return (
+    <ButtonBase
+      onClick={onClick}
+      aria-label={`Build environment for ${agent.name}`}
+      sx={{
+        minWidth: 0, px: 1.25, py: 1, borderRadius: 1, display: "flex", alignItems: "center", gap: 1.25, textAlign: "left",
+        "&:hover": { bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.05 : 0.03) },
+        "&:hover .agent-go, &.Mui-focusVisible .agent-go": { opacity: 1 },
+        "&.Mui-focusVisible": focusRing,
+      }}
+    >
+      <Iconify icon={src.icon} width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
+      <Box flex={1} minWidth={0}>
+        <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{agent.name}</Typography>
+        <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>{metaLine(agent)}</Typography>
+      </Box>
+      <Iconify className="agent-go" icon="solar:arrow-right-linear" width={14} sx={{ color: "text.secondary", flexShrink: 0, opacity: 0, transition: "opacity .12s ease" }} />
+    </ButtonBase>
+  );
+}
+AgentTile.propTypes = { agent: PropTypes.object.isRequired, onClick: PropTypes.func };
+
+function AgentRow({ agent, divider, selected = false, onClick }) {
   const src = agentSourceOf(agent);
   return (
     <ButtonBase
@@ -103,7 +169,6 @@ function AgentRow({ agent, divider, action, selected = false, onClick }) {
         borderTop: divider ? "1px solid" : "none", borderColor: "divider",
         bgcolor: (t) => (selected ? alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.06 : 0.03) : "transparent"),
         "&:hover": { bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.05 : 0.025) },
-        "&:hover .agent-go": { color: "text.primary" },
         "&.Mui-focusVisible": focusRing,
       }}
     >
@@ -112,23 +177,16 @@ function AgentRow({ agent, divider, action, selected = false, onClick }) {
         <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{agent.name}</Typography>
         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>{metaLine(agent)}</Typography>
       </Box>
-      {action ? (
-        <Stack className="agent-go" direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0, color: "text.secondary", typography: "s2", fontWeight: 700 }}>
-          <span>{action}</span>
-          <Iconify icon="solar:arrow-right-linear" width={14} />
-        </Stack>
-      ) : (
-        <Iconify
-          icon={selected ? "solar:check-circle-bold" : "solar:circle-linear"}
-          width={16}
-          sx={{ color: selected ? "text.primary" : "text.disabled", flexShrink: 0 }}
-        />
-      )}
+      <Iconify
+        icon={selected ? "solar:check-circle-bold" : "solar:circle-linear"}
+        width={16}
+        sx={{ color: selected ? "text.primary" : "text.disabled", flexShrink: 0 }}
+      />
     </ButtonBase>
   );
 }
 AgentRow.propTypes = {
-  agent: PropTypes.object.isRequired, divider: PropTypes.bool, action: PropTypes.string,
+  agent: PropTypes.object.isRequired, divider: PropTypes.bool,
   selected: PropTypes.bool, onClick: PropTypes.func,
 };
 

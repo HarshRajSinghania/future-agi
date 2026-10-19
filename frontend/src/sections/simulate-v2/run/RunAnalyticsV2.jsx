@@ -45,6 +45,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, rectSortingStrategy } from "@dnd-kit/sortable";
 import { clickable, focusRing } from "../components/clickable";
+import { coveredDrawerSx, useDrawerCovered } from "src/hooks/use-drawer-stack";
 import { scenarioTitle } from "../_mock/scenarios";
 
 /**
@@ -1766,11 +1767,13 @@ function useDrilldown() { return useContext(DrilldownContext) || (() => {}); }
  */
 function TaskDrilldownDrawer({ open, onClose, title, subtitle, tasks: filtered, env }) {
   const golden = useGoldenSet(env || {});
+  const covered = useDrawerCovered(open);
   return (
     <Dialog
       open={open}
       onClose={onClose}
       maxWidth={false}
+      sx={coveredDrawerSx(covered)}
       slotProps={{
         paper: {
           sx: {
