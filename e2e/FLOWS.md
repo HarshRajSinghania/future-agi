@@ -913,7 +913,7 @@
 ### EVAL-E2E-006 — Jev models are listed but locked on a self-hosted stack without a licence
 
 **Goal:** See that Jev evaluator models exist but cannot be chosen or saved on an unlicensed self-hosted install  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:196`  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:199`  
 **Tags:** —
 
 **User steps:**
@@ -937,7 +937,7 @@
 ### EVAL-E2E-007 — choosing a Jev model without a TypeSafe key opens the keys drawer on TypeSafe
 
 **Goal:** Choose a Jev evaluator model before saving a TypeSafe key and land in the keys drawer on TypeSafe  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:269`  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:272`  
 **Tags:** —
 
 **User steps:**
@@ -960,7 +960,7 @@
 ### EVAL-E2E-008 — a Jev pass/fail evaluator keeps its model, output type and criteria after reload
 
 **Goal:** Author a Jev pass/fail evaluator in the UI and find its model, output type and criteria intact after reload  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:342`  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:345`  
 **Tags:** —
 
 **User steps:**
@@ -983,7 +983,7 @@
 ### EVAL-E2E-009 — a Jev choices evaluator keeps its authored label order and scores after reload
 
 **Goal:** Author a Jev choices evaluator whose labels are not shortest-first and find their order and scores intact after reload  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:399`  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:402`  
 **Tags:** —
 
 **User steps:**
@@ -1006,7 +1006,7 @@
 ### EVAL-E2E-010 — a Jev scoring evaluator keeps its four ordered levels after reload
 
 **Goal:** Author a Jev scoring evaluator with four ordered rubric levels and find them intact after reload  
-**Spec:** `flows/evals/jev-evaluator-models.spec.ts:480`  
+**Spec:** `flows/evals/jev-evaluator-models.spec.ts:483`  
 **Tags:** —
 
 **User steps:**
