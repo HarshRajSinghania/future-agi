@@ -513,13 +513,18 @@ def _row_to_chspan(row: tuple) -> CHSpan:
     return CHSpan(**_row_to_dict(_DATA_KEYS, row))
 
 
+def _as_uuid(value: object) -> str | None:
+    """``value`` as ClickHouse's ``toString`` writes a UUID, or None if it
+    isn't one."""
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except ValueError:
+        return None
+
+
 def _uuid_text(value: object) -> str:
     """``value`` as ClickHouse's ``toString`` writes it, when it is a UUID."""
-    text = str(value).strip()
-    try:
-        return str(uuid.UUID(text))
-    except ValueError:
-        return text
+    return _as_uuid(value) or str(value).strip()
 
 
 class CHSpanReader:
@@ -609,7 +614,7 @@ class CHSpanReader:
         id_to_survivor = {str(a): str(s) for (a, s) in rows}
         return {i: id_to_survivor.get(i, i) for i in ids}
 
-    def _remap_groups(self, remap_table: str, ids: Iterable[str]) -> dict[str, str]:
+    def remap_groups(self, remap_table: str, ids: Iterable[str]) -> dict[str, str]:
         """``{raw id -> survivor}`` for every id in a ``remap_table`` group that
         ``ids`` touch: the group's new id and each old id it consolidates. An
         id no group holds is left out; it is its own survivor.
@@ -622,7 +627,8 @@ class CHSpanReader:
             bounded_survivor_map_subquery,
         )
 
-        ids = sorted({str(i) for i in ids if i})
+        # Only a UUID can be in a remap table; anything else is its own survivor.
+        ids = sorted({u for u in map(_as_uuid, ids) if u})
         bounded = bounded_survivor_map_subquery(remap_table, candidate_param="ids")
         groups: dict[str, str] = {}
         for start in range(0, len(ids), _REMAP_ID_BATCH):
@@ -632,6 +638,25 @@ class CHSpanReader:
             ).result_rows
             groups.update((str(a), str(s)) for a, s in rows)
         return groups
+
+    def resolve_ids(
+        self, remap_table: str, ids: Iterable[str]
+    ) -> tuple[dict[str, list[str]], dict[str, str]]:
+        """For the ids asked, through ``remap_table``: ``{survivor -> the
+        ids asked that resolve to it}`` (each as given), and ``{raw id ->
+        survivor}`` for every raw id whose spans belong to one of those
+        survivors: the ids a read must look for."""
+        callers = list(dict.fromkeys(str(i) for i in ids if i))
+        canonical = {caller: _uuid_text(caller) for caller in callers}
+        groups = self.remap_groups(remap_table, canonical.values())
+        askers: dict[str, list[str]] = {}
+        for caller in callers:
+            survivor = groups.get(canonical[caller], canonical[caller])
+            askers.setdefault(survivor, []).append(caller)
+        aliases = {raw: s for raw, s in groups.items() if s in askers}
+        for survivor in askers:
+            aliases.setdefault(survivor, survivor)
+        return askers, aliases
 
     def _roots_resolved(
         self,
@@ -662,19 +687,9 @@ class CHSpanReader:
         decides membership. Inside the dedup the time bounds apply by hour,
         which every version of a row shares; exactly, to the latest version.
         """
-        callers = list(dict.fromkeys(str(i) for i in ids if i))
-        if not callers:
+        askers, aliases = self.resolve_ids(remap_table, ids)
+        if not askers:
             return []
-        canonical = {caller: _uuid_text(caller) for caller in callers}
-        groups = self._remap_groups(remap_table, canonical.values())
-        askers: dict[str, list[str]] = {}
-        for caller in callers:
-            survivor = groups.get(canonical[caller], canonical[caller])
-            askers.setdefault(survivor, []).append(caller)
-        # Every raw id whose spans belong to a survivor asked for.
-        aliases = {raw: s for raw, s in groups.items() if s in askers}
-        for survivor in askers:
-            aliases.setdefault(survivor, survivor)
         raw_ids = sorted(aliases)
         params: dict[str, Any] = {"pid": str(project_id)}
         exact, hourly = [], []
@@ -729,7 +744,7 @@ class CHSpanReader:
     ) -> list[CHSpan]:
         """The same spans with ``column`` (the id the read didn't select by)
         resolved to its survivor, so one session or user isn't read as two."""
-        groups = self._remap_groups(remap_table, (getattr(s, column) for s in spans))
+        groups = self.remap_groups(remap_table, (getattr(s, column) for s in spans))
         return [
             replace(s, **{column: groups[v]})
             if (v := getattr(s, column)) in groups
@@ -1239,21 +1254,45 @@ class CHSpanReader:
         for the traces or sessions given. The root of an agent trace rarely
         names a model; its LLM child spans do.
 
+        Sessions read through the id remap: a straddler's or a consolidated
+        group's spans count for every session id asked for that resolves to
+        the group, keyed as given.
+
         No FINAL: a model name is the same on every version of a span, so an
         unmerged duplicate cannot change the answer."""
         if column not in ("trace_id", "trace_session_id"):
             raise ValueError(f"cannot group models by {column}")
-        if not ids:
-            return {}
-        rows = self._client.query(
-            f"SELECT {column} AS k, argMin(model, start_time) AS m "
-            "FROM spans "
-            f"WHERE project_id = %(pid)s AND {column} IN %(ids)s "
-            "AND model != '' AND is_deleted = 0 "
-            "GROUP BY k",
-            parameters={"pid": str(project_id), "ids": tuple(map(str, ids))},
-        ).result_rows
-        return {str(key): str(model) for key, model in rows if key and model}
+        if column == "trace_session_id":
+            askers, aliases = self.resolve_ids("trace_session_id_remap", ids)
+        else:
+            askers = {str(i): [str(i)] for i in ids if i}
+            aliases = {i: i for i in askers}
+        raw_ids = sorted(aliases)
+        # Each raw id's first model, then the first across a survivor's ids.
+        first: dict[str, tuple[datetime, str]] = {}
+        for start in range(0, len(raw_ids), _REMAP_ID_BATCH):
+            rows = self._client.query(
+                f"SELECT toString({column}) AS k, argMin(model, start_time) AS m, "
+                "min(start_time) AS t FROM spans "
+                f"WHERE project_id = %(pid)s AND {column} IN %(ids)s "
+                "AND model != '' AND is_deleted = 0 "
+                "GROUP BY k",
+                parameters={
+                    "pid": str(project_id),
+                    "ids": tuple(raw_ids[start : start + _REMAP_ID_BATCH]),
+                },
+            ).result_rows
+            for key, model, at in rows:
+                survivor = aliases.get(str(key))
+                if not (survivor and model):
+                    continue
+                if survivor not in first or (at, str(model)) < first[survivor]:
+                    first[survivor] = (at, str(model))
+        return {
+            caller: model
+            for survivor, (_, model) in first.items()
+            for caller in askers[survivor]
+        }
 
     # ─── Children of a parent span ────────────────────────────────────────────
     def list_by_parent(

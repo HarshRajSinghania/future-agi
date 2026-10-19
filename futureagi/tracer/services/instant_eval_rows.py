@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -304,7 +305,12 @@ _FACET_SQL = {
         "dateDiff('millisecond', min(start_time), max(coalesce(end_time, start_time))) AS dur, "
         "max(status = 'ERROR') AS err, argMinIf(model, start_time, model != '') AS m, "
         "argMinIf(substring(if(attrs_string['input.value'] != '', attrs_string['input.value'], input), 1, %(raw)s), "
-        "start_time, parent_span_id = '' OR parent_span_id IS NULL) AS raw, '' AS tid, '' AS kind, '' AS name "
+        "start_time, parent_span_id = '' OR parent_span_id IS NULL) AS raw, '' AS tid, '' AS kind, '' AS name, "
+        # What a session read under several ids needs to be put together.
+        "max(coalesce(end_time, start_time)) AS t_end, "
+        "groupUniqArrayIf(trace_id, parent_span_id = '' OR parent_span_id IS NULL) AS traces, "
+        "minIf(start_time, model != '') AS m_at, "
+        "minIf(start_time, parent_span_id = '' OR parent_span_id IS NULL) AS raw_at "
         "FROM spans WHERE project_id = %(pid)s AND is_deleted = 0 "
         "AND toString(trace_session_id) IN %(ids)s {window} GROUP BY trace_session_id"
     ),
@@ -396,6 +402,59 @@ def _row_extents(
     return out
 
 
+def _resolve(row_type: str, ids: list[str]) -> tuple[dict, dict[str, str]]:
+    """``({survivor: the ids asked that resolve to it}, {raw id: survivor})``:
+    a session through the id remap (``CHSpanReader.resolve_ids``); a trace or
+    a span is only itself."""
+    if row_type != "sessions":
+        return {i: [i] for i in ids}, {i: i for i in ids}
+    from tracer.services.clickhouse.v2 import get_reader
+
+    with get_reader() as reader:
+        return reader.resolve_ids("trace_session_id_remap", ids)
+
+
+def _user_survivors(user_ids: set[str]) -> dict[str, str]:
+    """``{end user id: its survivor}`` for the ids a remap group holds."""
+    if not user_ids:
+        return {}
+    from tracer.services.clickhouse.v2 import get_reader
+
+    with get_reader() as reader:
+        return reader.remap_groups("end_user_id_remap", user_ids)
+
+
+def _ms(value: datetime) -> int:
+    """Whole milliseconds since the epoch, as ClickHouse's ``dateDiff``
+    counts them."""
+    return (_naive_utc(value) - datetime(1970, 1, 1)) // timedelta(milliseconds=1)
+
+
+def _merged(parts: list[dict]) -> dict:
+    """One session's facet row from its rows under each id it was read by:
+    its first start, user, model and message, every turn once, and the time
+    from its first start to its last end."""
+    if len(parts) == 1:
+        return parts[0]
+    parts = sorted(parts, key=lambda r: _naive_utc(r["t"]))
+    rooted = [r for r in parts if r["traces"]]
+    modelled = [r for r in parts if r["m"]]
+    t_end = max(_naive_utc(r["t_end"]) for r in parts)
+    return {
+        **parts[0],
+        "uid": next((r["uid"] for r in parts if r["uid"]), None),
+        "turns": len({trace for r in parts for trace in r["traces"]}),
+        "dur": _ms(t_end) - _ms(parts[0]["t"]),
+        "err": max(r["err"] for r in parts),
+        "m": min(modelled, key=lambda r: (_naive_utc(r["m_at"]), r["m"]))["m"]
+        if modelled
+        else "",
+        "raw": min(rooted, key=lambda r: (_naive_utc(r["raw_at"]), r["raw"]))["raw"]
+        if rooted
+        else "",
+    }
+
+
 def read_facets(
     project_id: str,
     row_type: str,
@@ -408,6 +467,10 @@ def read_facets(
     """What the Ask page shows and groups each row by. Rows with no spans in
     the project are left out, which is also how hand-over ids are checked.
 
+    A session reads through the id remap: a straddler's or a consolidated
+    group's spans make one row, under every session id asked for that
+    resolves to the group, and every row's user is its survivor.
+
     More rows than one read takes are read in the order their spans start,
     and each read covers only its rows' spans (their ``extents``, from the
     pick, or read here first) rather than the whole window: a sample spread
@@ -416,20 +479,22 @@ def read_facets(
     window gives."""
     from ee.agenthub.insights.units import _user_labels
 
-    ids = list(dict.fromkeys(str(i) for i in ids))
+    askers, aliases = _resolve(row_type, list(dict.fromkeys(str(i) for i in ids)))
+    raw_ids = list(aliases)
     window, params_window = _facet_window(start, end)
     sql = _FACET_SQL[row_type].format(window=window)
-    batches: list[tuple[list[str], dict[str, Any]]] = [(ids, {})] if ids else []
-    if len(ids) > _FACET_BATCH:
-        known = dict(extents or {})
-        missing = [i for i in ids if i not in known]
+    batches: list[tuple[list[str], dict[str, Any]]] = [(raw_ids, {})] if raw_ids else []
+    if len(raw_ids) > _FACET_BATCH:
+        # Spans are read by the ids they carry, so batches are of those ids.
+        known = {i: e for i, e in (extents or {}).items() if i in aliases}
+        missing = [i for i in raw_ids if i not in known]
         if missing:
             known.update(dict.fromkeys(missing))
             known.update(
                 _row_extents(project_id, row_type, missing, start=start, end=end)
             )
         spanned = sorted(
-            (i for i in ids if known.get(i) is not None),
+            (i for i in raw_ids if known.get(i) is not None),
             key=lambda i: (known[i].first, i),
         )
         sql = _FACET_SQL[row_type].format(
@@ -445,7 +510,7 @@ def read_facets(
             )
             for chunk in _chunks(spanned, _FACET_BATCH)
         ]
-    out: dict[str, dict] = {}
+    parts: dict[str, list[dict]] = defaultdict(list)
     for chunk, bounds in batches:
         rows = _ch(
             sql,
@@ -458,30 +523,41 @@ def read_facets(
             },
         )
         for row in rows:
-            rid = str(row["rid"])
-            text = excerpt_of(row.get("raw"))
-            if row_type == "spans":
-                kind = str(row.get("kind") or "span").lower()
-                text = (
-                    f"{kind} · {row.get('name') or ''}: {text}"
-                    if text
-                    else f"{kind} · {row.get('name') or ''}"
-                )
-            duration = row.get("dur")
-            out[rid] = {
-                "time": _aware(row.get("t")),
-                "end_user_id": str(row["uid"]) if row.get("uid") else None,
-                "model": str(row.get("m") or "")[:255],
-                "turns": int(row["turns"])
-                if row_type == "sessions" and row.get("turns")
-                else None,
-                "duration_ms": int(duration)
-                if duration is not None and int(duration) >= 0
-                else None,
-                "error": bool(row.get("err")),
-                "excerpt": text,
-                "trace_id": str(row.get("tid") or "") or None,
-            }
+            parts[aliases[str(row["rid"])]].append(row)
+    out: dict[str, dict] = {}
+    for survivor, rows in parts.items():
+        row = _merged(rows)
+        text = excerpt_of(row.get("raw"))
+        if row_type == "spans":
+            kind = str(row.get("kind") or "span").lower()
+            text = (
+                f"{kind} · {row.get('name') or ''}: {text}"
+                if text
+                else f"{kind} · {row.get('name') or ''}"
+            )
+        duration = row.get("dur")
+        facets = {
+            "time": _aware(row.get("t")),
+            "end_user_id": str(row["uid"]) if row.get("uid") else None,
+            "model": str(row.get("m") or "")[:255],
+            "turns": int(row["turns"])
+            if row_type == "sessions" and row.get("turns")
+            else None,
+            "duration_ms": int(duration)
+            if duration is not None and int(duration) >= 0
+            else None,
+            "error": bool(row.get("err")),
+            "excerpt": text,
+            "trace_id": str(row.get("tid") or "") or None,
+        }
+        for asker in askers[survivor]:
+            out[asker] = dict(facets)
+    survivors = _user_survivors(
+        {f["end_user_id"] for f in out.values() if f["end_user_id"]}
+    )
+    for facets in out.values():
+        user = facets["end_user_id"]
+        facets["end_user_id"] = survivors.get(user, user) if user else user
     labels = {}
     users = list({f["end_user_id"] for f in out.values() if f["end_user_id"]})
     for chunk in _chunks(users, _LABEL_BATCH):
