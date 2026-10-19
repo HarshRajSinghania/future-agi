@@ -1076,6 +1076,13 @@ def _answer_exists(
     )
 
 
+def _contains(text: str) -> str:
+    """A LIKE pattern matching ``text`` anywhere, its own wildcards (and the
+    escape character) taken literally: use it with ``ESCAPE '\\'``."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _rolled(view: RunView, cfg: str | None, cond) -> str:
     """A condition on a user's rolled-up answers: to one question, or to any.
     ``cond(i)`` tests question i's columns."""
@@ -1100,12 +1107,13 @@ def _user_conditions(view: RunView, f: RowFilter, p: _Params) -> list[str]:
     if f.unsure:
         conds.append(_rolled(view, f.unsure_config, lambda i: f"r.u{i}"))
     if f.q:
-        like = p(f"%{f.q}%")
+        like = p(_contains(f.q))
         conds.append(
-            f"(r.user_label ILIKE {like} OR r.end_user_id::text = {p(f.q)} OR EXISTS ("
+            f"(r.user_label ILIKE {like} ESCAPE '\\' "
+            f"OR r.end_user_id::text = {p(f.q)} OR EXISTS ("
             "SELECT 1 FROM tracer_instant_eval_row s WHERE s.task_id = %(task)s "
             "AND s.end_user_id = r.end_user_id "
-            f"AND (s.excerpt ILIKE {like} OR s.row_id = {p(f.q)})))"
+            f"AND (s.excerpt ILIKE {like} ESCAPE '\\' OR s.row_id = {p(f.q)})))"
         )
     return conds
 
@@ -1172,9 +1180,10 @@ def _conditions(view: RunView, f: RowFilter, params: dict) -> list[str]:
     if f.error is not None:
         conds.append("r.error" if f.error else "NOT r.error")
     if f.q:
-        like = p(f"%{f.q}%")
+        like = p(_contains(f.q))
         conds.append(
-            f"(r.excerpt ILIKE {like} OR r.user_label ILIKE {like} OR r.row_id = {p(f.q)})"
+            f"(r.excerpt ILIKE {like} ESCAPE '\\' OR r.user_label ILIKE {like} "
+            f"ESCAPE '\\' OR r.row_id = {p(f.q)})"
         )
     if f.groups:
         conds.append(

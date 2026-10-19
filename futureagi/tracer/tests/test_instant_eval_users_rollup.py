@@ -21,6 +21,11 @@ from tracer.tests.test_instant_eval_scale import (
     _answer,
     _question,
 )
+from tracer.tests.test_instant_eval_scale import answered_run as answered_run
+from tracer.tests.test_instant_eval_scale import category as category
+from tracer.tests.test_instant_eval_scale import fake_view as fake_view
+from tracer.tests.test_instant_eval_scale import started as started
+from tracer.tests.test_instant_eval_scale import yes_no as yes_no
 from tracer.views.instant_eval import INSTANT_TASK_PREFIX
 
 RUNS = "/tracer/instant-eval/runs/"
@@ -430,3 +435,43 @@ def test_a_user_waits_for_every_session_unless_the_run_was_cancelled(
         "ann": "No",
         "bo": "Yes",
     }
+
+
+@pytest.mark.django_db
+def test_search_text_is_matched_literally(auth_client, observe_project, users_run):
+    """``%`` and ``_`` in the search are the characters, not LIKE wildcards:
+    for a user question's users and a session question's rows alike."""
+    task, _ = users_run
+    # No text of the run holds either character.
+    assert _rows(auth_client, observe_project, task, q="%")["total"] == 0
+    assert _rows(auth_client, observe_project, task, q="_")["total"] == 0
+    InstantEvalRow.objects.filter(task_id=task.id, user_label="ana").update(
+        excerpt="refund 5000 off"
+    )
+    InstantEvalRow.objects.filter(
+        task_id=task.id, user_label="ben", time=START + timedelta(minutes=30)
+    ).update(excerpt="refund 50% off")
+    page = _rows(auth_client, observe_project, task, q="50%")
+    assert [r["user_id"] for r in page["rows"]] == ["ben"]
+
+
+@pytest.mark.django_db
+def test_search_text_is_matched_literally_in_rows(
+    auth_client, observe_project, answered_run
+):
+    task, ids = answered_run
+    assert _rows(auth_client, observe_project, task, q="%")["total"] == 0
+    # Every row's user is "cust_<n>": the underscore itself.
+    assert _rows(auth_client, observe_project, task, q="_")["total"] == 12
+    InstantEvalRow.objects.filter(task_id=task.id).update(user_label="customer")
+    assert _rows(auth_client, observe_project, task, q="_")["total"] == 0
+    InstantEvalRow.objects.filter(task_id=task.id, row_id=ids[0]).update(
+        excerpt="50% off"
+    )
+    InstantEvalRow.objects.filter(task_id=task.id, row_id=ids[1]).update(
+        excerpt="5000 off"
+    )
+    page = _rows(auth_client, observe_project, task, q="50%")
+    assert [r["id"] for r in page["rows"]] == [ids[0]]
+    exported = _csv(_get(auth_client, EXPORT, observe_project, task, q="50%"))
+    assert [line[0] for line in exported[1:]] == [ids[0]]
