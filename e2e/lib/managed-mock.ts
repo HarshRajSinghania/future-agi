@@ -137,8 +137,7 @@ export function validateMockEnvironment(service: string, env: Record<string, str
     requireSafe(env[key] === value, `required ${service} ${key} mismatch`);
   }
   if (service === 'worker') {
-    // The E2E overlay clears the exclusion so agent preflight runs on this worker.
-    requireSafe(env.TEMPORAL_ALL_QUEUES === 'true' && ['', 'simulation_runner'].includes(env.TEMPORAL_EXCLUDED_QUEUES),
+    requireSafe(env.TEMPORAL_ALL_QUEUES === 'true' && env.TEMPORAL_EXCLUDED_QUEUES === 'simulation_runner',
       'worker must include the native agent_compass queue');
   }
 }
