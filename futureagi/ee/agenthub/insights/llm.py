@@ -2,8 +2,10 @@
 
 Two tiers, as in LangSmith Insights: a fast model reads every unit and a
 thinking model names categories, organises them and writes the summary.
-Both default to Turing models on the platform gateway (the only models that
-run on Future AGI keys); deployments can point them elsewhere.
+Both default to Turing models (the only models that run on Future AGI keys):
+Cloud reaches them through its own gateway, a licensed self-hosted install
+through Future AGI's managed service. Deployments can point them at their own
+models, which go through the deployment's gateway.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ _DEFAULTS = {
     THINKING: ModelConfigs.TURING_LARGE.model_name,
 }
 _SETTINGS = {FAST: "INSIGHTS_FAST_MODEL", THINKING: "INSIGHTS_THINKING_MODEL"}
+_TIMEOUT = 180
 
 
 class InsightModelError(Exception):
@@ -112,7 +115,52 @@ def parse_json(raw: str):
     return json.loads(text[start : end + 1])
 
 
+def _managed(model: str) -> bool:
+    """Whether ``model`` is a Future AGI managed model (Turing) that this
+    deployment reaches through the managed service. Cloud's gateway has the
+    Turing models; a self-hosted install's local gateway doesn't, so there
+    they go through the license's managed service, as Turing evals do."""
+    from ee.licensing.managed_ai import is_managed_model
+    from ee.usage.deployment import DeploymentMode
+
+    return is_managed_model(model) and not DeploymentMode.is_cloud()
+
+
+def _complete_managed(messages: list[dict], model: str, max_tokens: int, temperature: float):
+    from ee.licensing.managed_ai import (
+        chat_completion,
+        response_content,
+        response_usage,
+    )
+
+    response = chat_completion(
+        {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        },
+        timeout=_TIMEOUT,
+    )
+    if not response.get("choices"):
+        # An error body, not a reply: retry it as a provider failure rather
+        # than as a reply cut short.
+        raise RuntimeError(
+            f"managed completion returned no choices: {str(response.get('error'))[:200]}"
+        )
+    usage = response_usage(response)
+    prompt_tokens = usage["prompt_tokens"]
+    completion_tokens = usage["completion_tokens"]
+    # The managed service returns only the body, without the gateway's cost
+    # header, so the call is priced at the model's token price.
+    cost = call_cost(model, 0.0, prompt_tokens, completion_tokens)
+    return response_content(response), cost, prompt_tokens, completion_tokens
+
+
 def _complete(messages: list[dict], model: str, max_tokens: int, temperature: float):
+    if _managed(model):
+        return _complete_managed(messages, model, max_tokens, temperature)
+
     from ee.usage.services.gateway_llm_client import (
         call_llm,
         call_llm_raw,
@@ -138,7 +186,7 @@ def _complete(messages: list[dict], model: str, max_tokens: int, temperature: fl
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
-        timeout=180,
+        timeout=_TIMEOUT,
     )
     try:
         content = result.response.choices[0].message.content
