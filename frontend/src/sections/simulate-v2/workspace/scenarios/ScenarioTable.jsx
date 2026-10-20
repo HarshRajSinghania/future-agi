@@ -70,14 +70,15 @@ const briefLineOf = (row) => {
 const COLUMNS = [
   { id: "select", w: 40 },
   { id: "#", label: "#", w: 40 },
-  { id: "scenario", label: "Scenario", w: 280, tip: "A status shows only when the scenario needs something" },
+  { id: "scenario", label: "Scenario", w: 300, tip: "A status shows only when the scenario needs something" },
   { id: "persona", label: "Persona", w: 170 },
-  /* What tells scenarios apart at a glance — the same words as the drawer. */
-  { id: "brief", label: "Brief", w: 340, tip: "What the caller is told to do" },
-  { id: "passes", label: "Passes when", w: 260, tip: "What the agent has to do for the scenario to pass" },
   { id: "subgoals", label: "Sub-goals", w: 88, align: "right", tip: "Sub-goals met in the scenario's latest run, of all it's graded on" },
   { id: "mustPass", label: "Must-pass", w: 84, align: "center", tip: "An improvement that breaks a must-pass scenario is rejected" },
   { id: "runs", label: "Last runs", w: 116, tip: "This scenario in the environment's last runs, oldest to latest" },
+  /* What the scenario is about — the same words as the drawer. After the
+     status columns, so how it's doing stays in view in a narrow pane. */
+  { id: "brief", label: "Brief", w: 340, tip: "What the caller is told to do" },
+  { id: "passes", label: "Passes when", w: 260, tip: "What the agent has to do for the scenario to pass" },
   { id: "actions", w: 104 },
 ];
 
@@ -403,14 +404,6 @@ export default function ScenarioTable({
                       </Stack>
                     </TableCell>
 
-                    {/* BRIEF and PASSES WHEN — one line each, the whole text on hover. */}
-                    <TableCell className="scn-dim" sx={cellSx}>
-                      <OneLine text={briefLineOf(row)} />
-                    </TableCell>
-                    <TableCell className="scn-dim" sx={cellSx}>
-                      <OneLine text={row.expected || row.outcome ? asSentence(row.expected || row.outcome) : ""} />
-                    </TableCell>
-
                     {/* SUB-GOALS — met in the latest run, of all. */}
                     <TableCell align="right" sx={cellSx}>
                       <SubGoalsCell total={goals.length} latest={latestOf ? latestOf(row) : null} env={env} envState={envState} />
@@ -432,6 +425,14 @@ export default function ScenarioTable({
                         <RunDots history={historyOf ? historyOf(row) : null} />
                       </TableCell>
                     )}
+
+                    {/* BRIEF and PASSES WHEN — one line each, the whole text on hover. */}
+                    <TableCell className="scn-dim" sx={cellSx}>
+                      <OneLine text={briefLineOf(row)} />
+                    </TableCell>
+                    <TableCell className="scn-dim" sx={cellSx}>
+                      <OneLine text={row.expected || row.outcome ? asSentence(row.expected || row.outcome) : ""} />
+                    </TableCell>
 
                     {/* Edit · archive · delete, on hover. */}
                     <TableCell align="right" sx={{ ...cellSx, whiteSpace: "nowrap", pr: 1 }} onClick={stop}>
