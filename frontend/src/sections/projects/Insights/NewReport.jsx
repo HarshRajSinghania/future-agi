@@ -51,7 +51,6 @@ import {
 } from "./insightsLenses";
 import {
   DEFAULT_SAMPLE_SIZE,
-  SAMPLE_SIZES,
   buildConfig,
   buildRunPayload,
   cleanAttributes,
@@ -60,11 +59,14 @@ import {
   fixedScope,
   reanchorScope,
   sampleSentence,
+  sampleSizeOptions,
   spreadPick,
   storedScope,
   toPopulation,
 } from "./insightsScope";
 import NewReportTune from "./NewReportTune";
+import { CreditLimit, ErrorText } from "./parts";
+import { creditWords } from "src/sections/projects/LLMTracing/InstantEval/page/askFilter";
 import PreviewExamples from "./PreviewExamples";
 
 const DRAFT_EXAMPLES = 5;
@@ -349,6 +351,7 @@ export default function NewReport({
     unit: draft.unit,
     projectId,
     scope: settledScope,
+    sampleSize: draft.sampleSize,
     enabled: !fixed,
   });
   const serverExamples = count.data?.sampleIds;
@@ -460,13 +463,19 @@ export default function NewReport({
     starting.state.status === "busy" ||
     drafting.state.status === "busy" ||
     previewing.state.status === "busy";
+  // What the run costs, and whether the credits left pay for it.
+  const credits = fixed ? null : count.data?.credits || null;
+  const creditLimited = Boolean(credits?.limited);
   const blocker = questionMissing
     ? "Write the question this report should answer."
     : attributeProblem
       ? "Fix the attribute keys first."
       : noData
         ? `There are no ${UNITS[draft.unit].plural} in this scope.`
-        : "";
+        : creditLimited
+          ? credits.message ||
+            "The credits left this month don't cover this report."
+          : "";
 
   const runReport = () =>
     starting.run(async () => {
@@ -719,7 +728,7 @@ export default function NewReport({
               disabled={busy}
               sx={{ width: 140 }}
             >
-              {SAMPLE_SIZES.map((size) => (
+              {sampleSizeOptions(draft.sampleSize).map((size) => (
                 <MenuItem key={size} value={size}>
                   {formatCount(size)}
                 </MenuItem>
@@ -729,9 +738,16 @@ export default function NewReport({
               <Typography variant="body2" color="text.secondary">
                 {sentence}
                 {estimate ? ` · ${estimate}` : ""}
+                {credits ? ` · ${creditWords(credits.estimate)}` : ""}
               </Typography>
             )}
           </Stack>
+          {creditLimited && (
+            <CreditLimit
+              credits={credits}
+              onSample={(size) => update({ sampleSize: size })}
+            />
+          )}
           {Number.isFinite(total) && total > 0 && total < SMALL_POPULATION && (
             <Typography variant="caption" color="text.secondary">
               Fewer than {SMALL_POPULATION} {UNITS[draft.unit].plural} give
@@ -789,7 +805,10 @@ export default function NewReport({
           draftNote={
             draftState.status === "error" ? (
               <Alert severity="error" sx={{ mt: 1.5 }} onClose={drafting.reset}>
-                {draftState.error}
+                <ErrorText
+                  message={draftState.error}
+                  billing={draftState.billing}
+                />
               </Alert>
             ) : draftState.status === "done" ? (
               <Typography
@@ -861,7 +880,10 @@ export default function NewReport({
         </Stack>
         {previewState.status === "error" && (
           <Alert severity="error" onClose={previewing.reset}>
-            {previewState.error}
+            <ErrorText
+              message={previewState.error}
+              billing={previewState.billing}
+            />
           </Alert>
         )}
         {previewState.status === "busy" && (
@@ -917,12 +939,20 @@ export default function NewReport({
               />
             ) : starting.state.status === "error" ? (
               <Typography variant="body2" color="error.main">
-                {starting.state.error}
+                <ErrorText
+                  message={starting.state.error}
+                  billing={starting.state.billing}
+                />
               </Typography>
             ) : (
               <Typography variant="body2" color="text.secondary" noWrap>
                 {blocker ||
-                  [sentence, estimate, "it keeps running if you leave"]
+                  [
+                    sentence,
+                    estimate,
+                    credits && creditWords(credits.estimate),
+                    "it keeps running if you leave",
+                  ]
                     .filter(Boolean)
                     .join(" · ")}
               </Typography>

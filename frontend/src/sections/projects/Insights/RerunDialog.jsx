@@ -39,7 +39,6 @@ import {
 import { useCancellable, useDebouncedValue } from "./insightsHooks";
 import {
   DEFAULT_SAMPLE_SIZE,
-  SAMPLE_SIZES,
   buildRerunPayload,
   countedScope,
   editableScope,
@@ -48,9 +47,12 @@ import {
   lastScope,
   reanchorScope,
   sampleSentence,
+  sampleSizeOptions,
   scopeDateLabel,
   storedScope,
 } from "./insightsScope";
+import { CreditLimit, ErrorText } from "./parts";
+import { creditWords } from "src/sections/projects/LLMTracing/InstantEval/page/askFilter";
 
 /**
  * Run a saved report again: the last run's date and filters (a preset window
@@ -91,6 +93,7 @@ function RerunForm({
     unit,
     projectId,
     scope: settledScope,
+    sampleSize,
     enabled: !sameRows,
   });
   const total = sameRows ? remembered?.length : count.data?.total;
@@ -131,6 +134,9 @@ function RerunForm({
     });
 
   const busy = starting.state.status === "busy";
+  // What the run costs, and whether the credits left pay for it.
+  const credits = sameRows ? null : count.data?.credits || null;
+  const creditLimited = Boolean(credits?.limited);
   const sentence = sampleSentence({
     unit,
     total,
@@ -204,7 +210,7 @@ function RerunForm({
               disabled={busy}
               sx={{ width: 140 }}
             >
-              {SAMPLE_SIZES.map((size) => (
+              {sampleSizeOptions(sampleSize).map((size) => (
                 <MenuItem key={size} value={size}>
                   {formatCount(size)}
                 </MenuItem>
@@ -226,12 +232,15 @@ function RerunForm({
                   total
                     ? ` · ${estimateMinutes(effectiveSample(total, sampleSize))}`
                     : ""
-                }`
+                }${credits ? ` · ${creditWords(credits.estimate)}` : ""}`
               ) : (
                 ""
               )}
             </Typography>
           </Stack>
+          {creditLimited && (
+            <CreditLimit credits={credits} onSample={setSampleSize} />
+          )}
           {config.has_taxonomy && (
             <Box>
               <FormControlLabel
@@ -263,7 +272,12 @@ function RerunForm({
             </Box>
           )}
           {starting.state.status === "error" && (
-            <Alert severity="error">{starting.state.error}</Alert>
+            <Alert severity="error">
+              <ErrorText
+                message={starting.state.error}
+                billing={starting.state.billing}
+              />
+            </Alert>
           )}
         </Stack>
       </DialogContent>
@@ -274,7 +288,9 @@ function RerunForm({
         <Button
           variant="contained"
           onClick={run}
-          disabled={busy || (Number.isFinite(total) && total === 0)}
+          disabled={
+            busy || creditLimited || (Number.isFinite(total) && total === 0)
+          }
           startIcon={
             busy ? <CircularProgress size={14} color="inherit" /> : null
           }

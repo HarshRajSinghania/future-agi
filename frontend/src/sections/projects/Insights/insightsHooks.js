@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { insightsErrorMessage, isAbort } from "./insightsApi";
+import {
+  insightsCreditRefusal,
+  insightsErrorMessage,
+  isAbort,
+} from "./insightsApi";
 
 export function useDebouncedValue(value, delay = 350) {
   const [debounced, setDebounced] = useState(value);
@@ -30,7 +34,7 @@ export function useElapsedSeconds(since, active = true) {
 /**
  * A cancellable request (draft, preview, start): {state, run, cancel, reset}
  * where state is {status: "idle" | "busy" | "done" | "error", data, error,
- * startedAt}. A newer call or cancel aborts the one in flight.
+ * billing, startedAt}. A newer call or cancel aborts the one in flight.
  */
 export function useCancellable(fallbackMessage) {
   const [state, setState] = useState({ status: "idle" });
@@ -62,6 +66,8 @@ export function useCancellable(fallbackMessage) {
         setState({
           status: "error",
           error: insightsErrorMessage(error, fallbackMessage),
+          // Refused for credits: the way forward is billing.
+          billing: Boolean(insightsCreditRefusal(error)),
         });
         return undefined;
       }

@@ -111,6 +111,29 @@ const messageOf = (error) =>
   ) || "";
 
 /**
+ * A request refused for the credits it needs (a report run, a question about
+ * a report, a draft, a preview): {message, sampleSize, creditsLeft}, or
+ * null. The answer to it is a smaller sample or billing.
+ */
+export function insightsCreditRefusal(error) {
+  const data = error?.response?.data || error || {};
+  const status = Number(error?.statusCode || error?.response?.status);
+  const code = data.code || error?.code;
+  if (code !== "insights_credits" || (status !== 402 && status !== 403))
+    return null;
+  const result =
+    data.result && typeof data.result === "object" ? data.result : {};
+  return {
+    message:
+      result.message ||
+      messageOf(data) ||
+      "Your plan has no credits left for this.",
+    sampleSize: result.sample_size ?? null,
+    creditsLeft: result.credits_left ?? null,
+  };
+}
+
+/**
  * What to tell the user when an Insights call fails. Plan, rate-limit and
  * model-availability messages are written for users and shown as they are;
  * anything else goes through the app's safe-message filter.
@@ -119,6 +142,8 @@ export function insightsErrorMessage(
   error,
   fallback = "Something went wrong.",
 ) {
+  const credits = insightsCreditRefusal(error);
+  if (credits) return credits.message;
   const status = Number(error?.statusCode || error?.response?.status);
   const code = error?.code;
   if (status === 402 || code === "CAPABILITY_DENIED")
@@ -249,14 +274,23 @@ export async function askRun(runId, body, signal) {
 
 /**
  * How many units a scope ({filters, search?}) holds, counted on the server
- * the way a run reads them, and a few of them the server picked for the
- * draft and preview: {total, totalIsLowerBound, sampleIds}.
+ * the way a run reads them; a few of them the server picked for the draft
+ * and preview; and what analysing a sample of `sampleSize` costs:
+ * {total, totalIsLowerBound, sampleIds, credits}.
  */
-export const fetchScopeCount = async ({ projectId, unit, scope }, signal) => {
+export const fetchScopeCount = async (
+  { projectId, unit, scope, sampleSize },
+  signal,
+) => {
   const data = result(
     await axios.post(
       endpoints.project.insightsEstimate(),
-      { project_id: projectId, unit, scope },
+      {
+        project_id: projectId,
+        unit,
+        scope,
+        ...(sampleSize ? { sample_size: sampleSize } : {}),
+      },
       { signal },
     ),
   );
@@ -266,6 +300,17 @@ export const fetchScopeCount = async ({ projectId, unit, scope }, signal) => {
     sampleIds: Array.isArray(data?.sample_ids)
       ? data.sample_ids.map(String)
       : null,
+    // What the run costs, and whether the credits left pay for it.
+    credits:
+      data?.credits_estimate != null
+        ? {
+            estimate: data.credits_estimate,
+            limited: Boolean(data.credit_limited),
+            left: data.credits_left ?? null,
+            maxSample: data.credit_max_sample ?? null,
+            message: data.credit_message || null,
+          }
+        : null,
   };
 };
 
@@ -273,11 +318,17 @@ export const fetchScopeCount = async ({ projectId, unit, scope }, signal) => {
 // until it is exact it is read again this often, and shows as "N+".
 const COUNTING_POLL_MS = 2000;
 
-export function usePopulationCount({ unit, projectId, scope, enabled = true }) {
+export function usePopulationCount({
+  unit,
+  projectId,
+  scope,
+  sampleSize,
+  enabled = true,
+}) {
   return useQuery({
-    queryKey: insightsKeys.population(unit, projectId, scope),
+    queryKey: [...insightsKeys.population(unit, projectId, scope), sampleSize],
     queryFn: ({ signal }) =>
-      fetchScopeCount({ projectId, unit, scope }, signal),
+      fetchScopeCount({ projectId, unit, scope, sampleSize }, signal),
     enabled: Boolean(unit && projectId) && enabled,
     staleTime: 60_000,
     placeholderData: (previousData) => previousData,

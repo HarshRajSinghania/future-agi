@@ -14,7 +14,11 @@ import {
 import Iconify from "src/components/iconify";
 import { UNITS } from "src/sections/projects/observePopulation";
 import { CitationChip, EvidenceQuote } from "./Citation";
-import { askRun, insightsErrorMessage } from "./insightsApi";
+import {
+  askRun,
+  insightsCreditRefusal,
+  insightsErrorMessage,
+} from "./insightsApi";
 import { assignAskRefs } from "./insightsCitations";
 import { formatCount, formatSpan } from "./insightsFormat";
 import { useElapsedSeconds } from "./insightsHooks";
@@ -27,7 +31,7 @@ import {
   writeAskThread,
 } from "./insightsReport";
 import { useReport } from "./reportContext";
-import { CategoryLink } from "./parts";
+import { CategoryLink, ErrorText } from "./parts";
 
 // `line` keeps the chips on one row, each shrinking to fit.
 function Chips({ items, onPick, disabled, line }) {
@@ -148,7 +152,7 @@ function Answer({ turn, refs, reading, hint, onFollowUp, onRetry }) {
               color="error.main"
               sx={{ fontSize: 13 }}
             >
-              {turn.error}
+              <ErrorText message={turn.error} billing={turn.billing} />
             </Typography>
             <Button size="small" color="inherit" onClick={onRetry}>
               Retry
@@ -345,6 +349,7 @@ export default function AskPanel({ run, lens }) {
                   error,
                   "The question could not be answered.",
                 ),
+                billing: Boolean(insightsCreditRefusal(error)),
               }
             : t,
         ),

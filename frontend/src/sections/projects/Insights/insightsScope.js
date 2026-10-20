@@ -32,6 +32,12 @@ export const LEGACY_DAY = "24h";
 const LEGACY_PRESETS = { "7d": "7D", "30d": "30D" };
 const DAY_MS = 24 * 3600 * 1000;
 export const SAMPLE_SIZES = [50, 100, 300, 500, 1000];
+
+/** The sizes to offer: the fixed ones, and the one chosen if it isn't. */
+export const sampleSizeOptions = (current) =>
+  Number.isInteger(current) && !SAMPLE_SIZES.includes(current)
+    ? [...SAMPLE_SIZES, current].sort((a, b) => a - b)
+    : SAMPLE_SIZES;
 export const DEFAULT_SAMPLE_SIZE = 300;
 const MIN_SAMPLE_SIZE = 10;
 const LABEL_MAX = 300;

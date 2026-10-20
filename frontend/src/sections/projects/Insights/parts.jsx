@@ -5,13 +5,16 @@ import {
   Box,
   Button,
   Chip,
+  Link,
   Paper,
   Stack,
   Tooltip,
   Typography,
 } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
+import { Link as RouterLink } from "react-router-dom";
 import Iconify from "src/components/iconify";
+import { paths } from "src/routes/paths";
 import { formatCount, formatPercent } from "./insightsFormat";
 import { attributePills, facetChips } from "./insightsLenses";
 import {
@@ -24,6 +27,64 @@ import {
 
 // Small building blocks shared by the report, the drawers and the new-report
 // flow.
+
+const BillingLink = () => (
+  <Link component={RouterLink} to={paths.dashboard.settings.billing}>
+    Open billing
+  </Link>
+);
+
+/** An error, with the way to billing when it was refused for credits. */
+export function ErrorText({ message, billing }) {
+  return (
+    <>
+      {message}
+      {billing && (
+        <>
+          {" "}
+          <BillingLink />
+        </>
+      )}
+    </>
+  );
+}
+
+ErrorText.propTypes = {
+  message: PropTypes.node,
+  billing: PropTypes.bool,
+};
+
+// The smallest sample a report analyses.
+const MIN_SAMPLE = 10;
+
+/**
+ * Why a report can't run on the credits left, at full contrast, with the way
+ * forward: a sample the credits pay for, or billing.
+ */
+export function CreditLimit({ credits, onSample }) {
+  const fits = credits.maxSample;
+  return (
+    <Typography variant="body2" color="text.primary" role="status">
+      {credits.message ||
+        "The credits left this month don't cover this report."}{" "}
+      {fits >= MIN_SAMPLE && onSample ? (
+        <Link component="button" type="button" onClick={() => onSample(fits)}>
+          Analyse a sample of {formatCount(fits)} instead
+        </Link>
+      ) : (
+        <BillingLink />
+      )}
+    </Typography>
+  );
+}
+
+CreditLimit.propTypes = {
+  credits: PropTypes.shape({
+    message: PropTypes.string,
+    maxSample: PropTypes.number,
+  }).isRequired,
+  onSample: PropTypes.func,
+};
 
 export function Swatch({ color, size = 10 }) {
   return (

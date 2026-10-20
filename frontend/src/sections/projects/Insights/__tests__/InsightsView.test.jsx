@@ -647,6 +647,7 @@ describe("InsightsView", () => {
       project_id: PROJECT,
       unit: "sessions",
       scope: { filters: [windowItem(presetWindow("7D"))] },
+      sample_size: 300,
     });
     fireEvent.click(screen.getByRole("button", { name: "Run report" }));
     await waitFor(() =>
@@ -768,6 +769,7 @@ describe("InsightsView", () => {
       project_id: PROJECT,
       unit: "users",
       scope: { filters: [COST, windowItem(window)], search: "ada" },
+      sample_size: 300,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Run report" }));
@@ -916,5 +918,182 @@ describe("InsightsView", () => {
     expect(seed.questions[0].question).toMatch(
       /^Is this an example of “Unresponsive Support and No Escalation”\?/,
     );
+  });
+
+  describe("credits", () => {
+    // A refusal as the app's axios hands it over: the error envelope with
+    // its status.
+    const refused = (statusCode = 403) => ({
+      status: false,
+      code: "insights_credits",
+      message:
+        "This report needs about 12 credits; you have 2 left this month.",
+      statusCode,
+      result: {
+        message:
+          "This report needs about 12 credits; you have 2 left this month.",
+        error_code: statusCode === 402 ? "PAYMENT_REQUIRED" : "FREE_TIER_LIMIT",
+        credits_estimate: 12,
+        credits_left: 2,
+        sample_size: 50,
+      },
+    });
+    const estimate = (sampleSize, extra = {}) =>
+      ok({
+        population: 108,
+        population_is_lower_bound: false,
+        sample_size: Math.min(sampleSize || 300, 108),
+        credits_estimate: 3.6,
+        credit_limited: false,
+        credits_left: 500,
+        credit_max_sample: null,
+        credit_message: null,
+        ...extra,
+      });
+    const estimates = () => postsTo("/tracer/insights/estimate/");
+
+    it("says what a report costs", async () => {
+      mocks.post.mockImplementation((url, body) =>
+        url === "/tracer/insights/estimate/"
+          ? estimate(body.sample_size)
+          : ok({ run_id: RUN_ID, config_id: CONFIG_ID }),
+      );
+      renderAt("?new=1&lens=failures");
+      expect(
+        (
+          await screen.findAllByText(
+            /Analysing all 108 sessions · about \d+ minutes · about 3\.6 credits/,
+          )
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(estimates().at(-1)[1].sample_size).toBe(300);
+      expect(screen.getByRole("button", { name: "Run report" })).toBeEnabled();
+    });
+
+    it("holds a report the credits don't cover, and offers a sample that fits", async () => {
+      mocks.post.mockImplementation((url, body) =>
+        url !== "/tracer/insights/estimate/"
+          ? ok({ run_id: RUN_ID, config_id: CONFIG_ID })
+          : body.sample_size === 40
+            ? estimate(40, { credits_estimate: 1.2 })
+            : estimate(body.sample_size, {
+                credits_estimate: 3.6,
+                credit_limited: true,
+                credits_left: 1.3,
+                credit_max_sample: 40,
+                credit_message:
+                  "This report needs about 3.6 credits; you have 1.3 left this month.",
+              }),
+      );
+      renderAt("?new=1&lens=failures");
+      const why = await screen.findByRole("status");
+      expect(why).toHaveTextContent(
+        "This report needs about 3.6 credits; you have 1.3 left this month.",
+      );
+      expect(screen.getByRole("button", { name: "Run report" })).toBeDisabled();
+      fireEvent.click(
+        within(why).getByRole("button", {
+          name: "Analyse a sample of 40 instead",
+        }),
+      );
+      await waitFor(() => expect(estimates().at(-1)[1].sample_size).toBe(40));
+      await screen.findAllByText(/about 1\.2 credits/, {}, { timeout: 4000 });
+      expect(screen.getByRole("button", { name: "Run report" })).toBeEnabled();
+    });
+
+    it("leads to billing when no sample fits", async () => {
+      mocks.post.mockImplementation((url, body) =>
+        url === "/tracer/insights/estimate/"
+          ? estimate(body.sample_size, {
+              credit_limited: true,
+              credits_left: 0,
+              credit_max_sample: 0,
+              credit_message: "You have no credits left this month.",
+            })
+          : ok({ run_id: RUN_ID, config_id: CONFIG_ID }),
+      );
+      renderAt("?new=1&lens=failures");
+      const why = await screen.findByRole("status");
+      expect(why).toHaveTextContent("You have no credits left this month.");
+      expect(
+        within(why).getByRole("link", { name: "Open billing" }),
+      ).toHaveAttribute("href", "/dashboard/settings/billing");
+      expect(screen.getByRole("button", { name: "Run report" })).toBeDisabled();
+    });
+
+    it.each([
+      ["Run report", 403],
+      ["Draft with AI", 402],
+      [/Preview on 3 examples/, 403],
+    ])(
+      "says inline why %s was refused for credits, with billing",
+      async (name, statusCode) => {
+        mocks.post.mockImplementation((url, body) =>
+          url === "/tracer/insights/estimate/"
+            ? estimate(body.sample_size)
+            : Promise.reject(refused(statusCode)),
+        );
+        renderAt("?new=1&lens=failures");
+        await screen.findAllByText(/about 3\.6 credits/);
+        const button = await screen.findByRole("button", { name });
+        await waitFor(() => expect(button).toBeEnabled());
+        fireEvent.click(button);
+        const message = await screen.findByText(
+          /This report needs about 12 credits; you have 2 left this month\./,
+        );
+        const where = message.closest("p, div, [role='alert']");
+        expect(
+          within(where).getByRole("link", { name: "Open billing" }),
+        ).toHaveAttribute("href", "/dashboard/settings/billing");
+      },
+    );
+
+    it("says inline why a question about the report was refused", async () => {
+      mocks.enriched = true;
+      mocks.post.mockImplementation(() => Promise.reject(refused(402)));
+      renderAt(`?report=${CONFIG_ID}`);
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Which users are hit hardest?",
+        }),
+      );
+      const message = await screen.findByText(
+        /This report needs about 12 credits; you have 2 left this month\./,
+      );
+      expect(
+        within(message).getByRole("link", { name: "Open billing" }),
+      ).toBeInTheDocument();
+    });
+
+    it("holds a run again the credits don't cover", async () => {
+      mocks.post.mockImplementation((url, body) =>
+        url === "/tracer/insights/estimate/"
+          ? estimate(body.sample_size, {
+              credit_limited: true,
+              credits_left: 1.3,
+              credit_max_sample: 40,
+              credit_message:
+                "This report needs about 3.6 credits; you have 1.3 left this month.",
+            })
+          : ok({ run_id: RUN_ID, config_id: CONFIG_ID }),
+      );
+      renderAt(`?report=${CONFIG_ID}`);
+      fireEvent.click(await screen.findByRole("button", { name: "Run now" }));
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        await within(dialog).findByText(
+          "This report needs about 3.6 credits; you have 1.3 left this month.",
+          { exact: false },
+        ),
+      ).toBeInTheDocument();
+      expect(
+        within(dialog).getByRole("button", { name: "Run again" }),
+      ).toBeDisabled();
+      expect(
+        within(dialog).getByRole("button", {
+          name: "Analyse a sample of 40 instead",
+        }),
+      ).toBeInTheDocument();
+    });
   });
 });
