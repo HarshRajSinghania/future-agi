@@ -76,23 +76,38 @@ def _post(path: str, payload: dict, spend: Spend | None = None) -> dict:
                      body=response.text[:300])
         raise InsightModelError("The Insights agent rejected the request.")
     body = response.json()
-    usage = body.get("usage") or {}
     if spend is not None:
-        prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-        completion_tokens = int(
-            usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        _add_usage(spend, body.get("usage") or {})
+    return body
+
+
+def _tokens(entry: dict) -> tuple[int, int]:
+    return (
+        int(entry.get("input_tokens") or entry.get("prompt_tokens") or 0),
+        int(entry.get("output_tokens") or entry.get("completion_tokens") or 0),
+    )
+
+
+def _add_usage(spend: Spend, usage: dict) -> None:
+    """Add what an agent request cost. The agent reports tokens per model
+    (``by_model``) and a ``cost_usd`` that is 0, or null, for models the
+    gateway doesn't price, so each model is priced on its own: its gateway
+    cost when it reports one, else its tokens at the model's price."""
+    prompt_tokens, completion_tokens = _tokens(usage)
+    by_model = usage.get("by_model") or {}
+    if by_model:
+        cost = sum(
+            call_cost(model, float(entry.get("cost_usd") or 0.0), *_tokens(entry))
+            for model, entry in by_model.items()
         )
-        spend.add(
-            call_cost(
-                usage.get("model") or "",
-                float(usage.get("cost_usd") or 0.0),
-                prompt_tokens,
-                completion_tokens,
-            ),
+    else:
+        cost = call_cost(
+            usage.get("model") or "",
+            float(usage.get("cost_usd") or 0.0),
             prompt_tokens,
             completion_tokens,
         )
-    return body
+    spend.add(cost, prompt_tokens, completion_tokens)
 
 
 def run_context(settings: dict, unit: str, run_id: str) -> dict:

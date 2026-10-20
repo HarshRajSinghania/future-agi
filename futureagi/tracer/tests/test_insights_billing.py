@@ -71,6 +71,35 @@ class TestPricing:
         assert spend.cost_usd == pytest.approx(0.03)
         assert (spend.prompt_tokens, spend.completion_tokens) == (30, 11)
 
+    def test_the_agents_tokens_are_priced_per_model(self, monkeypatch):
+        """The agent's real usage shape: totals plus ``by_model``, with
+        ``cost_usd`` null when the gateway didn't price a model."""
+        from ee.agenthub.insights import agent
+
+        usage = {
+            "model_calls": 5, "input_tokens": 26000, "output_tokens": 3300, "cost_usd": None,
+            "by_model": {
+                "turing_flash": {"model_calls": 4, "input_tokens": 20000, "output_tokens": 2000},
+                "turing_large": {"model_calls": 1, "input_tokens": 6000, "output_tokens": 1300},
+            },
+        }
+        spend = llm.Spend()
+        agent._add_usage(spend, usage)
+        assert spend.cost_usd == pytest.approx(
+            llm.call_cost("turing_flash", 0.0, 20000, 2000)
+            + llm.call_cost("turing_large", 0.0, 6000, 1300)
+        )
+        assert spend.cost_usd > 0
+        assert (spend.prompt_tokens, spend.completion_tokens) == (26000, 3300)
+
+        # A model the gateway priced keeps the gateway's figure.
+        usage["by_model"]["turing_large"]["cost_usd"] = 0.5
+        priced = llm.Spend()
+        agent._add_usage(priced, usage)
+        assert priced.cost_usd == pytest.approx(
+            llm.call_cost("turing_flash", 0.0, 20000, 2000) + 0.5
+        )
+
     def test_the_agent_reports_tokens_when_it_has_no_cost(self, monkeypatch):
         from ee.agenthub.insights import agent
 
