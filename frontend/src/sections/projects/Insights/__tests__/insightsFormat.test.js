@@ -58,18 +58,43 @@ describe("insightsErrorMessage", () => {
     expect(
       insightsErrorMessage({
         statusCode: 503,
+        code: "model_unavailable",
         message: "The analysis model is unavailable right now.",
       }),
     ).toBe("The analysis model is unavailable right now.");
   });
 
-  it("hides server errors behind the fallback", () => {
+  it("says a fault on the server's side is worth retrying, not the input's", () => {
+    const retry = "Couldn't start right now. Try again in a moment.";
+    for (const error of [
+      { statusCode: 503, message: "Database temporarily unavailable" },
+      { statusCode: 500, message: "Traceback: boom" },
+      { message: "Network Error", transportCode: "ERR_NETWORK" },
+    ])
+      expect(insightsErrorMessage(error, "Could not start.", retry)).toBe(
+        retry,
+      );
+    expect(insightsErrorMessage({ statusCode: 502 })).toBe(
+      "Couldn't do that right now. Try again in a moment.",
+    );
+  });
+
+  it("keeps a refusal's own message, else the caller's words", () => {
     expect(
       insightsErrorMessage(
-        { statusCode: 500, message: "Traceback: boom" },
+        {
+          status: false,
+          code: "bad_request",
+          message: "Choose a date range for the report.",
+          result: "Choose a date range for the report.",
+          statusCode: 400,
+        },
         "Could not start.",
       ),
-    ).toBe("Could not start.");
+    ).toBe("Choose a date range for the report.");
+    expect(insightsErrorMessage({ statusCode: 400 }, "Could not start.")).toBe(
+      "Could not start.",
+    );
   });
 });
 

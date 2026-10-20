@@ -21,7 +21,7 @@ import {
   useMediaQuery,
 } from "@mui/material";
 import { paths } from "src/routes/paths";
-import { getSafeActionErrorMessage } from "src/utils/errorUtils";
+import { actionErrorMessage } from "src/sections/projects/requestErrors";
 import { UNITS } from "src/sections/projects/observePopulation";
 import {
   ASK_NEW_PARAM,
@@ -35,6 +35,7 @@ import {
 import {
   AskBusy,
   AskNoCredits,
+  AskRefused,
   AskSampleTooLarge,
   HISTORY_KEY,
   startAskRun,
@@ -356,13 +357,15 @@ export default function AskPage() {
           </>
         ) : error instanceof AskBusy ||
           error instanceof AskSampleTooLarge ||
+          error instanceof AskRefused ||
           error?.name === "AskNeedsConfirm" ? (
           error.message
         ) : (
-          getSafeActionErrorMessage(
-            error,
-            "Jev couldn't start. Check the question and try again.",
-          )
+          // A fault on the server's side isn't the question's.
+          actionErrorMessage(error, {
+            fallback: "Jev couldn't start. Check the question and try again.",
+            retry: "Couldn't start right now. Try again in a moment.",
+          })
         ),
       );
     }

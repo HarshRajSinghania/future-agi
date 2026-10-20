@@ -34,9 +34,10 @@ export function useElapsedSeconds(since, active = true) {
 /**
  * A cancellable request (draft, preview, start): {state, run, cancel, reset}
  * where state is {status: "idle" | "busy" | "done" | "error", data, error,
- * billing, startedAt}. A newer call or cancel aborts the one in flight.
+ * billing, startedAt}. A newer call or cancel aborts the one in flight. A
+ * fault on the server's side reads `retryMessage` (or a general "try again").
  */
-export function useCancellable(fallbackMessage) {
+export function useCancellable(fallbackMessage, retryMessage) {
   const [state, setState] = useState({ status: "idle" });
   const controller = useRef(null);
 
@@ -65,14 +66,14 @@ export function useCancellable(fallbackMessage) {
         controller.current = null;
         setState({
           status: "error",
-          error: insightsErrorMessage(error, fallbackMessage),
+          error: insightsErrorMessage(error, fallbackMessage, retryMessage),
           // Refused for credits: the way forward is billing.
           billing: Boolean(insightsCreditRefusal(error)),
         });
         return undefined;
       }
     },
-    [fallbackMessage],
+    [fallbackMessage, retryMessage],
   );
 
   const reset = useCallback(() => {

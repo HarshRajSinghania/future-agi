@@ -1096,4 +1096,53 @@ describe("InsightsView", () => {
       ).toBeInTheDocument();
     });
   });
+
+  describe("a fault on the server's side", () => {
+    const failures = {
+      503: {
+        status: false,
+        statusCode: 503,
+        message: "Database temporarily unavailable",
+      },
+      500: { status: false, statusCode: 500, message: "Server Error" },
+      none: { message: "Network Error", transportCode: "ERR_NETWORK" },
+    };
+
+    it.each([
+      ["Run report", 503, "Couldn't start right now. Try again in a moment."],
+      ["Run report", 500, "Couldn't start right now. Try again in a moment."],
+      [
+        "Run report",
+        "none",
+        "Couldn't start right now. Try again in a moment.",
+      ],
+      [
+        "Draft with AI",
+        503,
+        "Couldn't draft right now. Try again in a moment.",
+      ],
+      [
+        /Preview on 3 examples/,
+        "none",
+        "Couldn't preview right now. Try again in a moment.",
+      ],
+    ])("%s (%s) asks to try again", async (name, failure, words) => {
+      mocks.post.mockImplementation((url) =>
+        url === "/tracer/insights/estimate/"
+          ? ok({ population: 108, population_is_lower_bound: false })
+          : Promise.reject(failures[failure]),
+      );
+      renderAt("?new=1&lens=failures");
+      await screen.findAllByText(/Analysing all 108 sessions/);
+      const button = await screen.findByRole("button", { name });
+      await waitFor(() => expect(button).toBeEnabled());
+      fireEvent.click(button);
+      expect(await screen.findByText(words)).toBeInTheDocument();
+      // The report as set up, ready to try again.
+      expect(screen.getByLabelText(/Question/)).toHaveValue(
+        "Where is the agent failing?",
+      );
+      await waitFor(() => expect(button).toBeEnabled());
+    });
+  });
 });

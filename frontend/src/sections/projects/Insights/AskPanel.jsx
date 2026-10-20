@@ -348,6 +348,7 @@ export default function AskPanel({ run, lens }) {
                 error: insightsErrorMessage(
                   error,
                   "The question could not be answered.",
+                  "Couldn't answer right now. Try again in a moment.",
                 ),
                 billing: Boolean(insightsCreditRefusal(error)),
               }

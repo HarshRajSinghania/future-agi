@@ -482,6 +482,17 @@ describe("refusals the page explains", () => {
     expect(confirm.name).toBe("AskNeedsConfirm");
     expect(confirm.rows).toBe(6000);
 
+    const counting = askError({
+      status: false,
+      code: "users_still_counting",
+      message: "Still counting the users these filters match.",
+      statusCode: 503,
+    });
+    expect(counting.name).toBe("AskRefused");
+    expect(counting.message).toBe(
+      "Still counting the users these filters match.",
+    );
+
     const other = { statusCode: 500, message: "boom" };
     expect(askError(other)).toBe(other);
   });

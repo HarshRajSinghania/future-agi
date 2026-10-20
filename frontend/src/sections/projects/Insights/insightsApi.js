@@ -1,7 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import axios, { endpoints, readQuery } from "src/utils/axios";
-import { getSafeActionErrorMessage } from "src/utils/errorUtils";
+import {
+  RETRY_LATER,
+  actionErrorMessage,
+  errorStatus,
+} from "src/sections/projects/requestErrors";
 import { collectPopulation } from "src/sections/projects/observePopulation";
 import { isRunActive } from "./insightsLenses";
 import { isFixedScope } from "./insightsScope";
@@ -105,6 +109,16 @@ export const isAbort = (error) =>
   error?.transportCode === "ERR_CANCELED" ||
   error?.code === "ERR_CANCELED";
 
+// Codes whose message the server writes for users, shown whatever their
+// status: limits, and what isn't available right now.
+const USER_FACING_CODES = new Set([
+  "rate_limited",
+  "feature_unavailable",
+  "insight_unavailable",
+  "model_unavailable",
+  "users_still_counting",
+]);
+
 const messageOf = (error) =>
   [error?.message, error?.detail, error?.result, error?.error].find(
     (value) => typeof value === "string" && value.trim(),
@@ -134,29 +148,28 @@ export function insightsCreditRefusal(error) {
 }
 
 /**
- * What to tell the user when an Insights call fails. Plan, rate-limit and
- * model-availability messages are written for users and shown as they are;
- * anything else goes through the app's safe-message filter.
+ * What to tell the user when an Insights call fails. Plan, credit, rate-limit
+ * and availability messages are written for users and shown as they are; a
+ * fault on the server's side (a 5xx, or no answer) reads `retry`, never a
+ * reason to change what was asked; any other refusal goes through the app's
+ * safe-message filter, else `fallback`.
  */
 export function insightsErrorMessage(
   error,
   fallback = "Something went wrong.",
+  retry = RETRY_LATER,
 ) {
   const credits = insightsCreditRefusal(error);
   if (credits) return credits.message;
-  const status = Number(error?.statusCode || error?.response?.status);
+  const status = errorStatus(error);
   const code = error?.code;
   if (status === 402 || code === "CAPABILITY_DENIED")
     return "Insights isn't available on this plan.";
   const message = messageOf(error).trim();
-  const userFacing =
-    status === 429 ||
-    status === 503 ||
-    code === "rate_limited" ||
-    code === "feature_unavailable";
+  const userFacing = status === 429 || USER_FACING_CODES.has(code);
   if (userFacing && message && message.length <= 240 && !/[\r\n]/.test(message))
     return message;
-  return getSafeActionErrorMessage(error, fallback);
+  return actionErrorMessage(error, { fallback, retry });
 }
 
 export function useInsightsConfigs(projectId) {

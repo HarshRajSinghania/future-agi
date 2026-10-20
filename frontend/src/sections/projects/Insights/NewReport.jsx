@@ -392,9 +392,18 @@ export default function NewReport({
   const namePlaceholder = autoName(draft, currentScopeText);
 
   // ── Draft with AI and preview ───────────────────────────────────────────
-  const drafting = useCancellable("The draft could not be written.");
-  const previewing = useCancellable("The preview could not be made.");
-  const starting = useCancellable("The report could not be started.");
+  const drafting = useCancellable(
+    "The draft could not be written.",
+    "Couldn't draft right now. Try again in a moment.",
+  );
+  const previewing = useCancellable(
+    "The preview could not be made.",
+    "Couldn't preview right now. Try again in a moment.",
+  );
+  const starting = useCancellable(
+    "The report could not be started.",
+    "Couldn't start right now. Try again in a moment.",
+  );
 
   const draftWithAI = () =>
     drafting.run(async (signal) => {

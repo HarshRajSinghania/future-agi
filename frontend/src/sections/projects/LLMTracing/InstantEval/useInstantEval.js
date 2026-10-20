@@ -386,6 +386,10 @@ export function askError(error) {
     )
   )
     return new AskRefused(detail);
+  // A Users count still under way: what was counted is kept, so starting
+  // again carries on.
+  if (status === 503 && (detail.code || error?.code) === "users_still_counting")
+    return new AskRefused(detail);
   if (status === 429) return new AskBusy(detail);
   return error;
 }

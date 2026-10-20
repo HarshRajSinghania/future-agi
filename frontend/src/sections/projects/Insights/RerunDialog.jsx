@@ -107,7 +107,10 @@ function RerunForm({
     ? `The same ${formatCount(remembered.length)} ${unitWord(unit, remembered.length)} as last run`
     : `The same ${plural} as last run (not available: they were handed over in another browser session)`;
 
-  const starting = useCancellable("The report could not be started.");
+  const starting = useCancellable(
+    "The report could not be started.",
+    "Couldn't start right now. Try again in a moment.",
+  );
   const run = () =>
     starting.run(async () => {
       if (rediscover) await patchConfig(config.id, { reset_taxonomy: true });

@@ -1038,6 +1038,98 @@ describe("a run that stopped before finishing", () => {
   });
 });
 
+describe("a start that fails", () => {
+  const start = async () => {
+    fakes.estimate.mockResolvedValue(smallEstimate(3));
+    renderAt(askLink(PROJECT, { unit: "sessions", population: POPULATION }));
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Question 1" }),
+      { target: { value: QUESTION } },
+    );
+    await screen.findByText(/3 selected sessions/);
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
+      );
+    });
+  };
+
+  it.each([
+    [
+      "a 503",
+      {
+        status: false,
+        statusCode: 503,
+        message: "Database temporarily unavailable",
+      },
+    ],
+    ["a 500", { status: false, statusCode: 500, message: "Server Error" }],
+    [
+      "no answer at all",
+      { message: "Network Error", transportCode: "ERR_NETWORK" },
+    ],
+  ])(
+    "on the server's side (%s) asks to try again, not to fix the question",
+    async (_, failure) => {
+      fakes.startAskRun.mockRejectedValue(failure);
+      await start();
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(
+        "Couldn't start right now. Try again in a moment.",
+      );
+      expect(alert).not.toHaveTextContent(/Check the question/);
+      // Ready to try again as it was.
+      expect(screen.getByRole("textbox", { name: "Question 1" })).toHaveValue(
+        QUESTION,
+      );
+      expect(
+        screen.getByRole("button", { name: "Ask Jev about 3 sessions" }),
+      ).toBeEnabled();
+      expect(where().params.new).toBe("1");
+    },
+  );
+
+  it("shows a refusal's own message, else asks to check the question", async () => {
+    // As the app's axios hands over the server's error envelope.
+    const message = "Those questions aren't saved in this project.";
+    fakes.startAskRun.mockRejectedValue({
+      status: false,
+      code: "bad_request",
+      detail: message,
+      message,
+      error: message,
+      result: message,
+      statusCode: 400,
+    });
+    await start();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Those questions aren't saved in this project.",
+    );
+  });
+
+  it("asks to check the question for a refusal with no words of its own", async () => {
+    fakes.startAskRun.mockRejectedValue({ status: false, statusCode: 400 });
+    await start();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Jev couldn't start. Check the question and try again.",
+    );
+  });
+
+  it("says a Users count is still under way as the server words it", async () => {
+    const { AskRefused } = await import("../../useInstantEval");
+    fakes.startAskRun.mockRejectedValue(
+      new AskRefused({
+        message:
+          "Still counting the users these filters match; start again to carry on.",
+      }),
+    );
+    await start();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Still counting the users these filters match; start again to carry on.",
+    );
+  });
+});
+
 describe("a cancelled run, and controls the server refuses", () => {
   const SAMPLE = {
     is_sample: true,
