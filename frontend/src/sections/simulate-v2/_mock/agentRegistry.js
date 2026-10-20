@@ -658,8 +658,10 @@ export const connectedAgentsFrom = (state, { withDeleted = false } = {}) => {
       /* Named after its environment, not by anyone — two such agents can
          share a name, and get told apart below. */
       derivedName: !es.agent.name,
-      /* A template's stand-in, not anyone's agent — kept off the Agents list. */
-      placeholder: !!es.agent.seeded,
+      /* A template's stand-in, not anyone's agent — kept off the Agents list.
+         A world's sample agent is listed, tagged Sample. */
+      placeholder: !!es.agent.seeded && !es.agent.sample,
+      ...(es.agent.sample && { sample: true, sampleOf: es.agent.sampleOf }),
       typeId: es.agent.typeId,
       values: es.agent.values,
       sourceKind: es.agent.sourceKind,

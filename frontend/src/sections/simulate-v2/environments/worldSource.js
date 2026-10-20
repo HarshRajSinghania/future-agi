@@ -15,14 +15,82 @@ import { paths } from "src/routes/paths";
 import { buildPresetFor } from "../agents/agentViewUtils";
 import { agentStatusOf, isComingSoon } from "../_mock/rsiModel";
 import { worldFromTemplate } from "../_mock/agentWorlds";
+import { generatedPool } from "../_mock/scenarios";
+import { MODALITY_FOR } from "../_mock/fidelity";
+import { runtimeTypeFor } from "../_mock/builder";
+import { useSimStore } from "../store";
+import { answerGapPatch, setupGaps } from "../_mock/setupGaps";
 
 /**
  * The agents an environment can be built for: in Agents (not a template's
- * stand-in), connected (not archived or cut off), and not Coming soon.
+ * stand-in or a world's sample agent), connected (not archived or cut off),
+ * and not Coming soon.
  */
 export const buildableAgentsOf = (agents = []) => agents.filter(
-  (a) => !a.placeholder && !isComingSoon(a) && agentStatusOf(a).status === "connected",
+  (a) => !a.placeholder && !a.sample && !isComingSoon(a) && agentStatusOf(a).status === "connected",
 );
+
+/** The channel a prebuilt world is for — "voice" or "chat". */
+export const worldChannelOf = (template) => (MODALITY_FOR[template?.surface] === "voice" ? "voice" : "chat");
+
+/* A world's sample agent: one per world, in Agents tagged Sample, so every
+   environment still belongs to an agent in Agents. It's the agent the world
+   was designed and proven with. */
+export const sampleAgentOf = (template, now = new Date().toISOString()) => ({
+  key: `sample:${template.id}`,
+  name: `${template.name} sample agent`,
+  typeId: runtimeTypeFor(MODALITY_FOR[template.surface] || "chat", null, null)?.id,
+  sourceKind: "builtin",
+  values: {},
+  via: "sample",
+  /* Seeded: the environment's first real agent can still take its place. */
+  seeded: true,
+  sample: true,
+  sampleOf: template.id,
+  connectedAt: now,
+});
+
+/**
+ * Try a prebuilt world now: an environment from the world exactly as
+ * designed — its tables, tools, rules, its own proven scenarios and its
+ * evaluations — tested with the world's sample agent, ready to run. Nothing
+ * to connect, nothing to build. Connecting your agent later puts yours in
+ * its place (the environment's first real agent).
+ */
+export function useTryWorld() {
+  const navigate = useNavigate();
+  const { dispatch } = useSimStore();
+  return useCallback((template) => {
+    const now = new Date().toISOString();
+    const env = { ...template, id: `${template.id}-${Math.random().toString(36).slice(2, 8)}`, templateId: template.id };
+    dispatch({ type: "adoptEnvironment", env, now });
+    const scenarios = generatedPool(env);
+    const tools = (env.tools || []).map((t) => ({ ...t }));
+    const base = {
+      envVersions: [{
+        id: `${env.id}-v1`, label: "v1", createdAt: now,
+        note: `Ready-made from the ${template.name} world, with its sample agent.`,
+        scenarios: scenarios.length, changed: ["contract", "seed"], tools, builtFor: "v1",
+      }],
+      activeEnvVersion: "v1",
+      agent: sampleAgentOf(template, now),
+      agentVersions: [{ id: "agent-v1", label: "v1", note: "Ships with the world.", reach: "seed", createdAt: now, tools }],
+      activeAgentVersion: "v1",
+      scenarios,
+      scenarioSource: "templates",
+      evals: [...(env.evalPreset || [])],
+      runs: [],
+    };
+    /* The world as designed has already answered what a build would ask —
+       its open questions start settled with the world's own answers, so it
+       runs with nothing waiting on you. */
+    const settled = setupGaps(env, base)
+      .filter((g) => (g.status === "optional" || g.status === "blocking") && g.suggested != null && g.fixedBy !== "action")
+      .reduce((st, g) => ({ ...st, ...answerGapPatch(g, "assumed", g.suggested, st) }), base);
+    dispatch({ type: "patchEnvState", envId: env.id, patch: settled });
+    navigate(paths.dashboard.simulate.environmentDetail(env.id));
+  }, [dispatch, navigate]);
+}
 
 /** The host an MCP server is reached at — or the command, for stdio. */
 export const mcpHostOf = (value = "") => {

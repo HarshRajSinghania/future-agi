@@ -14,6 +14,7 @@ import ChipCard from "./ChipCard";
 import { SectionHead } from "./LandingBits";
 import { PANEL_SX, focusRing } from "./landingStyles";
 import { buildableAgentsOf, useBuildForAgent } from "./worldSource";
+import { fitsEnvChannel } from "../_mock/agentSwitch";
 
 /*
   Choosing the agent an environment belongs to (RSI PRD Flow 2, step 1:
@@ -197,9 +198,14 @@ AgentRow.propTypes = {
  * new one connected here (the same flows as Agents → New agent). `value` is
  * the agent's id.
  */
-export default function WorldAgentPicker({ value, onChange, title = "Agent", subtitle = null }) {
-  const { agents: all } = useConnectedAgents();
-  const agents = useMemo(() => buildableAgentsOf(all), [all]);
+export default function WorldAgentPicker({ value, onChange, title = "Agent", subtitle = null, surface = null }) {
+  const { agents: all, state } = useConnectedAgents();
+  /* A world is for one type of agent: only agents of that type are offered. */
+  const agents = useMemo(
+    () => buildableAgentsOf(all).filter((a) => !surface || fitsEnvChannel(a, { surface }, state)),
+    [all, surface, state],
+  );
+  const typeWord = surface === "voice" ? "voice" : surface ? "chat" : null;
   const saveAgent = useSaveConnectedAgent();
   const [connecting, setConnecting] = useState(false);
   const onConnected = (source) => {
@@ -212,7 +218,7 @@ export default function WorldAgentPicker({ value, onChange, title = "Agent", sub
       <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 0.75 }}>
         <Typography sx={{ typography: "s2", fontWeight: 700 }}>{title}</Typography>
         <Typography sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>
-          {subtitle || "The environment belongs to this agent in Agents."}
+          {subtitle || (typeWord ? `Your ${typeWord} agents — this world is for ${typeWord} agents.` : "The environment belongs to this agent in Agents.")}
         </Typography>
         <Button
           size="small"
@@ -231,7 +237,7 @@ export default function WorldAgentPicker({ value, onChange, title = "Agent", sub
         </Box>
       ) : (
         <Typography sx={{ typography: "s2", color: "text.subtitle", px: 1.75, py: 1.25, border: "1px dashed", borderColor: "divider", borderRadius: 1 }}>
-          No agents in Agents yet — connect one to build its environment from this world.
+          {typeWord ? `No ${typeWord} agents in Agents yet — connect one to build its environment from this world.` : "No agents in Agents yet — connect one to build its environment from this world."}
         </Typography>
       )}
 
@@ -267,4 +273,6 @@ WorldAgentPicker.propTypes = {
   onChange: PropTypes.func.isRequired,
   title: PropTypes.string,
   subtitle: PropTypes.string,
+  /* The world's channel ("voice" or "chat") — limits the agents offered. */
+  surface: PropTypes.string,
 };

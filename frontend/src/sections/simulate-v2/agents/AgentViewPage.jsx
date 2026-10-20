@@ -537,6 +537,11 @@ export default function AgentViewPage() {
                 <Box component="span"><QuietTag>Coming soon</QuietTag></Box>
               </Tooltip>
             )}
+            {agent.sample && (
+              <Tooltip arrow title="Comes with a prebuilt world — the agent it was designed and proven with. Connect your own agent to that environment to test yours there.">
+                <Box component="span"><QuietTag>Sample</QuietTag></Box>
+              </Tooltip>
+            )}
             {status.status !== "connected" && (
               <Tooltip arrow title={status.reason || ""}>
                 <Box {...clickable(() => setQuery({ tab: "connections" }))} sx={{ cursor: "pointer", ...focusRing }}>

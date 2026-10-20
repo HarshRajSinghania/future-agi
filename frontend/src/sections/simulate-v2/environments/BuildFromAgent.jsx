@@ -642,7 +642,7 @@ export default function BuildFromAgent() {
           /* Built at the version picked — following production when that is it. */
           ...agentPinPatch({ agent: record, agentVersions: connectedVersions || [] }, source.agentVersion || latest || "v1"),
           envVersions: [
-            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: `First build, read from agent ${source.agentVersion || latest || "v1"}${source.worldSource?.label ? `, starting from ${source.worldSource.label}` : ""}.`, scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools, builtFor: source.agentVersion || latest || "v1" },
+            { id: `${env.id}-v1`, label: "v1", createdAt: now, note: `First build, read from agent ${source.agentVersion || latest || "v1"}${source.worldSource?.label ? `, starting from ${source.worldSource.label}` : ""}${source.worldSource?.runsOn === "local" ? ", on your machine" : ""}.`, scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools, builtFor: source.agentVersion || latest || "v1" },
           ],
           activeEnvVersion: "v1",
           runs: [],

@@ -21,7 +21,7 @@ export default function WorldDrawer({ world, onClose }) {
                 <QuietTag>{world.typeLabel}</QuietTag>
               </Stack>
               <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-                Pick one of your agents — its environment starts from this world.
+                Try it now with its sample agent, or use it with one of your agents.
               </Typography>
             </Box>
             <ButtonBase onClick={onClose} aria-label="Close" sx={{ width: 28, height: 28, borderRadius: 0.75, color: "text.secondary", "&:hover": { color: "text.primary" } }}>

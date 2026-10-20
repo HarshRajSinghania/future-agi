@@ -129,9 +129,13 @@ export default function EnvAgentLine({ env, envState, patch, locked = false, onF
         <Stack direction="row" alignItems="center" spacing={1.5} sx={{ my: 2, px: 2, py: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1.5 }}>
           <Iconify icon="solar:cpu-bolt-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
           <Typography sx={{ typography: "s2", flex: 1, minWidth: 0, color: "text.secondary" }}>
-            {locked
-              ? "Tests the placeholder this template ships with. Fork the environment to test your own agent."
-              : `Tests ${agent.name || "a template placeholder"} until you connect your agent.`}
+            {agent.sample
+              ? (locked
+                ? `Tests ${agent.name}, the sample agent this world ships with. Fork the environment to test your own agent.`
+                : `Tests ${agent.name}, the sample agent this world ships with. Connect your agent to test yours in this world.`)
+              : locked
+                ? "Tests the placeholder this template ships with. Fork the environment to test your own agent."
+                : `Tests ${agent.name || "a template placeholder"} until you connect your agent.`}
           </Typography>
           {locked ? (
             onFork && <Button size="small" variant="outlined" onClick={onFork} sx={outlined}>Fork environment</Button>

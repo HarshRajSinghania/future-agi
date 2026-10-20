@@ -17,6 +17,7 @@ import { subGoalResultsOf } from "../../_mock/scenarioSubGoals";
 import { envLabelOf } from "../../_mock/envVersionKinds";
 import { clickable, focusRing } from "../../components/clickable";
 import { scenarioTitle } from "../../_mock/scenarios";
+import { asSentence, parseBrief } from "../../_mock/scenarioBrief";
 
 /* Neutral white-on-selected checkbox — no primary colour, keeps the
    table's monochrome treatment. */
@@ -48,11 +49,32 @@ const onHover = { opacity: 0, transition: "opacity .12s ease", ".MuiTableRow-roo
 const laterThanPinned = (row, envVersion) => !!(row?.addedInEnv && envVersion
   && versionNumber(row.addedInEnv) > versionNumber(envVersion));
 
+/* The identity columns stay put while the rest scrolls sideways. */
+const PIN_LEFT = { select: 0, "#": 40, scenario: 80 };
+const PINNED_SX = {
+  "& td.scn-pin, & th.scn-pin": { position: "sticky", bgcolor: "background.paper", zIndex: 2 },
+  "& td.scn-pin-0": { left: 0 }, "& td.scn-pin-1": { left: 40 }, "& td.scn-pin-2": { left: 80 },
+  /* The row's hover and selection tint carry into the pinned cells. */
+  "& tr:hover > td.scn-pin": { backgroundImage: (t) => `linear-gradient(${t.palette.action.hover}, ${t.palette.action.hover})` },
+  "& tr.Mui-selected > td.scn-pin, & tr.scn-selected > td.scn-pin": { backgroundImage: (t) => `linear-gradient(${t.palette.action.selected}, ${t.palette.action.selected})` },
+  "& .scn-pin-last": { boxShadow: (t) => `1px 0 0 ${t.palette.divider}` },
+};
+
+/* The brief's opening, without the "Your details: …" block the caller carries. */
+const briefLineOf = (row) => {
+  const text = row.task || row.situation || "";
+  const b = parseBrief(text);
+  return (b.intro || text).trim();
+};
+
 const COLUMNS = [
   { id: "select", w: 40 },
   { id: "#", label: "#", w: 40 },
-  { id: "scenario", label: "Scenario", tip: "A status shows only when the scenario needs something" },
-  { id: "persona", label: "Persona", w: 180 },
+  { id: "scenario", label: "Scenario", w: 280, tip: "A status shows only when the scenario needs something" },
+  { id: "persona", label: "Persona", w: 170 },
+  /* What tells scenarios apart at a glance — the same words as the drawer. */
+  { id: "brief", label: "Brief", w: 340, tip: "What the caller is told to do" },
+  { id: "passes", label: "Passes when", w: 260, tip: "What the agent has to do for the scenario to pass" },
   { id: "subgoals", label: "Sub-goals", w: 88, align: "right", tip: "Sub-goals met in the scenario's latest run, of all it's graded on" },
   { id: "mustPass", label: "Must-pass", w: 84, align: "center", tip: "An improvement that breaks a must-pass scenario is rejected" },
   { id: "runs", label: "Last runs", w: 116, tip: "This scenario in the environment's last runs, oldest to latest" },
@@ -237,7 +259,9 @@ export default function ScenarioTable({
 
   return (
     <Box sx={{ overflowX: "auto" }}>
-      <Table size="small" sx={{ minWidth: 860, tableLayout: "fixed" }}>
+      {/* Wider than most panes, so it scrolls sideways; the checkbox, #
+          and Scenario stay pinned so a row never loses its name. */}
+      <Table size="small" sx={{ minWidth: 1500, tableLayout: "fixed", ...PINNED_SX }}>
         <colgroup>
           {columns.map((c) => <col key={c.id} style={c.w ? { width: c.w } : undefined} />)}
         </colgroup>
@@ -253,7 +277,9 @@ export default function ScenarioTable({
                   bgcolor: "background.paper", borderBottom: "1px solid", borderColor: "divider", py: 1,
                   ...(c.id === "select" && { pl: 1.5 }),
                   ...(c.id === "#" && { px: 1 }),
+                  ...(PIN_LEFT[c.id] != null && { position: "sticky", left: PIN_LEFT[c.id], zIndex: 3 }),
                 }}
+                className={PIN_LEFT[c.id] != null ? `scn-pin${c.id === "scenario" ? " scn-pin-last" : ""}` : undefined}
               >
                 {c.id === "select" ? (
                   <Checkbox
@@ -274,9 +300,10 @@ export default function ScenarioTable({
               {section.label && (
                 <TableRow>
                   <TableCell colSpan={columns.length} sx={{ borderBottom: "1px solid", borderColor: "divider", py: 1, px: 2 }}>
-                    <Stack direction="row" alignItems="center" spacing={1.25}>
-                      <Typography noWrap sx={{ typography: "s2", fontWeight: 600, flex: 1, minWidth: 0 }}>{section.label}</Typography>
-                      <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
+                    {/* Pinned like the identity columns, so a heading never scrolls out of view. */}
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ position: "sticky", left: 16, width: "fit-content", maxWidth: 960 }}>
+                      <Typography noWrap sx={{ typography: "s2", fontWeight: 600, minWidth: 0 }}>{section.label}</Typography>
+                      <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
                         {section.rows.length}
                       </Typography>
                     </Stack>
@@ -302,27 +329,29 @@ export default function ScenarioTable({
                   <TableRow
                     key={row.id}
                     hover
+                    className={selected.has(row.id) ? "scn-selected" : undefined}
                     {...clickable(open, { role: "row" })}
                     sx={{ ...focusRing,
                       cursor: open ? "pointer" : "default",
                       ...(selected.has(row.id) && { bgcolor: "action.selected" }),
                       /* Archived rows stay listed, dimmed; the state and the actions keep full strength. */
-                      ...(archived && { "& .scn-dim": { opacity: 0.45 } }),
+                      /* On the cell's content, so a pinned cell keeps its solid background. */
+                      ...(archived && { "& .scn-dim > *": { opacity: 0.45 } }),
                     }}
                   >
-                    <TableCell padding="checkbox" sx={{ ...cellSx, pl: 1.5 }} onClick={stop}>
+                    <TableCell padding="checkbox" className="scn-pin scn-pin-0" sx={{ ...cellSx, pl: 1.5 }} onClick={stop}>
                       <Checkbox
                         size="small" checked={selected.has(row.id)} onChange={() => toggle(row.id)}
                         disabled={locked} sx={selectableCheckboxSx}
                       />
                     </TableCell>
-                    <TableCell sx={{ ...cellSx, px: 1, typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
+                    <TableCell className="scn-pin scn-pin-1" sx={{ ...cellSx, px: 1, typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>
                       {idx}
                     </TableCell>
 
                     {/* SCENARIO — what it is, in words, and how many sub-goals
                         grade it. The id-style name is on hover and inside. */}
-                    <TableCell className="scn-dim" sx={cellSx}>
+                    <TableCell className="scn-dim scn-pin scn-pin-2 scn-pin-last" sx={cellSx}>
                       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
                         <Tooltip arrow enterDelay={400} title={row.name && row.name !== headline ? row.name : ""}>
                           <Typography noWrap sx={{ typography: "s2", fontWeight: 500, minWidth: 40, flexShrink: 1 }}>{headline}</Typography>
@@ -372,6 +401,14 @@ export default function ScenarioTable({
                           {personaMeta && <Box component="span" sx={{ color: "text.subtitle" }}>{` · ${personaMeta}`}</Box>}
                         </Typography>
                       </Stack>
+                    </TableCell>
+
+                    {/* BRIEF and PASSES WHEN — one line each, the whole text on hover. */}
+                    <TableCell className="scn-dim" sx={cellSx}>
+                      <OneLine text={briefLineOf(row)} />
+                    </TableCell>
+                    <TableCell className="scn-dim" sx={cellSx}>
+                      <OneLine text={row.expected || row.outcome ? asSentence(row.expected || row.outcome) : ""} />
                     </TableCell>
 
                     {/* SUB-GOALS — met in the latest run, of all. */}
@@ -451,3 +488,14 @@ ScenarioTable.propTypes = {
   onSelectionChange: PropTypes.func,
   locked: PropTypes.bool,
 };
+
+/* A cell's text on one line; the whole of it on hover. */
+function OneLine({ text }) {
+  if (!text) return <Typography sx={{ typography: "s2", color: "text.disabled" }}>—</Typography>;
+  return (
+    <Tooltip arrow enterDelay={400} title={<Box sx={{ maxWidth: 420 }}>{text}</Box>}>
+      <Typography noWrap sx={{ typography: "s2", color: "text.secondary", minWidth: 0 }}>{text}</Typography>
+    </Tooltip>
+  );
+}
+OneLine.propTypes = { text: PropTypes.string };

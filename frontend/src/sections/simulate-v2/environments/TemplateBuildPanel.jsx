@@ -1,8 +1,8 @@
 import PropTypes from "prop-types";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
-  Box, Stack, Typography, Button,
+  Box, Stack, Typography, Button, CircularProgress, Divider,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { getSurface } from "../_mock/surfaces";
@@ -10,11 +10,23 @@ import { useConnectedAgents } from "../store";
 import { SectionCard } from "../components/primitives";
 import BuildEnvironmentDialog from "../agents/BuildEnvironmentDialog";
 import { HintLine } from "../agents/connect/replicationBits";
+import { WhereOption } from "../agents/connect/connectBits";
+import LocalSteps from "./LocalSteps";
 import WorldAgentPicker from "./AgentChoice";
-import { buildableAgentsOf, templateWorldSource, useBuildForAgent } from "./worldSource";
+import { buildableAgentsOf, sampleAgentOf, templateWorldSource, useBuildForAgent, useTryWorld, worldChannelOf } from "./worldSource";
+import { generatedPool } from "../_mock/scenarios";
+import { replicationOf } from "../_mock/replication";
 
 /**
- * A prebuilt world, as the world source of one agent's environment.
+ * A prebuilt world: try it now, or use it with your own agent.
+ *
+ * Try it now — the world exactly as designed, with its sample agent and its
+ * own proven scenarios, ready to run. Nothing to connect, nothing to build.
+ * The sample agent is in Agents, tagged Sample, so the environment still
+ * belongs to an agent; connecting your agent later takes its place.
+ *
+ * Use it with your agent — the world as the world source of one agent's
+ * environment:
  *
  * Every environment belongs to exactly one agent in Agents (RSI PRD), so a
  * prebuilt world is never built on its own or with a stand-in: the user picks
@@ -24,20 +36,45 @@ import { buildableAgentsOf, templateWorldSource, useBuildForAgent } from "./worl
  * tables, tools and rules — reading the agent, checking its tools against
  * the world, proving the scenarios, then running the suite once.
  *
+ * Where it runs is the person's choice: in Future AGI (our hosted sandbox,
+ * the default) or on their own machine — the CLI builds the world there and
+ * streams results back over a secure tunnel, so the environment still shows
+ * up in this workspace.
+ *
  * Rendered in the world drawer, so it takes a base `template`.
  */
-export default function TemplateBuildPanel({ template, showName = false }) {
+export default function TemplateBuildPanel({ template, showName = false, initialMode = "try" }) {
+  /* "try" — the world with its sample agent; "agent" — with one of yours. */
+  const [mode, setMode] = useState(initialMode);
+  const tryWorld = useTryWorld();
   const { agents: all } = useConnectedAgents();
   const agents = useMemo(() => buildableAgentsOf(all), [all]);
   const [agentId, setAgentId] = useState(null);
   const agent = agents.find((a) => a.id === agentId) || null;
   const [dialogOpen, setDialogOpen] = useState(false);
   const build = useBuildForAgent();
+  /* "cloud" — our hosted sandbox; "local" — the person's own machine. */
+  const [where, setWhere] = useState("cloud");
+  /* On their machine: what the Build environment dialog settled, while the
+     CLI steps run; then the machine checks in and the build opens. */
+  const [localChoice, setLocalChoice] = useState(null);
+  const [checkedIn, setCheckedIn] = useState(false);
+  useEffect(() => {
+    if (!localChoice) return undefined;
+    setCheckedIn(false);
+    /* Demo: the machine checks in a moment after the steps run. */
+    const t = setTimeout(() => setCheckedIn(true), 4000);
+    return () => clearTimeout(t);
+  }, [localChoice]);
+  const startBuild = (choice, runsOn) => build(agent, choice, { ...templateWorldSource(template), ...(runsOn === "local" && { runsOn: "local" }) });
 
   if (!template) return null;
   const env = template;
   const surface = getSurface(env.surface);
   const rows = (env.seed?.tables || []).reduce((a, t) => a + t.rows, 0);
+  const sample = sampleAgentOf(template);
+  const scenarioCount = generatedPool(template).length;
+  const evalCount = (template.evalPreset || []).length;
 
   return (
     <Stack spacing={2}>
@@ -54,12 +91,82 @@ export default function TemplateBuildPanel({ template, showName = false }) {
         </Box>
       )}
 
+      <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+        <WhereOption
+          icon="solar:play-circle-linear" label="Try it now" on={mode === "try"} onClick={() => setMode("try")}
+          short="With the world's sample agent · ready in seconds"
+          hint="The world exactly as designed — its sample agent, scenarios and evaluations. Nothing to connect or build."
+        />
+        <WhereOption
+          icon="solar:link-circle-linear" label="Use it with your agent" on={mode === "agent"} onClick={() => setMode("agent")}
+          short="Build this world for an agent you've connected"
+          hint="Your agent is read and its tools are checked against this world, then scenarios are written and proven for it."
+        />
+      </Box>
+
+      {mode === "try" ? (
+        <SectionCard
+          title="Try it now"
+          subtitle="The world exactly as designed, tested with its sample agent."
+        >
+          <Stack sx={{ p: 2.5 }} spacing={1.25}>
+            {[
+              { icon: "solar:user-speak-rounded-linear", text: `${sample.name} — the agent this world was designed and proven with.`, hint: "It's in Agents, tagged Sample. Connect your own agent from the environment's Overview when you're ready — it takes the sample agent's place." },
+              { icon: "solar:checklist-minimalistic-linear", text: `${scenarioCount} scenarios, already proven, and ${evalCount} evaluation${evalCount === 1 ? "" : "s"}.` },
+              { icon: "solar:play-circle-linear", text: "Ready to run in seconds — nothing to connect, nothing to build." },
+            ].map((row) => (
+              <Stack key={row.text} direction="row" spacing={1.25} alignItems="flex-start">
+                <Iconify icon={row.icon} width={16} sx={{ color: "text.subtitle", flexShrink: 0, mt: "1px" }} />
+                <Typography component="div" sx={{ typography: "s2", color: "text.secondary" }}>
+                  {row.hint ? <HintLine hint={row.hint}>{row.text}</HintLine> : row.text}
+                </Typography>
+              </Stack>
+            ))}
+          </Stack>
+          <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 2, borderTop: "1px solid", borderColor: "divider" }}>
+            <Button
+              variant="contained" color="primary"
+              onClick={() => tryWorld(template)}
+              startIcon={<Iconify icon="solar:play-bold" width={15} />}
+              sx={{ typography: "s2", fontWeight: 700, whiteSpace: "nowrap" }}
+            >
+              Try it now
+            </Button>
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Opens a ready environment</Typography>
+          </Stack>
+        </SectionCard>
+      ) : (
       <SectionCard
         title="Build an agent's environment from this world"
         subtitle="The world is the starting point; the agent is what's tested."
       >
         <Stack sx={{ p: 2.5 }} spacing={2}>
-          <WorldAgentPicker value={agentId} onChange={setAgentId} />
+          <WorldAgentPicker value={agentId} onChange={(id) => { setAgentId(id); setLocalChoice(null); }} surface={worldChannelOf(template)} />
+          {agent && replicationOf(agent).proofLabel === "Live" && (
+            <Stack direction="row" spacing={1.25} alignItems="flex-start" sx={{ px: 1.5, py: 1.25, borderRadius: 1, border: "1px solid", borderColor: "divider", bgcolor: "background.neutral" }}>
+              <Iconify icon="solar:info-circle-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0, mt: "1px" }} />
+              <Typography sx={{ typography: "s2", color: "text.secondary" }}>
+                {`${agent.name} is tested live, so it calls its own tools — this world grades its conversations but doesn't answer its tools. To have the world's tools answer, test a sealed copy (the agent's Connections).`}
+              </Typography>
+            </Stack>
+          )}
+          <Box>
+            <Typography sx={{ typography: "s2", fontWeight: 700, mb: 0.75 }}>Where it runs</Typography>
+            <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+              <WhereOption
+                icon="solar:cloud-linear" label="In Future AGI" on={where === "cloud"}
+                onClick={() => { setWhere("cloud"); setLocalChoice(null); }}
+                short="Our hosted sandbox · ready to run in seconds"
+                hint="Built in an isolated sandbox from this world's tables, tools and rules. Runs are metered by the minute."
+              />
+              <WhereOption
+                icon="solar:laptop-2-linear" label="On your machine" on={where === "local"}
+                onClick={() => setWhere("local")}
+                short="Through our CLI · the world stays on your laptop"
+                hint="The CLI builds this world on your machine and streams results back over a secure tunnel, so runs still show up in this workspace. Good for regulated code, air-gapped setups or offline work."
+              />
+            </Box>
+          </Box>
           <Stack spacing={1.25}>
             {[
               { icon: "solar:box-minimalistic-linear", text: "Seeded with this world's tables, tools and hard rules." },
@@ -75,7 +182,17 @@ export default function TemplateBuildPanel({ template, showName = false }) {
             ))}
           </Stack>
         </Stack>
-        <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 2, borderTop: "1px solid", borderColor: "divider" }}>
+        {localChoice && agent && (
+          <LocalRun
+            template={template}
+            agent={agent}
+            choice={localChoice}
+            checkedIn={checkedIn}
+            onOpen={() => startBuild(localChoice, "local")}
+            onBack={() => setLocalChoice(null)}
+          />
+        )}
+        {!localChoice && <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 2.5, py: 2, borderTop: "1px solid", borderColor: "divider" }}>
           <Button
             variant="contained" color="primary"
             disabled={!agent}
@@ -83,20 +200,34 @@ export default function TemplateBuildPanel({ template, showName = false }) {
             startIcon={<Iconify icon="solar:magic-stick-3-bold" width={16} />}
             sx={{ typography: "s2", fontWeight: 700, whiteSpace: "nowrap" }}
           >
-            Use environment
+            Build environment
           </Button>
           {!agent && (
             <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Pick the agent this environment is for</Typography>
           )}
-        </Stack>
+          {agent && where === "local" && (
+            <Typography sx={{ typography: "s3", color: "text.subtitle" }}>Then run three commands on your machine</Typography>
+          )}
+        </Stack>}
       </SectionCard>
+      )}
 
       <SectionCard title="What this world gives you">
         <Stack sx={{ px: 2.5, py: 2 }} spacing={1.25}>
           <Line label="World" value={`${rows.toLocaleString()} seeded rows`} />
           <Line label="Tools" value={`${env.tools?.length || 0} the world answers`} />
           <Line label="Rules" value={`${env.rules?.length || 0} graded on every run`} />
-          <Line label="Agent" value={agent ? agent.name : "Not picked yet"} muted={!agent} />
+          {mode === "try" ? (
+            <>
+              <Line label="Scenarios" value={`${scenarioCount} proven`} />
+              <Line label="Agent" value={sample.name} />
+            </>
+          ) : (
+            <>
+              <Line label="Agent" value={agent ? agent.name : "Not picked yet"} muted={!agent} />
+              <Line label="Runs" value={where === "local" ? "On your machine" : "In Future AGI"} />
+            </>
+          )}
         </Stack>
       </SectionCard>
 
@@ -123,13 +254,68 @@ export default function TemplateBuildPanel({ template, showName = false }) {
           onClose={() => setDialogOpen(false)}
           agent={agent}
           defaultVersion={agent.production || agent.latest}
-          onBuild={(choice) => build(agent, choice, templateWorldSource(template))}
+          onBuild={(choice) => {
+            setDialogOpen(false);
+            if (where === "local") setLocalChoice(choice);
+            else startBuild(choice, "cloud");
+          }}
         />
       )}
     </Stack>
   );
 }
-TemplateBuildPanel.propTypes = { template: PropTypes.object, showName: PropTypes.bool };
+TemplateBuildPanel.propTypes = { template: PropTypes.object, showName: PropTypes.bool, initialMode: PropTypes.oneOf(["try", "agent"]) };
+
+/* On their machine: the CLI steps for this world and agent, then the wait
+   for the machine to check in, then the build — as it is in Future AGI. */
+function LocalRun({ template, agent, choice, checkedIn, onOpen, onBack }) {
+  const slug = (choice.name || template.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const steps = [
+    { title: "Install the CLI", body: "Once per machine.", cmd: "pip install futureagi" },
+    {
+      title: "Pull this world for your agent",
+      body: `This world's tables, tools and rules, and ${agent.name} at ${choice.version || agent.latest}.`,
+      cmd: `fai env init ${slug} --world ${template.id} --agent "${agent.name}" --scenarios ${choice.count}`,
+    },
+    {
+      title: "Build it on your machine",
+      body: "Builds the world locally and opens a secure tunnel back to this workspace.",
+      hint: "Nothing in the world leaves your machine — the tunnel carries results, traces and scores.",
+      cmd: `fai env up ${slug}`,
+    },
+  ];
+  return (
+    <Box sx={{ borderTop: "1px solid", borderColor: "divider" }}>
+      <Box sx={{ px: 2.5, pt: 2, pb: 2.5 }}>
+        <LocalSteps steps={steps} />
+      </Box>
+      <Divider />
+      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.5, py: 1.75 }}>
+        {checkedIn ? (
+          <Iconify icon="solar:check-circle-bold" width={16} sx={{ color: "#16A34A", flexShrink: 0 }} />
+        ) : (
+          <CircularProgress size={14} thickness={5} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+        )}
+        <Typography sx={{ typography: "s2", color: checkedIn ? "text.primary" : "text.secondary", flex: 1, minWidth: 0 }}>
+          {checkedIn ? "Your machine checked in — the build continues here." : "Waiting for your machine to check in…"}
+        </Typography>
+        <Button size="small" onClick={onBack} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary" }}>Back</Button>
+        <Button
+          size="small" variant="contained" color="primary"
+          disabled={!checkedIn}
+          onClick={onOpen}
+          sx={{ typography: "s2", fontWeight: 700, whiteSpace: "nowrap" }}
+        >
+          Open the build
+        </Button>
+      </Stack>
+    </Box>
+  );
+}
+LocalRun.propTypes = {
+  template: PropTypes.object.isRequired, agent: PropTypes.object.isRequired, choice: PropTypes.object.isRequired,
+  checkedIn: PropTypes.bool, onOpen: PropTypes.func.isRequired, onBack: PropTypes.func.isRequired,
+};
 
 function Line({ label, value, muted = false }) {
   return (
