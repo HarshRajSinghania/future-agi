@@ -192,7 +192,7 @@ function PrebuiltSection({ sectionRef, onBrowse }) {
     <Box ref={sectionRef} sx={{ scrollMarginTop: 16 }}>
       <SectionHead
         title="Use a prebuilt world"
-        subtitle="Tables, tools and rules, as designed. Pick one of your agents and its environment starts from this world."
+        subtitle="Tables, tools and rules, as designed. Try one now with its sample agent, or use it with one of your agents."
         action={(
           <Button size="small" variant="outlined" onClick={onBrowse} sx={OUTLINE_BTN}>
             {`Browse all ${worldTotal()}`}

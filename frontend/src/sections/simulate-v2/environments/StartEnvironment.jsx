@@ -314,7 +314,7 @@ export default function StartEnvironment({ entry = false }) {
                   </Typography>
                   <Typography noWrap sx={{ typography: "s2", color: "text.secondary" }}>
                     {view === "worlds"
-                      ? "Tables, tools and rules, as designed. Pick one of your agents and its environment starts from the world you choose."
+                      ? "Tables, tools and rules, as designed. Try one now with its sample agent, or use it with one of your agents."
                       : "Every environment belongs to one agent — pick yours, or connect one, then start from its own world or one of these."}
                   </Typography>
                 </Box>

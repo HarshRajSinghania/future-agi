@@ -55,7 +55,7 @@ export default function PrebuiltWorldsView({ onBack, bare = false }) {
             <Box component="span" sx={{ color: "text.secondary", fontWeight: 500, ml: 0.75 }}>{total}</Box>
           </Typography>
           <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-            Tables, tools and rules, as designed. Pick one of your agents and its environment starts from the world you choose.
+            Tables, tools and rules, as designed. Try one now with its sample agent, or use it with one of your agents.
           </Typography>
         </Box>
       </Stack>
