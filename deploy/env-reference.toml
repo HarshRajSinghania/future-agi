@@ -1199,7 +1199,7 @@ value `image.tag`. The keys below are the Compose equivalents.
     keys = ["FRONTEND_VERSION", "AGENTCC_GATEWAY_VERSION", "SERVING_VERSION", "CODE_EXECUTOR_VERSION"]
     default = "`latest`"
     setups = ["S", "D"]
-    text = "Tags of the UI, gateway, embedding-server and code-executor images. Standalone uses only `SERVING_VERSION` (`ml` profile) and `CODE_EXECUTOR_VERSION` (`sandbox` profile)."
+    text = "Tags of the UI, gateway, embedding-server and code-executor images. Standalone uses only `SERVING_VERSION` (`ml` profile) and `CODE_EXECUTOR_VERSION` (`sandbox` profile). Keep `AGENTCC_GATEWAY_VERSION` at the release `FUTURE_AGI_VERSION` names: the backend calls Jev evals through the gateway, and an older gateway fails every one (see `JEV_TRANSPORT`)."
 
     [[part.section.row]]
     keys = ["FI_COLLECTOR_VERSION"]
@@ -1720,6 +1720,64 @@ database, override `PG_HOST`, `PGBOUNCER_HOST` or `CH_HOST` in a
     text = "Platform URL the simulation runner reports results to."
 
   [[part.section]]
+  heading = "Jev evals, Instant eval and Insights"
+  body = '''
+Jev evals run on every edition, always on the organization's own TypeSafe key.
+Instant eval and Insights need an Enterprise license that lists `instant_eval`
+and `insights`; Future AGI Cloud plans include them. The API and the workers
+read these keys.
+'''
+
+    [[part.section.row]]
+    keys = ["JEV_TRANSPORT"]
+    default = "`gateway`"
+    setups = ["S", "D", "H"]
+    text = "How Jev evals reach TypeSafe. `gateway` sends them through the LLM gateway's `/v1/systemone`, so the gateway needs egress to `api.typesafe.ai` (behind a proxy, set `HTTPS_PROXY` on it) and the same release as the backend: an older gateway answers 404, and every Jev eval fails with `JEV_PROVIDER_ERROR`. `direct` calls TypeSafe from the API and workers instead, for development without a gateway or as a fallback. Any other value means `gateway`."
+
+    [[part.section.row]]
+    keys = ["JEV_MAX_CONCURRENT"]
+    default = "`8`"
+    setups = ["S", "D", "H"]
+    text = "Jev calls one worker process makes at once; the rest wait. An Instant eval run keeps up to 32 rows in flight, so workers that serve it want at least `32`."
+
+    [[part.section.row]]
+    keys = ["INSTANT_EVAL_MAX_ROWS"]
+    default = "`100000`"
+    setups = ["S", "D", "H"]
+    text = "Most rows one Instant eval run reads (a user counts as five sessions). Larger runs are refused."
+
+    [[part.section.row]]
+    keys = ["INSTANT_EVAL_CONFIRM_ROWS"]
+    default = "`5000`"
+    setups = ["S", "D", "H"]
+    text = "A run over this many rows asks the person to confirm its credits before it starts."
+
+    [[part.section.row]]
+    keys = ["INSTANT_EVAL_MAX_ACTIVE_PER_ORG"]
+    default = "`2`"
+    setups = ["S", "D", "H"]
+    text = "Instant eval runs one organization can have going at once; another start is refused until one finishes."
+
+    [[part.section.row]]
+    keys = ["INSTANT_EVAL_ASSUMED_ROWS_PER_MIN"]
+    default = "`300`"
+    setups = ["S", "D", "H"]
+    text = "Rows a minute assumed for a run's time estimate before it starts. A running run shows its measured rate."
+
+    [[part.section.row]]
+    keys = ["INSIGHTS_FAST_MODEL", "INSIGHTS_THINKING_MODEL"]
+    default = "`turing_flash`, `turing_large`"
+    setups = ["S", "D", "H"]
+    text = "Models Insights uses: the fast one reads every trace or session, the thinking one names the categories and writes the report. The Turing defaults run on Future AGI's keys, which a licensed self-hosted install reaches through Future AGI's managed service; any other model goes through your gateway on your own provider key."
+
+    [[part.section.row]]
+    keys = ["INSIGHTS_AGENT_URL", "INSIGHTS_AGENT_SECRET"]
+    default = "empty: the built-in engine"
+    setups = ["S", "D", "H"]
+    text = "Future AGI's separate Insights agent service and the bearer token it accepts. Set, every model step of an Insights run goes to that service; empty, the API and workers run the same steps themselves."
+    audience = "internal"
+
+  [[part.section]]
   heading = "Observed-attribute catalog"
   body = '''
 The span attributes and values that trace filters, dashboard widgets and task
@@ -1855,7 +1913,7 @@ in a compose override; the Helm chart sets them from `global.proxy`,
     label = "`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (and lowercase)"
     default = "unset"
     setups = ["S", "D", "H"]
-    text = "Outbound proxy and the hosts that bypass it, object storage included; object storage on a loopback address (Standalone's) is always reached directly. On Distributed, list the internal hosts in `NO_PROXY` (`minio,code-executor,serving,agentcc-gateway,fi-collector,localhost,127.0.0.1`), or their calls go to the proxy. Helm: `global.proxy`, which builds `NO_PROXY` from the cluster's names, the release's Services and the datastore hosts plus `global.proxy.noProxy`. The LLM gateway does not use a proxy yet."
+    text = "Outbound proxy and the hosts that bypass it, object storage included; object storage on a loopback address (Standalone's) is always reached directly. On Distributed, list the internal hosts in `NO_PROXY` (`minio,code-executor,serving,agentcc-gateway,fi-collector,localhost,127.0.0.1`), or their calls go to the proxy. Helm: `global.proxy`, which builds `NO_PROXY` from the cluster's names, the release's Services and the datastore hosts plus `global.proxy.noProxy`. The LLM gateway uses the proxy for decision models only (Jev on TypeSafe, Perplexity Decider, OpenAI Decisions); its chat providers connect directly."
 
     [[part.section.row]]
     keys = ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"]
