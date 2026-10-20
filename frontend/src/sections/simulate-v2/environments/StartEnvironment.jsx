@@ -7,6 +7,8 @@ import {
   Switch, MenuItem, Select,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
+import EnvironmentValues from "../agents/connect/EnvironmentValues";
+import { envValuesSourceOf } from "../_mock/envValues";
 import { paths } from "src/routes/paths";
 import { SectionCard } from "../components/primitives";
 import { useSimStore, useConnectedAgents } from "../store";
@@ -1642,6 +1644,9 @@ function PanelCodeUpload() {
   const [scenarioCount, setScenarioCount] = useState(DEFAULT_SCENARIOS);
   const [files, setFiles] = useState([]);
   const [entry, setEntry] = useState("");
+  /* What our sandbox needs to run the code, as for a repository. */
+  const [envValues, setEnvValues] = useState([]);
+  const [credFiles, setCredFiles] = useState([]);
   const canGo = files.length > 0;
 
   const onDrop = (list) => {
@@ -1721,6 +1726,12 @@ function PanelCodeUpload() {
           helper="Which file defines the agent's step function?"
         />
       )}
+      {files.length > 0 && (
+        <EnvironmentValues
+          values={envValues} onValues={setEnvValues}
+          files={credFiles} onFiles={setCredFiles}
+        />
+      )}
       <ScenarioCountRow value={scenarioCount} onChange={setScenarioCount} />
       <ContinueRow
         disabled={!canGo}
@@ -1730,6 +1741,7 @@ function PanelCodeUpload() {
           scenarioCount: scenarioCountOf(scenarioCount),
           entry: entry.trim(),
           files: files.map((f) => ({ name: f.name, size: f.size })),
+          ...envValuesSourceOf({ values: envValues, files: credFiles }),
         })}
       />
     </Stack>

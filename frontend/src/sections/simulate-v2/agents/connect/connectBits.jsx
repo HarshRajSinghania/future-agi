@@ -1,7 +1,9 @@
 import PropTypes from "prop-types";
 import { useState } from "react";
 import { Box, Button, IconButton, Stack, TextField, Tooltip, Typography } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
+import { HintLine } from "./replicationBits";
 
 const MONO = "ui-monospace, Menlo, monospace";
 
@@ -241,3 +243,30 @@ export function FrameworkTuning({ tuning, structure }) {
   );
 }
 FrameworkTuning.propTypes = { tuning: PropTypes.object, structure: PropTypes.string };
+
+/** One of two or three ways to do something, as a selectable card with a one-line summary and a hint. */
+export function WhereOption({ icon, label, short, hint, on, onClick }) {
+  return (
+    <Stack
+      direction="row" spacing={1.25} alignItems="flex-start"
+      role="radio" aria-checked={on} tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+      sx={{
+        px: 1.5, py: 1.25, borderRadius: 1, border: "1px solid", cursor: "pointer",
+        borderColor: on ? "text.primary" : "divider",
+        bgcolor: (t) => (on ? alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.06 : 0.03) : "transparent"),
+      }}
+    >
+      <Iconify icon={icon} width={16} sx={{ color: "text.secondary", mt: 0.25, flexShrink: 0 }} />
+      <Box flex={1} minWidth={0}>
+        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{label}</Typography>
+        <Typography component="div" sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+          <HintLine hint={hint}>{short}</HintLine>
+        </Typography>
+      </Box>
+      <Iconify icon={on ? "solar:check-circle-bold" : "solar:circle-linear"} width={16} sx={{ color: on ? "text.primary" : "text.disabled", flexShrink: 0 }} />
+    </Stack>
+  );
+}
+WhereOption.propTypes = { icon: PropTypes.string, label: PropTypes.string, short: PropTypes.string, hint: PropTypes.string, on: PropTypes.bool, onClick: PropTypes.func };

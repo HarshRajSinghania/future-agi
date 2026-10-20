@@ -25,7 +25,7 @@ const MONO = "ui-monospace, Menlo, monospace";
  * we scan it, and the person says which agent they mean — a repository can
  * hold several. Falls back to typing a URL for code that isn't on GitHub.
  */
-export default function GithubRepoPicker({ repo, agentId, onPick, onManual, showAgents = true }) {
+export default function GithubRepoPicker({ repo, agentId, onPick, onManual, showAgents = true, manualLinks = true }) {
   const integrations = useIntegrations();
   const repos = installedRepos(integrations);
   const [installOpen, setInstallOpen] = useState(false);
@@ -92,10 +92,12 @@ export default function GithubRepoPicker({ repo, agentId, onPick, onManual, show
               Install GitHub App
             </Button>
           </Stack>
-          <ManualLink
-            onManual={onManual}
-            label="Not on GitHub? Enter a repository URL instead"
-          />
+          {manualLinks && (
+            <ManualLink
+              onManual={onManual}
+              label="Not on GitHub? Enter a repository URL instead"
+            />
+          )}
         </Box>
         {dialog}
       </>
@@ -278,10 +280,12 @@ export default function GithubRepoPicker({ repo, agentId, onPick, onManual, show
               </Stack>
             </Box>
           ))}
-        <ManualLink
-          onManual={onManual}
-          label="Enter a repository URL instead"
-        />
+        {manualLinks && (
+          <ManualLink
+            onManual={onManual}
+            label="Enter a repository URL instead"
+          />
+        )}
       </Stack>
       {dialog}
     </>
@@ -294,6 +298,8 @@ GithubRepoPicker.propTypes = {
   onPick: PropTypes.func.isRequired,
   onManual: PropTypes.func,
   showAgents: PropTypes.bool,
+  /* Off where the form already offers pasting a link as its own choice. */
+  manualLinks: PropTypes.bool,
 };
 
 function ManualLink({ onManual, label }) {

@@ -32,6 +32,9 @@ export default function HostedAgentFlow({ title, onSave, prefill, initial = null
   const submitLabel = useConnectSubmitLabel();
   const [listing, setListing] = useState(false);
   const [agentType, setAgentType] = useState(lockedType || initial?.agentType || "voice");
+  /* Picked on the directory ("Vapi", "Retell chat"): the drawer is that
+     platform's — its header names it — so there is nothing to switch. */
+  const platformLocked = !!initial?.platform;
   /* No "Others" here: a prompt with no platform behind it is an agent built
      in Future AGI, which has its own way in. */
   const platforms = (HOSTED_PLATFORMS_BY_TYPE[agentType] || []).filter((p) => !p.isOther);
@@ -173,7 +176,7 @@ export default function HostedAgentFlow({ title, onSave, prefill, initial = null
       next={next}
     >
       <Stack spacing={1.75}>
-        {!lockedType && <Box>
+        {!lockedType && !platformLocked && <Box>
           <Label>Agent type</Label>
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
             {AGENT_TYPES.map((t) => (
@@ -182,8 +185,8 @@ export default function HostedAgentFlow({ title, onSave, prefill, initial = null
           </Box>
         </Box>}
         <Box>
-          <Label>Platform</Label>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
+          {!platformLocked && <Label>Platform</Label>}
+          {!platformLocked && <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
             {platforms.map((p) => (
               <ChipCard
                 key={p.id}
@@ -194,7 +197,7 @@ export default function HostedAgentFlow({ title, onSave, prefill, initial = null
                 onClick={() => { setPlatformId(p.id); setPickedId(null); setChatChannel(null); setImportCopy(false); setSealedOpen(false); setToolFiles([]); }}
               />
             ))}
-          </Box>
+          </Box>}
           {!platform && (
             <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 1 }}>
               None for this agent type yet — connect it by its endpoint.

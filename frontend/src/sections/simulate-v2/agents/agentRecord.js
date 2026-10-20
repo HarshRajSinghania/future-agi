@@ -71,7 +71,20 @@ export const sourceRowsOf = ({ agent, source, definition, version }) => {
       const access = githubAccessOf(repo);
       rows.push({ label: "Write access", value: access ? githubAccessLabel(access) : "None — the GitHub App can't see this repository" });
     }
-    rows.push({ label: "Credentials", value: "Test credentials you provide · production secrets are never read" });
+    /* One row for what the sandbox runs the code with: the test
+       credentials given at connect, or the promise when none were. */
+    const envVals = v.envValues || [];
+    const secrets = envVals.filter((e) => e.secret).length;
+    const files = (v.credentialFiles || []).length;
+    const given = [
+      envVals.length ? `${envVals.map((e) => e.name).join(", ")}${secrets ? ` · ${secrets} by reference` : ""}` : null,
+      files ? `${files} credential file${files === 1 ? "" : "s"}` : null,
+    ].filter(Boolean);
+    rows.push({
+      label: "Test credentials",
+      value: given.length ? given.join(" · ") : "Test credentials you provide · production secrets are never read",
+      hint: "What our sandbox runs the code with — test credentials only. Secrets are references into your secret manager, never stored here.",
+    });
   } else if (kind === "platform") {
     if (v.agentId) rows.push({ label: "Agent ID", value: v.agentId, mono: true });
     rows.push({

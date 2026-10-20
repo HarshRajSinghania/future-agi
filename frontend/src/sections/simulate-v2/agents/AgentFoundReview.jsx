@@ -29,6 +29,11 @@ export default function AgentFoundReview({ agent, onSave, onCancel }) {
   /* Safe by default: whatever was marked at connect stays marked. */
   const [neverReal, setNeverReal] = useState(() => (v.neverRunForReal || []).filter((t) => found.tools.includes(t)));
   const [credRef, setCredRef] = useState(v.testCredentialsRef || "");
+  /* Test credentials given at connect (.env values, a credential file) are
+     the ones — shown here, not asked for again. */
+  const givenEnv = v.envValues || [];
+  const givenFiles = v.credentialFiles || [];
+  const givenAtConnect = givenEnv.length > 0 || givenFiles.length > 0;
 
   const tools = values.tools || [];
   const open = FOUND_FACTS.filter((f) => !status[f.id]);
@@ -46,7 +51,7 @@ export default function AgentFoundReview({ agent, onSave, onCancel }) {
         runtimePrompts: found.runtimePrompts.length ? runtimePrompts : null,
         neverRunForReal: neverReal.filter((t) => tools.includes(t)),
         /* Stored encrypted: what's kept is the reference it's held under. */
-        testCredentialsRef: keyRefOf(credRef, CRED_SLOT),
+        ...(!givenAtConnect && { testCredentialsRef: keyRefOf(credRef, CRED_SLOT) }),
       }),
       n ? `Saved — ${n} item${n === 1 ? "" : "s"} corrected on ${agent.name}'s record.` : `Saved — what we found in ${agent.name} is confirmed.`,
     );
@@ -116,12 +121,28 @@ export default function AgentFoundReview({ agent, onSave, onCancel }) {
         label="Test credentials"
         from={found.credentialKeys.length ? `It reads ${found.credentialKeys.join(", ")} — names only, we never read the values.` : null}
       >
-        <SecretRefField
-          value={credRef}
-          onChange={setCredRef}
-          placeholder={CRED_SLOT}
-          helper="Test credentials only, never production secrets. Stored encrypted and used only by Future AGI — never sent to the improver."
-        />
+        {givenAtConnect ? (
+          <Box>
+            <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+              {[...givenEnv.map((e) => ({ k: e.name, val: e.secret ? e.ref : e.value })), ...givenFiles.map((f) => ({ k: f.name, val: "credential file · mounted per run" }))].map((r, i) => (
+                <Stack key={r.k} direction="row" spacing={1.5} sx={{ px: 1.25, py: 0.75, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>
+                  <Typography noWrap sx={{ typography: "s2", fontWeight: 600, fontFamily: MONO, width: 190, flexShrink: 0 }}>{r.k}</Typography>
+                  <Typography noWrap sx={{ typography: "s2", fontFamily: MONO, color: "text.secondary", minWidth: 0 }}>{r.val}</Typography>
+                </Stack>
+              ))}
+            </Box>
+            <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.5 }}>
+              Given when you connected — test credentials only, never sent to the improver.
+            </Typography>
+          </Box>
+        ) : (
+          <SecretRefField
+            value={credRef}
+            onChange={setCredRef}
+            placeholder={CRED_SLOT}
+            helper="Test credentials only, never production secrets. Stored encrypted and used only by Future AGI — never sent to the improver."
+          />
+        )}
       </DetailRow>
 
       <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.75, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>

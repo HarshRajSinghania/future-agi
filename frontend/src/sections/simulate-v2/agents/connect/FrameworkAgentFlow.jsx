@@ -1,7 +1,6 @@
 import PropTypes from "prop-types";
 import { useEffect, useState } from "react";
 import { Box, Stack, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { FRAMEWORK_META } from "../../_mock/agentRegistry";
 import { installedRepos, useIntegrations } from "../../_mock/integrations";
@@ -9,7 +8,7 @@ import { ADAPTERS, ADAPTER_ENDPOINT_PLACEHOLDER, BUILTIN_TOOL_LIBRARY, adapterSh
 import { OPENAI_AGENT_BUILDER_NOTE, TRACEAI_FRAMEWORK_NOTE } from "../../environments/connectOptions";
 import { ChipCard, Field, Label } from "../../environments/StartEnvironment";
 import ConnectSteps from "./ConnectSteps";
-import { CodeSnippet, FrameworkTuning, TextLink } from "./connectBits";
+import { CodeSnippet, FrameworkTuning, TextLink, WhereOption } from "./connectBits";
 import { HintLine } from "./replicationBits";
 import { useConnectSubmitLabel } from "./connectSubmit";
 import { hashSeed } from "../../_mock/runStream";
@@ -40,7 +39,7 @@ const localInitOf = (adapter) => adapter.code
  * and it checks in with its commit and uncommitted changes. The framework is picked on the directory and can be
  * switched at the top, which says what improvements can change in it.
  */
-export default function FrameworkAgentFlow({ title, framework, onFramework, onSave, onSwitch }) {
+export default function FrameworkAgentFlow({ title, framework, onFramework, onSave, onSwitch, initial = null }) {
   const submitLabel = useConnectSubmitLabel();
   const integrations = useIntegrations();
   const [endpoint, setEndpoint] = useState(ADAPTER_ENDPOINT_PLACEHOLDER);
@@ -150,14 +149,17 @@ export default function FrameworkAgentFlow({ title, framework, onFramework, onSa
       next={next}
     >
         <Stack spacing={2}>
-          <Box>
-            <Label>Framework</Label>
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
-              {Object.entries(FRAMEWORK_META).map(([id, f]) => (
-                <ChipCard key={id} icon={f.icon} label={f.label} on={framework === id} onClick={() => switchFramework(id)} />
-              ))}
+          {/* Picked on the directory: the drawer is that framework's. */}
+          {!initial?.framework && (
+            <Box>
+              <Label>Framework</Label>
+              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
+                {Object.entries(FRAMEWORK_META).map(([id, f]) => (
+                  <ChipCard key={id} icon={f.icon} label={f.label} on={framework === id} onClick={() => switchFramework(id)} />
+                ))}
+              </Box>
             </Box>
-          </Box>
+          )}
           <FrameworkTuning tuning={tuning} structure={meta.structure} />
 
           <Box>
@@ -235,6 +237,7 @@ export default function FrameworkAgentFlow({ title, framework, onFramework, onSa
 FrameworkAgentFlow.propTypes = {
   title: PropTypes.string,
   framework: PropTypes.oneOf(Object.keys(FRAMEWORK_META)).isRequired,
+  initial: PropTypes.object,
   onFramework: PropTypes.func.isRequired,
   limits: PropTypes.object.isRequired,
   onLimits: PropTypes.func.isRequired,
@@ -248,31 +251,6 @@ FrameworkAgentFlow.propTypes = {
 };
 
 /* One way it can run — the same selectable card as the run-location choice. */
-function WhereOption({ icon, label, short, hint, on, onClick }) {
-  return (
-    <Stack
-      direction="row" spacing={1.25} alignItems="flex-start"
-      role="radio" aria-checked={on} tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
-      sx={{
-        px: 1.5, py: 1.25, borderRadius: 1, border: "1px solid", cursor: "pointer",
-        borderColor: on ? "text.primary" : "divider",
-        bgcolor: (t) => (on ? alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.06 : 0.03) : "transparent"),
-      }}
-    >
-      <Iconify icon={icon} width={16} sx={{ color: "text.secondary", mt: 0.25, flexShrink: 0 }} />
-      <Box flex={1} minWidth={0}>
-        <Typography sx={{ typography: "s2", fontWeight: 600 }}>{label}</Typography>
-        <Typography component="div" sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-          <HintLine hint={hint}>{short}</HintLine>
-        </Typography>
-      </Box>
-      <Iconify icon={on ? "solar:check-circle-bold" : "solar:circle-linear"} width={16} sx={{ color: on ? "text.primary" : "text.disabled", flexShrink: 0 }} />
-    </Stack>
-  );
-}
-WhereOption.propTypes = { icon: PropTypes.string, label: PropTypes.string, short: PropTypes.string, hint: PropTypes.string, on: PropTypes.bool, onClick: PropTypes.func };
 
 /* One numbered step of the install, on a thin rail — like Develop locally. */
 function RailStep({ n, title, body, last, children }) {

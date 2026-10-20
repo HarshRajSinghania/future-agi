@@ -96,14 +96,17 @@ export default function ClosedPlatformFlow({ title, onSave, initial = null, lock
       next={next}
     >
       <Stack spacing={1.75}>
-        <Box>
-          <Label>Platform</Label>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
-            {CLOSED_PLATFORMS.map((p) => (
-              <ChipCard key={p.id} icon={CLOSED_PLATFORM_REACH[p.id]?.icon} label={p.label} on={platform.id === p.id} onClick={() => pickPlatform(p.id)} />
-            ))}
+        {/* Picked on the directory (Sierra, Decagon…): nothing to switch. */}
+        {!initial?.closedPlatform && (
+          <Box>
+            <Label>Platform</Label>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
+              {CLOSED_PLATFORMS.map((p) => (
+                <ChipCard key={p.id} icon={CLOSED_PLATFORM_REACH[p.id]?.icon} label={p.label} on={platform.id === p.id} onClick={() => pickPlatform(p.id)} />
+              ))}
+            </Box>
           </Box>
-        </Box>
+        )}
 
         <Box>
           <Label>How we reach it</Label>

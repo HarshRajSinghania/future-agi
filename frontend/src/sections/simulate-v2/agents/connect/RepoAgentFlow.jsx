@@ -10,7 +10,9 @@ import { isSecretRef } from "../../_mock/secretRefs";
 import GithubRepoPicker from "../../integrations/GithubRepoPicker";
 import { ChipCard, Field, Label } from "../../environments/StartEnvironment";
 import ConnectSteps from "./ConnectSteps";
-import { FrameworkTuning, TextLink } from "./connectBits";
+import EnvironmentValues from "./EnvironmentValues";
+import { envValuesSourceOf } from "../../_mock/envValues";
+import { FrameworkTuning, TextLink, WhereOption } from "./connectBits";
 import GitHostRepoPicker from "./GitHostRepoPicker";
 import { HintLine } from "./replicationBits";
 import { recommendedRunLocation } from "../../_mock/replication";
@@ -67,7 +69,15 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
     return repoFolders(repo).find((f) => (f.agents || []).some((a) => a.id === preset?.agent?.id))?.path || "";
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [mode, setMode] = useState(pasted && !pastedVisible ? "manual" : "github");
+  /* GitHub: connect the app and pick from its repositories, or paste a
+     repository link and start — whichever the person has. Without the app
+     installed, pasting a link is where it starts. */
+  const githubReady = installedRepos(integrations).length > 0;
+  const [mode, setMode] = useState(
+    (pasted && !pastedVisible) || (host === "github" && !githubReady && !preset?.repo && !suggestedRepo) ? "manual" : "github",
+  );
+  /* The option it opens on sits first, and the order holds while the person switches. */
+  const [linkFirst] = useState(mode === "manual");
   const [ghRepo, setGhRepo] = useState(preset?.repo || (pastedVisible ? pasted : "") || suggestedRepo || "");
   /* Access granted on GitHub after opening: pick the matching repository then. */
   useEffect(() => {
@@ -96,14 +106,25 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
   const [pointers, setPointers] = useState({});
   const [modelAtRuntime, setModelAtRuntime] = useState(false);
   const [keyRefs, setKeyRefs] = useState({});
+  /* The test credentials and settings our sandbox runs the code with —
+     .env values (secrets by reference) and a credential file. */
+  /* A pasted link reads a public repository; a private one is read
+     through the GitHub App. */
+  const [visibility, setVisibility] = useState("public");
+  const [envValues, setEnvValues] = useState([]);
+  const [credFiles, setCredFiles] = useState([]);
+  const envRefOf = (name) => envValues.find((v) => v.name === name && v.secret)?.ref;
 
   /* "github" mode is picking from the host's connection, whichever host. */
   const viaGithub = mode === "github";
+  /* A pasted GitHub link — it can start at the repository root. */
+  const pastedLink = host === "github" && mode === "manual";
+  const privatePasted = pastedLink && visibility === "private";
   const hostLabel = HOST_LABEL[host];
   const review = reviewNounOf(host);
   const repo = viaGithub
     ? reposOn(host).find((r) => r.name === ghRepo) || null
-    : manualRepo.trim() ? { name: manualRepo.trim().replace(/^https?:\/\/[^/]+\//, ""), language: /\.ts|typescript|-web|-chat/i.test(manualRepo) ? "TypeScript" : "Python", agents: [] } : null;
+    : manualRepo.trim() ? { name: manualRepo.trim().replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "").replace(/\/+$/, ""), language: /\.ts|typescript|-web|-chat/i.test(manualRepo) ? "TypeScript" : "Python", agents: [] } : null;
   const branches = useMemo(() => repoBranches(repo), [repo?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Read one entry point of the folder — again when another is picked. */
@@ -149,7 +170,9 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
     agentType: tracedCode?.channel || (livekit ? "voice" : "chat"),
     value: viaGithub ? hostRepoUrlOf(host, ghRepo) : manualUrl,
     ref: branch.trim() || "main",
-    releaseDetection: { watch: "branch", ref: (branch || "main").trim() },
+    /* Through the GitHub App a merge is seen at once; a pasted link is
+       checked once a day — or Synced any time. */
+    releaseDetection: { watch: "branch", ref: (branch || "main").trim(), ...(pastedLink && { dailySync: true }) },
     folder: folder.trim(),
     entry: (direct && entryPoint.trim()) || facts.entry || "",
     ...(viaGithub && host === "github" && { githubApp: true }),
@@ -171,10 +194,15 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
       ...(modelAtRuntime && { modelAtRuntime: true }),
       runtimePrompts: detected.runtimePrompts.map((p) => ({ kind: p.kind, what: p.what, where: p.where, ...((pointers[p.id] || "").trim() && { pointer: pointers[p.id].trim() }) })),
       /* Key names and the reference each resolves through — never a value. */
-      credentialKeys: detected.credentialKeys.value.map((name) => ({ name, ...(isSecretRef(keyRefs[name]) && { ref: keyRefs[name].trim() }) })),
+      credentialKeys: detected.credentialKeys.value.map((name) => {
+        const ref = isSecretRef(keyRefs[name]) ? keyRefs[name].trim() : envRefOf(name);
+        return { name, ...(ref && { ref }) };
+      }),
       fagiPrompts: detected.fagiPrompts.value,
       ...(detected.members.length && { members: detected.members.map((m) => ({ ...m, instructions: m.promptRef })) }),
     }),
+    ...envValuesSourceOf({ values: envValues, files: credFiles }),
+    ...(pastedLink && { repoVisibility: "public" }),
     versionNote: `Read from ${repo?.name || "the repository"} @ ${branch.trim() || "main"}.`,
   };
 
@@ -202,20 +230,40 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
     onSave(source);
   }, [saveWanted, found]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ready = !!repo && !!folder.trim() && !!branch.trim();
+  const ready = !!repo && (!!folder.trim() || pastedLink) && !!branch.trim() && !privatePasted;
   const next = {
     label: submitLabel,
     icon: "solar:link-circle-linear",
     disabled: !ready || mismatch,
-    hint: mismatch ? `Doesn't match ${project.name}'s traces` : !repo ? (viaGithub ? "Choose a repository" : "Add a repository") : "Choose the agent",
+    hint: mismatch ? `Doesn't match ${project.name}'s traces` : !repo ? (viaGithub ? "Choose a repository" : pastedLink ? "Paste the repository link" : "Add a repository") : privatePasted ? "Private repositories need the GitHub App" : "Choose the agent",
     busy: reading ? `Reading ${folder || "the agent"} at ${branch}…` : null,
     onClick: connect,
   };
 
+  /* GitHub only: the two ways in, the one it opens on first. */
+  const githubOption = (
+    <WhereOption
+      key="github"
+      icon="mdi:github" label="Connect GitHub" on={viaGithub} onClick={() => setMode("github")}
+      short="Pick from a list · private repositories · fixes as pull requests"
+      hint="Install the GitHub App once. Every repository it can see is listed, a merge on the branch is picked up at once, and fixes come back as pull requests."
+    />
+  );
+  const linkOption = (
+    <WhereOption
+      key="link"
+      icon="solar:link-linear" label="Paste a repo link" on={!viaGithub} onClick={() => setMode("manual")}
+      short="Start building now · public repositories"
+      hint="We read the code when you connect and check the branch once a day — Sync any time to pick up a change now. Without the GitHub App, fixes come back as a patch."
+    />
+  );
+
   return (
     <ConnectSteps
       title={title}
-      subtitle="Pick the git host, the repository and the agent in it. We read the code when you connect — then confirm or correct what we found in Finish setting up, on the agent's Overview."
+      subtitle={host === "github" && initial?.host
+        ? "Connect GitHub to pick from your repositories, or paste a repository link and start. We read the code when you connect — then confirm or correct what we found in Finish setting up, on the agent's Overview."
+        : "Pick the git host, the repository and the agent in it. We read the code when you connect — then confirm or correct what we found in Finish setting up, on the agent's Overview."}
       steps={STEPS}
       active={0}
       next={next}
@@ -228,7 +276,9 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
               : <>{`None of the repositories the GitHub App can see matches ${project.name}'s traces — service `}<Box component="span" sx={{ fontFamily: MONO }}>{tracedCode.service}</Box>{` · ${tracedFw}. If its code is in another repository, give the app access with "Change access on GitHub" below.`}</>}
           </Typography>
         )}
-        <Box>
+        {/* Picked on the directory (GitHub, GitLab, Bitbucket): nothing to
+            switch. Direct model calls can live on any host, so they choose. */}
+        {(!initial?.host || initial?.direct) && <Box>
           <Label>Git host</Label>
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, mt: 0.75 }}>
             {HOSTS.map((h) => (
@@ -241,7 +291,7 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
               />
             ))}
           </Box>
-        </Box>
+        </Box>}
         {viaGithub && host !== "github" ? (
           <GitHostRepoPicker
             host={host}
@@ -256,8 +306,15 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
             }}
             onManual={(pre) => { setMode("manual"); if (pre?.repo) setManualRepo(pre.repo); }}
           />
-        ) : viaGithub ? (
+        ) : null}
+        {host === "github" && (
+          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+            {(linkFirst ? [linkOption, githubOption] : [githubOption, linkOption])}
+          </Box>
+        )}
+        {viaGithub && host !== "github" ? null : viaGithub ? (
           <GithubRepoPicker
+            manualLinks={false}
             repo={ghRepo}
             agentId={entryId}
             onPick={({ repo: r, agent: a }) => {
@@ -272,26 +329,56 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
         ) : (
           <Stack spacing={1.5}>
             <Field
-              label={`${hostLabel} repository`} required mono
-              placeholder={host === "github" ? "owner/repo" : `${GIT_HOST_META[host].accountPlaceholder}/repo`}
+              label={pastedLink ? "Repository link" : `${hostLabel} repository`} required mono
+              placeholder={pastedLink ? "https://github.com/owner/repo" : `${GIT_HOST_META[host].accountPlaceholder}/repo`}
               value={manualRepo} onChange={(v) => { setManualRepo(v); setFolder(""); }}
-              helper={host === "github"
-                ? "Read once now — Sync and fix PRs need the GitHub App."
+              helper={pastedLink
+                ? "We read the code so scenarios stay in step with the agent's tools."
                 : `Read once now — Sync and fix ${review.long}s need the ${hostLabel} connection.`}
             />
-            <Field
-              label="Agent folder" required mono
-              placeholder="agents/returns"
-              value={folder} onChange={setFolder}
-              helper={<HintLine hint="A monorepo can hold several agents.">The folder the agent&apos;s entry file lives in.</HintLine>}
-            />
-            <TextLink onClick={() => setMode("github")}>{`Pick from ${hostLabel} instead`}</TextLink>
+            {pastedLink ? (
+              <>
+                <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                  <Field label="Branch or tag" mono value={branch} onChange={setBranch} placeholder="main" />
+                  <Field
+                    label="Entry path (optional)" mono
+                    placeholder="src/agent/index.ts"
+                    value={entryPoint}
+                    onChange={(v) => { setEntryPoint(v); setFolder(v.includes("/") ? v.replace(/\/[^/]*$/, "") : ""); }}
+                  />
+                </Box>
+                <Box>
+                  <Label>Visibility</Label>
+                  <Box sx={{ display: "grid", gap: 0.75, mt: 0.75, gridTemplateColumns: "1fr 1fr" }}>
+                    <ChipCard label="Public" on={visibility === "public"} onClick={() => setVisibility("public")} />
+                    <ChipCard label="Private" on={visibility === "private"} onClick={() => setVisibility("private")} />
+                  </Box>
+                </Box>
+                {visibility === "private" && (
+                  <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 1.5, py: 1.25, borderRadius: 1, border: "1px solid", borderColor: "divider" }}>
+                    <Iconify icon="solar:lock-keyhole-minimalistic-linear" width={16} sx={{ color: "text.secondary", flexShrink: 0 }} />
+                    <Typography sx={{ typography: "s2", flex: 1, minWidth: 0 }}>
+                      Private repositories are read through the GitHub App — install it once and pick this repository from the list.
+                    </Typography>
+                    <TextLink onClick={() => { setMode("github"); setVisibility("public"); }}>Connect GitHub</TextLink>
+                  </Stack>
+                )}
+              </>
+            ) : (
+              <Field
+                label="Agent folder" required mono
+                placeholder="agents/returns"
+                value={folder} onChange={setFolder}
+                helper={<HintLine hint="A monorepo can hold several agents.">The folder the agent&apos;s entry file lives in.</HintLine>}
+              />
+            )}
+            {!pastedLink && <TextLink onClick={() => setMode("github")}>{`Pick from ${hostLabel} instead`}</TextLink>}
           </Stack>
         )}
 
         {/* What improvements can change in the agent picked, before it's read. */}
         {pickedAgent && <FrameworkTuning tuning={frameworkTuningOf(pickedAgent.framework)} />}
-        {direct && (
+        {direct && !pastedLink && (
           <Field
             label={pickedAgent ? "Where the agent starts" : "Where the agent starts (when it uses no framework)"} mono
             placeholder={ENTRY_EXAMPLE}
@@ -305,7 +392,7 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
         )}
 
         {/* The branch is the one choice with a default worth stating. */}
-        {repo && (
+        {repo && !pastedLink && (
           changingBranch ? (
             <Box sx={{ maxWidth: 320 }}>
               {viaGithub ? (
@@ -334,6 +421,14 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
               <TextLink onClick={() => setChangingBranch(true)}>Change</TextLink>
             </Typography>
           )
+        )}
+
+        {(repo || pastedLink) && (
+          <EnvironmentValues
+            values={envValues} onValues={setEnvValues}
+            files={credFiles} onFiles={setCredFiles}
+            expectedNames={detected?.credentialKeys.value || []}
+          />
         )}
 
         {match && found && (

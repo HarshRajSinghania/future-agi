@@ -496,6 +496,12 @@ export const agentRecordFromSource = (source, now = new Date().toISOString()) =>
     ...(source?.importedCopy && { importedCopy: true }),
     ...(source?.toolCodeUploaded && { toolCodeUploaded: true }),
     ...(source?.toolCodeFiles?.length && { toolCodeFiles: source.toolCodeFiles }),
+    /* Test credentials and settings the sandbox runs the code with —
+       secrets as references only. */
+    ...(source?.envValues?.length && { envValues: source.envValues.map((e) => (e.secret ? { name: e.name, secret: true, ref: e.ref } : { name: e.name, value: e.value })) }),
+    /* A repository given by its link: who can read it, and how. */
+    ...(source?.repoVisibility && { repoVisibility: source.repoVisibility }),
+    ...(source?.credentialFiles?.length && { credentialFiles: source.credentialFiles.map((f) => ({ name: f.name, ref: f.ref })) }),
   };
   /* The Observe project picked at connect: an existing one is already
      receiving traces; a new one waits for them (a hosted agent's key pulls
