@@ -135,8 +135,9 @@ DEPRECATED secrets.eeLicenseKey: move the key to license.existingSecret (or lice
 {{- /* host:port only: the URL may carry a login. */}}
 
 NOTE     Outbound traffic goes through the proxy {{ include "futureagi.urlHost" ($proxy.httpsProxy | default $proxy.httpProxy) }}; NO_PROXY covers the release's
-         Services and datastores. The LLM gateway (agentcc-gateway) does not use the proxy yet:
-         its provider connections go direct, so allow its egress to the LLM providers.
+         Services and datastores. The LLM gateway (agentcc-gateway) uses the proxy for decision
+         models only (Jev on TypeSafe, Perplexity Decider, OpenAI Decisions): its chat providers
+         connect directly, so allow its egress to them.
 {{- end }}
 {{- if include "futureagi.caBundle.enabled" . }}
 
