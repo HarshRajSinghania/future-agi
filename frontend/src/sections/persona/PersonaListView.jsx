@@ -913,10 +913,28 @@ const PersonaListView = ({
         personaId={duplicateDialog.persona?.id}
         onClose={() => setDuplicateDialog({ open: false, persona: null })}
       />
+      {/* The drawer offers what the row does — Use, Duplicate, Edit your own —
+          and closes first, so only one panel is ever open. */}
       <PersonaInfoDrawer
         open={infoDrawer.open}
         persona={infoDrawer.persona || {}}
         onClose={() => setInfoDrawer({ open: false, persona: null })}
+        usage={usage ? usage[String(infoDrawer.persona?.id)] || { scenarios: 0, envs: [] } : undefined}
+        onUse={onUseInEnvironment && !isSelectable ? () => {
+          const p = infoDrawer.persona;
+          setInfoDrawer({ open: false, persona: null });
+          onUseInEnvironment([p]);
+        } : undefined}
+        onDuplicate={canCreate && !isSelectable ? () => {
+          const p = infoDrawer.persona;
+          setInfoDrawer({ open: false, persona: null });
+          setDuplicateDialog({ open: true, persona: p });
+        } : undefined}
+        onEdit={canCreate && !isSelectable && !infoDrawer.persona?.isDefault ? () => {
+          const p = infoDrawer.persona;
+          setInfoDrawer({ open: false, persona: null });
+          setEditDrawer({ mode: "edit", persona: p, personaCreateEditType: p?.simulationType });
+        } : undefined}
       />
     </Box>
   );

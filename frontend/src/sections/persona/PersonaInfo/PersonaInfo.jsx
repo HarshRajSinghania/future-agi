@@ -1,116 +1,134 @@
-import { Box, Divider, Typography } from "@mui/material";
-import React from "react";
-import PersonaBasicInfo from "./PersonaBasicInfo";
-import PersonaBehaviouralInfo from "./PersonaBehaviouralInfo";
-import PersonaConversationInfo from "./PersonaConversationInfo";
-import { FormProvider, useForm } from "react-hook-form";
-import {
-  getPersonaDefaultValues,
-  PersonCreateValidationSchema,
-} from "../PersonaCreateEdit/common";
-import { zodResolver } from "@hookform/resolvers/zod";
-import PrintFormValues from "src/utils/PrintFormValues";
 import PropTypes from "prop-types";
-import { ShowComponent } from "src/components/show";
-import { AGENT_TYPES } from "src/sections/agents/constants";
-import PersonaChatSettingsInfo from "./PersonaChatInfo";
+import { Box, Button, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import Iconify from "src/components/iconify";
+import {
+  callRowsOf, chatRowsOf, isVoicePersona, talkRowsOf, usageLineOf, whoRowsOf,
+} from "./personaInfoRows";
 
-const PersonaInfo = ({
-  onSuccess: _onSuccess,
-  onCancel: _onCancel,
-  editPersona,
-  persona,
-}) => {
-  const _isEditMode = Boolean(editPersona);
-  const form = useForm({
-    defaultValues: getPersonaDefaultValues(editPersona),
-    resolver: zodResolver(PersonCreateValidationSchema),
-  });
-
-  // const onSubmit = (data) => {
-  //   if (isEditMode) {
-  //     const updatePayload = {
-  //       ...data,
-  //       languages: data?.language,
-  //     };
-  //     delete updatePayload?.language;
-  //   } else {
-  //     // createPersona(data);
-  //   }
-  // };
+/**
+ * One persona, as a spec sheet: who it is, how it talks, and how it behaves
+ * on a call or in a chat — each a short key-value table, every value said in
+ * words. The header carries what you'd do with it (use it in an environment,
+ * duplicate it, edit your own) and where it's already used.
+ */
+const PersonaInfo = ({ persona, usage, onUse, onDuplicate, onEdit, onClose }) => {
+  const voice = isVoicePersona(persona);
+  const builtIn = !!persona?.isDefault;
+  const meta = [voice ? "Voice" : "Chat", builtIn ? "Future AGI built" : "Custom", usage !== undefined ? usageLineOf(usage) : null].filter(Boolean);
 
   return (
-    <FormProvider {...form}>
-      <Box
-        sx={{
-          padding: 2,
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-          height: "100%",
-        }}
-        component="form"
-        // onSubmit={form.handleSubmit(onSubmit)}
-      >
-        <PrintFormValues control={form.control} />
-        <Box>
-          <Typography typography="m2" fontWeight="fontWeightSemiBold">
-            Persona Info
-          </Typography>
-        </Box>
-        <Divider flexItem orientation="horizontal" />
-        <Box
-          sx={{
-            flex: 1,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-          }}
-        >
-          <PersonaBasicInfo persona={persona} />
-          <PersonaBehaviouralInfo persona={persona} />
-          <ShowComponent
-            condition={persona?.simulationType === AGENT_TYPES.VOICE}
-          >
-            <PersonaConversationInfo persona={persona} />
-          </ShowComponent>
-          <ShowComponent
-            condition={persona?.simulationType === AGENT_TYPES.CHAT}
-          >
-            <PersonaChatSettingsInfo persona={persona} />
-          </ShowComponent>
-        </Box>
-        {/* <Box sx={{ display: "flex", gap: 2 }}>
-          <Button
-            variant="outlined"
-            color="primary"
-            size="small"
-            fullWidth
-            onClick={onCancel}
-          >
-            Cancel
-          </Button>
-          <LoadingButton
-            variant="contained"
-            color="primary"
-            size="small"
-            fullWidth
-            type="submit"
-          >
-            {isEditMode ? "Update" : "Add"}
-          </LoadingButton>
-        </Box> */}
+    <Stack sx={{ height: "100%" }}>
+      {/* ── header ── */}
+      <Box sx={{ px: 2.5, pt: 2, pb: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+        <Stack direction="row" alignItems="flex-start" spacing={1.5}>
+          <Box sx={{
+            width: 32, height: 32, borderRadius: "50%", flexShrink: 0, display: "grid", placeItems: "center",
+            border: "1px solid", borderColor: "divider", color: "text.secondary",
+          }}>
+            <Iconify icon={voice ? "solar:microphone-3-linear" : "solar:chat-round-line-linear"} width={16} />
+          </Box>
+          <Box flex={1} minWidth={0}>
+            <Typography sx={{ typography: "m3", fontWeight: 600 }}>{persona?.name || "Persona"}</Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>{meta.join(" · ")}</Typography>
+          </Box>
+          <IconButton size="small" onClick={onClose} aria-label="Close">
+            <Iconify icon="eva:close-fill" width={18} sx={{ color: "text.secondary" }} />
+          </IconButton>
+        </Stack>
+        {persona?.description && (
+          <Typography sx={{ typography: "s2", color: "text.secondary", mt: 1.5 }}>{persona.description}</Typography>
+        )}
+        {(onUse || onDuplicate || onEdit) && (
+          <Stack direction="row" spacing={1} sx={{ mt: 1.75 }}>
+            {onUse && (
+              <Button
+                size="small" variant="contained" color="primary" onClick={onUse}
+                startIcon={<Iconify icon="mingcute:add-line" width={14} />}
+                sx={{ typography: "s2", fontWeight: 600 }}
+              >
+                Use in an environment
+              </Button>
+            )}
+            {onDuplicate && (
+              <Tooltip arrow title={builtIn ? "Make your own copy to change" : ""}>
+                <Button
+                  size="small" variant="outlined" onClick={onDuplicate}
+                  startIcon={<Iconify icon="solar:copy-linear" width={14} />}
+                  sx={{ typography: "s2", fontWeight: 600, color: "text.primary", borderColor: "divider" }}
+                >
+                  Duplicate
+                </Button>
+              </Tooltip>
+            )}
+            {onEdit && !builtIn && (
+              <Button
+                size="small" variant="outlined" onClick={onEdit}
+                startIcon={<Iconify icon="solar:pen-linear" width={14} />}
+                sx={{ typography: "s2", fontWeight: 600, color: "text.primary", borderColor: "divider" }}
+              >
+                Edit
+              </Button>
+            )}
+          </Stack>
+        )}
       </Box>
-    </FormProvider>
+
+      {/* ── the spec sheet ── */}
+      <Box sx={{ flex: 1, overflowY: "auto", px: 2.5, py: 2, display: "flex", flexDirection: "column", gap: 2.5 }}>
+        <Section title="Who they are" rows={whoRowsOf(persona)} />
+        <Section title="How they talk" rows={talkRowsOf(persona)} />
+        {voice
+          ? <Section title="On the call" rows={callRowsOf(persona)} />
+          : <Section title="In the chat" rows={chatRowsOf(persona)} />}
+        {usage?.scenarios > 0 && (
+          <Section title="Used in" rows={usage.envs.map((name) => [name, null])} />
+        )}
+      </Box>
+    </Stack>
   );
 };
 
 PersonaInfo.propTypes = {
-  onSuccess: PropTypes.func,
-  onCancel: PropTypes.func,
-  editPersona: PropTypes.object,
   persona: PropTypes.object,
+  /* `{ scenarios, envs: [name] }` where this persona is used; undefined when unknown. */
+  usage: PropTypes.object,
+  onUse: PropTypes.func,
+  onDuplicate: PropTypes.func,
+  onEdit: PropTypes.func,
+  onClose: PropTypes.func,
 };
 
 export default PersonaInfo;
+
+const LABEL_W = 200;
+
+function Section({ title, rows }) {
+  return (
+    <Box>
+      <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: 0.5, mb: 0.75 }}>
+        {title}
+      </Typography>
+      {rows.length ? (
+        <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+          {rows.map(([label, value], i) => (
+            <Stack
+              key={label}
+              direction="row"
+              alignItems="baseline"
+              spacing={2}
+              sx={{ px: 1.5, py: 1, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}
+            >
+              <Typography sx={{ typography: "s2", color: value == null ? "text.primary" : "text.subtitle", width: value == null ? "auto" : LABEL_W, flexShrink: 0 }}>
+                {label}
+              </Typography>
+              {value != null && <Typography sx={{ typography: "s2", color: "text.primary", minWidth: 0 }}>{value}</Typography>}
+            </Stack>
+          ))}
+        </Box>
+      ) : (
+        <Typography sx={{ typography: "s2", color: "text.disabled" }}>Not set</Typography>
+      )}
+    </Box>
+  );
+}
+Section.propTypes = { title: PropTypes.string, rows: PropTypes.array };

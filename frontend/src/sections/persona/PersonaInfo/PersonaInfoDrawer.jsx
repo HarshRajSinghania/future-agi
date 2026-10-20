@@ -1,57 +1,31 @@
-import { Box, IconButton } from "@mui/material";
 import PropTypes from "prop-types";
-import SideDrawer from "src/sections/simulate-v2/components/SideDrawer";
-import PersonaDrawerScale from "../PersonaDrawerScale";
 import React from "react";
+import SideDrawer from "src/sections/simulate-v2/components/SideDrawer";
 import PersonaInfo from "./PersonaInfo";
-import Iconify from "src/components/iconify";
 
-const PersonaInfoDrawer = ({
-  open,
-  onClose,
-  editPersona,
-  setSelectedTab,
-  persona,
-}) => {
-  const handleOnSuccess = () => {
-    if (!editPersona) {
-      setSelectedTab("custom");
-    }
-    onClose();
-  };
-  return (
-    <SideDrawer open={open} onClose={onClose} width={700}>
-      <PersonaDrawerScale>
-        <Box sx={{ width: "100%", height: "100%", position: "relative" }}>
-          <IconButton
-            onClick={onClose}
-            sx={{
-              position: "absolute",
-              top: "12px",
-              right: "12px",
-              color: "text.primary",
-            }}
-          >
-            <Iconify icon="akar-icons:cross" />
-          </IconButton>
-          <PersonaInfo
-            editPersona={editPersona}
-            onSuccess={handleOnSuccess}
-            onCancel={onClose}
-            persona={persona}
-          />
-        </Box>
-      </PersonaDrawerScale>
-    </SideDrawer>
-  );
-};
+/* A persona's details, with what you can do with it — the actions are
+   offered only where the page that opened it supports them. */
+const PersonaInfoDrawer = ({ open, onClose, persona, usage, onUse, onDuplicate, onEdit }) => (
+  <SideDrawer open={open} onClose={onClose} width={560}>
+    <PersonaInfo
+      persona={persona}
+      usage={usage}
+      onUse={onUse}
+      onDuplicate={onDuplicate}
+      onEdit={onEdit}
+      onClose={onClose}
+    />
+  </SideDrawer>
+);
 
 PersonaInfoDrawer.propTypes = {
   open: PropTypes.bool,
   onClose: PropTypes.func,
-  editPersona: PropTypes.object,
-  setSelectedTab: PropTypes.func,
   persona: PropTypes.object,
+  usage: PropTypes.object,
+  onUse: PropTypes.func,
+  onDuplicate: PropTypes.func,
+  onEdit: PropTypes.func,
 };
 
 export default PersonaInfoDrawer;
