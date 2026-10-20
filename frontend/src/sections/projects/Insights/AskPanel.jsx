@@ -20,6 +20,7 @@ import {
   insightsErrorMessage,
 } from "./insightsApi";
 import { assignAskRefs } from "./insightsCitations";
+import { categoriesFor } from "./insightsDistribution";
 import { formatCount, formatSpan } from "./insightsFormat";
 import { useElapsedSeconds } from "./insightsHooks";
 import {
@@ -161,9 +162,10 @@ function Answer({ turn, refs, reading, hint, onFollowUp, onRetry }) {
         ) : (
           <Stack spacing={1}>
             {(turn.answer || []).map((paragraph, index) => {
-              const categories = paragraph.category_ids
-                .map((id) => report.categoriesById.get(id))
-                .filter(Boolean);
+              const categories = categoriesFor(
+                paragraph.category_ids,
+                report.categoriesById,
+              );
               return (
                 <Box key={index}>
                   <Typography

@@ -149,8 +149,12 @@ ChangeCard.propTypes = { card: PropTypes.object.isRequired };
 
 /** "What changed since the last run", as compact cards. */
 export default function ChangeCards({ changes }) {
+  const report = useReport();
   const [all, setAll] = useState(false);
-  const cards = buildChangeCards(changes);
+  // A sub folded into its same-named top moved with it: one card, not two.
+  const cards = buildChangeCards(changes).filter(
+    (card) => !report.echoes?.has(card.categoryId),
+  );
   if (!cards.length) return null;
   const strong = cards.filter((card) => card.significant).length;
   // With nothing beyond the noise, the largest moves are enough.

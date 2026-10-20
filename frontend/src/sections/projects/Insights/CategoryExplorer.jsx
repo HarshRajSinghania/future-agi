@@ -169,9 +169,11 @@ TreeItem.propTypes = {
   onOpen: PropTypes.func.isRequired,
 };
 
-function CategoryTree({ currentId }) {
+function CategoryTree({ categoryId }) {
   const report = useReport();
-  const current = report.categoriesById.get(currentId);
+  // A folded sub's id opens its top.
+  const current = report.categoriesById.get(categoryId);
+  const currentId = current?.id || categoryId;
   const currentTop = current?.level === 2 ? current.parent_id : currentId;
   const [expanded, setExpanded] = useState(() => new Set([currentTop]));
   const rows = useMemo(() => sortCategoryTree(report.tree), [report.tree]);
@@ -224,7 +226,7 @@ function CategoryTree({ currentId }) {
   );
 }
 
-CategoryTree.propTypes = { currentId: PropTypes.string.isRequired };
+CategoryTree.propTypes = { categoryId: PropTypes.string.isRequired };
 
 // ─── Header ─────────────────────────────────────────────────────────────────
 
@@ -950,10 +952,11 @@ export default function CategoryExplorer({
   const unit = run.unit;
   const plural = (UNITS[unit] || UNITS.traces).plural;
   const totals = run.result?.totals || {};
+  // The same units whichever id opened it: a folded sub opens its top.
   const params =
     category?.level === 2
-      ? { sub_category_id: categoryId }
-      : { category_id: categoryId };
+      ? { sub_category_id: category.id }
+      : { category_id: category?.id || categoryId };
   const units = useRunUnits(run.id, { ...params, offset, limit: UNITS_PAGE });
   const collecting = useCancellable("The examples could not be collected.");
 
@@ -1055,7 +1058,7 @@ export default function CategoryExplorer({
           Back to report
         </Button>
         <Box sx={{ position: "sticky", top: 12 }}>
-          <CategoryTree key={categoryId} currentId={categoryId} />
+          <CategoryTree key={categoryId} categoryId={categoryId} />
         </Box>
       </Box>
 

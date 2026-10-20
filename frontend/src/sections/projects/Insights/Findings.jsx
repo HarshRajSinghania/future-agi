@@ -4,6 +4,7 @@ import { Box, Stack, Tooltip, Typography } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { CitedText } from "./Citation";
+import { categoriesFor } from "./insightsDistribution";
 import {
   citationBudget,
   normalizeFindings,
@@ -57,9 +58,7 @@ const MAX_CHIPS = 2;
 
 function Finding({ finding, index }) {
   const report = useReport();
-  const categories = finding.categoryIds
-    .map((id) => report.categoriesById.get(id))
-    .filter(Boolean);
+  const categories = categoriesFor(finding.categoryIds, report.categoriesById);
   // Past four citations, the rest fold into one "+N".
   const budget = citationBudget(finding, (n) => report.refIndex.has(n));
   const fold = (place) => ({

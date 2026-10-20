@@ -15,6 +15,7 @@ import Iconify from "src/components/iconify";
 import { UNITS } from "src/sections/projects/observePopulation";
 import { EvidenceQuote } from "./Citation";
 import { useRunUnit } from "./insightsApi";
+import { categoriesFor } from "./insightsDistribution";
 import {
   evidenceRanges,
   splitByRanges,
@@ -178,8 +179,13 @@ export default function ExamplePanel({ open, unitId, onClose }) {
   const unit = report.unit;
   const noun = (UNITS[unit] || UNITS.traces).noun;
   const link = unitLink(report.projectId, unit, data);
-  const top = data && report.categoriesById.get(data.category_id);
-  const sub = data && report.categoriesById.get(data.sub_category_id);
+  // "Top › Sub", or one name when the sub is folded into its top.
+  const path = data
+    ? categoriesFor(
+        [data.category_id, data.sub_category_id],
+        report.categoriesById,
+      )
+    : [];
   const facets = data?.facets || {};
   const evidence = Array.isArray(facets.evidence) ? facets.evidence : [];
   const preview = unitId ? report.previews.get(unitId) : null;
@@ -261,7 +267,7 @@ export default function ExamplePanel({ open, unitId, onClose }) {
                     .filter(Boolean)
                     .join(" · ")}
                 </Typography>
-                {(top || sub) && (
+                {path.length > 0 && (
                   <Stack
                     direction="row"
                     alignItems="center"
@@ -269,7 +275,7 @@ export default function ExamplePanel({ open, unitId, onClose }) {
                     useFlexGap
                     sx={{ mt: 1, gap: 0.25 }}
                   >
-                    {[top, sub].filter(Boolean).map((category, index) => (
+                    {path.map((category, index) => (
                       <React.Fragment key={category.id}>
                         {index > 0 && (
                           <Iconify

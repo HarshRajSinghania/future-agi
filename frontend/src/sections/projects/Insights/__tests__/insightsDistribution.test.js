@@ -7,8 +7,10 @@ import {
   buildColorOrder,
   buildSegments,
   buildTrend,
+  categoriesFor,
   colorFor,
   isMutedCategory,
+  mergeEchoedSubcategories,
   resultTops,
   sortCategoryTree,
 } from "../insightsDistribution";
@@ -160,5 +162,104 @@ describe("category tree", () => {
 
   it("reads top-level items off a result", () => {
     expect(resultTops(categories).map((t) => t.count)).toEqual([28, 18, 26]);
+  });
+});
+
+describe("a sub named like its only top", () => {
+  const top = (id, name, children, extra = {}) => ({
+    id,
+    name,
+    level: 1,
+    parent_id: null,
+    children,
+    has_children: Boolean(children?.length),
+    stats: { count: 6 },
+    ...extra,
+  });
+  const sub = (id, name, parentId, extra = {}) => ({
+    id,
+    name,
+    level: 2,
+    parent_id: parentId,
+    stats: { count: 6 },
+    ...extra,
+  });
+
+  it("folds the sub into its top, whatever its case or spacing", () => {
+    const { categories: merged, echoes } = mergeEchoedSubcategories([
+      top("t1", "Refunds", ["s1"], { description: "" }),
+      sub("s1", "  refunds ", "t1", {
+        description: "Asked for money back",
+        insight: { root_cause: "Slow refunds" },
+      }),
+    ]);
+    expect(merged).toEqual([
+      expect.objectContaining({
+        id: "t1",
+        name: "Refunds",
+        level: 1,
+        children: [],
+        has_children: false,
+        description: "Asked for money back",
+        insight: { root_cause: "Slow refunds" },
+      }),
+    ]);
+    expect([...echoes]).toEqual([["s1", "t1"]]);
+    const [row] = buildCategoryTree(merged);
+    expect(row).toMatchObject({ id: "t1", childRows: [], expandable: false });
+  });
+
+  it("finds the sub by parent when the top lists no children", () => {
+    const { categories: merged, echoes } = mergeEchoedSubcategories([
+      top("t1", "Refunds", undefined),
+      sub("s1", "Refunds", "t1"),
+    ]);
+    expect(merged.map((c) => c.id)).toEqual(["t1"]);
+    expect(echoes.get("s1")).toBe("t1");
+  });
+
+  it("keeps a top's own description and notes", () => {
+    const { categories: merged } = mergeEchoedSubcategories([
+      top("t1", "Refunds", ["s1"], {
+        description: "Top",
+        notable: [{ kind: "failure" }],
+      }),
+      sub("s1", "Refunds", "t1", { description: "Sub", notable: [] }),
+    ]);
+    expect(merged[0]).toMatchObject({
+      description: "Top",
+      notable: [{ kind: "failure" }],
+    });
+  });
+
+  it("leaves a top with one differently named sub as it is", () => {
+    const input = [
+      top("t1", "Billing", ["s1"]),
+      sub("s1", "Card declined", "t1"),
+    ];
+    const { categories: merged, echoes } = mergeEchoedSubcategories(input);
+    expect(merged).toBe(input);
+    expect(echoes.size).toBe(0);
+  });
+
+  it("leaves a top with two subs, even when one shares its name", () => {
+    const input = [
+      top("t1", "Refunds", ["s1", "s2"]),
+      sub("s1", "Refunds", "t1", { stats: { count: 4 } }),
+      sub("s2", "Partial refunds", "t1", { stats: { count: 2 } }),
+    ];
+    expect(mergeEchoedSubcategories(input).categories).toBe(input);
+  });
+
+  it("names each category once, skipping ids not in the run", () => {
+    const one = { id: "t1", name: "Refunds" };
+    const byId = new Map([
+      ["t1", one],
+      ["s1", one],
+      ["t2", { id: "t2", name: "Billing" }],
+    ]);
+    expect(
+      categoriesFor(["t1", "s1", "gone", "t2"], byId).map((c) => c.name),
+    ).toEqual(["Refunds", "Billing"]);
   });
 });

@@ -920,6 +920,158 @@ describe("InsightsView", () => {
     );
   });
 
+  // Three or fewer themes make each its own top with a same-named sub.
+  describe("a sub named like its only top", () => {
+    const UNITS_URL = `/tracer/insights/runs/${RUN_ID}/units/`;
+    const stats = runFixture.result.result.categories[0].stats;
+    const category = (id, name, parentId, children) => ({
+      id,
+      name,
+      level: parentId ? 2 : 1,
+      parent_id: parentId,
+      description: `${name.trim()} sessions`,
+      status: "active",
+      notable: [],
+      stats: { ...stats, count: 5, share: 0.5 },
+      ...(parentId
+        ? { has_children: false }
+        : { children, has_children: true }),
+    });
+    const moved = (id, name) => ({
+      category_id: id,
+      name,
+      level: id.startsWith("s-") ? 2 : 1,
+      share: 0.5,
+      previous_share: 0.2,
+      delta: 0.3,
+      count: 5,
+      significant: true,
+    });
+    const unitIn = (categoryId, subId) => ({
+      ...unitsFixture.result.units[0],
+      unit_id: `u-${subId}`,
+      category_id: categoryId,
+      sub_category_id: subId,
+    });
+    const unitCalls = () =>
+      mocks.readQuery.mock.calls
+        .filter(
+          ([url, options]) => url === UNITS_URL && !options?.params?.unit_ids,
+        )
+        .map(([, options]) => options.params);
+
+    beforeEach(() => {
+      const base = mocks.readQuery.getMockImplementation();
+      mocks.readQuery.mockImplementation((url, options = {}) => {
+        if (url === `/tracer/insights/runs/${RUN_ID}/`)
+          return ok({
+            ...runFixture.result,
+            result: {
+              ...runFixture.result.result,
+              categories: [
+                category("t-refunds", "Refunds", null, ["s-refunds"]),
+                category("t-billing", "Billing", null, ["s-card"]),
+                category("s-refunds", " refunds ", "t-refunds"),
+                category("s-card", "Card declined", "t-billing"),
+              ],
+              changes: {
+                categories: [
+                  moved("t-refunds", "Refunds"),
+                  moved("s-refunds", " refunds "),
+                ],
+                new_category_ids: [],
+                metrics: [],
+              },
+            },
+          });
+        if (url === UNITS_URL) {
+          const id = options.params?.unit_ids;
+          const unit =
+            id === "u-s-card"
+              ? unitIn("t-billing", "s-card")
+              : unitIn("t-refunds", "s-refunds");
+          return ok({ units: [unit], total: 1 });
+        }
+        return base(url, options);
+      });
+    });
+
+    it("lists it once in the table and the changes", async () => {
+      renderAt(`?report=${CONFIG_ID}`);
+      const table = await screen.findByRole("table");
+      expect(within(table).getAllByText(/^refunds$/i)).toHaveLength(1);
+      expect(
+        screen.queryByRole("button", { name: "Show subcategories of Refunds" }),
+      ).toBeNull();
+      const changes = screen.getByRole("region", {
+        name: "What changed since the last run",
+      });
+      expect(within(changes).getAllByText(/^refunds$/i)).toHaveLength(1);
+    });
+
+    it("names an example's category once and opens the same units", async () => {
+      renderAt(`?report=${CONFIG_ID}&example=u-s-refunds`);
+      const [chip, ...more] = await screen.findAllByRole(
+        "button",
+        { name: /^refunds$/i },
+        { timeout: 4000 },
+      );
+      expect(more).toHaveLength(0);
+      fireEvent.click(chip);
+      await waitFor(() =>
+        expect(screen.getByTestId("location").textContent).toContain(
+          "category=t-refunds",
+        ),
+      );
+      await waitFor(() =>
+        expect(unitCalls()).toContainEqual(
+          expect.objectContaining({ category_id: "t-refunds" }),
+        ),
+      );
+      expect(unitCalls().some((params) => params.sub_category_id)).toBe(false);
+    });
+
+    it("opens the sub's id as the one category", async () => {
+      renderAt(`?report=${CONFIG_ID}&category=s-refunds`);
+      expect(
+        await screen.findByRole("button", { name: "Measure with Jev" }),
+      ).toBeInTheDocument();
+      const tree = screen.getByRole("tree");
+      expect(
+        within(tree).getByRole("treeitem", { name: /Refunds/ }),
+      ).toHaveAttribute("aria-selected", "true");
+      expect(within(tree).getAllByRole("treeitem")).toHaveLength(2);
+      expect(screen.queryByText(/\/ Refunds/)).toBeNull();
+      await waitFor(() =>
+        expect(unitCalls()).toContainEqual(
+          expect.objectContaining({ category_id: "t-refunds" }),
+        ),
+      );
+      expect(unitCalls().some((params) => params.sub_category_id)).toBe(false);
+    });
+
+    it("keeps a differently named sub under its top", async () => {
+      renderAt(`?report=${CONFIG_ID}&example=u-s-card`);
+      expect(
+        await screen.findByRole(
+          "button",
+          { name: "Card declined" },
+          { timeout: 4000 },
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Billing" }),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Card declined" }));
+      await waitFor(() =>
+        expect(unitCalls()).toContainEqual(
+          expect.objectContaining({ sub_category_id: "s-card" }),
+        ),
+      );
+      expect(await screen.findByText(/\/ Billing$/)).toBeInTheDocument();
+    });
+  });
+
   describe("credits", () => {
     // A refusal as the app's axios hands it over: the error envelope with
     // its status.

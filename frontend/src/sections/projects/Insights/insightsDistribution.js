@@ -150,6 +150,66 @@ export function buildTrend(
     }));
 }
 
+const sameName = (a, b) => {
+  const name = (category) =>
+    String(category?.name || "")
+      .trim()
+      .toLowerCase();
+  return Boolean(name(a)) && name(a) === name(b);
+};
+
+const isEmpty = (value) =>
+  value == null || value === "" || (Array.isArray(value) && value.length === 0);
+
+/**
+ * A top whose only subcategory has the same name (a report with three or
+ * fewer themes makes each theme its own top) is one category, not
+ * "Refunds › Refunds". Returns the categories with each such sub folded into
+ * its top (the top keeps its id and units, and takes the sub's description,
+ * notes or insight where it has none) and `echoes`, sub id → top id, so
+ * anything that names the sub resolves to the top.
+ */
+export function mergeEchoedSubcategories(categories = []) {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  const echoes = new Map();
+  const merged = new Map();
+  categories
+    .filter((c) => c.level === 1)
+    .forEach((top) => {
+      const childIds =
+        top.children ||
+        categories.filter((c) => c.parent_id === top.id).map((c) => c.id);
+      const children = childIds.map((id) => byId.get(id)).filter(Boolean);
+      if (children.length !== 1 || !sameName(top, children[0])) return;
+      const sub = children[0];
+      const one = { ...top, children: [], has_children: false };
+      ["description", "insight", "notable"].forEach((key) => {
+        if (isEmpty(one[key]) && !isEmpty(sub[key])) one[key] = sub[key];
+      });
+      merged.set(top.id, one);
+      echoes.set(sub.id, top.id);
+    });
+  if (!echoes.size) return { categories, echoes };
+  return {
+    categories: categories
+      .filter((c) => !echoes.has(c.id))
+      .map((c) => merged.get(c.id) || c),
+    echoes,
+  };
+}
+
+/** The categories for some ids, each once, skipping ids not in the run. */
+export const categoriesFor = (ids = [], categoriesById) => {
+  const seen = new Set();
+  return ids
+    .map((id) => categoriesById.get(id))
+    .filter((category) => {
+      if (!category || seen.has(category.id)) return false;
+      seen.add(category.id);
+      return true;
+    });
+};
+
 /** Rows of the categories table: tops with their children nested. */
 export function buildCategoryTree(categories = []) {
   const byId = new Map(categories.map((c) => [c.id, c]));

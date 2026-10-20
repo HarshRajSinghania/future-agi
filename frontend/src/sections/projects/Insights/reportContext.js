@@ -8,6 +8,7 @@ import {
   buildColorOrder,
   colorFor,
   isMutedCategory,
+  mergeEchoedSubcategories,
   resultTops,
 } from "./insightsDistribution";
 
@@ -24,11 +25,17 @@ export function useReportModel(config, run) {
   const theme = useTheme();
   const mode = theme.palette.mode;
   const result = run?.result;
-  const categories = useMemo(() => result?.categories || [], [result]);
-  const categoriesById = useMemo(
-    () => new Map(categories.map((c) => [c.id, c])),
-    [categories],
+  // A sub named like its only parent is folded into it; its id still
+  // resolves, to the parent.
+  const { categories, echoes } = useMemo(
+    () => mergeEchoedSubcategories(result?.categories || []),
+    [result],
   );
+  const categoriesById = useMemo(() => {
+    const byId = new Map(categories.map((c) => [c.id, c]));
+    echoes.forEach((topId, subId) => byId.set(subId, byId.get(topId)));
+    return byId;
+  }, [categories, echoes]);
   const tree = useMemo(() => buildCategoryTree(categories), [categories]);
   const order = useMemo(
     () =>
@@ -43,7 +50,8 @@ export function useReportModel(config, run) {
   const colorOf = useCallback(
     (id) => {
       const category = categoriesById.get(id);
-      const topId = category?.level === 2 ? category.parent_id : id;
+      const topId =
+        category?.level === 2 ? category.parent_id : category?.id || id;
       const top = categoriesById.get(topId) || category;
       if (top && isMutedCategory(top)) return otherColor;
       return colorFor(topId, order, mode) || otherColor;
@@ -66,6 +74,7 @@ export function useReportModel(config, run) {
     mode,
     categories,
     categoriesById,
+    echoes,
     tree,
     order,
     colorOf,
