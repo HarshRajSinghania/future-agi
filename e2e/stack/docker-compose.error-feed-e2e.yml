@@ -3,6 +3,7 @@
 x-error-feed-env: &error-feed-env
   ENV_TYPE: local
   E2E_ERROR_FEED_PROFILE: th8613
+  DJANGO_SETTINGS_MODULE: tfc.settings.settings
   EE_LICENSE_KEY: ${EE_LICENSE_KEY:?Generate a local test license first}
   EE_LICENSE_PUBLIC_KEY: ${EE_LICENSE_PUBLIC_KEY:?Generate a local test key first}
   FUTURE_AGI_TELEMETRY_DISABLED: "true"
