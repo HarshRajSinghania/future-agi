@@ -118,6 +118,21 @@ def _frozen_filters(
     return pinned, start, end
 
 
+def window_problem(filters: list[dict]) -> str | None:
+    """Why a view's window can't be read, refused as the bounded lists
+    refuse it, rather than read as the last 30 days: a range that ends before
+    it starts, or a date that can't be read. None when it reads."""
+    from tracer.services.clickhouse.query_builders.base import BaseQueryBuilder
+
+    try:
+        BaseQueryBuilder.parse_time_range(filters, strict=True)
+    except ValueError as exc:
+        if "before or equal to its end" in str(exc):
+            return "The date range ends before it starts."
+        return "The date range has a date that can't be read."
+    return None
+
+
 def _builder(project_id: str, row_type: str, ui_filters: list[dict]):
     from tracer.services.clickhouse.v2.dispatch import get_v2_class
 

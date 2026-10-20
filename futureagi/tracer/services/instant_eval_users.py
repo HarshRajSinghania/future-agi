@@ -129,6 +129,16 @@ def unsupported_filter_columns(filters: list[dict]) -> list[str]:
     return list(dict.fromkeys(unsupported))
 
 
+def unsupported_filter_message(filters: list[dict]) -> str | None:
+    """The sentence a Users scope with unsupported system fields is refused
+    with, or None."""
+    unsupported = unsupported_filter_columns(filters)
+    if not unsupported:
+        return None
+    names = ", ".join(f'"{column}"' for column in unsupported)
+    return f"The Users view can't filter on {names}."
+
+
 def _deadline(budget_s: float | None) -> ReadDeadline | None:
     if budget_s is None:
         return None

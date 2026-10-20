@@ -198,33 +198,15 @@ class InstantEvalScopeSerializer(serializers.Serializer):
             )
         if attrs["unit"] == "users":
             validate_users_filter_capabilities(attrs.get("filters") or [])
-            unsupported = users_service.unsupported_filter_columns(
+            if refused := users_service.unsupported_filter_message(
                 attrs.get("filters") or []
-            )
-            if unsupported:
-                names = ", ".join(f'"{column}"' for column in unsupported)
-                raise serializers.ValidationError(
-                    f"The Users view can't filter on {names}."
-                )
-        _check_window(attrs.get("filters") or [])
+            ):
+                raise serializers.ValidationError(refused)
+        # A window the lists would refuse is refused here too, instead of
+        # falling back to the last 30 days.
+        if problem := rows_service.window_problem(attrs.get("filters") or []):
+            raise serializers.ValidationError(problem)
         return attrs
-
-
-def _check_window(filters: list[dict]) -> None:
-    """A window the lists would refuse is refused here too, instead of
-    falling back to the last 30 days."""
-    from tracer.services.clickhouse.query_builders.base import BaseQueryBuilder
-
-    try:
-        BaseQueryBuilder.parse_time_range(filters, strict=True)
-    except ValueError as exc:
-        if "before or equal to its end" in str(exc):
-            raise serializers.ValidationError(
-                "The date range ends before it starts."
-            ) from exc
-        raise serializers.ValidationError(
-            "The date range has a date that can't be read."
-        ) from exc
 
 
 class InstantEvalEstimateRequestSerializer(InstantEvalScopeSerializer):

@@ -383,3 +383,159 @@ def test_a_users_estimate_names_its_first_users_while_still_counting(
             "budget_s": users_service.estimate_budget_s(),
         }
     ]
+
+
+def _system(column, value="x"):
+    return {
+        "column_id": column,
+        "filter_config": {
+            "col_type": "SYSTEM_METRIC",
+            "filter_type": "text",
+            "filter_op": "equals",
+            "filter_value": value,
+        },
+    }
+
+
+def _saved(observe_project, organization, workspace, user, unit="sessions"):
+    return InsightConfig.objects.create(
+        project=observe_project,
+        organization=organization,
+        workspace=workspace,
+        created_by=user,
+        name="Where is the agent failing?",
+        unit=unit,
+        lens="failures",
+        question="Where is the agent failing?",
+        scope={"window": WINDOW, "preset": "7D"},
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("window", "message"),
+    [
+        (
+            ["2026-10-15T00:00:00Z", "2026-10-10T00:00:00Z"],
+            "The date range ends before it starts.",
+        ),
+        (
+            ["not-a-date", "2026-10-10T00:00:00Z"],
+            "The date range has a date that can't be read.",
+        ),
+    ],
+)
+def test_a_window_that_ends_before_it_starts_or_cant_be_read_is_refused(
+    auth_client,
+    observe_project,
+    organization,
+    workspace,
+    user,
+    scope_view,
+    insight_enabled,
+    window,
+    message,
+):
+    date_filter = {
+        "column_id": "created_at",
+        "filter_config": {
+            "filter_type": "datetime",
+            "filter_op": "between",
+            "filter_value": window,
+        },
+    }
+    for scope in ({"window": window, "preset": "Custom"}, {"filters": [date_filter]}):
+        estimate = auth_client.post(
+            ESTIMATE,
+            {"project_id": str(observe_project.id), "unit": "sessions", "scope": scope},
+            format="json",
+        )
+        assert estimate.status_code == status.HTTP_400_BAD_REQUEST, scope
+        assert message in estimate.json()["message"]
+        run = auth_client.post(
+            RUNS,
+            {
+                "project_id": str(observe_project.id),
+                "config": report(),
+                "scope": scope,
+                "sample_size": 50,
+            },
+            format="json",
+        )
+        assert run.status_code == status.HTTP_400_BAD_REQUEST
+        assert message in run.json()["message"]
+    # Saving the scope on a report is refused the same way.
+    config = _saved(observe_project, organization, workspace, user)
+    patched = auth_client.patch(
+        f"{CONFIGS}{config.id}/", {"scope": {"window": window}}, format="json"
+    )
+    assert patched.status_code == status.HTTP_400_BAD_REQUEST
+    assert message in patched.json()["message"]
+    assert not scope_view["count"]
+    assert InsightConfig.objects.filter(project=observe_project).count() == 1
+
+
+@pytest.mark.django_db
+def test_a_users_report_on_a_field_the_users_view_cant_filter_is_refused(
+    auth_client,
+    observe_project,
+    organization,
+    workspace,
+    user,
+    scope_view,
+    insight_enabled,
+):
+    message = 'The Users view can\'t filter on "trace_id".'
+    scope = {"filters": [_system("trace_id")], "window": WINDOW}
+    estimate = auth_client.post(
+        ESTIMATE,
+        {"project_id": str(observe_project.id), "unit": "users", "scope": scope},
+        format="json",
+    )
+    assert estimate.status_code == status.HTTP_400_BAD_REQUEST
+    assert estimate.json()["message"] == message
+    run = auth_client.post(
+        RUNS,
+        {
+            "project_id": str(observe_project.id),
+            "config": report("users"),
+            "scope": scope,
+        },
+        format="json",
+    )
+    assert run.status_code == status.HTTP_400_BAD_REQUEST
+    assert run.json()["message"] == message
+    config = _saved(observe_project, organization, workspace, user, unit="users")
+    patched = auth_client.patch(
+        f"{CONFIGS}{config.id}/", {"scope": scope}, format="json"
+    )
+    assert patched.status_code == status.HTTP_400_BAD_REQUEST
+    assert patched.json()["message"] == message
+    assert not scope_view["count"]
+
+
+@pytest.mark.django_db
+def test_a_users_report_on_status_reads_each_users_spans(
+    auth_client, observe_project, scope_view
+):
+    """``status`` is one of the span dimensions the Users list answers from
+    each user's spans (users with any span of that status), so it is a Users
+    filter like any other, here as in the Users view."""
+    from tracer.services.clickhouse.v2.query_builders.user_list import (
+        UserListQueryBuilderV2,
+    )
+
+    errored = _system("status", "ERROR")
+    assert UserListQueryBuilderV2.native_span_dimension(errored) == "status"
+    assert users_service.unsupported_filter_columns([errored]) == []
+    estimate = auth_client.post(
+        ESTIMATE,
+        {
+            "project_id": str(observe_project.id),
+            "unit": "users",
+            "scope": {"filters": [errored], "window": WINDOW},
+        },
+        format="json",
+    )
+    assert estimate.status_code == status.HTTP_200_OK, estimate.json()
+    assert scope_view["count"][-1]["filters"][0]["column_id"] == "status"

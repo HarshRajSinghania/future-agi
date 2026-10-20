@@ -108,6 +108,17 @@ FIXED_PRESET = "fixed"
 LEGACY_PRESETS = {"7d": "7D", "30d": "30D"}
 
 
+def _window_item(window) -> dict:
+    return {
+        "column_id": "created_at",
+        "filter_config": {
+            "filter_type": "datetime",
+            "filter_op": "between",
+            "filter_value": list(window),
+        },
+    }
+
+
 def normalize_scope(scope) -> dict:
     """A scope with its preset in Observe's terms."""
     scope = dict(scope or {})
@@ -133,6 +144,17 @@ class InsightScopeSerializer(serializers.Serializer):
         if value and value not in SCOPE_PRESETS:
             raise serializers.ValidationError(f"“{value}” isn't a date option.")
         return value
+
+    def validate(self, attrs):
+        # A window the lists would refuse is refused, instead of being read
+        # as the last 30 days: the scope's own window and any date filter.
+        filters = [item for item in attrs.get("filters") or [] if isinstance(item, dict)]
+        window = attrs.get("window") or []
+        if len(window) == 2:
+            filters.append(_window_item(window))
+        if problem := rows_service.window_problem(filters):
+            raise serializers.ValidationError(problem)
+        return attrs
 
 
 class InsightRunCreateSerializer(serializers.Serializer):
@@ -425,6 +447,53 @@ def _distribution(run) -> list[dict]:
     ]
 
 
+# A run in flight this quiet has its workflow looked up (at most every
+# LOST_CHECK_TTL seconds): one whose workflow is gone, as after a Temporal
+# restart, stopped before it finished and would otherwise run forever.
+LOST_AFTER = timedelta(minutes=2)
+LOST_CHECK_TTL = 20
+LOST_ERROR = "This report stopped before it finished. Run it again."
+
+
+def _workflow_lost(run) -> bool:
+    key = f"insight-wf-lost:{run.id}"
+    known = cache.get(key)
+    if known is not None:
+        return known
+    from tfc.temporal.eval_tasks.client import WF_ABSENT, WF_CLOSED
+    from tfc.temporal.insights import client
+
+    try:
+        lost = client.describe_insight_run_sync(
+            run.workflow_id or client.workflow_id_for(run.id)
+        ) in (WF_ABSENT, WF_CLOSED)
+    except Exception:
+        # An unreachable Temporal is not an answer: the run is left running.
+        logger.warning("insight_describe_failed", run_id=str(run.id))
+        lost = False
+    cache.set(key, lost, LOST_CHECK_TTL)
+    return lost
+
+
+def settle_lost_runs(runs) -> None:
+    """Mark failed, once, the runs still pending or running whose workflow is
+    gone, so the report offers Run again. Runs that changed lately aren't
+    looked up; the update only takes a run still in flight."""
+    now = timezone.now()
+    for run in runs:
+        if run.status not in ("pending", "running"):
+            continue
+        if run.updated_at and now - run.updated_at < LOST_AFTER:
+            continue
+        if not _workflow_lost(run):
+            continue
+        if InsightRun.objects.filter(
+            id=run.id, status__in=["pending", "running"]
+        ).update(status="failed", error=LOST_ERROR, finished_at=now, updated_at=now):
+            logger.info("insight_run_lost", run_id=str(run.id), stage=run.stage)
+        run.refresh_from_db(fields=["status", "error", "finished_at", "updated_at"])
+
+
 def _run_summary(run) -> dict:
     return {
         "id": run.id,
@@ -443,6 +512,7 @@ def _run_summary(run) -> dict:
 
 def _config_item(config, *, with_runs=False) -> dict:
     runs = list(config.runs.filter(deleted=False).order_by("-created_at"))
+    settle_lost_runs(runs)
     item = {
         "id": config.id,
         "name": config.name,
@@ -661,16 +731,7 @@ def _scope_filters(scope: dict) -> list[dict]:
     if not any(_is_date_item(item) for item in filters):
         if len(window) != 2:
             raise serializers.ValidationError("Choose a date range for the report.")
-        filters.append(
-            {
-                "column_id": "created_at",
-                "filter_config": {
-                    "filter_type": "datetime",
-                    "filter_op": "between",
-                    "filter_value": list(window),
-                },
-            }
-        )
+        filters.append(_window_item(window))
     return SessionFilterListField().run_validation(filters)
 
 
@@ -685,6 +746,8 @@ def _scope_population(request, project, unit: str, scope: dict, *, finish=False)
     search = (scope.get("search") or "").strip()
     if unit == "users":
         validate_users_filter_capabilities(filters)
+        if refused := users_service.unsupported_filter_message(filters):
+            raise serializers.ValidationError(refused)
     elif search:
         raise serializers.ValidationError("Search text only narrows a report on users.")
     filters = bind_request_my_annotations_principal(request, filters)
@@ -798,7 +861,14 @@ class InsightConfigDetailView(APIView):
             config.attributes = clean_attributes([dict(a) for a in data["attributes"]])
             fields.add("attributes")
         if "scope" in data:
-            config.scope = dict(data["scope"])
+            scope = dict(data["scope"])
+            if config.unit == "users":
+                refused = users_service.unsupported_filter_message(
+                    [i for i in scope.get("filters") or [] if isinstance(i, dict)]
+                )
+                if refused:
+                    return self._gm.bad_request(refused)
+            config.scope = scope
             fields.add("scope")
         if reset and (config.taxonomy or {}).get("subs"):
             config.taxonomy = {}
@@ -1014,6 +1084,9 @@ class InsightRunCreateView(APIView):
                 .first()
             )
             if active is not None:
+                # A run whose workflow is gone isn't one to join.
+                settle_lost_runs([active])
+            if active is not None and active.status in ("pending", "running"):
                 return self._gm.success_response(
                     {"run_id": active.id, "config_id": config.id}
                 )
@@ -1112,6 +1185,7 @@ class InsightRunDetailView(APIView):
         )
         if run is None:
             return self._gm.not_found("Report run not found")
+        settle_lost_runs([run])
         siblings = InsightRun.objects.filter(config_id=run.config_id, deleted=False)
         previous = siblings.filter(created_at__lt=run.created_at).order_by("-created_at").first()
         following = siblings.filter(created_at__gt=run.created_at).order_by("created_at").first()
