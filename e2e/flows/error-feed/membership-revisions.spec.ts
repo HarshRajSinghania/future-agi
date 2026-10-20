@@ -44,6 +44,7 @@ test('ESC-E2E-007: Evaluate current findings after merge, split, removal and sup
   const merged = merge.issues[0];
   expect(merged.status).toBe('for_review');
   const retiredBefore = [await storedIssue(scopeProbe, first), await storedIssue(scopeProbe, second)];
+  for (const retired of retiredBefore) expect(retired.deleted).toBe(true);
   for (const minute of [40, 45, 50, 55]) await harness.evaluate(project, minute);
   const active = await storedIssue(scopeProbe, merged);
   expect(active.status).toBe('escalating');

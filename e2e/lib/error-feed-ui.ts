@@ -13,6 +13,7 @@ export interface FeedRow {
     baseline: number; entry_threshold: number; evaluated_at: string; policy_revision: number } | null;
 }
 export interface StoredIssue {
+  deleted: boolean;
   status: string; status_origin: string; status_revision: string;
   status_changed_by_id: string | null;
   escalation_state: { reason?: { current_count: number; historical_count: number; baseline: number;
@@ -41,10 +42,10 @@ export async function readIssue(scopes: ScopeActors, project: FixtureProject, is
 }
 
 export async function storedIssue(probe: StateProbe, issue: IssueReceipt) {
-  // models/trace_error_analysis.py + migration 0111. Synchronous persisted state.
+  // Read physical state, including tombstones created by issue redirects.
   const rows = await probe.pg<StoredIssue>(
-    `SELECT status, status_origin, status_revision, status_changed_by_id, escalation_state
-     FROM tracer_trace_error_group WHERE id=$1 AND deleted=false`, [issue.id]);
+    `SELECT deleted, status, status_origin, status_revision, status_changed_by_id, escalation_state
+     FROM tracer_trace_error_group WHERE id=$1`, [issue.id]);
   expect(rows).toHaveLength(1);
   return rows[0];
 }
