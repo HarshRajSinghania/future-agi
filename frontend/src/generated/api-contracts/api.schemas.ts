@@ -25635,6 +25635,41 @@ export interface LinearTeamsResponseApi {
   result: LinearTeamsResultApi;
 }
 
+export type FeedListRowApiStatusOrigin =
+  (typeof FeedListRowApiStatusOrigin)[keyof typeof FeedListRowApiStatusOrigin];
+
+export const FeedListRowApiStatusOrigin = {
+  system: "system",
+  manual: "manual",
+  legacy_unknown: "legacy_unknown",
+} as const;
+
+export type FeedEscalationApiUnit =
+  (typeof FeedEscalationApiUnit)[keyof typeof FeedEscalationApiUnit];
+
+export const FeedEscalationApiUnit = {
+  findings: "findings",
+  failed_evaluations: "failed_evaluations",
+} as const;
+
+export interface FeedEscalationApi {
+  current_count: number;
+  affected_trace_count: number;
+  baseline: number;
+  entry_threshold: number;
+  recovery_threshold: number;
+  unit: FeedEscalationApiUnit;
+  window_start: string;
+  window_end: string;
+  evaluated_at: string;
+  /** @minLength 1 */
+  algorithm_version: string;
+  policy_revision: number;
+  input_revision: number;
+  entry_confirmation_minutes: number;
+  recovery_confirmation_minutes: number;
+}
+
 export interface ErrorNameApi {
   /** @minLength 1 */
   name: string;
@@ -25648,6 +25683,9 @@ export interface TrendPointApi {
 }
 
 export interface FeedListRowApi {
+  status_origin?: FeedListRowApiStatusOrigin;
+  status_revision?: number;
+  escalation?: FeedEscalationApi;
   /** @minLength 1 */
   severity_assessment_status?: string;
   /** @minLength 1 */
@@ -32616,6 +32654,93 @@ export interface ActivationResponseApi {
   allowed_services: string[];
   allowed_models: string[];
   scope: ActivationResponseApiScope;
+}
+
+export interface FeedEscalationValuesApi {
+  /**
+   * @minimum 2
+   * @maximum 1000000
+   */
+  min_findings: number;
+  entry_multiplier: string;
+  /**
+   * @minimum 1
+   * @maximum 1000000
+   */
+  entry_delta: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  entry_confirmation_minutes: number;
+  /** @minimum 0 */
+  recovery_min: number;
+  recovery_multiplier: string;
+  /** @minimum 0 */
+  recovery_delta: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  recovery_confirmation_minutes: number;
+}
+
+export type FeedEscalationSettingsApiRanges = {
+  [key: string]: { [key: string]: number };
+};
+
+export interface FeedEscalationSettingsApi {
+  values: FeedEscalationValuesApi;
+  defaults: FeedEscalationValuesApi;
+  ranges: FeedEscalationSettingsApiRanges;
+  revision: number;
+  /** @minLength 1 */
+  algorithm_version: string;
+  defaults_version: number;
+  workspace_id: string;
+  /** @minLength 1 */
+  workspace_name: string;
+  can_edit: boolean;
+  window_minutes: number;
+  baseline_hours: number;
+  cadence_minutes: number;
+  processing_allowance_minutes: number;
+}
+
+export interface FeedEscalationSettingsApiResponseApi {
+  status?: boolean;
+  result: FeedEscalationSettingsApi;
+}
+
+export interface FeedEscalationSettingsBodyApi {
+  /**
+   * @minimum 2
+   * @maximum 1000000
+   */
+  min_findings?: number;
+  entry_multiplier?: string;
+  /**
+   * @minimum 1
+   * @maximum 1000000
+   */
+  entry_delta?: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  entry_confirmation_minutes?: number;
+  /** @minimum 0 */
+  recovery_min?: number;
+  recovery_multiplier?: string;
+  /** @minimum 0 */
+  recovery_delta?: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  recovery_confirmation_minutes?: number;
+  /** @minimum 0 */
+  revision: number;
 }
 
 export type AccountsAwsMarketplaceLaunchSoftwareCreateBody = {

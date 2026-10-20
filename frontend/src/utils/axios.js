@@ -1847,9 +1847,15 @@ export const endpoints = {
     alerts: {
       list: apiPath("/tracer/alerts/"),
       options: apiPath("/tracer/alerts/options/"),
-      detail: (id) => apiPath("/tracer/alerts/{kind}/{alert_id}/", { kind: "error_feed", alert_id: id }),
-      test: (id) => apiPath("/tracer/alerts/error_feed/{alert_id}/test/", { alert_id: id }),
+      detail: (id) =>
+        apiPath("/tracer/alerts/{kind}/{alert_id}/", {
+          kind: "error_feed",
+          alert_id: id,
+        }),
+      test: (id) =>
+        apiPath("/tracer/alerts/error_feed/{alert_id}/test/", { alert_id: id }),
     },
+    escalationSettings: apiPath("/tracer/feed/escalation-settings/"),
     list: apiPath("/tracer/feed/issues/"),
     stats: apiPath("/tracer/feed/issues/stats/"),
     detail: (clusterId) =>
@@ -2063,7 +2069,10 @@ export const endpoints = {
   integrations: {
     slack: {
       install: apiPath("/integrations/slack/install/"),
-      channels: (id) => apiPath("/integrations/connections/{connection_id}/slack/channels/", { connection_id: id }),
+      channels: (id) =>
+        apiPath("/integrations/connections/{connection_id}/slack/channels/", {
+          connection_id: id,
+        }),
     },
     connections: {
       list: apiPath("/integrations/connections/"),
