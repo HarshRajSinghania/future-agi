@@ -129,14 +129,15 @@ GitHostRepoPicker.propTypes = {
 };
 
 /*
-  Connecting the host, once for the workspace: the group (GitLab) or
-  workspace (Bitbucket) and an access token by reference. Read scopes only —
-  write is asked for at the first draft merge or pull request.
+  Connecting the host, once for the workspace: an access token by
+  reference. A group (GitLab) or workspace (Bitbucket) token belongs to one
+  group or workspace, so that's read off the token when it connects — it
+  can't be listed before there's a token. Read scopes only — write is asked
+  for at the first draft merge or pull request.
 */
 export function GitHostConnectForm({ host, onConnected }) {
   const meta = GIT_HOST_META[host];
   const review = reviewNounOf(host);
-  const [account, setAccount] = useState(meta.accounts[0]);
   const [tokenRef, setTokenRef] = useState("");
   const [connecting, setConnecting] = useState(false);
   /* What's recorded is a reference — the one typed, or (demo) the host's slot. */
@@ -145,7 +146,8 @@ export function GitHostConnectForm({ host, onConnected }) {
   useEffect(() => {
     if (!connecting) return undefined;
     const t = setTimeout(() => {
-      connectGitHost(host, { account, tokenRef: savedRef });
+      /* Demo: the token's group or workspace, as the host would report it. */
+      connectGitHost(host, { account: meta.accounts[0], tokenRef: savedRef });
       setConnecting(false);
       onConnected?.();
     }, 700);
@@ -166,20 +168,12 @@ export function GitHostConnectForm({ host, onConnected }) {
         </Box>
       </Stack>
       <Stack spacing={1.5} sx={{ px: 1.75, py: 1.5 }}>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
-          <Box sx={{ width: { sm: 200 }, flexShrink: 0 }}>
-            <Typography sx={{ typography: "s3", fontWeight: 600, mb: 0.5 }}>{meta.account}</Typography>
-            <Select size="small" fullWidth value={account} onChange={(e) => setAccount(e.target.value)} sx={{ typography: "s2", fontFamily: MONO }}>
-              {meta.accounts.map((a) => <MenuItem key={a} value={a} sx={{ typography: "s2", fontFamily: MONO }}>{a}</MenuItem>)}
-            </Select>
-          </Box>
-          <SecretRefField
-            label={meta.token} required fullWidth
-            placeholder={meta.tokenSlot}
-            value={tokenRef} onChange={setTokenRef}
-            helper="Stored encrypted. Used only to read the repository — never shown again, never sent to the improver."
-          />
-        </Stack>
+        <SecretRefField
+          label={meta.token} required fullWidth
+          placeholder={meta.tokenSlot}
+          value={tokenRef} onChange={setTokenRef}
+          helper={`A token belongs to one ${meta.account.toLowerCase()} — we read which when you connect, then list its repositories. Stored encrypted, never shown again, never sent to the improver.`}
+        />
         <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
           {meta.readScopes.map((p, i) => (
             <Stack key={p.scope} direction="row" spacing={1.5} sx={{ px: 1.5, py: 0.875, borderTop: i ? "1px solid" : "none", borderColor: "divider" }}>

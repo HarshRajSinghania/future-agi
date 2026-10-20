@@ -261,9 +261,11 @@ export default function RepoAgentFlow({ title, preset, onSave, prefill, initial 
   return (
     <ConnectSteps
       title={title}
-      subtitle={host === "github" && initial?.host
-        ? "Connect GitHub to pick from your repositories, or paste a repository link and start. We read the code when you connect — then confirm or correct what we found in Finish setting up, on the agent's Overview."
-        : "Pick the git host, the repository and the agent in it. We read the code when you connect — then confirm or correct what we found in Finish setting up, on the agent's Overview."}
+      subtitle={`${!initial?.host || initial?.direct
+        ? "Pick the git host, the repository and the agent in it."
+        : host === "github"
+          ? "Connect GitHub to pick from your repositories, or paste a repository link and start."
+          : `Connect ${hostLabel} to pick the repository and the agent in it.`} We read the code when you connect — then confirm or correct what we found in Finish setting up, on the agent's Overview.`}
       steps={STEPS}
       active={0}
       next={next}
