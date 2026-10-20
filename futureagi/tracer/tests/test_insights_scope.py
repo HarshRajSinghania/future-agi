@@ -79,7 +79,15 @@ def test_the_estimate_counts_a_scope_on_the_server(
         format="json",
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
-    assert response.json()["result"] == {
+    result = response.json()["result"]
+    scope_keys = (
+        "population",
+        "population_is_lower_bound",
+        "sample_size",
+        "window",
+        "sample_ids",
+    )
+    assert {key: result[key] for key in scope_keys} == {
         "population": 2345,
         "population_is_lower_bound": False,
         "sample_size": 500,
@@ -87,6 +95,14 @@ def test_the_estimate_counts_a_scope_on_the_server(
         # The first units a run over this scope would read.
         "sample_ids": scope_view["ids"][:20],
     }
+    # Billing adds the run's credit estimate; its values are tested with it.
+    assert {
+        "credits_estimate",
+        "credit_limited",
+        "credits_left",
+        "credit_max_sample",
+        "credit_message",
+    } <= result.keys()
     asked = scope_view["count"][-1]
     # The window joins the filters as their created_at item.
     assert [f["column_id"] for f in asked["filters"]] == ["status", "created_at"]
