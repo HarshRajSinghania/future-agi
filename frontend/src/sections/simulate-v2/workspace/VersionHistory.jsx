@@ -12,6 +12,7 @@ import { ago } from "../agents/agentViewUtils";
 import useEnvViewAs from "./useEnvViewAs";
 import { clickable, focusRing } from "../components/clickable";
 import RollbackDialog from "./RollbackDialog";
+import { contractWordingIn } from "../_mock/rlContract";
 
 const ACCENT = "#7857FC";
 const MONO = "ui-monospace, Menlo, monospace";
@@ -153,10 +154,14 @@ export default function VersionHistoryMenu({ anchor, onClose, env, envState, pat
               {expanded && (
                 <Box sx={{ pl: 4.75, pr: 1.25, pb: 1 }}>
                   {v.details.map((d, i) => (
-                    <Typography key={`${d.part}-${d.label}-${i}`} sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
-                      <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>{PART_NAME[d.part] || d.part}</Box>
-                      {d.text ? ` — ${d.text}` : ""}
-                    </Typography>
+                    <Box key={`${d.part}-${d.label}-${i}`}>
+                      <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+                        <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>{PART_NAME[d.part] || d.part}</Box>
+                        {d.text ? ` — ${d.text}` : ""}
+                      </Typography>
+                      {/* The words that changed, not just a count of them. */}
+                      {d.part === "env" && <ContractWording items={contractWordingIn(env, envState, d.label)} />}
+                    </Box>
                   ))}
                 </Box>
               )}
@@ -199,6 +204,36 @@ VersionHistoryMenu.propTypes = {
   patch: PropTypes.func,
   readOnly: PropTypes.bool,
 };
+
+const WORDING_TONE = { added: "#16A34A" };
+
+/* Each changed rule, use case or argument as it read before and after — a
+   removed line struck through, an added one in green. */
+function ContractWording({ items }) {
+  if (!items.length) return null;
+  return (
+    <Stack spacing={0.75} sx={{ mt: 0.75, mb: 0.25 }}>
+      {items.map((c) => (
+        <Box key={`${c.what}-${c.kind}`}>
+          <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}>
+            {`${c.what} ${c.kind}`}
+          </Typography>
+          {c.from && (
+            <Typography sx={{ typography: "s3", fontFamily: MONO, fontSize: 11.5, color: "text.disabled", textDecoration: "line-through", mt: 0.25 }}>
+              {c.from}
+            </Typography>
+          )}
+          {c.to && (
+            <Typography sx={{ typography: "s3", fontFamily: MONO, fontSize: 11.5, color: c.kind === "added" ? WORDING_TONE.added : "text.primary", mt: 0.25 }}>
+              {c.to}
+            </Typography>
+          )}
+        </Box>
+      ))}
+    </Stack>
+  );
+}
+ContractWording.propTypes = { items: PropTypes.array.isRequired };
 
 function Section({ title, note }) {
   return (

@@ -40,10 +40,11 @@ const CONTRACT_KINDS = ["contract", "rules"];
 const WORLD_KINDS = ["contract", "rules", "seed", "toolbehaviour", "actors"];
 
 /* Which kind names a snapshot when one action changed several parts. */
-const KIND_ORDER = ["build", "world", "scenarios", "sub-goals", "evals", "caller"];
+const KIND_ORDER = ["recorded", "build", "world", "scenarios", "sub-goals", "evals", "caller"];
 
 export const SNAPSHOT_KIND_LABEL = {
   build: "First build",
+  recorded: "Recorded",
   world: "World + contract",
   scenarios: "Scenarios",
   "sub-goals": "Sub-goals",
@@ -87,7 +88,9 @@ const apply = (parts, e, counters) => {
     parts.env = e.v.label;
     const pieces = [];
     const details = [];
-    if (e.first) {
+    if (e.first && e.v.origin === "pre-versioning") {
+      pieces.push({ kind: "recorded", text: firstSentence(e.v.note) });
+    } else if (e.first) {
       pieces.push({ kind: "build", text: firstSentence(e.v.note) || "First build" });
     } else if (world.length || !changed.length) {
       const head = world.some((k) => CONTRACT_KINDS.includes(k)) ? "Contract" : "World";

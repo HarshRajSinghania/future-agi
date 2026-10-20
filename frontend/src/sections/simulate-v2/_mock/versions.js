@@ -54,6 +54,15 @@ export const environmentVersions = (env, envState) => {
  * steps the fallback used to invent for every environment, now stated once
  * for the environments that actually have that history.
  */
+/*
+  A version recorded when versioning started: the agent or environment as it
+  stood then. Nothing before it is known, it was never checked, and it reads
+  as recorded — not as a first build or a first connect.
+*/
+export const PRE_VERSIONING_AGENT_NOTE = "Recorded from before versioning — the agent as it stood when versioning started.";
+export const PRE_VERSIONING_ENV_NOTE = "Recorded from before versioning — the environment as it stood when versioning started.";
+export const recordedBeforeVersioning = (v, note) => ({ ...v, origin: "pre-versioning", note });
+
 export const seededEnvHistory = (env, scenarioCount) => {
   const back = (n) => Math.max(1, Math.round((scenarioCount || 0) * n));
   return [

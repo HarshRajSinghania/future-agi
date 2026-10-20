@@ -14,7 +14,7 @@
 import { getEnvironment } from "./environments";
 import { getRows } from "./scenarios";
 import { derivedEnvironment } from "./builder";
-import { seededEnvHistory } from "./versions";
+import { PRE_VERSIONING_AGENT_NOTE, PRE_VERSIONING_ENV_NOTE, recordedBeforeVersioning, seededEnvHistory } from "./versions";
 import { baseRunOf, buildImprovement } from "./improvementStart";
 import { DEFAULT_LIMITS, OPT_STATUS, improvementOutcome } from "./optimizationRuns";
 import { withDemoFaultRun, withPassingRun } from "./demoRun";
@@ -370,7 +370,9 @@ export function seededState() {
         scenarios: builtScenarios,
         /* A real history for the demo — stated here, not invented for
            every environment that has none. */
-        envVersions: seededEnvHistory(built, builtScenarios.length),
+        /* The returns line was running before versioning started, so its
+           first versions are recorded, not built or connected. */
+        envVersions: seededEnvHistory(built, builtScenarios.length).map((v, i) => (i ? v : recordedBeforeVersioning(v, PRE_VERSIONING_ENV_NOTE))),
         scenarioSource: "agent",
         /*
           Every seeded env has at least Task success + Policy adherence
@@ -381,7 +383,7 @@ export function seededState() {
         */
         evals: ["task_success", "policy_adherence"],
         agentVersions: [
-          agentVersion(1, 12, "First version connected."),
+          recordedBeforeVersioning(agentVersion(1, 12), PRE_VERSIONING_AGENT_NOTE),
           agentVersion(2, 6, "Goodwill cap moved out of the prompt and into code.", "Never state a goodwill credit amount — apply_goodwill_credit decides it."),
           agentVersion(3, 2, "Refund quoting moved before the promise.", "Quote the refund with get_refund_quote before promising any amount."),
         ],

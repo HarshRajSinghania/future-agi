@@ -13,6 +13,7 @@ import { withScenarioSetSeed, withArchivedMigration, withImprovementScenarioSeed
 import { withErrorFeedFixes, withAirlineTracing, withWatchedFixes, SEEDED_RETELL_VALUES } from "./seedErrorFeedFixes";
 import { withVoiceRunHistory, HISTORY_ENV } from "./voiceRunHistory";
 import { withFiveAGoal, TOPUP_ENV } from "./voiceScenarioTopUp";
+import { PRE_VERSIONING_AGENT_NOTE, PRE_VERSIONING_ENV_NOTE, recordedBeforeVersioning } from "./versions";
 
 /*
   Bumped whenever the seed gains an environment.
@@ -24,7 +25,7 @@ import { withFiveAGoal, TOPUP_ENV } from "./voiceScenarioTopUp";
   has are left exactly as they are, and an environment someone deliberately
   removed stays removed because the marker moves on regardless.
 */
-export const SEED_VERSION = 28;
+export const SEED_VERSION = 30;
 /* Environments a seed version added, so a later top-up adds only those —
    never one someone removed since the last. */
 const ADDED_AT = { 21: ["env-clinic-line"] };
@@ -267,6 +268,9 @@ const withoutRetiredConcepts = (state) => {
 
 export const topUpSeed = (stored) => withoutRetiredConcepts(topUpSeedVersions(stored));
 
+/* How a seeded environment's first version was worded, before and after the seed history. */
+const SEEDED_FIRST_BUILD_NOTES = ["First build, read from the agent source.", "First build from the agent."];
+
 const topUpSeedVersions = (stored) => {
   if ((stored.seedVersion || 0) >= SEED_VERSION) return { ...stored, seedVersion: SEED_VERSION };
   const seed = seededState();
@@ -393,6 +397,26 @@ const topUpSeedVersions = (stored) => {
      one Resolved, one Watching, and ISS-4402 released and Reopened. */
   if ((stored.seedVersion || 0) < 28) {
     upgraded = withWatchedFixes({ ...stored, myEnvironments, byEnv: upgraded, agentLimits }, myEnvironments).byEnv;
+  }
+  /* Seeds 29–30: the returns line was running before versioning started —
+     its first agent and environment versions read as recorded, not
+     connected or built. Only the seeded records, untouched since. */
+  if ((stored.seedVersion || 0) < 30 && upgraded["env-returns-line"]) {
+    const es = upgraded["env-returns-line"];
+    const [a1, ...aRest] = es.agentVersions || [];
+    const [e1, ...eRest] = es.envVersions || [];
+    upgraded = {
+      ...upgraded,
+      "env-returns-line": {
+        ...es,
+        ...(a1?.label === "v1" && !a1.origin && a1.note === "First version connected." && {
+          agentVersions: [recordedBeforeVersioning(a1, PRE_VERSIONING_AGENT_NOTE), ...aRest],
+        }),
+        ...(e1?.label === "v1" && !e1.origin && SEEDED_FIRST_BUILD_NOTES.includes(e1.note) && {
+          envVersions: [recordedBeforeVersioning(e1, PRE_VERSIONING_ENV_NOTE), ...eRest],
+        }),
+      },
+    };
   }
   return {
     ...stored,

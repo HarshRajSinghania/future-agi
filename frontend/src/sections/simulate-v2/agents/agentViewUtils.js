@@ -28,6 +28,7 @@ export const ago = (iso) => {
 export const ORIGIN_LABEL = (v, source) => {
   if (v.origin === "sync") return `Synced from ${source.label}`;
   if (v.origin === "manual") return "Recorded by hand";
+  if (v.origin === "pre-versioning") return "Recorded";
   if (v.origin === "rollback") return "Roll back";
   if (v.origin === "push") return `Pushed ${v.commit?.sha || ""}`.trim();
   if (v.origin === "pr") return `Merged PR #${v.prNumber}`;

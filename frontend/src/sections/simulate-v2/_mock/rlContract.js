@@ -367,6 +367,43 @@ export const toolArgsOf = (tool, envState) => {
   });
 };
 
+/**
+ * The contract's exact words that changed in one world version — what the
+ * version history shows under it, so "1 rule added" comes with the rule:
+ *   [{ what: "Rule R7", kind: "added" | "changed" | "removed", from, to }]
+ * Rules and use cases read as they stood before and after; an argument
+ * reads as the values it allows.
+ */
+export const contractWordingIn = (env, envState, label) => {
+  if (!label) return [];
+  const out = [];
+  /* Walk a change log in order, keeping each id's wording, and note the
+     changes that landed in `label` against the wording before them. */
+  const walk = (log, base, name) => {
+    const words = new Map(base);
+    (log || []).forEach((c) => {
+      if (c.removal) return; // the re-check twin of a removal, not a change of words
+      const before = words.get(c.id) ?? null;
+      if (c.envVersion === label) {
+        out.push({ what: `${name} ${c.id}`, kind: c.kind, from: c.kind === "added" ? null : before, to: c.kind === "removed" ? null : c.to });
+      }
+      if (c.kind === "removed") words.delete(c.id);
+      else words.set(c.id, c.to);
+    });
+  };
+  walk(envState?.ruleChanges, (env?.rules || []).map((text, i) => [`R${i + 1}`, text]), "Rule");
+  walk(envState?.useCaseChanges, contractFor(env).useCases.map((text) => [stableCaseId(text), text]), "Use case");
+  Object.entries(envState?.toolArgEdits || {}).forEach(([key, e]) => {
+    if (e?.envVersion !== label) return;
+    const [toolName, argName] = key.split(".");
+    const tool = (env?.tools || []).find((t) => t.name === toolName);
+    const arg = tool ? baseArgsOf(tool).find((a) => a.name === argName) : null;
+    const { at, envVersion, from, ...change } = e;
+    out.push({ what: key, kind: "changed", from: from || null, to: allowedLine({ ...(arg || {}), ...change }) });
+  });
+  return out;
+};
+
 /** "order_id · email · phone", "0–order total £", "true only", "A-#####" — what the contract allows. */
 export const allowedLine = (a) => {
   if (!a) return "";

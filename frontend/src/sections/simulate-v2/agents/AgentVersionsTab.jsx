@@ -13,6 +13,7 @@ import { pinsDiff, versionPinsOf } from "../_mock/versionPins";
 import { versionNumber } from "../_mock/versions";
 import { OUTSIDE_CHANGE_LABEL, isOutsideChange } from "../_mock/agentSync";
 import { MAKE_ACTIVE_ADMIN_ONLY, activeVersionOf, currentWorkspaceRole } from "./agentProfile";
+import { versionChecksLine, versionChecksOf } from "../_mock/versionChecks";
 
 
 const TONE = { added: "#16A34A", changed: "text.secondary", removed: "#DC2626" };
@@ -188,6 +189,8 @@ export default function AgentVersionsTab({ agent, source, filesOf, toolsOf, stat
                   {(v.note ? [releasedNote(v)] : (v.changes || []).map((c) => c.title)).map((t) => (
                     <Typography key={t} sx={{ typography: "s3", color: "text.secondary", mt: 0.375 }}>{t}</Typography>
                   ))}
+                  {/* What was checked when it was saved — said per check, not as one gate. */}
+                  <VersionChecks result={versionChecksOf(agent, source, v)} />
                   {/* One row of actions under every version, so they line up down the list. */}
                   <Stack direction="row" alignItems="center" spacing={0.5} flexWrap="wrap" sx={{ mt: 0.5, ml: -0.75, "& .MuiButton-root": { px: 0.75, height: 24 } }}>
                     <Button size="small" onClick={() => onView(v.label)} sx={{ typography: "s3", fontWeight: 700, color: "text.secondary", minWidth: 0 }}>
@@ -385,6 +388,55 @@ function VersionSelect({ value, onChange, labels }) {
   );
 }
 VersionSelect.propTypes = { value: PropTypes.string, onChange: PropTypes.func, labels: PropTypes.array };
+
+/* One line under a version — "3 checks passed" — that opens to each check. */
+function VersionChecks({ result }) {
+  const [open, setOpen] = useState(false);
+  if (!result) return null;
+  if (result.unchecked) {
+    return (
+      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.5 }}>
+        <Iconify icon="solar:minus-circle-linear" width={13} sx={{ color: "text.disabled", flexShrink: 0 }} />
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{result.unchecked}</Typography>
+      </Stack>
+    );
+  }
+  if (!result.checks.length) return null;
+  const failed = result.checks.some((c) => !c.ok);
+  return (
+    <Box sx={{ mt: 0.5 }}>
+      <Stack
+        direction="row" alignItems="center" spacing={0.5}
+        {...clickable(() => setOpen((o) => !o), { expanded: open })}
+        sx={{ width: "fit-content", cursor: "pointer", borderRadius: 0.5, ...focusRing }}
+      >
+        <Iconify
+          icon={failed ? "solar:danger-circle-linear" : "solar:check-circle-linear"}
+          width={13}
+          sx={{ color: failed ? TONE.removed : "text.subtitle", flexShrink: 0 }}
+        />
+        <Typography sx={{ typography: "s3", fontWeight: 600, color: failed ? TONE.removed : "text.secondary" }}>{versionChecksLine(result)}</Typography>
+        <Iconify icon={open ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"} width={11} sx={{ color: "text.disabled" }} />
+      </Stack>
+      {open && (
+        <Box component="dl" sx={{ m: 0, mt: 0.5, pl: 2.25, display: "grid", gridTemplateColumns: "auto 1fr", columnGap: 1.5, rowGap: 0.25 }}>
+          {result.checks.map((c) => (
+            <Box key={c.id} sx={{ display: "contents" }}>
+              <Stack component="dt" direction="row" alignItems="center" spacing={0.5} sx={{ m: 0 }}>
+                <Iconify icon={c.ok ? "eva:checkmark-fill" : "eva:close-fill"} width={12} sx={{ color: c.ok ? "text.subtitle" : TONE.removed, flexShrink: 0 }} />
+                <Typography sx={{ typography: "s3", color: c.ok ? "text.secondary" : TONE.removed, whiteSpace: "nowrap" }}>{c.label}</Typography>
+              </Stack>
+              <Typography component="dd" noWrap sx={{ m: 0, typography: "s3", color: "text.disabled", fontFamily: c.detail && /[/:_.@]/.test(c.detail) ? MONO : undefined, fontSize: c.detail && /[/:_.@]/.test(c.detail) ? 11.5 : undefined, minWidth: 0 }}>
+                {c.detail || ""}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+}
+VersionChecks.propTypes = { result: PropTypes.object };
 
 function Chip({ label, tone }) {
   return (

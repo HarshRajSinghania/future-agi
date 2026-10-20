@@ -695,10 +695,15 @@ function SimStoreRoot({ children }) {
           type: "hydrate",
           payload: raw ? topUpSeed(JSON.parse(raw)) : firstRunState(),
         });
-      } catch {
+      } catch (err) {
         /* a corrupt prototype cache should never block the screen — fall back
-           to the seed so the app still renders rather than staying blank */
-        dispatch({ type: "hydrate", payload: firstRunState() });
+           to the seed so the app still renders rather than staying blank. But
+           never save that seed over what's stored: a top-up that throws for a
+           moment (a half-saved edit under HMR) once replaced a whole workspace
+           with a fresh seed. The stored copy stays as it was until it loads. */
+        // eslint-disable-next-line no-console
+        console.error("[store] stored state didn't load — showing the seed, not saving over it", err);
+        dispatch({ type: "hydrate", payload: raw ? { ...firstRunState(), storedUnreadable: true } : firstRunState() });
       }
     });
   }, []);
@@ -722,7 +727,7 @@ function SimStoreRoot({ children }) {
     last environment) still has the flag and persists correctly.
   */
   useEffect(() => {
-    if (!state.hydrated) return;
+    if (!state.hydrated || state.storedUnreadable) return;
     /* storeStorage falls back quietly — the prototype still works in-memory */
     writeStored(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
