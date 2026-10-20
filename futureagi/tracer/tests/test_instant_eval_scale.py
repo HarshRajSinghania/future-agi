@@ -1354,3 +1354,89 @@ def test_a_run_reports_the_time_it_ran_apart_from_the_time_it_sat(
     summary = _summary(auth_client, observe_project, task, tz="Asia/Seoul")
     assert summary["active_s"] == 180
     assert summary["idle_s"] == 200 * 60 + 5 - 180
+
+
+class _KeptCache:
+    """A cache that remembers each key's value and how long it was kept."""
+
+    def __init__(self):
+        self.values, self.timeouts = {}, {}
+
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
+    def set(self, key, value, timeout):
+        self.values[key], self.timeouts[key] = value, timeout
+
+
+@pytest.fixture
+def counted(monkeypatch):
+    """``compute_summary`` around a fake count: its cache, and the ``check``
+    each count was synced with."""
+    kept, checks = _KeptCache(), []
+    monkeypatch.setattr(instant_eval_scale, "cache", kept)
+    monkeypatch.setattr(
+        "tracer.services.instant_eval_answers.ensure_synced",
+        lambda run, *, check: checks.append(check),
+    )
+    monkeypatch.setattr(
+        instant_eval_scale,
+        "_summary_payload",
+        lambda task, run, *_: {"status": instant_eval_scale._status(task, run)},
+    )
+    monkeypatch.setattr(
+        instant_eval_scale,
+        "_summary_key",
+        lambda task, run, status, view: f"summary:{status}:{run.answers_version}",
+    )
+    return kept, checks
+
+
+def test_a_finished_runs_summary_and_answer_check_expire(counted, monkeypatch):
+    kept, checks = counted
+    monkeypatch.setattr(
+        instant_eval_scale, "_status", lambda task, run: EvalTaskStatus.COMPLETED
+    )
+    run = SimpleNamespace(eval_task_id="t1", answers_version=3)
+    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    assert kept.timeouts == {
+        "ie-answers-checked:t1:3": instant_eval_scale.ANSWERS_CHECKED_TTL,
+        "summary:completed:3": instant_eval_scale.FINISHED_SUMMARY_TTL,
+    }
+    assert instant_eval_scale.FINISHED_SUMMARY_TTL == 24 * 60 * 60
+    # The check outlives the summaries, so counting one again (another time
+    # zone, or after it expired) doesn't compare the answers again.
+    assert instant_eval_scale.ANSWERS_CHECKED_TTL == 7 * 24 * 60 * 60
+    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    assert checks == [True, False]
+    # Once the check expires the answers are compared again, and kept again.
+    del kept.values["ie-answers-checked:t1:3"]
+    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    assert checks == [True, False, True]
+    assert kept.values["ie-answers-checked:t1:3"] == 1
+
+
+def test_a_live_runs_summary_is_kept_a_minute_and_checks_nothing(counted, monkeypatch):
+    kept, checks = counted
+    monkeypatch.setattr(
+        instant_eval_scale, "_status", lambda task, run: EvalTaskStatus.RUNNING
+    )
+    run = SimpleNamespace(eval_task_id="t1", answers_version=0)
+    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    assert kept.timeouts == {"summary:running:0": 60}
+    assert checks == [False]
+
+
+@pytest.mark.parametrize(
+    ("live", "timeout"), [(False, summary_service.USERS_BY_ANSWER_TTL), (True, 30)]
+)
+def test_users_by_answer_are_kept_as_long_as_the_summary(monkeypatch, live, timeout):
+    kept = _KeptCache()
+    monkeypatch.setattr(summary_service, "cache", kept)
+    monkeypatch.setattr(summary_service, "users_by_answer", lambda view: {"c1": {}})
+    view = SimpleNamespace(task_id="t1", rows_version=2, config_ids=["c1"], live=live)
+    assert summary_service.kept_users_by_answer(view) == {"c1": {}}
+    assert list(kept.timeouts.values()) == [timeout]
+    # Kept as long as the summaries it is part of.
+    finished = instant_eval_scale.FINISHED_SUMMARY_TTL
+    assert summary_service.USERS_BY_ANSWER_TTL == finished

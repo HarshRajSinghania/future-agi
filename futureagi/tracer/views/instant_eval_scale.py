@@ -83,7 +83,16 @@ MAX_HANDOVER_IDS = 5000
 MAX_QUESTIONS = 5
 MAX_PAGE_SIZE = 200
 MAX_COMPACT_PAGE = 1500
-SUMMARY_CACHE_TTL = 3600
+# A finished run's summary only changes when its answers version moves, and
+# the key moves with it, so this only bounds the cache: at 100,000 rows a
+# summary is about 190 KB, kept per time zone and set of questions, in a Redis
+# that doesn't evict. The run is counted as it finishes, and opening it again
+# after a day counts it again in about half a second.
+FINISHED_SUMMARY_TTL = 24 * 60 * 60
+# Outlives the summaries, so they are counted again without comparing the
+# answers again. Once it expires the next count compares them once more: two
+# counts over the run's own entries, and a copy only if they disagree.
+ANSWERS_CHECKED_TTL = 7 * 24 * 60 * 60
 TERMINAL = {EvalTaskStatus.COMPLETED, EvalTaskStatus.FAILED, EvalTaskStatus.PAUSED}
 ACTIVE = (EvalTaskStatus.PENDING, EvalTaskStatus.RUNNING)
 
@@ -1324,7 +1333,7 @@ def _checked_key(run) -> str:
 def compute_summary(task, run, view, questions) -> dict:
     """Count a run, copying its answers over first if they weren't recorded
     as they landed (or, once it has finished, if any were missed), and keep
-    the result: for good once the run has finished."""
+    the result: for a day once the run has finished."""
     from tracer.services.instant_eval_answers import ensure_synced
 
     status = _status(task, run)
@@ -1333,7 +1342,7 @@ def compute_summary(task, run, view, questions) -> dict:
     check = status in TERMINAL and not cache.get(_checked_key(run))
     ensure_synced(run, check=check)
     if check:
-        cache.set(_checked_key(run), 1, None)
+        cache.set(_checked_key(run), 1, ANSWERS_CHECKED_TTL)
     payload = _summary_payload(task, run, view, questions)
     finished = payload["status"] not in (*ACTIVE, STALLED, PAUSING)
     cache.set(
@@ -1341,7 +1350,7 @@ def compute_summary(task, run, view, questions) -> dict:
         {"payload": payload, "at": time.time()},
         # A finished run never changes until something bumps its answers
         # version; a live or stalled one is counted again shortly.
-        None if finished else 60,
+        FINISHED_SUMMARY_TTL if finished else 60,
     )
     return payload
 

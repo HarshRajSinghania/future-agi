@@ -444,6 +444,11 @@ WHERE task_id = %(task)s AND config_id = ANY(%(cfg_uuids)s::uuid[])
 # share of it, by z-score, among users with 3 rows or more.
 USERS_BY_ANSWER = 50
 USERS_BY_ANSWER_MIN_ROWS = 3
+# A finished run's users by answer (about 50 KB at 100,000 rows) are kept as
+# long as the summaries they are part of (``FINISHED_SUMMARY_TTL`` in
+# ``tracer.views.instant_eval_scale``): only a summary being counted again
+# reads them.
+USERS_BY_ANSWER_TTL = 24 * 60 * 60
 
 _LEANING = f"""
 WITH ru AS (
@@ -493,8 +498,8 @@ WHERE rn <= %(top)s ORDER BY config_id, label, rn
 
 def kept_users_by_answer(view: RunView) -> dict:
     """``users_by_answer``, which doesn't depend on the time zone: counted
-    once per answers version for a finished run, every half minute for a
-    live one."""
+    once per answers version for a finished run (kept a day), every half
+    minute for a live one."""
     key = (
         f"ie-users-by-answer:v2:{view.task_id}:{view.rows_version}:"
         f"{','.join(view.config_ids)}"
@@ -502,7 +507,7 @@ def kept_users_by_answer(view: RunView) -> dict:
     kept = cache.get(key)
     if kept is None:
         kept = users_by_answer(view)
-        cache.set(key, kept, 30 if view.live else None)
+        cache.set(key, kept, 30 if view.live else USERS_BY_ANSWER_TTL)
     return kept
 
 

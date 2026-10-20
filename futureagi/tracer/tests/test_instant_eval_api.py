@@ -412,3 +412,54 @@ def test_runs_opens_one_run_by_id_with_its_pending_rows(
     }).json()["result"]["runs"][0]
     assert done["pending"] == 0
     assert done["finished_at"]
+
+
+class _FakeCursor:
+    """Every run on the page stored three rows."""
+
+    def __init__(self):
+        self.tasks = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def execute(self, sql, params):
+        self.tasks = params["tasks"]
+
+    def fetchall(self):
+        return [(tid, 3) for tid in self.tasks]
+
+
+def test_a_finished_runs_history_line_is_kept_a_month(monkeypatch):
+    kept = {}
+
+    class Cache:
+        def get_many(self, keys):
+            return {}
+
+        def set(self, key, value, timeout):
+            kept[key] = timeout
+
+    monkeypatch.setattr(instant_eval, "cache", Cache())
+    monkeypatch.setattr("django.db.connection", SimpleNamespace(cursor=_FakeCursor))
+    monkeypatch.setattr(
+        instant_eval,
+        "_answer_tally",
+        lambda ids, out: [out.setdefault(i, [0, 3, None, {}, 0]) for i in ids],
+    )
+    stamp = datetime(2026, 10, 20, 9)
+    done = SimpleNamespace(id="t-done", status="completed", updated_at=stamp)
+    live = SimpleNamespace(id="t-live", status="running", updated_at=stamp)
+    run = SimpleNamespace(
+        answers_version=2, cancelled_at=None, answers_synced=True, unit="traces"
+    )
+    tally = instant_eval._history_tally([(done, run, ["c1"]), (live, run, ["c1"])])
+    assert set(tally) == {"t-done", "t-live"}
+    # Only the finished run is kept, and not for good.
+    assert kept == {
+        f"ie-history:v2:t-done:2:{stamp.timestamp()}": instant_eval.HISTORY_TALLY_TTL
+    }
+    assert instant_eval.HISTORY_TALLY_TTL == 30 * 24 * 60 * 60

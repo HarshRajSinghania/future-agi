@@ -16,7 +16,7 @@ from datetime import timedelta
 from typing import List, Optional, Tuple
 
 import structlog
-from django.db import IntegrityError, transaction
+from django.db import DatabaseError, IntegrityError, ProgrammingError, transaction
 from django.db.models import CharField, Exists, OuterRef, Q
 from django.db.models.functions import Cast
 from django.utils import timezone
@@ -171,17 +171,39 @@ def is_clusterable_eval_failure(entry: EvalLogger) -> bool:
 
 
 def _instant_eval_task_ids():
-    """The eval tasks Instant eval started, as the text ``eval_task_id``."""
+    """The eval tasks Instant eval started, as the text ``eval_task_id``, or
+    None when the Instant eval table doesn't exist yet.
+
+    Workers can be deployed before migration 0117 is applied, and without
+    the table there are no Instant eval runs to exclude. Only that case
+    fails open: any other database error still fails the fetch, because
+    Instant eval answers clustered by mistake stay in Error Feed, while a
+    failed fetch only leaves its rows for a later drain.
+    """
     from tracer.models.instant_eval import InstantEvalRun
 
-    return InstantEvalRun.objects.annotate(
-        tid=Cast("eval_task_id", output_field=CharField())
-    ).values("tid")
+    runs = InstantEvalRun.objects.all()
+    try:
+        # A savepoint, so a failed read can't break a surrounding transaction.
+        with transaction.atomic(using=runs.db):
+            runs.exists()
+    except ProgrammingError:
+        logger.warning("instant_eval_runs_unreadable", exc_info=True)
+        return None
+    return runs.annotate(tid=Cast("eval_task_id", output_field=CharField())).values(
+        "tid"
+    )
 
 
 def is_instant_eval_task(eval_task_id) -> bool:
     """Whether an eval task was started by Instant eval, whose answers stay
-    out of Error Feed clustering."""
+    out of Error Feed clustering.
+
+    Every regular eval task asks this for each failing result, so a failed
+    read (the Instant eval table not migrated yet, for one) answers "no"
+    rather than failing the entry. That only starts a clustering run, and
+    the fetch for that run excludes Instant eval answers again.
+    """
     import uuid
 
     from tracer.models.instant_eval import InstantEvalRun
@@ -190,7 +212,18 @@ def is_instant_eval_task(eval_task_id) -> bool:
         task_id = uuid.UUID(str(eval_task_id))
     except (TypeError, ValueError):
         return False
-    return InstantEvalRun.objects.filter(eval_task_id=task_id).exists()
+    runs = InstantEvalRun.objects.filter(eval_task_id=task_id)
+    try:
+        # A savepoint, so a failed read can't break a surrounding transaction.
+        with transaction.atomic(using=runs.db):
+            return runs.exists()
+    except DatabaseError:
+        logger.warning(
+            "instant_eval_task_check_failed",
+            eval_task_id=str(task_id),
+            exc_info=True,
+        )
+        return False
 
 
 def get_unclustered_eval_results(
@@ -226,17 +259,18 @@ def get_unclustered_eval_results(
     # session→project. ``trace_id`` / ``trace_session_id`` are read below from the
     # eval row's own FK columns (no join). Targets still never co-cluster: the
     # centroid family is keyed by (target_type, eval_name) downstream.
+    evals = EvalLogger.objects.filter(
+        _FAILING_EVAL_Q,
+        custom_eval_config__project_id=project_id,
+        created_at__gte=since,
+    ).select_related("custom_eval_config", "custom_eval_config__eval_template")
+    # Instant eval answers never cluster, even when a regular eval's failure
+    # starts the drain.
+    instant_task_ids = _instant_eval_task_ids()
+    if instant_task_ids is not None:
+        evals = evals.exclude(eval_task_id__in=instant_task_ids)
     evals = (
-        EvalLogger.objects.filter(
-            _FAILING_EVAL_Q,
-            custom_eval_config__project_id=project_id,
-            created_at__gte=since,
-        )
-        .select_related("custom_eval_config", "custom_eval_config__eval_template")
-        # Instant eval answers never cluster, even when a regular eval's
-        # failure starts the drain.
-        .exclude(eval_task_id__in=_instant_eval_task_ids())
-        .filter(
+        evals.filter(
             ~Exists(
                 ErrorClusterTraces.objects.filter(
                     eval_logger_id=OuterRef("pk"),

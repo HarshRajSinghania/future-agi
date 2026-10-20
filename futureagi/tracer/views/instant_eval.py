@@ -576,6 +576,10 @@ class InstantEvalAnswersView(InstantEvalLicenseRequired, APIView):
 # ─── History ────────────────────────────────────────────────────────────────
 HISTORY_SCAN = 500
 INSTANT_TASK_PREFIX = "Instant eval"
+# A finished run's history line is a few hundred bytes and its key moves with
+# the run's answers version and update time, so this only bounds the cache.
+# Long, because a page whose lines all expired counts up to 50 runs at once.
+HISTORY_TALLY_TTL = 30 * 24 * 60 * 60
 
 
 class InstantEvalRunsQuerySerializer(serializers.Serializer):
@@ -739,7 +743,7 @@ def _history_tally(page: list[tuple]) -> dict[str, tuple]:
     answer counts per question, the rows its run stored, and for a user
     question the sessions behind its users (its rows are then its users).
     Counted in SQL (from the narrow answer table where the run records one),
-    and kept for good once a run has finished."""
+    and kept for a month once a run has finished."""
     from django.db import connection
 
     out: dict[str, list] = {}
@@ -782,7 +786,7 @@ def _history_tally(page: list[tuple]) -> dict[str, tuple]:
             value[0] = value[4]
         out[tid] = value
         if tid in keys:
-            cache.set(keys[tid], value, None)
+            cache.set(keys[tid], value, HISTORY_TALLY_TTL)
     return {tid: tuple(v) for tid, v in out.items()}
 
 
