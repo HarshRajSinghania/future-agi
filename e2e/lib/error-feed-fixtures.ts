@@ -14,7 +14,8 @@ export const test = base.extend<{ errorFeedProfile: void; scopeActors: ScopeActo
     base.skip(process.env.E2E_STACK !== 'error-feed', 'Requires the dedicated entitled Error Feed stack');
     await use();
   }, { auto: true }],
-  scopeActors: async ({}, use, info) => {
+  // CLI account setup runs before a test callback can extend its own timeout.
+  scopeActors: [async ({}, use, info) => {
     const backend = managedErrorFeedBackend();
     // Independent cohorts share Docker's host IP. Reset only this isolated
     // stack's login IP budget; never auth tokens, roles, memberships or data.
@@ -27,7 +28,7 @@ export const test = base.extend<{ errorFeedProfile: void; scopeActors: ScopeActo
         }
         execFileSync('docker', ['exec', backend.Id, 'python', 'manage.py', 'create_user',
           '--email', email, '--name', fullName, '--password', password],
-          { encoding: 'utf8', timeout: 60_000, stdio: ['pipe', 'pipe', 'pipe'] });
+          { encoding: 'utf8', timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'] });
       }), async email => {
         if (!email.startsWith(scopes.prefix + '-')) throw new Error('Refusing foreign local-mail read');
         let link = '';
@@ -48,7 +49,7 @@ export const test = base.extend<{ errorFeedProfile: void; scopeActors: ScopeActo
       await info.attach('scope-api-receipt', { contentType: 'application/json', body: JSON.stringify(scopes.evidence()) });
       await scopes.dispose();
     }
-  },
+  }, { timeout: 360_000 }],
   scopeProbe: async ({ scopeActors }, use) => {
     const probe = new StateProbe({ api: scopeActors.ownerA.api, pgUrl: E2E.pgUrl,
       chUrl: E2E.chUrl, chDatabase: E2E.chDatabase, chPassword: E2E.chPassword,
