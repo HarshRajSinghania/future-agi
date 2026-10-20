@@ -232,6 +232,39 @@ describe("ModelSelector — Jev models (bring your own key)", () => {
     );
   });
 
+  // Jev is in Community: an open-source server allows it (Turing stays
+  // locked), and without a key it asks for one, as on Cloud.
+  it("offers Jev on a self-hosted open-source server", async () => {
+    capabilityResponse = Promise.resolve({
+      data: {
+        deployment_flavor: "oss",
+        features: {
+          turing_models: { allowed: false, reason_code: "OSS_LOCKED" },
+          jev_models: { allowed: true },
+        },
+      },
+    });
+    typesafeHasKey = false;
+    const onModelChange = vi.fn();
+    renderSelector({ onModelChange });
+    await userEvent.click(screen.getByText("Select model"));
+    const row = await screen.findByRole("menuitem", {
+      name: /Jev latest.*Add your TypeSafe API key/,
+    });
+    await waitFor(() => expect(row).not.toHaveAttribute("aria-disabled"));
+    expect(
+      screen.getByRole("menuitem", { name: /Turing Large/ }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(row);
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(keysDrawer).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        open: true,
+        selectedModel: { model_name: "jev-latest", providers: "typesafe" },
+      }),
+    );
+  });
+
   it("selects the exact provider ID and labels only exact Jev values", async () => {
     const onModelChange = vi.fn();
     renderSelector({ model: "latest", onModelChange });

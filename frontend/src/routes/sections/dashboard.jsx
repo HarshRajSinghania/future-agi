@@ -1148,14 +1148,24 @@ export const dashboardRoutes = (
           path: "users",
           element: <UsersView />,
         },
+        // Insights and Instant eval are Enterprise: without the capability
+        // (e.g. open source) the route shows the upgrade gate, as Error Feed.
         {
           path: "insights",
-          element: <InsightsView />,
+          element: (
+            <CapabilityGate feature={CAPABILITY.INSIGHTS}>
+              <InsightsView />
+            </CapabilityGate>
+          ),
         },
         // Instant eval: a question answered for every row of a view.
         {
           path: "ask",
-          element: <AskPage />,
+          element: (
+            <CapabilityGate feature={CAPABILITY.INSTANT_EVAL}>
+              <AskPage />
+            </CapabilityGate>
+          ),
         },
         // Insights was called Analyse; keep old links working.
         {

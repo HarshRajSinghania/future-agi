@@ -24,7 +24,9 @@ import {
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import { useNavigate } from "react-router";
+import EnterpriseMark from "src/components/capability-gate/EnterpriseMark";
 import Iconify from "src/components/iconify";
+import { CAPABILITY, useFeatureDenied } from "src/hooks/useCapabilities";
 import {
   askLink,
   insightsReportLink,
@@ -959,6 +961,9 @@ export default function CategoryExplorer({
       : { category_id: category?.id || categoryId };
   const units = useRunUnits(run.id, { ...params, offset, limit: UNITS_PAGE });
   const collecting = useCancellable("The examples could not be collected.");
+  // Instant eval is Enterprise: without it, Measure is marked and opens its
+  // gate.
+  const askDenied = useFeatureDenied(CAPABILITY.INSTANT_EVAL);
 
   if (!category)
     return (
@@ -1243,12 +1248,17 @@ export default function CategoryExplorer({
           <Tooltip
             arrow
             describeChild
-            title={`Opens Instant eval on ${plural} with this as a yes/no question, to measure it across all your traffic and keep tracking it.`}
+            title={
+              askDenied
+                ? "Instant eval is an Enterprise feature."
+                : `Opens Instant eval on ${plural} with this as a yes/no question, to measure it across all your traffic and keep tracking it.`
+            }
           >
             <Button
               size="small"
               variant="outlined"
               startIcon={<Iconify icon="mdi:creation-outline" width={16} />}
+              endIcon={askDenied ? <EnterpriseMark compact /> : undefined}
               onClick={measure}
               sx={{ fontSize: 13 }}
             >

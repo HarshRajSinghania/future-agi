@@ -2,15 +2,30 @@ import React, { useId, useState } from "react";
 import PropTypes from "prop-types";
 import { Box, Button, Menu, MenuItem, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import EnterpriseMark from "src/components/capability-gate/EnterpriseMark";
 import Iconify from "src/components/iconify";
+import { CAPABILITY, useFeatureDenied } from "src/hooks/useCapabilities";
 import { unitMeta } from "./instantEvalUnits";
 import { pillSx } from "../toolbarStyles";
+
+// Marks an action whose feature this deployment doesn't include. Rendered
+// inside the open menu only, so the toolbar itself needs no capability read.
+function ActionLock({ feature, sx }) {
+  return useFeatureDenied(feature) ? <EnterpriseMark sx={sx} /> : null;
+}
+
+ActionLock.propTypes = {
+  feature: PropTypes.string.isRequired,
+  sx: PropTypes.object,
+};
 
 /**
  * The toolbar's one entry point for judging the rows in view: ask Jev a
  * question about each of them (Instant eval), start an Insights report on
  * them, or run saved evaluators. Each action shows only when its handler is
- * given; with none, nothing renders.
+ * given; with none, nothing renders. Instant eval and Insights are
+ * Enterprise: without them an action is marked and still opens, onto the
+ * upgrade gate its page shows.
  */
 export default function EvaluateMenu({
   unit,
@@ -27,6 +42,7 @@ export default function EvaluateMenu({
       icon: "mdi:creation-outline",
       title: "Ask a question",
       detail: `Jev answers it for every ${meta.noun} in view, in seconds.`,
+      feature: CAPABILITY.INSTANT_EVAL,
       onClick: onAsk,
     },
     onFindPatterns && {
@@ -34,6 +50,7 @@ export default function EvaluateMenu({
       icon: "mdi:chart-box-outline",
       title: "Find patterns",
       detail: `Start an Insights report on these ${meta.plural}.`,
+      feature: CAPABILITY.INSIGHTS,
       onClick: onFindPatterns,
     },
     onAddEvaluators && {
@@ -112,6 +129,9 @@ export default function EvaluateMenu({
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="body2" fontWeight={600}>
                 {action.title}
+                {action.feature && (
+                  <ActionLock feature={action.feature} sx={{ ml: 0.75 }} />
+                )}
               </Typography>
               <Typography
                 variant="caption"

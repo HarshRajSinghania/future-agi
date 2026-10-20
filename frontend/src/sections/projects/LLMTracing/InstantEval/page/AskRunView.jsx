@@ -19,8 +19,10 @@ import {
 } from "@mui/material";
 import { keyframes } from "@mui/material/styles";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
+import EnterpriseMark from "src/components/capability-gate/EnterpriseMark";
 import Iconify from "src/components/iconify";
 import TraceDetailDrawerV2 from "src/components/traceDetail/TraceDetailDrawerV2";
+import { CAPABILITY, useFeatureDenied } from "src/hooks/useCapabilities";
 import { paths } from "src/routes/paths";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
 import { insightsReportLink } from "src/sections/projects/observeHandoff";
@@ -474,6 +476,7 @@ function SelectionBar({
   unit,
   label,
   onFindPatterns,
+  patternsLocked = false,
   gridLink,
   onClear,
 }) {
@@ -521,6 +524,11 @@ function SelectionBar({
           size="small"
           variant="contained"
           startIcon={<Iconify icon="mdi:chart-box-outline" width={16} />}
+          endIcon={
+            patternsLocked ? (
+              <EnterpriseMark compact sx={{ color: "inherit" }} />
+            ) : undefined
+          }
           onClick={onFindPatterns}
         >
           Find patterns
@@ -548,6 +556,7 @@ SelectionBar.propTypes = {
   unit: PropTypes.string.isRequired,
   label: PropTypes.string,
   onFindPatterns: PropTypes.func,
+  patternsLocked: PropTypes.bool,
   gridLink: PropTypes.func,
   onClear: PropTypes.func.isRequired,
 };
@@ -712,43 +721,48 @@ export default function AskRunView({
     return { filters: summary?.scope?.filters || scope?.filters || [] };
   };
 
+  // Insights is Enterprise: without it, Find patterns opens its gate rather
+  // than reading the rows first.
+  const insightsDenied = useFeatureDenied(CAPABILITY.INSIGHTS);
   const findPatterns =
     unit === "spans" || !tableTotal || !question
       ? null
-      : async () => {
-          setHanding(true);
-          try {
-            const handed = await handOverRows();
-            const count = handed.rows ? handed.rows.length : tableTotal;
-            const noun = count === 1 ? meta.noun : meta.plural;
-            const subject = count === 1 ? `this ${noun}` : `these ${noun}`;
-            navigate(
-              insightsReportLink(projectId, {
-                unit,
-                ...(handed.rows
-                  ? {
-                      population: handed.rows.map((record) => ({
-                        id: record.id,
-                        time: record.time || "",
-                        user_id: record.user_id || "",
-                      })),
-                    }
-                  : { filters: handed.filters }),
-                question: focus.answer
-                  ? `Why did ${subject} get ${quoted(answerText(focus.answer))} for ${quoted(question.question)}?`
-                  : `What do ${subject} have in common?`,
-                label: filterLabel || question.question,
-                source: `Instant eval: ${question.question}`,
-              }),
-            );
-          } catch (error) {
-            setActionError(
-              getSafeActionErrorMessage(error, "The rows couldn't be read."),
-            );
-          } finally {
-            setHanding(false);
-          }
-        };
+      : insightsDenied
+        ? () => navigate(`/dashboard/observe/${projectId}/insights`)
+        : async () => {
+            setHanding(true);
+            try {
+              const handed = await handOverRows();
+              const count = handed.rows ? handed.rows.length : tableTotal;
+              const noun = count === 1 ? meta.noun : meta.plural;
+              const subject = count === 1 ? `this ${noun}` : `these ${noun}`;
+              navigate(
+                insightsReportLink(projectId, {
+                  unit,
+                  ...(handed.rows
+                    ? {
+                        population: handed.rows.map((record) => ({
+                          id: record.id,
+                          time: record.time || "",
+                          user_id: record.user_id || "",
+                        })),
+                      }
+                    : { filters: handed.filters }),
+                  question: focus.answer
+                    ? `Why did ${subject} get ${quoted(answerText(focus.answer))} for ${quoted(question.question)}?`
+                    : `What do ${subject} have in common?`,
+                  label: filterLabel || question.question,
+                  source: `Instant eval: ${question.question}`,
+                }),
+              );
+            } catch (error) {
+              setActionError(
+                getSafeActionErrorMessage(error, "The rows couldn't be read."),
+              );
+            } finally {
+              setHanding(false);
+            }
+          };
 
   const showSelectionInTraces =
     unit === "users"
@@ -1078,6 +1092,7 @@ export default function AskRunView({
             unit={unit}
             label={handing ? "Reading the rows…" : filterLabel}
             onFindPatterns={findPatterns}
+            patternsLocked={insightsDenied}
             gridLink={showSelectionInTraces}
             onClear={clearFilter}
           />

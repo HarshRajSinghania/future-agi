@@ -19,6 +19,8 @@ export const CAPABILITY = Object.freeze({
   AGENTIC_EVAL: "agentic_eval",
   SYNTHETIC_DATA: "synthetic_data",
   OPTIMIZATION: "optimization",
+  INSTANT_EVAL: "instant_eval",
+  INSIGHTS: "insights",
 });
 
 export function useCapabilities() {
@@ -69,4 +71,16 @@ export function useFeatureLocked(featureId) {
     isLoading,
     isError,
   };
+}
+
+/**
+ * A confirmed denial: capabilities loaded, the fetch didn't fail, and the
+ * feature isn't allowed. For marking an entry point that still opens (onto
+ * its upgrade gate), so it never shows while loading or after a failed fetch.
+ *
+ *   const insightsDenied = useFeatureDenied(CAPABILITY.INSIGHTS);
+ */
+export function useFeatureDenied(featureId) {
+  const { allowed, isLoading, isError } = useFeatureAllowed(featureId);
+  return !isLoading && !isError && !allowed;
 }

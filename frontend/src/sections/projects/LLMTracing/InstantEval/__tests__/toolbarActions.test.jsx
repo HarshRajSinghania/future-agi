@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "src/utils/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "src/utils/test-utils";
 import ObserveToolbar from "../../ObserveToolbar";
+
+// Features the deployment's license or plan denies.
+const capabilities = vi.hoisted(() => ({ denied: new Set() }));
+vi.mock("src/hooks/useCapabilities", async (importOriginal) => ({
+  ...(await importOriginal()),
+  useFeatureDenied: (feature) => capabilities.denied.has(feature),
+}));
 
 vi.mock("src/components/custom-datepicker/DatePicker", () => ({
   default: () => null,
@@ -39,6 +46,10 @@ const menuTitles = () =>
     .map((item) => item.querySelector("p, span")?.textContent);
 
 describe("ObserveToolbar Evaluate menu", () => {
+  beforeEach(() => {
+    capabilities.denied = new Set();
+  });
+
   it.each([
     ["traces", "trace", "traces"],
     ["sessions", "session", "sessions"],
@@ -82,6 +93,35 @@ describe("ObserveToolbar Evaluate menu", () => {
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: /Ask a question/ }));
     expect(props.onInstantEval).toHaveBeenCalledTimes(1);
+  });
+
+  // Instant eval and Insights are Enterprise (e.g. locked on open source):
+  // marked, and still clickable, onto the gate their pages show.
+  it("marks the Enterprise actions and still opens them", () => {
+    capabilities.denied = new Set(["instant_eval", "insights"]);
+    const props = handlers();
+    renderToolbar({ mode: "sessions", ...props });
+    openMenu();
+    const item = (name) => screen.getByRole("menuitem", { name });
+    expect(
+      within(item(/Ask a question/)).getByText("Enterprise"),
+    ).toBeInTheDocument();
+    expect(
+      within(item(/Find patterns/)).getByText("Enterprise"),
+    ).toBeInTheDocument();
+    expect(within(item(/Add evaluators/)).queryByText("Enterprise")).toBeNull();
+
+    fireEvent.click(item(/Ask a question/));
+    expect(props.onInstantEval).toHaveBeenCalledTimes(1);
+    openMenu();
+    fireEvent.click(item(/Find patterns/));
+    expect(props.onInsights).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks nothing when the features are allowed", () => {
+    renderToolbar({ mode: "traces", ...handlers() });
+    openMenu();
+    expect(screen.queryByText("Enterprise")).toBeNull();
   });
 
   it("keeps only Add evaluators in compare mode", () => {

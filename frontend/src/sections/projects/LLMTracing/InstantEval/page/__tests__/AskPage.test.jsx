@@ -25,9 +25,15 @@ const fakes = vi.hoisted(() => ({
   askRunArgs: [],
   rowsArgs: [],
   control: vi.fn(),
+  // Features the deployment's license or plan denies.
+  denied: new Set(),
 }));
 
 vi.mock("src/components/iconify", () => ({ default: () => null }));
+vi.mock("src/hooks/useCapabilities", async (importOriginal) => ({
+  ...(await importOriginal()),
+  useFeatureDenied: (feature) => fakes.denied.has(feature),
+}));
 // The views' filter panel: here it applies a Status filter, as a pick in it
 // would.
 vi.mock("src/sections/projects/LLMTracing/TraceFilterPanel", () => ({
@@ -174,6 +180,7 @@ vi.mock("../viz", async (importOriginal) => ({
 }));
 
 import AskPage from "../AskPage";
+import { fetchRowIds } from "../useAskRows";
 import {
   presetWindow,
   viewSeed,
@@ -409,6 +416,7 @@ beforeEach(() => {
   fakes.askRuns = {};
   fakes.askRunArgs = [];
   fakes.rowsArgs = [];
+  fakes.denied = new Set();
   globalThis.sessionStorage?.clear?.();
   globalThis.localStorage?.clear?.();
 });
@@ -833,6 +841,31 @@ describe("the Ask page", () => {
     fireEvent.click(within(bar).getByRole("button", { name: "Clear" }));
     expect(rows()).toBe(3);
     expect(screen.queryByRole("region", { name: "Selected rows" })).toBeNull();
+  });
+
+  // Insights is Enterprise: without it Find patterns is marked and opens the
+  // Insights gate, without reading the rows first.
+  it("sends a locked Find patterns to the Insights gate", async () => {
+    fakes.denied = new Set(["insights"]);
+    fetchRowIds.mockClear();
+    fakes.runs = [historyItem("task-sessions", "sessions", QUESTION)];
+    fakes.askRuns["task-sessions"] = doneRun;
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    const bar = screen.getByRole("region", { name: "Selected rows" });
+    const patterns = within(bar).getByRole("button", {
+      name: /Find patterns/,
+    });
+    expect(
+      within(patterns).getByRole("img", { name: "Enterprise feature" }),
+    ).toBeInTheDocument();
+    fireEvent.click(patterns);
+    await waitFor(() =>
+      expect(where().path).toBe(`/dashboard/observe/${PROJECT}/insights`),
+    );
+    expect(fetchRowIds).not.toHaveBeenCalled();
   });
 
   it("estimates the whole view from a sample and reads more of it", async () => {

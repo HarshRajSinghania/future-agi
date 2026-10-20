@@ -36,6 +36,7 @@ import {
 import { enqueueSnackbar } from "notistack";
 import { getRequestErrorMessage } from "src/utils/errorUtils";
 import { useAuthContext } from "src/auth/hooks";
+import { CAPABILITY, useFeatureDenied } from "src/hooks/useCapabilities";
 
 // Fixed default tabs — matches backend DEFAULT_TABS
 const FIXED_TABS = [
@@ -48,11 +49,13 @@ const FIXED_TABS = [
   },
   { key: "users", label: "Users", icon: "mdi:account-outline", shortcut: "3" },
   // Letter shortcut so the digit shortcuts of saved views don't shift.
+  // Insights is Enterprise: without it the tab is marked and opens its gate.
   {
     key: "insights",
     label: "Insights",
     icon: "mdi:creation-outline",
     shortcut: "A",
+    feature: CAPABILITY.INSIGHTS,
   },
 ];
 
@@ -112,6 +115,7 @@ const ObserveTabBar = ({
     return FIXED_TABS;
   }, [projectSource]);
   const { data: savedViewsData } = useGetSavedViews(projectId);
+  const insightsDenied = useFeatureDenied(CAPABILITY.INSIGHTS);
   const { user } = useAuthContext();
   // Only show trace-list views (traces/spans/voice) — exclude "imagine" tabs (those belong to trace detail)
   const customViews = (savedViewsData?.custom_views ?? []).filter(
@@ -357,6 +361,7 @@ const ObserveTabBar = ({
               icon={tab.icon}
               shortcut={tab.shortcut}
               isActive={activeTab === tab.key}
+              locked={tab.feature === CAPABILITY.INSIGHTS && insightsDenied}
               onClick={(key) =>
                 // Re-clicking Insights would reset its URL (mode, scope).
                 !(key === "insights" && activeTab === "insights") &&
