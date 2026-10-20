@@ -112,7 +112,8 @@ function RunPane({
       scope={launch ? { label: launch.label, filters: launch.filters } : null}
       creating={!taskId}
       onRunAgain={
-        run.status === "done" && run.questions.every((q) => q.configId)
+        (run.status === "done" || run.status === "cancelled") &&
+        run.questions.every((q) => q.configId)
           ? () => onRunAgain(run)
           : undefined
       }

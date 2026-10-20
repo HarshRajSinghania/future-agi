@@ -339,14 +339,35 @@ export class AskSampleTooLarge extends Error {
   }
 }
 
+// Controls the server refuses with a reason worded for the person: a
+// cancelled run is asked again, not resumed; a run still answering can't
+// read more yet.
+const CONTROL_REFUSALS = new Set([
+  "INSTANT_EVAL_CANCELLED",
+  "INSTANT_EVAL_STILL_ANSWERING",
+  "INSTANT_EVAL_RUNNING",
+]);
+
+export class AskRefused extends Error {
+  constructor(detail) {
+    super(detail?.message || "That can't be done on this run.");
+    this.name = "AskRefused";
+    this.code = detail?.error_code || detail?.code || null;
+  }
+}
+
+// The app's axios rejects with the response's error envelope and its
+// `statusCode`; a raw Axios error carries them under `response`.
+const errorStatus = (error) => error?.response?.status ?? error?.statusCode;
+
 const errorDetail = (error) => {
-  const data = error?.response?.data || {};
+  const data = error?.response?.data || error || {};
   return typeof data.result === "object" && data.result ? data.result : data;
 };
 
 /** Turn a control or start refusal the page explains into its own error. */
 export function askError(error) {
-  const status = error?.response?.status;
+  const status = errorStatus(error);
   const detail = errorDetail(error);
   if (status === 409 && detail.error_code === "INSTANT_EVAL_CONFIRM")
     return new AskNeedsConfirm(detail);
@@ -358,6 +379,13 @@ export function askError(error) {
       detail.error_code === "INSTANT_EVAL_SAMPLE_TOO_LARGE")
   )
     return new AskSampleTooLarge(detail);
+  if (
+    status === 409 &&
+    CONTROL_REFUSALS.has(
+      String(detail.error_code || detail.code || "").toUpperCase(),
+    )
+  )
+    return new AskRefused(detail);
   if (status === 429) return new AskBusy(detail);
   return error;
 }

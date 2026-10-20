@@ -434,3 +434,55 @@ describe("filters and saved questions", () => {
     ).toBe(false);
   });
 });
+
+describe("refusals the page explains", () => {
+  // As the app's axios hands them over: the error envelope and its status.
+  const envelope = (statusCode, code, result) => ({
+    status: false,
+    code,
+    message: result.message,
+    statusCode,
+    result,
+  });
+
+  it("reads the app's error envelope as well as a raw Axios error", async () => {
+    const { askError } = await import("../useInstantEval");
+    const cancelled = askError(
+      envelope(409, "instant_eval_cancelled", {
+        message:
+          "This run was cancelled. Use Run again to ask these questions again.",
+        error_code: "INSTANT_EVAL_CANCELLED",
+      }),
+    );
+    expect(cancelled.name).toBe("AskRefused");
+    expect(cancelled.message).toMatch(/^This run was cancelled/);
+
+    const tooLarge = askError(
+      envelope(400, "instant_eval_sample_too_large", {
+        message: "There are only 40 sessions in this view; choose up to 40.",
+        error_code: "INSTANT_EVAL_SAMPLE_TOO_LARGE",
+        sample_size: 40,
+      }),
+    );
+    expect(tooLarge.name).toBe("AskSampleTooLarge");
+    expect(tooLarge.sampleSize).toBe(40);
+
+    const confirm = askError({
+      response: {
+        status: 409,
+        data: {
+          result: {
+            error_code: "INSTANT_EVAL_CONFIRM",
+            rows_to_read: 6000,
+            credits_estimate: 360,
+          },
+        },
+      },
+    });
+    expect(confirm.name).toBe("AskNeedsConfirm");
+    expect(confirm.rows).toBe(6000);
+
+    const other = { statusCode: 500, message: "boom" };
+    expect(askError(other)).toBe(other);
+  });
+});

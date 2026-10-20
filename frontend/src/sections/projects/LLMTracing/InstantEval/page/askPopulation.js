@@ -217,7 +217,8 @@ export function useAskScope({ projectId, unit, scope, sampleSize = null }) {
         });
         return { estimate, fallbackIds: null };
       } catch (error) {
-        if (handed || error?.response?.status !== 422) throw error;
+        const status = error?.response?.status ?? error?.statusCode;
+        if (handed || status !== 422) throw error;
         // Filters the server can't count: read the newest rows the grid shows
         // and ask about exactly those.
         const population = await collectPopulation({

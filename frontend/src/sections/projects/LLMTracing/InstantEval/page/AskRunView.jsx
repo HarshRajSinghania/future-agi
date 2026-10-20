@@ -27,7 +27,7 @@ import { insightsReportLink } from "src/sections/projects/observeHandoff";
 import { ANSWER_TYPES, readOption } from "../instantEvalPayloads";
 import { answerText, quoted } from "../instantEvalAnswers";
 import { formatWhen, unitMeta } from "../instantEvalUnits";
-import { AskBusy, AskNoCredits, askError } from "../useInstantEval";
+import { AskBusy, AskNoCredits, AskRefused, askError } from "../useInstantEval";
 import KeepAnswering from "../results/KeepAnswering";
 import { AskCrossTab, AskHeatmap, AskPatterns, AskTimeline } from "./viz";
 import AskChartBoundary from "./AskChartBoundary";
@@ -97,7 +97,7 @@ function StatusLine({ run, unit, creating }) {
       run.summary.waiting_s / 60,
     )} min · ${settled.toLocaleString()} of ${run.total.toLocaleString()} answered`;
   else if (run.status === "cancelled")
-    text = `Cancelled · ${settled.toLocaleString()} of ${run.total.toLocaleString()} read, ${run.notRead.toLocaleString()} not read`;
+    text = `Cancelled · ${run.answered.toLocaleString()} of ${run.total.toLocaleString()} answered`;
   else
     text = [
       `Answering ${settled.toLocaleString()} of ${run.total.toLocaleString()}`,
@@ -186,13 +186,12 @@ StatusLine.propTypes = {
   creating: PropTypes.bool,
 };
 
-// Pause, resume, cancel and retry the failed rows of a run.
+// Pause, resume, cancel and retry the failed rows of a run. A cancelled run
+// is over: it is asked again (Run again), not resumed or retried.
 function RunControls({ run, onControl, busy, retryElsewhere }) {
   const live = run.status === "running" || run.status === "preparing";
-  const resumable =
-    PAUSED_STATES.has(run.status) ||
-    run.status === "cancelled" ||
-    run.status === "stalled";
+  const cancelled = run.status === "cancelled";
+  const resumable = PAUSED_STATES.has(run.status) || run.status === "stalled";
   return (
     <Stack direction="row" spacing={1} alignItems="center">
       {live && (
@@ -215,7 +214,7 @@ function RunControls({ run, onControl, busy, retryElsewhere }) {
             startIcon={<Iconify icon="mdi:play" width={16} />}
             onClick={() => onControl("resume")}
           >
-            {run.status === "cancelled" ? "Read the rest" : "Resume"}
+            Resume
           </Button>
         )}
       {(live || PAUSED_STATES.has(run.status)) && (
@@ -228,7 +227,7 @@ function RunControls({ run, onControl, busy, retryElsewhere }) {
           Cancel
         </Button>
       )}
-      {run.failed > 0 && !live && !retryElsewhere && (
+      {run.failed > 0 && !live && !cancelled && !retryElsewhere && (
         <Button
           size="small"
           variant="outlined"
@@ -270,6 +269,8 @@ function SampleBanner({ run, unit, question, focusAnswer, onControl, busy }) {
   const estimate = sampleEstimate(run, question, focusAnswer);
   const remaining = Math.max(0, sample.population - sample.requested);
   const live = run.status === "running" || run.status === "preparing";
+  // A cancelled run reads no more and retries nothing: it is asked again.
+  const cancelled = run.status === "cancelled";
   // Rows Jev couldn't answer: how far they could move the estimate.
   const bounds = estimate
     ? unansweredBounds(run, question, estimate.labels)
@@ -331,7 +332,7 @@ function SampleBanner({ run, unit, question, focusAnswer, onControl, busy }) {
             >
               {boundWords(bounds, question)}
             </Typography>
-            {run.failed > 0 && (
+            {run.failed > 0 && !cancelled && (
               <Button
                 size="small"
                 variant="outlined"
@@ -368,7 +369,7 @@ function SampleBanner({ run, unit, question, focusAnswer, onControl, busy }) {
               ? ` ${bounds.failed.toLocaleString()} couldn't be answered.`
               : ""}
           </Typography>
-          {remaining > 0 && (
+          {remaining > 0 && !cancelled && (
             <Stack direction="row" spacing={1}>
               {sample.next_size > 0 && sample.next_size < remaining && (
                 <Button
@@ -685,7 +686,7 @@ export default function AskRunView({
         );
       else
         setActionError(
-          known instanceof AskBusy
+          known instanceof AskBusy || known instanceof AskRefused
             ? known.message
             : getSafeActionErrorMessage(error, "That didn't work. Try again."),
         );
@@ -893,17 +894,21 @@ export default function AskRunView({
                   )}
                 />
               )}
-              {onRunAgain && run.status === "done" && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={rerunning}
-                  startIcon={<Iconify icon="mdi:refresh" width={16} />}
-                  onClick={onRunAgain}
-                >
-                  {rerunning ? "Starting…" : "Run again"}
-                </Button>
-              )}
+              {onRunAgain &&
+                (run.status === "done" || run.status === "cancelled") && (
+                  <Button
+                    size="small"
+                    // The way forward from a cancelled run.
+                    variant={
+                      run.status === "cancelled" ? "contained" : "outlined"
+                    }
+                    disabled={rerunning}
+                    startIcon={<Iconify icon="mdi:refresh" width={16} />}
+                    onClick={onRunAgain}
+                  >
+                    {rerunning ? "Starting…" : "Run again"}
+                  </Button>
+                )}
               {showInTraces && (
                 <Button
                   size="small"

@@ -1038,6 +1038,119 @@ describe("a run that stopped before finishing", () => {
   });
 });
 
+describe("a cancelled run, and controls the server refuses", () => {
+  const SAMPLE = {
+    is_sample: true,
+    population: 24473,
+    requested: 1000,
+    read: 360,
+    next_size: 1000,
+    can_extend: true,
+  };
+  const OPEN = `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`;
+  const refusal = (code, message) =>
+    Object.assign(new Error(message), {
+      response: {
+        status: 409,
+        data: { result: { message, error_code: code } },
+      },
+    });
+
+  it("is asked again, not resumed, retried or read further", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "cancelled",
+      total: 1000,
+      answered: 340,
+      failed: 20,
+      sample: { ...SAMPLE, can_extend: false },
+      records: null,
+    });
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-again",
+      questions: QUESTIONS,
+    });
+    renderAt(OPEN);
+    expect(
+      screen.getByText("Cancelled · 340 of 1,000 answered"),
+    ).toBeInTheDocument();
+    for (const name of [
+      /^Resume$/,
+      /Read the rest/,
+      /^Retry \d/,
+      /^Read [\d,]+ more/,
+      /^Read all/,
+    ])
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    const again = screen.getByRole("button", { name: "Run again" });
+    expect(again).toHaveClass("MuiButton-contained");
+    await act(async () => {
+      fireEvent.click(again);
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({ sampleSize: 1000, confirm: true }),
+    );
+  });
+
+  it("says why a control was refused, inline", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "paused",
+      total: 1000,
+      answered: 340,
+      records: null,
+    });
+    fakes.control.mockRejectedValue(
+      refusal(
+        "INSTANT_EVAL_CANCELLED",
+        "This run was cancelled. Use Run again to ask these questions again.",
+      ),
+    );
+    renderAt(OPEN);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This run was cancelled. Use Run again to ask these questions again.",
+    );
+  });
+
+  it("reads more only once a run stops answering", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "running",
+      total: 1000,
+      answered: 300,
+      sample: SAMPLE,
+      records: null,
+    });
+    const { unmount } = renderAt(OPEN);
+    expect(
+      screen.getByRole("button", { name: "Read 1,000 more" }),
+    ).toBeDisabled();
+    unmount();
+
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "done",
+      total: 1000,
+      answered: 1000,
+      sample: SAMPLE,
+      records: null,
+    });
+    fakes.control.mockRejectedValue(
+      refusal(
+        "INSTANT_EVAL_STILL_ANSWERING",
+        "This run is still answering; read more when it finishes.",
+      ),
+    );
+    renderAt(OPEN);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Read 1,000 more" }));
+    });
+    expect(fakes.control).toHaveBeenCalledWith("read_more", { more: 1000 });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This run is still answering; read more when it finishes.",
+    );
+  });
+});
+
 describe("a new question's date and filters", () => {
   const STATUS = {
     column_id: "status",
