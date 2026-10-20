@@ -97,6 +97,38 @@ class UsersCountIncomplete(PopulationUnavailable):
         )
 
 
+def unsupported_filter_columns(filters: list[dict]) -> list[str]:
+    """System fields a Users filter names that the Users list has no column
+    for. The list would read each as a span attribute no span carries, and
+    match no user (or every one) without saying so. A custom attribute, an
+    eval or annotation result, a date, a per-user column (traces, cost,
+    sessions, latency, ...) and a span dimension it answers from the user's
+    spans (status, model, name, ...) are all supported."""
+    from tracer.services.clickhouse.v2.query_builders.user_list import (
+        UserListQueryBuilderV2 as Builder,
+    )
+
+    unsupported: list[str] = []
+    for item in filters or []:
+        if Builder._is_date_filter(item) or Builder._is_relation_filter(item):
+            continue
+        column = str(item.get("column_id") or item.get("columnId") or "")
+        property_id = str(item.get("property_id") or item.get("propertyId") or "")
+        system = Builder._filter_col_type(item) in (
+            "SYSTEM_METRIC",
+            "NORMAL",
+        ) or property_id.startswith("system_attribute:")
+        if (
+            not system
+            or column in Builder.OUTPUT_FILTER_MAP
+            or column == "eval_score"
+            or Builder.native_span_dimension(item)
+        ):
+            continue
+        unsupported.append(column)
+    return list(dict.fromkeys(unsupported))
+
+
 def _deadline(budget_s: float | None) -> ReadDeadline | None:
     if budget_s is None:
         return None

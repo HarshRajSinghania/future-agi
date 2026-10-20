@@ -198,7 +198,33 @@ class InstantEvalScopeSerializer(serializers.Serializer):
             )
         if attrs["unit"] == "users":
             validate_users_filter_capabilities(attrs.get("filters") or [])
+            unsupported = users_service.unsupported_filter_columns(
+                attrs.get("filters") or []
+            )
+            if unsupported:
+                names = ", ".join(f'"{column}"' for column in unsupported)
+                raise serializers.ValidationError(
+                    f"The Users view can't filter on {names}."
+                )
+        _check_window(attrs.get("filters") or [])
         return attrs
+
+
+def _check_window(filters: list[dict]) -> None:
+    """A window the lists would refuse is refused here too, instead of
+    falling back to the last 30 days."""
+    from tracer.services.clickhouse.query_builders.base import BaseQueryBuilder
+
+    try:
+        BaseQueryBuilder.parse_time_range(filters, strict=True)
+    except ValueError as exc:
+        if "before or equal to its end" in str(exc):
+            raise serializers.ValidationError(
+                "The date range ends before it starts."
+            ) from exc
+        raise serializers.ValidationError(
+            "The date range has a date that can't be read."
+        ) from exc
 
 
 class InstantEvalEstimateRequestSerializer(InstantEvalScopeSerializer):
@@ -1581,6 +1607,30 @@ class InstantEvalControlView(APIView):
             {"status": _status(task, run), "message": message, **extra}
         )
 
+    def _restarted(self, task, message, **extra):
+        """The run started again, or (its workflow couldn't start, and the
+        task was marked failed) a 503 that says so: never a success that
+        reports the run failed."""
+        task.refresh_from_db(fields=["status"])
+        if task.status == EvalTaskStatus.FAILED:
+            return self._gm.custom_error_response(
+                503,
+                "The run couldn't be started again right now. Resume it to carry on.",
+                code="instant_eval_restart_failed",
+            )
+        return self._ok(task, message, **extra)
+
+    def _cancelled(self):
+        return self._gm.custom_error_response(
+            409,
+            {
+                "message": "This run was cancelled. Use Run again to ask these "
+                "questions again.",
+                "error_code": "INSTANT_EVAL_CANCELLED",
+            },
+            code="instant_eval_cancelled",
+        )
+
     def _busy(self, request, task):
         others = [r for r in _active_runs(_org(request)) if r.eval_task_id != task.id]
         return _busy_response(self._gm, others) if len(others) >= max_active() else None
@@ -1610,8 +1660,9 @@ class InstantEvalControlView(APIView):
         _start_workflow_on_commit(task, replace=True)
 
     def _resume(self, request, task, run, data):
-        cancelled = bool(run and run.cancelled_at)
-        resumable = task.status in RESUMABLE_TASK_STATUSES or cancelled
+        if run is not None and run.cancelled_at:
+            return self._cancelled()
+        resumable = task.status in RESUMABLE_TASK_STATUSES
         if not resumable and run is not None:
             # A run that stopped before finishing: its workflow is gone while
             # the task says running, or it finished with rows unanswered.
@@ -1636,12 +1687,12 @@ class InstantEvalControlView(APIView):
         with transaction.atomic():
             if run is not None:
                 InstantEvalRun.objects.filter(id=run.id).update(
-                    cancelled_at=None, answers_version=F("answers_version") + 1
+                    answers_version=F("answers_version") + 1
                 )
             # The fresh run reads only the rows still without an answer.
             self._restart(task)
         cache.delete(f"ie-wf-gone:{task.id}")
-        return self._ok(task, "Resumed.")
+        return self._restarted(task, "Resumed.")
 
     def _cancel(self, request, task, run, data):
         from tfc.temporal.eval_tasks.client import signal_pause_eval_task_workflow
@@ -1668,6 +1719,8 @@ class InstantEvalControlView(APIView):
         )
 
     def _retry_failed(self, request, task, run, data):
+        if run is not None and run.cancelled_at:
+            return self._cancelled()
         failed = EvalLogger.objects.filter(
             eval_task_id=str(task.id),
             deleted=False,
@@ -1698,25 +1751,29 @@ class InstantEvalControlView(APIView):
             forget_answers(task.id, ids)
             if run is not None:
                 InstantEvalRun.objects.filter(id=run.id).update(
-                    cancelled_at=None, answers_version=F("answers_version") + 1
+                    answers_version=F("answers_version") + 1
                 )
             # A run still draining claims the requeued rows itself.
             if not running:
                 self._restart(task)
-        return self._ok(task, f"Retrying {retried:,} answers.", retried=retried)
+        return self._restarted(task, f"Retrying {retried:,} answers.", retried=retried)
 
     def _read_more(self, request, task, run, data):
-        if run is None or run.rows_requested >= run.population:
-            return self._gm.bad_request("This run already reads every row of its view.")
-        if task.status in ACTIVE:
+        # Refused before any work: a run still answering (or one paused with
+        # answers still landing) reads more once it is done.
+        if run is not None and run.cancelled_at:
+            return self._cancelled()
+        if task.status in ACTIVE or _in_flight(task):
             return self._gm.custom_error_response(
                 409,
                 {
-                    "message": "Wait for this run to finish, or pause it, before reading more.",
-                    "error_code": "INSTANT_EVAL_RUNNING",
+                    "message": "This run is still answering; read more once it finishes.",
+                    "error_code": "INSTANT_EVAL_STILL_ANSWERING",
                 },
-                code="instant_eval_running",
+                code="instant_eval_still_answering",
             )
+        if run is None or run.rows_requested >= run.population:
+            return self._gm.bad_request("This run already reads every row of its view.")
         if busy := self._busy(request, task):
             return busy
         more = data.get("more")
@@ -1755,9 +1812,8 @@ class InstantEvalControlView(APIView):
                 # The sample's size stays the size of each "Read more".
                 sample_size=None if target >= run.population else run.sample_size,
                 credits_estimate=run.credits_estimate + credits,
-                cancelled_at=None,
                 answers_version=F("answers_version") + 1,
             )
             EvalTask.objects.filter(id=task.id).update(spans_limit=rows)
             self._restart(task)
-        return self._ok(task, f"Reading {added:,} more.", rows_requested=target)
+        return self._restarted(task, f"Reading {added:,} more.", rows_requested=target)

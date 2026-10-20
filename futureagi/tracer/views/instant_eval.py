@@ -807,6 +807,11 @@ class InstantEvalRunsView(APIView):
         if params.get("search"):
             tasks = tasks.filter(name__icontains=params["search"])
         tasks = list(tasks.order_by("-created_at").prefetch_related("evals")[:HISTORY_SCAN])
+        # A run knows its own unit; a question may have been asked of another.
+        run_units = dict(
+            InstantEvalRun.objects.filter(eval_task_id__in=[t.id for t in tasks])
+            .values_list("eval_task_id", "unit")
+        )
         runs = []
         for task in tasks:
             # In the order the run asked them (its page opens on the first).
@@ -817,7 +822,11 @@ class InstantEvalRunsView(APIView):
             metas = [(cid, m) for cid, m in metas if m.get("question")]
             if not metas:
                 continue
-            unit = metas[0][1].get("unit") or str(task.row_type or "traces")
+            unit = (
+                run_units.get(task.id)
+                or metas[0][1].get("unit")
+                or str(task.row_type or "traces")
+            )
             if params.get("unit") and unit != params["unit"]:
                 continue
             runs.append((task, unit, metas))

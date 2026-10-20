@@ -17,15 +17,18 @@ from rest_framework import status
 
 from tracer.models.eval_task import EvalTask, EvalTaskStatus
 from tracer.models.instant_eval import InstantEvalRun
+from tracer.models.observation_span import EvalEntryStatus, EvalLogger
 from tracer.selectors.eval_tasks.row_resolver import resolve_desired_rows
 from tracer.services import instant_eval_rows as rows_service
 from tracer.services import instant_eval_users as users_service
 from tracer.services.clickhouse.read_budget import ReadDeadlineExceeded
+from tracer.services.instant_eval_answers import record_answer
 from tracer.tests.test_instant_eval_scale import (
     CONTROL,
     ESTIMATE,
     SUMMARY,
     WINDOW,
+    _answer,
     _hash,
     _start,
     _summary,
@@ -504,6 +507,213 @@ def test_read_more_stops_at_the_rows_one_run_reads(
     sample = _sample(auth_client, observe_project, task_id)
     assert (sample["requested"], sample["is_sample"]) == (20, True)
     assert (sample["next_size"], sample["can_extend"]) == (0, False)
+
+
+# ─── Control, History and scope checks from QA ───────────────────────────────
+def _control(auth_client, project, task_id, action, **body):
+    return auth_client.post(
+        CONTROL,
+        {
+            "project_id": str(project.id),
+            "eval_task_id": str(task_id),
+            "action": action,
+            **body,
+        },
+        format="json",
+    )
+
+
+def _sampled_run(auth_client, project, yes_no, size=7):
+    task_id = _start(auth_client, project, [yes_no], sample_size=size).json()["result"][
+        "task_id"
+    ]
+    task = EvalTask.objects.get(id=task_id)
+    ids = list(resolve_desired_rows(task).matched_ids)
+    return task, ids
+
+
+@pytest.mark.django_db
+def test_reading_more_of_a_run_still_answering_is_refused_before_any_work(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    task, ids = _sampled_run(auth_client, observe_project, yes_no)
+    starts = len(started)
+    response = _control(auth_client, observe_project, task.id, "read_more", more=7)
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["code"] == "instant_eval_still_answering"
+    assert response.json()["result"]["message"] == (
+        "This run is still answering; read more once it finishes."
+    )
+    # Paused, with an answer still being read: still answering.
+    EvalTask.objects.filter(id=task.id).update(status=EvalTaskStatus.PAUSED)
+    entry = _answer(task, yes_no, ids[0], pending=True)
+    entry.status = EvalEntryStatus.RUNNING
+    entry.save()
+    response = _control(auth_client, observe_project, task.id, "read_more", more=7)
+    assert response.json()["code"] == "instant_eval_still_answering"
+    run = InstantEvalRun.objects.get(eval_task=task)
+    assert run.rows_requested == 7 and len(started) == starts
+    # Once it is done, it reads more.
+    EvalLogger.objects.filter(id=entry.id).update(status=EvalEntryStatus.COMPLETED)
+    response = _control(auth_client, observe_project, task.id, "read_more", more=7)
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert response.json()["result"]["status"] == "pending"
+
+
+@pytest.mark.django_db
+def test_a_cancelled_run_is_not_resumed_retried_or_read_further(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    task, _ = _sampled_run(auth_client, observe_project, yes_no)
+    assert _control(auth_client, observe_project, task.id, "cancel").status_code == 200
+    for action, body in [("resume", {}), ("retry_failed", {}), ("read_more", {})]:
+        response = _control(auth_client, observe_project, task.id, action, **body)
+        assert response.status_code == status.HTTP_409_CONFLICT, action
+        assert response.json()["code"] == "instant_eval_cancelled"
+        assert response.json()["result"]["message"] == (
+            "This run was cancelled. Use Run again to ask these questions again."
+        )
+    assert InstantEvalRun.objects.get(eval_task=task).cancelled_at is not None
+
+
+@pytest.mark.django_db
+def test_a_run_that_cant_start_again_says_so_instead_of_reporting_success(
+    auth_client, observe_project, yes_no, fake_view, started, monkeypatch
+):
+    task, _ = _sampled_run(auth_client, observe_project, yes_no)
+    EvalTask.objects.filter(id=task.id).update(status=EvalTaskStatus.PAUSED)
+
+    def unavailable(task, **kwargs):
+        raise RuntimeError("Temporal is unavailable")
+
+    monkeypatch.setattr(
+        "tfc.temporal.eval_tasks.client.start_eval_task_workflow_sync", unavailable
+    )
+    response = _control(auth_client, observe_project, task.id, "resume")
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.json()["code"] == "instant_eval_restart_failed"
+    assert "Resume it to carry on" in response.json()["message"]
+
+
+@pytest.mark.django_db
+def test_history_reports_a_cancelled_run_and_its_answers(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    task, ids = _sampled_run(auth_client, observe_project, yes_no)
+    logs = EvalLogger.objects.bulk_create(
+        [_answer(task, yes_no, sid, "Yes") for sid in ids[:3]]
+    )
+    for entry in logs:
+        record_answer(entry.id)
+    assert _control(auth_client, observe_project, task.id, "cancel").status_code == 200
+    runs = auth_client.get(
+        RUNS, {"project_id": str(observe_project.id), "task_id": str(task.id)}
+    ).json()["result"]["runs"]
+    assert len(runs) == 1
+    assert (runs[0]["status"], runs[0]["answered"], runs[0]["pending"]) == (
+        "cancelled",
+        3,
+        0,
+    )
+    summary = _summary(auth_client, observe_project, task)
+    assert summary["status"] == "cancelled" and summary["answered"] == 3
+
+
+@pytest.mark.django_db
+def test_history_lists_a_run_under_its_own_unit(
+    auth_client, observe_project, yes_no, users_view, started
+):
+    # A question first asked of sessions, asked here of users.
+    task_id = _start(
+        auth_client, observe_project, [yes_no], unit="users", sample_size=5
+    ).json()["result"]["task_id"]
+    runs = auth_client.get(
+        RUNS, {"project_id": str(observe_project.id), "unit": "users"}
+    ).json()["result"]["runs"]
+    assert [(r["task_id"], r["unit"]) for r in runs] == [(task_id, "users")]
+
+
+@pytest.mark.django_db
+def test_a_users_filter_on_a_field_the_users_view_cant_filter_is_named(
+    auth_client, observe_project, users_view
+):
+    def estimate(*filters):
+        return auth_client.post(
+            ESTIMATE,
+            {
+                "project_id": str(observe_project.id),
+                "unit": "users",
+                "filters": [*WINDOW, *filters],
+            },
+            format="json",
+        )
+
+    def system(column):
+        return _leaf(column, "equals", "x", "text", col_type="SYSTEM_METRIC")
+
+    refused = estimate(system("trace_id"), system("session_id"))
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST
+    assert (
+        'The Users view can\'t filter on "trace_id", "session_id".'
+        in refused.json()["message"]
+    )
+    assert not users_view
+    # Span dimensions it reads from the user's spans, per-user columns and
+    # custom attributes are the Users view's own filters.
+    for leaf in [
+        system("status"),
+        system("model"),
+        MORE_THAN_TWO_SESSIONS,
+        _leaf("plan", "equals", "pro", "text", col_type="SPAN_ATTRIBUTE"),
+    ]:
+        assert estimate(leaf).status_code == status.HTTP_200_OK, leaf
+
+
+def _window(start, end):
+    return [
+        {
+            "column_id": "created_at",
+            "filter_config": {
+                "filter_type": "datetime",
+                "filter_op": "between",
+                "filter_value": [start, end],
+            },
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_a_window_that_ends_before_it_starts_or_cant_be_read_is_refused(
+    auth_client, observe_project, yes_no, fake_view, started
+):
+    cases = [
+        (
+            _window("2026-10-15T00:00:00Z", "2026-10-01T00:00:00Z"),
+            "The date range ends before it starts.",
+        ),
+        (
+            _window("last tuesday", "2026-10-15T00:00:00Z"),
+            "The date range has a date that can't be read.",
+        ),
+    ]
+    for filters, message in cases:
+        estimate = auth_client.post(
+            ESTIMATE,
+            {
+                "project_id": str(observe_project.id),
+                "unit": "sessions",
+                "filters": filters,
+            },
+            format="json",
+        )
+        assert estimate.status_code == status.HTTP_400_BAD_REQUEST, filters
+        assert message in estimate.json()["message"]
+        start = _start(
+            auth_client, observe_project, [yes_no], filters=filters, sample_size=5
+        )
+        assert start.status_code == status.HTTP_400_BAD_REQUEST
+        assert message in start.json()["message"]
+    assert not InstantEvalRun.objects.exists()
 
 
 # ─── The users population against a stand-in ClickHouse ──────────────────────
