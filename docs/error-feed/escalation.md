@@ -82,12 +82,14 @@ that shares only a temporary staging directory, set `TH8613_BIND_ROOT` and provi
 `source_root`; the driver verifies the checkout marker and production module
 digests before publishing fixtures. Do not point this profile at a shared DB.
 
-## Validation of the dev port
+## Validation evidence
 
-146 focused backend tests passed, followed by 50 evaluator/alert regression tests
-including transactional alert creation. All 24 focused frontend tests, seven
-profile safety tests, E2E type/catalog checks, API contract checks and migration
-model-drift checks passed. Frontend lint has zero errors (existing warnings).
-The eight full flows passed on the earlier implementation worktree; they have
-not been rerun on this dev port because Docker is reporting storage I/O errors.
-An EE-stripped deployment and large-data performance were not rerun for this port.
+Use the PR description and CI jobs for results tied to a particular commit.
+The entitled profile runs the eight `ESC-E2E-*` flows; the ordinary OSS profile
+excludes them because it does not provide Error Feed entitlement. The source
+qualification harness separately checks collector publication, real Temporal
+evaluation and session trace breadth.
+
+The profile uses production Django settings. Account setup has a separate
+six-minute fixture budget because it runs before a flow can extend its own
+timeout; each account-creation command remains bounded to two minutes.
