@@ -20,7 +20,7 @@ import { SCENARIOS_COPY } from "./scenarios.constants";
 export default function PagedScenarioViews({
   pageData, selection, env, view, hiddenGroupIds, onHideGroup, onEdit, onRemove,
   page, onPageChange, query, filters, groupBy, showInspector, locked, rowHeight,
-  readout,
+  readout, editHint = null,
 }) {
   const [inspect, setInspect] = useState(false);
   const { rows, total, pageCount, limit, pageGroups, pageIds, loading } = pageData;
@@ -89,6 +89,7 @@ export default function PagedScenarioViews({
             pageIds={pageIds}
             onTogglePage={onTogglePage}
             locked={locked}
+            editHint={editHint}
             rowHeight={rowHeight}
           />
         ) : (
@@ -100,6 +101,7 @@ export default function PagedScenarioViews({
             onHideGroup={onHideGroup}
             selection={selection}
             locked={locked}
+            editHint={editHint}
           />
         )}
       </Box>
@@ -182,6 +184,8 @@ PagedScenarioViews.propTypes = {
   groupBy: PropTypes.string,
   showInspector: PropTypes.bool,
   locked: PropTypes.bool,
+  // Why rows cannot be edited or removed here; set, the row actions are disabled with it.
+  editHint: PropTypes.string,
   rowHeight: PropTypes.string,
   // Set while a search, filter or hidden group narrows the list.
   readout: PropTypes.shape({

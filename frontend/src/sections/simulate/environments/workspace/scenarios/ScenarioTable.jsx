@@ -71,7 +71,7 @@ const selectableCheckboxSx = {
 // The per-row edit pencil opens the scenario editor through onEdit. Stripped
 // from the source: the twin-seed override icon (twinSeedPrompt) — twin-only, not
 // on either entry path.
-export default function ScenarioTable({ rows, groups, onEdit, onRemove, onHideGroup, selectedIds, onSelectionChange, selection, pageIds, onTogglePage, locked = false, rowHeight = "Short" }) {
+export default function ScenarioTable({ rows, groups, onEdit, onRemove, onHideGroup, selectedIds, onSelectionChange, selection, pageIds, onTogglePage, locked = false, editHint = null, rowHeight = "Short" }) {
   const limits = ROW_HEIGHTS[rowHeight] || ROW_HEIGHTS.Short;
   const [widths, setWidths] = useState(readWidths);
   const widthsRef = useRef(widths);
@@ -368,16 +368,16 @@ export default function ScenarioTable({ rows, groups, onEdit, onRemove, onHideGr
                         width: 96, minWidth: 96,
                       }}
                     >
-                      <Tooltip arrow title={locked ? LOCK_TOOLTIP : SCENARIOS_COPY.editLabel}>
+                      <Tooltip arrow title={locked ? LOCK_TOOLTIP : editHint || SCENARIOS_COPY.editLabel}>
                         <Box component="span" sx={{ display: "inline-flex" }}>
-                          <IconButton size="small" disabled={locked} aria-label={SCENARIOS_COPY.editLabel} onClick={() => onEdit?.(row)}>
+                          <IconButton size="small" disabled={locked || Boolean(editHint)} aria-label={SCENARIOS_COPY.editLabel} onClick={() => onEdit?.(row)}>
                             <Iconify icon="solar:pen-new-square-linear" width={15} sx={{ color: "text.subtitle" }} />
                           </IconButton>
                         </Box>
                       </Tooltip>
-                      <Tooltip arrow title={locked ? LOCK_TOOLTIP : SCENARIOS_COPY.removeLabel}>
+                      <Tooltip arrow title={locked ? LOCK_TOOLTIP : editHint || SCENARIOS_COPY.removeLabel}>
                         <Box component="span" sx={{ display: "inline-flex" }}>
-                          <IconButton size="small" disabled={locked} aria-label={SCENARIOS_COPY.removeLabel} onClick={() => onRemove(row.id)}>
+                          <IconButton size="small" disabled={locked || Boolean(editHint)} aria-label={SCENARIOS_COPY.removeLabel} onClick={() => onRemove(row.id)}>
                             <Iconify icon="solar:trash-bin-trash-linear" width={15} sx={{ color: "text.subtitle" }} />
                           </IconButton>
                         </Box>
@@ -407,5 +407,6 @@ ScenarioTable.propTypes = {
   pageIds: PropTypes.arrayOf(PropTypes.string),
   onTogglePage: PropTypes.func,
   locked: PropTypes.bool,
+  editHint: PropTypes.string,
   rowHeight: PropTypes.oneOf(Object.keys(ROW_HEIGHTS)),
 };
