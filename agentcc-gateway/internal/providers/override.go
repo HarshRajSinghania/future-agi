@@ -112,7 +112,13 @@ func (c *OrgProviderCache) GetOrCreateWithTenantConfig(orgID, providerID, apiKey
 
 	orgCfg := resolveOrgConfig(baseCfg, apiKey, tenantCfg)
 	if tenantCfg != nil && tenantCfg.BaseURL != "" {
-		orgCfg.DialContext = orgDialContext(c.allowPrivateBaseURLs)
+		if IsSystemOneFormat(orgCfg.APIFormat) {
+			// Decision calls go through the operator's proxy, so the org's
+			// host is checked before each request, not only at the dial.
+			orgCfg.DialContext, orgCfg.Proxy = netguard.Proxied(net.Dialer{}, c.allowPrivateBaseURLs, decisionProxy)
+		} else {
+			orgCfg.DialContext = orgDialContext(c.allowPrivateBaseURLs)
+		}
 	}
 
 	p, err := createProvider(providerID+"_org_"+orgID, orgCfg)
@@ -242,20 +248,12 @@ func (e *BaseURLError) PublicMessage() string {
 }
 
 var (
-	// Metadata endpoints by name, refused before any lookup.
-	metadataHosts = map[string]bool{
-		"metadata":                   true,
-		"metadata.google.internal":   true,
-		"metadata.goog":              true,
-		"instance-data":              true,
-		"instance-data.ec2.internal": true,
-	}
-
 	// lookupIP resolves a base_url host; a variable so tests can stub DNS.
 	lookupIP = net.LookupIP
 
 	// orgDialContext opens the connections of an org provider that names its
-	// own base_url; a variable so tests can reach a test server on loopback.
+	// own base_url, other than a decision provider; a variable so tests can
+	// reach a test server on loopback.
 	orgDialContext = func(allowPrivate bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return netguard.DialContext(net.Dialer{}, allowPrivate)
 	}
@@ -288,7 +286,7 @@ func validateBaseURL(baseURL string, allowPrivate bool) error {
 	if host == "" {
 		return &BaseURLError{BaseURL: baseURL, Reason: BaseURLInvalid, Err: fmt.Errorf("no hostname")}
 	}
-	if metadataHosts[host] {
+	if netguard.IsMetadataHost(host) {
 		return &BaseURLError{BaseURL: baseURL, Host: host, Reason: BaseURLForbidden}
 	}
 

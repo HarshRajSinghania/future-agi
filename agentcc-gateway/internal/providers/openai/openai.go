@@ -69,6 +69,7 @@ func New(id string, cfg config.ProviderConfig) (*Provider, error) {
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   true,
 		DialContext:         cfg.DialContext,
+		Proxy:               cfg.Proxy,
 	}
 	if cfg.SkipTLS {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-opted skip

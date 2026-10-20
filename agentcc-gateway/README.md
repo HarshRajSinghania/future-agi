@@ -1050,6 +1050,16 @@ and the usage; full bodies only when body logging is on and privacy mode
 allows. Spans are evaluator spans carrying the format, question count and
 question types, never the state or the instructions.
 
+**Outbound proxy.** Decision calls follow the gateway's `HTTP_PROXY`,
+`HTTPS_PROXY` and `NO_PROXY`: every System One provider does, and so does
+OpenAI Decisions on an internal caller's key. Other provider connections,
+chat and an organization's own OpenAI provider included, do not use the proxy
+yet. An organization provider with its own `base_url` keeps its address
+checks: before each call its host must resolve, from the gateway, only to
+addresses the gateway allows, and a direct connection (a `NO_PROXY` host) is
+checked again when it is dialled. The proxy resolves the host again for
+itself, so its own egress rules still apply.
+
 ---
 
 ## 🖥️ Self-host

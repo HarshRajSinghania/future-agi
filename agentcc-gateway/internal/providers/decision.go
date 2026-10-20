@@ -2,6 +2,7 @@ package providers
 
 import (
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,12 @@ const DecisionDialectOpenAI = "openai"
 // defaultOpenAIBaseURL is where OpenAI Decisions go when config.yaml has no
 // openai provider.
 const defaultOpenAIBaseURL = "https://api.openai.com"
+
+// decisionProxy picks the proxy for a decision call: the operator's
+// HTTP_PROXY, HTTPS_PROXY and NO_PROXY, as every System One provider and the
+// providers built for internal callers' keys use them. Chat providers do not
+// use a proxy. A variable so tests can send decision calls to a test proxy.
+var decisionProxy = http.ProxyFromEnvironment
 
 // DecisionDialectFormat returns the wire format a decision dialect speaks:
 // "typesafe" and "perplexity" speak System One, "openai" OpenAI Decisions.
@@ -78,6 +85,7 @@ func NewKeyedDecisionProvider(dialect, baseURL, apiKey string) (Provider, error)
 		DefaultTimeout: 60 * time.Second,
 		MaxConcurrent:  100,
 		ConnPoolSize:   100,
+		Proxy:          decisionProxy,
 	}
 	if strings.EqualFold(dialect, DecisionDialectOpenAI) {
 		if cfg.BaseURL == "" {

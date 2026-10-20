@@ -131,6 +131,12 @@ func createProvider(name string, cfg config.ProviderConfig) (Provider, error) {
 	case "azure":
 		return azure.New(name, cfg)
 	case APIFormatSystemOne, apiFormatTypeSafe:
+		// A decision provider takes the operator's proxy. One that comes with
+		// its own dialer (an org's base_url, checked) comes with the proxy
+		// that matches it, or connects directly.
+		if cfg.Proxy == nil && cfg.DialContext == nil {
+			cfg.Proxy = decisionProxy
+		}
 		return systemone.New(name, cfg)
 	case "deepgram", "cartesia":
 		return speech.New(name, cfg)

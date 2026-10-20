@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/futureagi/agentcc-gateway/internal/config"
 	"github.com/futureagi/agentcc-gateway/internal/models"
+	"github.com/futureagi/agentcc-gateway/internal/netguard"
 	"github.com/futureagi/agentcc-gateway/internal/providers/testhttp"
 )
 
@@ -402,6 +406,44 @@ func TestSystemOneTransportFailure(t *testing.T) {
 	upstream.Close()
 	_, err := p.SystemOne(context.Background(), request(t, testBody))
 	checkError(t, err, 502, "upstream_error")
+}
+
+// The provider takes the proxy it is given. With a checked dialer the dial
+// reaches the proxy, not the vendor, so the base_url's host is checked before
+// the request leaves: an internal one never reaches the proxy, and the error
+// names neither the address nor the key.
+func TestSystemOneProxyKeepsTheAddressCheck(t *testing.T) {
+	var asked atomic.Int32
+	var lastTarget atomic.Value
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		lastTarget.Store(r.URL.String())
+		io.WriteString(w, `{"model":"jev-1.13.0","answers":{"q":{"type":"score","score":1}},"usage":{"input_tokens":1,"output_tokens":0}}`)
+	}))
+	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := func(base string) *Provider {
+		dial, pick := netguard.Proxied(net.Dialer{}, false, http.ProxyURL(proxyURL))
+		return newProvider(t, "custom-systemone", config.ProviderConfig{BaseURL: base, APIKey: testKey, DialContext: dial, Proxy: pick})
+	}
+
+	for _, base := range []string{"http://169.254.169.254", "https://169.254.169.254", "http://10.0.0.1:8000", "http://127.0.0.1:9", "http://metadata.google.internal"} {
+		_, err := checked(base).SystemOne(context.Background(), request(t, testBody))
+		checkError(t, err, http.StatusBadGateway, "upstream_error", "169.254", "10.0.0.1", "127.0.0.1")
+	}
+	if asked.Load() != 0 {
+		t.Fatalf("an internal base_url reached the proxy %d times", asked.Load())
+	}
+
+	if _, err := checked("http://203.0.113.10").SystemOne(context.Background(), request(t, testBody)); err != nil {
+		t.Fatalf("a public base_url through the proxy: %v", err)
+	}
+	if asked.Load() != 1 || lastTarget.Load() != "http://203.0.113.10/v1/systemone" {
+		t.Fatalf("the proxy was asked %d times, last for %v", asked.Load(), lastTarget.Load())
+	}
 }
 
 func TestProviderContract(t *testing.T) {

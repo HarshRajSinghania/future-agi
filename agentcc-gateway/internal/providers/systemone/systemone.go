@@ -81,6 +81,7 @@ func NewForDialect(id string, cfg config.ProviderConfig, dialect Dialect) (*Prov
 				IdleConnTimeout:     90 * time.Second,
 				ForceAttemptHTTP2:   true,
 				DialContext:         cfg.DialContext,
+				Proxy:               cfg.Proxy,
 			},
 			// A redirect must not carry the key or the request content anywhere
 			// the provider was not configured to send them.
