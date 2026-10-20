@@ -70,7 +70,7 @@ const briefLineOf = (row) => {
 const COLUMNS = [
   { id: "select", w: 40 },
   { id: "#", label: "#", w: 40 },
-  { id: "scenario", label: "Scenario", w: 300, tip: "A status shows only when the scenario needs something" },
+  { id: "scenario", label: "Scenario", w: 380, tip: "A status shows only when the scenario needs something" },
   { id: "persona", label: "Persona", w: 170 },
   { id: "subgoals", label: "Sub-goals", w: 88, align: "right", tip: "Sub-goals met in the scenario's latest run, of all it's graded on" },
   { id: "mustPass", label: "Must-pass", w: 84, align: "center", tip: "An improvement that breaks a must-pass scenario is rejected" },
@@ -262,7 +262,7 @@ export default function ScenarioTable({
     <Box sx={{ overflowX: "auto" }}>
       {/* Wider than most panes, so it scrolls sideways; the checkbox, #
           and Scenario stay pinned so a row never loses its name. */}
-      <Table size="small" sx={{ minWidth: 1500, tableLayout: "fixed", ...PINNED_SX }}>
+      <Table size="small" sx={{ minWidth: 1580, tableLayout: "fixed", ...PINNED_SX }}>
         <colgroup>
           {columns.map((c) => <col key={c.id} style={c.w ? { width: c.w } : undefined} />)}
         </colgroup>
@@ -355,7 +355,7 @@ export default function ScenarioTable({
                     <TableCell className="scn-dim scn-pin scn-pin-2 scn-pin-last" sx={cellSx}>
                       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
                         <Tooltip arrow enterDelay={400} title={row.name && row.name !== headline ? row.name : ""}>
-                          <Typography noWrap sx={{ typography: "s2", fontWeight: 500, minWidth: 40, flexShrink: 1 }}>{headline}</Typography>
+                          <Typography noWrap sx={{ typography: "s2", fontWeight: 500, minWidth: 120, flexShrink: 1 }}>{headline}</Typography>
                         </Tooltip>
                         {row.newTool && (
                           <Tooltip

@@ -245,9 +245,11 @@ export default function WorldAgentPicker({ value, onChange, title = "Agent", sub
         <Stack sx={{ height: "100%" }}>
           <Stack direction="row" alignItems="flex-start" spacing={2} sx={{ px: 2.5, py: 2, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
             <Box flex={1} minWidth={0}>
-              <Typography sx={{ typography: "m2", fontWeight: 600 }}>Connect a new agent</Typography>
+              <Typography sx={{ typography: "m2", fontWeight: 600 }}>{typeWord ? `Connect a ${typeWord} agent` : "Connect a new agent"}</Typography>
               <Typography sx={{ typography: "s2", color: "text.subtitle", mt: 0.25 }}>
-                It joins Agents, and this environment is built for it.
+                {typeWord
+                  ? `This world is for ${typeWord} agents, so only ways to connect a ${typeWord} agent are shown. It joins Agents, and this environment is built for it.`
+                  : "It joins Agents, and this environment is built for it."}
               </Typography>
             </Box>
             <IconButton size="small" onClick={() => setConnecting(false)} aria-label="Close">
@@ -258,7 +260,7 @@ export default function WorldAgentPicker({ value, onChange, title = "Agent", sub
             {connecting && (
               <Suspense fallback={null}>
                 <ConnectSubmitContext.Provider value="Connect agent">
-                  <ConnectAgentPicker onConnect={onConnected} flowsIn="inline" />
+                  <ConnectAgentPicker onConnect={onConnected} flowsIn="inline" channel={surface} />
                 </ConnectSubmitContext.Provider>
               </Suspense>
             )}
