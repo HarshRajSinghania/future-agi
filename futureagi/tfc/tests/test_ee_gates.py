@@ -27,7 +27,9 @@ def test_r02_r14_jev_capability_and_exact_ids():
     from tfc.capabilities.registry import FEATURE_REGISTRY
 
     feature = FEATURE_REGISTRY["jev_models"]
-    assert feature.oss_locked and feature.requires_license
+    # Community: open on every self-hosted install; still a paid feature so
+    # Cloud resolves it through the plan (has_jev_models).
+    assert not feature.oss_locked and feature.requires_license
     # Bring your own key: no FutureAGI service or managed credits.
     assert feature.execution_location.value == "local"
     assert feature.required_service is None
@@ -46,7 +48,14 @@ def test_r06_jev_unknown_denied_before_transport():
     dispatch.assert_not_called()
 
 
-def test_r14_jev_off_cloud_denied():
+def test_r14_jev_off_cloud_allowed():
+    cfg, loc, chk = _cfg(DeploymentLocation.SELF_HOSTED, allowed=True)
+    with cfg, loc, chk as check:
+        assert ee_gates.ee_model_gate_for_template("jev-latest") is None
+    check.assert_called_once_with("jev_models")
+
+
+def test_r14_jev_off_cloud_still_honours_a_capability_denial():
     cfg, loc, chk = _cfg(DeploymentLocation.SELF_HOSTED, allowed=False)
     with cfg, loc, chk as check:
         response = ee_gates.ee_model_gate_for_template("jev-latest")
@@ -54,6 +63,12 @@ def test_r14_jev_off_cloud_denied():
     assert response.data["code"] == "ENTITLEMENT_DENIED"
     assert response.data["feature"] == "jev"
     check.assert_called_once_with("jev_models")
+
+
+def test_r14_jev_allowed_before_the_service_is_configured():
+    with patch("tfc.capabilities.service.is_configured", return_value=False):
+        assert ee_gates._jev_denied_off_cloud() is False
+        assert ee_gates.ee_model_gate_for_template("jev-latest") is None
 
 
 def test_r14_jev_cloud_defers_to_engine():

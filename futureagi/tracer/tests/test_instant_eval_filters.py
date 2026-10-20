@@ -35,8 +35,11 @@ from tracer.tests.test_instant_eval_scale import (
 )
 
 # The scale suite's fixtures: a fake view of 40 sessions, a recorded workflow
-# start and a yes/no question.
+# start, a yes/no question and Instant eval's license.
 from tracer.tests.test_instant_eval_scale import fake_view as fake_view
+from tracer.tests.test_instant_eval_scale import (
+    instant_eval_enabled as instant_eval_enabled,
+)
 from tracer.tests.test_instant_eval_scale import started as started
 from tracer.tests.test_instant_eval_scale import yes_no as yes_no
 

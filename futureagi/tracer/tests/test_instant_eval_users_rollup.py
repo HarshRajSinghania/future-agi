@@ -24,6 +24,9 @@ from tracer.tests.test_instant_eval_scale import (
 from tracer.tests.test_instant_eval_scale import answered_run as answered_run
 from tracer.tests.test_instant_eval_scale import category as category
 from tracer.tests.test_instant_eval_scale import fake_view as fake_view
+from tracer.tests.test_instant_eval_scale import (
+    instant_eval_enabled as instant_eval_enabled,
+)
 from tracer.tests.test_instant_eval_scale import started as started
 from tracer.tests.test_instant_eval_scale import yes_no as yes_no
 from tracer.views.instant_eval import INSTANT_TASK_PREFIX

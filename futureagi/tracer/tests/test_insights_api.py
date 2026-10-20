@@ -21,6 +21,8 @@ def insight_enabled(monkeypatch):
     from tfc.capabilities import service as capability_service
     from tfc.capabilities.service import CapabilityDecision
 
+    # Insights is Enterprise-only: run it as a licensed install does.
+    monkeypatch.setattr(capability_service, "_configured", True)
     monkeypatch.setattr(
         capability_service,
         "check",
@@ -98,17 +100,43 @@ def test_run_again_while_a_run_is_in_flight_joins_it(
 
 
 @pytest.mark.django_db
-def test_reports_need_the_turing_capability(auth_client, observe_project, monkeypatch):
+def test_reports_need_the_insights_capability(
+    auth_client, observe_project, monkeypatch
+):
     from tfc.capabilities import service as capability_service
     from tfc.capabilities.service import CapabilityDecision
 
     monkeypatch.setattr(
         capability_service,
         "check",
-        lambda feature_id, **_: CapabilityDecision(allowed=False, feature_id=feature_id),
+        lambda feature_id, **_: CapabilityDecision(
+            allowed=feature_id != "insights", feature_id=feature_id
+        ),
     )
     response = auth_client.post(RUNS, new_run_body(observe_project), format="json")
     assert response.status_code == status.HTTP_402_PAYMENT_REQUIRED
+    assert response.json()["error"]["detail"]["feature"] == "insights"
+    assert not InsightConfig.objects.exists()
+
+
+@pytest.mark.django_db
+def test_reports_on_turing_models_need_the_turing_capability(
+    auth_client, observe_project, monkeypatch
+):
+    from tfc.capabilities import service as capability_service
+    from tfc.capabilities.service import CapabilityDecision
+    from tfc.ee_gates import INSIGHTS_TURING_DENIED_MESSAGE
+
+    monkeypatch.setattr(
+        capability_service,
+        "check",
+        lambda feature_id, **_: CapabilityDecision(
+            allowed=feature_id != "turing_models", feature_id=feature_id
+        ),
+    )
+    response = auth_client.post(RUNS, new_run_body(observe_project), format="json")
+    assert response.status_code == status.HTTP_402_PAYMENT_REQUIRED
+    assert response.json()["message"] == INSIGHTS_TURING_DENIED_MESSAGE
     assert not InsightConfig.objects.exists()
 
 

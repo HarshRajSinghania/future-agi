@@ -65,6 +65,8 @@ class EEFeature(str, Enum):
     PROTECT = "protect"
     SCENARIOS = "scenarios"
     ERROR_FEED = "error_feed"
+    INSTANT_EVAL = "instant_eval"
+    INSIGHTS = "insights"
     FIX_MY_AGENT = "fix_my_agent"
 
 

@@ -28,6 +28,7 @@ from tracer.models.eval_task import EvalTask
 from tracer.models.instant_eval import InstantEvalRun
 from tracer.models.observation_span import EvalLogger
 from tracer.models.project import Project
+from tracer.views._license import InstantEvalLicenseRequired
 
 logger = structlog.get_logger(__name__)
 
@@ -453,7 +454,7 @@ def _summary(unit: str, shown_rows: list[dict], all_rows: list[dict], config_ids
     }
 
 
-class InstantEvalUserSessionsView(APIView):
+class InstantEvalUserSessionsView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -505,7 +506,7 @@ class InstantEvalUserSessionsView(APIView):
         return self._gm.success_response({"sessions": sessions, "users": len(by_user)})
 
 
-class InstantEvalAnswersView(APIView):
+class InstantEvalAnswersView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -785,7 +786,7 @@ def _history_tally(page: list[tuple]) -> dict[str, tuple]:
     return {tid: tuple(v) for tid, v in out.items()}
 
 
-class InstantEvalRunsView(APIView):
+class InstantEvalRunsView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 

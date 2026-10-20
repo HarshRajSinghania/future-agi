@@ -31,7 +31,7 @@ def _build_registry():
         try:
             from ee.evals.llm.jev_evaluator.evaluator import JevEvaluator
         except ImportError:
-            pass  # CE images omit ee/; the capability gate denies execution.
+            pass  # A build without ee/: create_eval_instance refuses Jev.
         else:
             _REGISTRY["JevEvaluator"] = JevEvaluator
 

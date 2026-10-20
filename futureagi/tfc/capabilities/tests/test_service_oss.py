@@ -104,6 +104,10 @@ class TestRegistryConsistency:
     def test_managed_services_and_error_feed_are_oss_locked(self):
         assert MANAGED_SERVICE_FEATURES | {"error_feed"} <= OSS_LOCKED_FEATURES
 
+    def test_instant_eval_and_insights_are_oss_locked_and_jev_is_not(self):
+        assert {"instant_eval", "insights"} <= OSS_LOCKED_FEATURES
+        assert "jev_models" not in OSS_LOCKED_FEATURES
+
     def test_no_feature_in_both_categories(self):
         for f in FEATURE_REGISTRY.values():
             if f.oss_baseline:

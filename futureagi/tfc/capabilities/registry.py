@@ -105,9 +105,10 @@ FEATURE_TURING_MODELS = FeatureDefinition(
 
 # Jev runs on the org's own TypeSafe key (Settings -> AI Providers), so no
 # FutureAGI service or managed credits are involved; it still needs TypeSafe.
+# Community: every self-hosted install runs it, licensed or not. It stays a
+# paid feature so Cloud resolves it through the plan (has_jev_models).
 FEATURE_JEV_MODELS = FeatureDefinition(
     id="jev_models",
-    oss_locked=True,
     display_name="Jev Models",
     oss_baseline=False,
     requires_license=True,
@@ -166,6 +167,26 @@ FEATURE_ERROR_FEED = FeatureDefinition(
     id="error_feed",
     oss_locked=True,
     display_name="Error Feed",
+    oss_baseline=False,
+    requires_license=True,
+    execution_location=ExecutionLocation.LOCAL,
+)
+
+# Instant eval and Insights are Enterprise-only, like the error feed:
+# self-hosted needs a licence that lists them, Cloud a plan that does.
+FEATURE_INSTANT_EVAL = FeatureDefinition(
+    id="instant_eval",
+    oss_locked=True,
+    display_name="Instant eval",
+    oss_baseline=False,
+    requires_license=True,
+    execution_location=ExecutionLocation.LOCAL,
+)
+
+FEATURE_INSIGHTS = FeatureDefinition(
+    id="insights",
+    oss_locked=True,
+    display_name="Insights",
     oss_baseline=False,
     requires_license=True,
     execution_location=ExecutionLocation.LOCAL,
@@ -282,6 +303,8 @@ _ALL_FEATURES: tuple[FeatureDefinition, ...] = (
     FEATURE_SYNTHETIC_DATA,
     FEATURE_SCENARIOS,
     FEATURE_ERROR_FEED,
+    FEATURE_INSTANT_EVAL,
+    FEATURE_INSIGHTS,
     FEATURE_FIX_MY_AGENT,
     FEATURE_OPTIMIZATION,
     FEATURE_SCIM,
@@ -310,7 +333,8 @@ PAID_FEATURES: frozenset[str] = frozenset(
 )
 
 # Paid features that stay license-gated even off-cloud (managed compute, the
-# error feed and Jev). Everything else in PAID_FEATURES is free on self-hosted.
+# error feed, Instant eval and Insights). Everything else in PAID_FEATURES,
+# Jev included, is free on self-hosted.
 OSS_LOCKED_FEATURES: frozenset[str] = frozenset(
     f.id for f in _ALL_FEATURES if f.oss_locked
 )

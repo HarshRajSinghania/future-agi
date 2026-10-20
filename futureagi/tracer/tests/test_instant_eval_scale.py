@@ -85,6 +85,26 @@ class FakeView:
         return out
 
 
+@pytest.fixture(autouse=True)
+def instant_eval_enabled(monkeypatch):
+    """Instant eval is Enterprise-only: these tests run it as a licensed
+    install does. Every other capability keeps its real decision."""
+    from tfc.capabilities import service as capability_service
+    from tfc.capabilities.service import CapabilityDecision
+
+    check = capability_service.check
+    monkeypatch.setattr(capability_service, "_configured", True)
+    monkeypatch.setattr(
+        capability_service,
+        "check",
+        lambda feature_id, **kw: (
+            CapabilityDecision(allowed=True, feature_id=feature_id)
+            if feature_id == "instant_eval"
+            else check(feature_id, **kw)
+        ),
+    )
+
+
 @pytest.fixture
 def fake_view(monkeypatch):
     view = FakeView(40)

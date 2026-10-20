@@ -27,7 +27,6 @@ from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from tfc.capabilities import service as capability_service
 from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_serializers import ApiErrorResponseSerializer
 from tfc.utils.general_methods import GeneralMethods
@@ -45,6 +44,7 @@ from tracer.services import instant_eval_users as users_service
 from tracer.services.user_filter_capabilities import (
     validate_users_filter_capabilities,
 )
+from tracer.views._license import InsightsLicenseRequired
 
 logger = structlog.get_logger(__name__)
 
@@ -543,10 +543,16 @@ def _rate_limited(gm):
 
 
 def _gate(gm, org):
-    if not capability_service.check("turing_models", org_id=str(org.id)).allowed:
+    """The model gate of the steps that call a model. Insights itself is
+    licensed on every view (InsightsLicenseRequired); its models also need
+    Turing when they are Turing models, as they are unless the deployment
+    configures its own."""
+    from tfc.ee_gates import INSIGHTS_TURING_DENIED_MESSAGE, insights_turing_denied
+
+    if insights_turing_denied(org.id):
         return gm.custom_error_response(
             status.HTTP_402_PAYMENT_REQUIRED,
-            "Insights isn't available on this organization's plan.",
+            INSIGHTS_TURING_DENIED_MESSAGE,
             code="CAPABILITY_DENIED",
         )
     return None
@@ -793,7 +799,7 @@ def _unavailable(gm):
 
 
 # ─── Views ───────────────────────────────────────────────────────────────────
-class InsightConfigListView(APIView):
+class InsightConfigListView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -812,7 +818,7 @@ class InsightConfigListView(APIView):
         return self._gm.success_response({"configs": [_config_item(c) for c in configs]})
 
 
-class InsightConfigDetailView(APIView):
+class InsightConfigDetailView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -888,7 +894,7 @@ class InsightConfigDetailView(APIView):
         return self._gm.success_response(item)
 
 
-class InsightDraftView(APIView):
+class InsightDraftView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -935,7 +941,7 @@ class InsightDraftView(APIView):
         return self._gm.success_response(result)
 
 
-class InsightPreviewView(APIView):
+class InsightPreviewView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -989,7 +995,7 @@ class InsightPreviewView(APIView):
         return self._gm.success_response({"units": units})
 
 
-class InsightEstimateView(APIView):
+class InsightEstimateView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1040,7 +1046,7 @@ class InsightEstimateView(APIView):
         )
 
 
-class InsightRunCreateView(APIView):
+class InsightRunCreateView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1171,7 +1177,7 @@ class InsightRunCreateView(APIView):
         return self._gm.success_response({"run_id": run.id, "config_id": config.id})
 
 
-class InsightRunDetailView(APIView):
+class InsightRunDetailView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1217,7 +1223,7 @@ class InsightRunDetailView(APIView):
         )
 
 
-class InsightRunUnitsView(APIView):
+class InsightRunUnitsView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1297,7 +1303,7 @@ class InsightAskResponseSerializer(serializers.Serializer):
     result = InsightAskResultSerializer()
 
 
-class InsightRunAskView(APIView):
+class InsightRunAskView(InsightsLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 

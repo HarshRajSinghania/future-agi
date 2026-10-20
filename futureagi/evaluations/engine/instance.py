@@ -492,6 +492,23 @@ def prepare_jev_config(
     return effective
 
 
+def reject_jev_without_code():
+    """Refuse a Jev run in a build without Jev's code (ee/ stripped) with a
+    clear error, instead of failing on the import."""
+    from tfc.ee_gates import JEV_UNAVAILABLE_MESSAGE, jev_available
+
+    if jev_available():
+        return
+    from tfc.capabilities.errors import CapabilityDenied
+    from tfc.licensing.types import DenialReason
+
+    raise CapabilityDenied(
+        feature_id="jev_models",
+        reason_code=DenialReason.EE_CODE_UNAVAILABLE.value,
+        detail=JEV_UNAVAILABLE_MESSAGE,
+    )
+
+
 def reject_unknown_jev_model(model):
     """Raise JEV_MODEL_UNKNOWN for a jev-* ID that is not a supported Jev model."""
     from tfc.ee_gates import is_jev_model
@@ -501,6 +518,7 @@ def reject_unknown_jev_model(model):
         and model.lower().startswith("jev-")
         and not is_jev_model(model)
     ):
+        reject_jev_without_code()
         from ee.jev.mapping import JevMappingError
 
         raise JevMappingError(
@@ -573,6 +591,7 @@ def create_eval_instance(
     if is_jev_model(effective_model):
         from tfc.capabilities import service as capability_service
 
+        reject_jev_without_code()
         capability_service.check_or_raise(
             "jev_models", org_id=str(org.id) if org is not None else organization_id
         )

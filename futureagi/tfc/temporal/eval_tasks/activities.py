@@ -47,6 +47,42 @@ logger = structlog.get_logger(__name__)
 # =============================================================================
 
 
+INSTANT_EVAL_DENIED_MESSAGE = (
+    "Instant eval isn't available on this organization's plan."
+)
+
+
+def _require_instant_eval_license(task) -> None:
+    """Refuse a task started by Instant eval when its organization may not
+    use Instant eval, with a non-retryable error the workflow fails on.
+
+    Instant eval is Enterprise-only. Its views check the license on every
+    request; this covers a run on an install without it (the license lapsed,
+    or the run predates the gate). Other eval tasks are not affected.
+    """
+    from tracer.services.instant_eval_rows import RUN_MARKER
+
+    filters = getattr(task, "filters", None)
+    if not isinstance(filters, dict) or not filters.get(RUN_MARKER):
+        return
+    from tfc.ee_gating import EEFeature, FeatureUnavailable, check_ee_feature
+    from tracer.models.instant_eval import InstantEvalRun
+
+    org_id = (
+        InstantEvalRun.objects.filter(eval_task_id=task.id)
+        .values_list("organization_id", flat=True)
+        .first()
+    )
+    if org_id is None:
+        return
+    try:
+        check_ee_feature(EEFeature.INSTANT_EVAL, org_id=str(org_id))
+    except FeatureUnavailable:
+        raise ApplicationError(
+            INSTANT_EVAL_DENIED_MESSAGE, type="CapabilityDenied", non_retryable=True
+        ) from None
+
+
 def _reconcile_sync(task_id: str) -> dict:
     """Make the task's live entries match its desired (sampled rows × evals) set.
 
@@ -62,6 +98,7 @@ def _reconcile_sync(task_id: str) -> dict:
 
         with eval_ch_guardrails():
             task = EvalTask.objects.get(id=task_id)
+            _require_instant_eval_license(task)
             result = reconcile(task)
         return {
             "task_id": str(task_id),
@@ -87,6 +124,7 @@ def _claim_batch_sync(task_id: str, n: int) -> dict:
         from tracer.services.eval_tasks.entries import claim_pending_batch
 
         task = EvalTask.objects.get(id=task_id)
+        _require_instant_eval_license(task)
         entries = claim_pending_batch(task, n)
         return {"entry_ids": [str(e.id) for e in entries]}
     finally:

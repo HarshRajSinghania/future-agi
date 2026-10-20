@@ -2,7 +2,12 @@
 
 from rest_framework.response import Response
 
-from tfc.ee_gates import describe_jev_error, is_jev_model, jev_gate_for_template
+from tfc.ee_gates import (
+    JEV_UNAVAILABLE_MESSAGE,
+    describe_jev_error,
+    is_jev_model,
+    jev_gate_for_template,
+)
 from tfc.utils.api_errors import build_error_envelope
 
 
@@ -27,7 +32,7 @@ def validate_jev_template_save(
     except ImportError:
         return Response(
             build_error_envelope(
-                "Jev models are not available in this deployment.",
+                JEV_UNAVAILABLE_MESSAGE,
                 status_code=402,
                 code="ENTITLEMENT_DENIED",
                 extra={"feature": "jev"},

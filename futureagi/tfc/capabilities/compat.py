@@ -35,6 +35,8 @@ _LEGACY_TO_CAPABILITY_ID: dict[str, str] = {
     "protect": "protect",
     "scenarios": "scenarios",
     "error_feed": "error_feed",
+    "instant_eval": "instant_eval",
+    "insights": "insights",
     "fix_my_agent": "fix_my_agent",
 }
 

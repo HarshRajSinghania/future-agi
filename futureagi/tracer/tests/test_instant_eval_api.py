@@ -14,6 +14,9 @@ from tracer.models.custom_eval_config import CustomEvalConfig
 from tracer.models.eval_task import EvalTask, EvalTaskStatus, RowType, RunType
 from tracer.models.observation_span import EvalLogger, EvalTargetType
 from tracer.models.project import Project
+from tracer.tests.test_instant_eval_scale import (
+    instant_eval_enabled as instant_eval_enabled,
+)
 from tracer.utils.eval import render_session_transcript
 from tracer.views import instant_eval
 

@@ -60,6 +60,7 @@ from tracer.services import instant_eval_users as users_service
 from tracer.services.user_filter_capabilities import (
     validate_users_filter_capabilities,
 )
+from tracer.views._license import InstantEvalLicenseRequired
 from tracer.views.instant_eval import (
     INSTANT_TASK_PREFIX,
     MAX_ANSWER_ROWS,
@@ -740,7 +741,7 @@ def _window(population: rows_service.Population) -> dict:
 
 
 # ─── Estimate ────────────────────────────────────────────────────────────────
-class InstantEvalEstimateView(APIView):
+class InstantEvalEstimateView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -831,7 +832,7 @@ class InstantEvalEstimateView(APIView):
 
 
 # ─── Start ───────────────────────────────────────────────────────────────────
-class InstantEvalStartView(APIView):
+class InstantEvalStartView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1358,7 +1359,7 @@ def prewarm_summary(task_id) -> None:
 
 # Hundreds of KB of counts every 2 s compress about tenfold.
 @method_decorator(gzip_page, name="dispatch")
-class InstantEvalSummaryView(APIView):
+class InstantEvalSummaryView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1476,7 +1477,7 @@ def _row_filter(params) -> summary_service.RowFilter:
 
 
 @method_decorator(gzip_page, name="dispatch")
-class InstantEvalRowsView(APIView):
+class InstantEvalRowsView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1517,7 +1518,7 @@ class InstantEvalRowsView(APIView):
         return self._gm.success_response(page)
 
 
-class InstantEvalExportView(APIView):
+class InstantEvalExportView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
@@ -1561,7 +1562,7 @@ class InstantEvalExportView(APIView):
 
 
 # ─── Control ─────────────────────────────────────────────────────────────────
-class InstantEvalControlView(APIView):
+class InstantEvalControlView(InstantEvalLicenseRequired, APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
