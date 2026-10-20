@@ -25617,6 +25617,93 @@ export interface EvalTaskUpdateResponseApi {
   result: EvalTaskUpdateResultApi;
 }
 
+export interface FeedEscalationValuesApi {
+  /**
+   * @minimum 2
+   * @maximum 1000000
+   */
+  min_findings: number;
+  entry_multiplier: string;
+  /**
+   * @minimum 1
+   * @maximum 1000000
+   */
+  entry_delta: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  entry_confirmation_minutes: number;
+  /** @minimum 0 */
+  recovery_min: number;
+  recovery_multiplier: string;
+  /** @minimum 0 */
+  recovery_delta: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  recovery_confirmation_minutes: number;
+}
+
+export type FeedEscalationSettingsApiRanges = {
+  [key: string]: { [key: string]: number };
+};
+
+export interface FeedEscalationSettingsApi {
+  values: FeedEscalationValuesApi;
+  defaults: FeedEscalationValuesApi;
+  ranges: FeedEscalationSettingsApiRanges;
+  revision: number;
+  /** @minLength 1 */
+  algorithm_version: string;
+  defaults_version: number;
+  workspace_id: string;
+  /** @minLength 1 */
+  workspace_name: string;
+  can_edit: boolean;
+  window_minutes: number;
+  baseline_hours: number;
+  cadence_minutes: number;
+  processing_allowance_minutes: number;
+}
+
+export interface FeedEscalationSettingsApiResponseApi {
+  status?: boolean;
+  result: FeedEscalationSettingsApi;
+}
+
+export interface FeedEscalationSettingsBodyApi {
+  /**
+   * @minimum 2
+   * @maximum 1000000
+   */
+  min_findings?: number;
+  entry_multiplier?: string;
+  /**
+   * @minimum 1
+   * @maximum 1000000
+   */
+  entry_delta?: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  entry_confirmation_minutes?: number;
+  /** @minimum 0 */
+  recovery_min?: number;
+  recovery_multiplier?: string;
+  /** @minimum 0 */
+  recovery_delta?: number;
+  /**
+   * @minimum 5
+   * @maximum 60
+   */
+  recovery_confirmation_minutes?: number;
+  /** @minimum 0 */
+  revision: number;
+}
+
 export interface LinearTeamApi {
   /** @minLength 1 */
   id: string;
@@ -32654,93 +32741,6 @@ export interface ActivationResponseApi {
   allowed_services: string[];
   allowed_models: string[];
   scope: ActivationResponseApiScope;
-}
-
-export interface FeedEscalationValuesApi {
-  /**
-   * @minimum 2
-   * @maximum 1000000
-   */
-  min_findings: number;
-  entry_multiplier: string;
-  /**
-   * @minimum 1
-   * @maximum 1000000
-   */
-  entry_delta: number;
-  /**
-   * @minimum 5
-   * @maximum 60
-   */
-  entry_confirmation_minutes: number;
-  /** @minimum 0 */
-  recovery_min: number;
-  recovery_multiplier: string;
-  /** @minimum 0 */
-  recovery_delta: number;
-  /**
-   * @minimum 5
-   * @maximum 60
-   */
-  recovery_confirmation_minutes: number;
-}
-
-export type FeedEscalationSettingsApiRanges = {
-  [key: string]: { [key: string]: number };
-};
-
-export interface FeedEscalationSettingsApi {
-  values: FeedEscalationValuesApi;
-  defaults: FeedEscalationValuesApi;
-  ranges: FeedEscalationSettingsApiRanges;
-  revision: number;
-  /** @minLength 1 */
-  algorithm_version: string;
-  defaults_version: number;
-  workspace_id: string;
-  /** @minLength 1 */
-  workspace_name: string;
-  can_edit: boolean;
-  window_minutes: number;
-  baseline_hours: number;
-  cadence_minutes: number;
-  processing_allowance_minutes: number;
-}
-
-export interface FeedEscalationSettingsApiResponseApi {
-  status?: boolean;
-  result: FeedEscalationSettingsApi;
-}
-
-export interface FeedEscalationSettingsBodyApi {
-  /**
-   * @minimum 2
-   * @maximum 1000000
-   */
-  min_findings?: number;
-  entry_multiplier?: string;
-  /**
-   * @minimum 1
-   * @maximum 1000000
-   */
-  entry_delta?: number;
-  /**
-   * @minimum 5
-   * @maximum 60
-   */
-  entry_confirmation_minutes?: number;
-  /** @minimum 0 */
-  recovery_min?: number;
-  recovery_multiplier?: string;
-  /** @minimum 0 */
-  recovery_delta?: number;
-  /**
-   * @minimum 5
-   * @maximum 60
-   */
-  recovery_confirmation_minutes?: number;
-  /** @minimum 0 */
-  revision: number;
 }
 
 export type AccountsAwsMarketplaceLaunchSoftwareCreateBody = {

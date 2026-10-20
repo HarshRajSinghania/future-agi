@@ -9,7 +9,11 @@ import { E2E } from './env';
 // Enterprise signup mails a generated password. Use the supported local owner
 // CLI for fixture creation; login, roles, invitations and API keys use normal
 // product paths. No direct SQL role edits, token minting or license bypass.
-export const test = base.extend<{ scopeActors: ScopeActors; scopeProbe: StateProbe }>({
+export const test = base.extend<{ errorFeedProfile: void; scopeActors: ScopeActors; scopeProbe: StateProbe }>({
+  errorFeedProfile: [async ({}, use) => {
+    base.skip(process.env.E2E_STACK !== 'error-feed', 'Requires the dedicated entitled Error Feed stack');
+    await use();
+  }, { auto: true }],
   scopeActors: async ({}, use, info) => {
     const backend = managedErrorFeedBackend();
     // Independent cohorts share Docker's host IP. Reset only this isolated
