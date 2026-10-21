@@ -1,5 +1,5 @@
 import { unitWord } from "src/sections/projects/observePopulation";
-import { formatCount, formatDayRange } from "./insightsFormat";
+import { formatCount, formatDayRange, humanizeKey } from "./insightsFormat";
 
 // Plain-language facts about a completed run, shared by the report header,
 // the method note and the Ask composer.
@@ -46,6 +46,41 @@ export function reportMetaParts(run, lens) {
     parts.push(formatDayRange(from, to));
   }
   return parts;
+}
+
+// How a run's units were chosen (`settings.sampling`, from the server).
+const SAMPLING = {
+  uniform: "a uniform random sample",
+  even_over_time: "spread evenly over time",
+  even: "spread evenly through the selection",
+};
+
+/**
+ * What a run read, for "How this report was made": "All 108 sessions", or
+ * "300 of 12,345 sessions, a uniform random sample". A run that doesn't say
+ * how it sampled gets no method.
+ */
+export function samplingText(run) {
+  if (!run) return "";
+  const sample = Number(run.sample_size) || 0;
+  const population = Number(run.population_size) || 0;
+  const method = run.settings?.sampling;
+  if (method === "all" || (population > 0 && sample >= population))
+    return `All ${formatCount(population)} ${unitWord(run.unit, population)}`;
+  const counted = `${formatCount(sample)} of ${formatCount(population)} ${unitWord(
+    run.unit,
+    population,
+  )}`;
+  return SAMPLING[method] ? `${counted}, ${SAMPLING[method]}` : counted;
+}
+
+const ENGINES = { builtin: "Built-in engine", omega: "Insights agent" };
+
+/** "Built-in engine (builtin/v1)", from the run's `result.engine`. */
+export function engineLabel(engine) {
+  if (!engine?.kind) return null;
+  const name = ENGINES[engine.kind] || humanizeKey(engine.kind);
+  return engine.version ? `${name} (${engine.version})` : name;
 }
 
 /** Three starting questions for Ask, fitted to the report's unit and lens. */

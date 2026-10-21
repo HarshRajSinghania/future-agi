@@ -101,11 +101,24 @@ export function normalizeFindings(summary) {
     });
 }
 
+// Whether quotes on the findings were checked against the examples they
+// cite: `summary.verification.quotes`, or for a run written before the
+// summary said so, whether any finding carries a quote (only the Insights
+// agent's findings do, and their quotes are checked).
+const quotesChecked = (summary) =>
+  typeof summary?.verification?.quotes === "boolean"
+    ? summary.verification.quotes
+    : (Array.isArray(summary?.findings) ? summary.findings : []).some(
+        (f) => toEvidence(f?.evidence).length > 0,
+      );
+
 /**
- * The line under the findings: how they were checked and what was left out.
- * {text, checked, verifier} where checked is false when the summary or the
- * independent verifier says the findings did not hold up, and verifier is
- * true when an independent model re-checked them (`summary.verification`).
+ * The line under the findings: what they were checked against and what was
+ * left out. {text, checked, verifier} where checked is false when the
+ * summary or the independent verifier says the findings did not hold up, and
+ * verifier is true when an independent model re-checked them. It names only
+ * the checks that ran (`summary.verification`): the built-in engine checks a
+ * finding's numbers against the statistics and nothing else.
  */
 export function verificationNote(summary, count) {
   const verification = summary?.verification || {};
@@ -128,10 +141,9 @@ export function verificationNote(summary, count) {
       text: `These findings could not be confirmed against the report's statistics${tail}`,
     };
   const noun = count === 1 ? "finding" : "findings";
-  const against =
-    Array.isArray(summary?.findings) && summary.findings.length
-      ? "the report's statistics and the cited examples"
-      : "the report's statistics";
+  const against = quotesChecked(summary)
+    ? "the report's statistics and the cited examples"
+    : "the report's statistics";
   if (verdict === "passed")
     return {
       checked: true,

@@ -253,8 +253,9 @@ def compare_runs(current: dict, previous: dict) -> dict | None:
         )
     adjusted = benjamini_hochberg(pvalues) if pvalues else []
     for item, q in zip(rows + metrics, adjusted, strict=True):
-        item["q"] = q
-        item["significant"] = q < Q_THRESHOLD and abs(item["delta"]) >= CHANGE_MIN_DELTA
+        # Plain Python values: a numpy bool can't be stored in the run's JSON.
+        item["q"] = float(q)
+        item["significant"] = bool(q < Q_THRESHOLD and abs(item["delta"]) >= CHANGE_MIN_DELTA)
     rows.sort(key=lambda r: (not r["significant"], -abs(r["delta"])))
     return {
         "categories": rows,

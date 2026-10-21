@@ -1,12 +1,12 @@
 """Insights pipeline pieces that don't need a database: statistics, facet
-validation, clustering, summary verification and sampling."""
+validation, clustering, summary verification, sampling and the engine label."""
 
 import numpy as np
 import pytest
 
 from ee.agenthub.insights import clustering, llm, summary
 from ee.agenthub.insights.facets import clean_attributes, included, normalise
-from ee.agenthub.insights.pipeline import sample_evenly
+from ee.agenthub.insights.pipeline import sample_evenly, sampling_method
 from ee.agenthub.insights.stats import benjamini_hochberg, measure, wilson
 
 
@@ -198,6 +198,68 @@ class TestSummary:
         assert out["dropped_points"] == 1
         assert [h["unit_id"] for h in out["highlights"]] == ["trace-1"]
 
+    def test_citations_are_not_claims_and_the_action_is_checked_too(self, monkeypatch):
+        result = {
+            "totals": {"count": 40, "users": 30, "sessions": 40},
+            "population_size": 108,
+            "sample_size": 108,
+            "categories": [{
+                "id": "a", "name": "A", "level": 1, "description": "d", "has_children": False,
+                "stats": {"count": 10, "users": 8, "sessions": 10, "turns": 30, "share": 0.25,
+                          "failure_rate": 1.0, "unresolved_rate": 0.5, "error_rate": 0.0,
+                          "outcomes": {"unresolved": 5}},
+                "notable": [],
+            }],
+        }
+        units = {"a": [
+            {"key": str(i), "unit_id": f"trace-{i}", "summary": "s", "facets": {"sentiment": 1}}
+            for i in (1, 2)
+        ]}
+        monkeypatch.setattr(summary, "chat_json", lambda *a, **k: {"findings": [
+            # "#2" cites an example; "2" is no statistic, so it can't pass as one.
+            {"headline": "A fails in 2 conversations", "detail": "See #1 and #2."},
+            {"headline": "A fails 100% of the time", "detail": "As in #1 and #2.",
+             "action": "Retry 3 times before giving up"},
+            {"headline": "A fails 100% of the time", "detail": "As in #2.",
+             "action": "Hand over to a person after one failed lookup (#1)"},
+        ]})
+        out = summary.write_summary(question="q", unit="sessions", agent_description="",
+                                    result=result, units_by_category=units, spend=llm.Spend())
+        assert [f["action"] for f in out["findings"]] == [
+            "Hand over to a person after one failed lookup (#1)"
+        ]
+        assert out["findings"][0]["refs"] == [
+            {"ref": 1, "unit_id": "trace-1"}, {"ref": 2, "unit_id": "trace-2"}
+        ]
+        assert out["dropped_points"] == 2
+
+    def test_the_built_in_report_records_that_only_numbers_were_checked(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from ee.agenthub.insights import agent, report
+
+        monkeypatch.setattr(agent, "enabled", lambda: False)
+        monkeypatch.setattr(report, "write_summary", lambda **_: {
+            "title": "T", "key_points": [], "findings": [], "highlights": [], "examples": [],
+        })
+        run = SimpleNamespace(settings={"question": "q"}, unit="sessions")
+        out = report.write(run, {"totals": {}, "categories": []}, [], {}, llm.Spend())
+        assert out["verification"] == {"numbers": True, "quotes": False, "audit": False}
+        assert "verified" not in out
+
+
+class TestEngine:
+    def test_the_built_in_engine_has_its_own_version(self, monkeypatch):
+        from ee.agenthub.insights import agent
+
+        monkeypatch.setattr(agent, "_setting", lambda name, default="": default)
+        assert agent.engine() == {"kind": "builtin", "version": "builtin/v1"}
+        monkeypatch.setattr(
+            agent, "_setting",
+            lambda name, default="": "http://agent" if name == "INSIGHTS_AGENT_URL" else default,
+        )
+        assert agent.engine() == {"kind": "omega", "version": "insights-agent/v1"}
+
 
 class TestModelCalls:
     def test_a_truncated_reply_is_retried_with_more_room(self, monkeypatch):
@@ -234,6 +296,18 @@ class TestSampling:
         assert sample_evenly(population, 1) == [population[-1]]
         assert sample_evenly(population[:3], 10) == population[:3]
 
+    def test_the_sampling_method_says_how_units_were_chosen(self):
+        timed = [{"id": str(i), "time": f"2026-10-{i + 1:02d}"} for i in range(20)]
+        untimed = [{"id": str(i)} for i in range(20)]
+        # The server's draw from a scope is a uniform (hash-ordered) sample.
+        assert sampling_method(untimed[:5], untimed[:5], drawn=True, total=2345) == "uniform"
+        # A scope smaller than the sample is read whole.
+        assert sampling_method(untimed[:7], untimed[:7], drawn=True, total=7) == "all"
+        # Rows handed over are spread over their times, else over the selection.
+        assert sampling_method(timed, timed[:5], drawn=False, total=20) == "even_over_time"
+        assert sampling_method(untimed, untimed[:5], drawn=False, total=20) == "even"
+        assert sampling_method(timed[:3], timed[:3], drawn=False, total=3) == "all"
+
 
 class TestRunChanges:
     def _result(self, counts, total, failure=0.5):
@@ -244,6 +318,22 @@ class TestRunChanges:
                 for cid, n in counts.items()
             ],
         }
+
+    def test_changes_are_plain_values_a_run_can_store(self):
+        import json
+
+        from ee.agenthub.insights.stats import compare_runs
+
+        # q between 0.1 and 1 used to come back as a numpy bool, which the
+        # run's JSON field refused, so a rerun could never finish.
+        changes = compare_runs(
+            self._result({"a": 20, "b": 30, "c": 50}, 100),
+            self._result({"a": 30, "b": 30, "c": 40}, 100),
+        )
+        rows = changes["categories"] + changes["metrics"]
+        assert any(0.1 <= row["q"] < 1 for row in rows)
+        assert all(type(row["significant"]) is bool and type(row["q"]) is float for row in rows)
+        json.dumps(changes)
 
     def test_a_category_that_grew_a_lot_is_a_significant_change(self):
         from ee.agenthub.insights.stats import compare_runs
@@ -321,3 +411,84 @@ class TestAgentOutputIsCheckedHere:
         assert out["highlights"][0]["quote"] == "Where is order HP-1?"
         assert out["category_insights"]["a"]["root_cause"] == "Lookup state is lost"
         assert out["key_points"][0]["text"].startswith("Re-asks the order number")
+        # Numbers and quotes were checked here; no verifier ran.
+        assert out["verification"] == {"numbers": True, "quotes": True, "audit": False}
+        assert "verified" not in out
+
+        reply["verification"] = {"model_verifier": "passed", "investigated": 2}
+        audited = from_agent(reply, result, units, {"7": self.content})
+        assert audited["verification"] == {
+            "model_verifier": "passed", "investigated": 2,
+            "numbers": True, "quotes": True, "audit": True,
+        }
+        # Without quotes on any finding, no example was checked.
+        reply["findings"][0]["evidence"] = [{"unit_key": "7", "quote": "not in the text"}]
+        unquoted = from_agent(reply, result, units, {"7": self.content})
+        assert unquoted["verification"]["quotes"] is False
+
+    def test_a_number_only_in_the_action_is_checked_too(self):
+        from ee.agenthub.insights.report import from_agent
+
+        result = {
+            "totals": {"count": 40, "users": 30, "sessions": 40},
+            "categories": [{"id": "a", "name": "A", "level": 2, "description": "",
+                            "stats": {"count": 10, "share": 0.25}, "notable": []}],
+        }
+        units = [{"key": "7", "unit_id": "sess-7", "summary": "s", "category_id": "t", "sub_category_id": "a",
+                  "facets": {}, "time": ""}]
+        reply = {"findings": [
+            # 3 is no statistic, and it is only in the action.
+            {"headline": "Re-asks the order number in 10 conversations", "detail": "",
+             "action": "Retry the lookup 3 times before asking", "unit_keys": ["7"]},
+            {"headline": "Re-asks the order number in 10 conversations", "detail": "",
+             "action": "Keep the order number in context", "unit_keys": ["7"]},
+        ]}
+        out = from_agent(reply, result, units, {"7": self.content})
+        assert [f["action"] for f in out["findings"]] == ["Keep the order number in context"]
+        assert out["dropped_points"] == 1
+
+
+class TestAsk:
+    def test_examples_cited_inline_are_not_claims_but_unknown_numbers_still_drop(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from ee.agenthub.insights import agent, report
+
+        monkeypatch.setattr(agent, "enabled", lambda: False)
+        cid = "3fa2b1c0d9e8"
+        result = {
+            "totals": {"count": 40, "users": 30, "sessions": 40},
+            "categories": [{
+                "id": cid, "name": "Re-asks order number", "level": 1,
+                "stats": {"count": 10, "users": 8, "share": 0.25, "failure_rate": 1.0,
+                          "unresolved_rate": 0.5},
+                "notable": [],
+            }],
+        }
+        units = [unit(1234, category=cid, sub=None), unit(5678, category=cid, sub=None)]
+        prompts = []
+
+        def fake_chat(system, prompt, **kwargs):
+            prompts.append(prompt)
+            return {"answer": [
+                # The prompt asks for [key] citations; unit keys are row ids.
+                {"text": "10 conversations (25%) re-ask the order number [1234].",
+                 "unit_keys": ["5678"], "category_ids": [cid]},
+                {"text": f"Half of them stay unresolved [{cid}] [1234, 5678]."},
+                {"text": "It grew 73% this week [5678]."},
+                # A bracket that names no example is checked like any number.
+                {"text": "Order [9999] was refunded."},
+            ], "follow_ups": ["Which users?"]}
+
+        monkeypatch.setattr(llm, "chat_json", fake_chat)
+        run = SimpleNamespace(settings={"question": "Where does it fail?"}, unit="sessions")
+        out = report.answer(run, result, units, {}, "Why?", [], llm.Spend())
+        assert "[1234]" in prompts[0] and f"[{cid}]" in prompts[0]
+        assert out["answer"] == [
+            {"text": "10 conversations (25%) re-ask the order number.",
+             "unit_ids": ["u5678", "u1234"], "category_ids": [cid], "evidence": []},
+            {"text": "Half of them stay unresolved.",
+             "unit_ids": ["u1234", "u5678"], "category_ids": [cid], "evidence": []},
+        ]
+        assert out["dropped"] == 2
+        assert out["follow_ups"] == ["Which users?"]

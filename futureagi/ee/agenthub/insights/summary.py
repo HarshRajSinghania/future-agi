@@ -2,8 +2,10 @@
 
 The thinking model sees only computed statistics and numbered example units,
 writes a few findings with citations, and picks highlighted examples. Every
-number in a finding is then checked against the statistics; a finding with a
-number that isn't there is dropped rather than shown.
+number in a finding (headline, detail and action, citations aside) is then
+checked against the statistics; a finding with a number that isn't there is
+dropped rather than shown. Nothing here checks a finding against the examples
+it cites.
 """
 
 from __future__ import annotations
@@ -39,7 +41,8 @@ def _notable_text(note: dict) -> str:
     return f"{note['label']} {note['value']:.1f} vs {note['rest']:.1f} elsewhere"
 
 
-def allowed_numbers(result: dict, examples: list[dict]) -> set[str]:
+def allowed_numbers(result: dict) -> set[str]:
+    """Every number the report's statistics hold, as a claim may write it."""
     numbers: set[str] = set()
 
     def add(value):
@@ -92,9 +95,12 @@ def allowed_numbers(result: dict, examples: list[dict]) -> set[str]:
             if note["metric"] == "latency_ms":
                 add(note["value"] / 1000)
                 add(note["rest"] / 1000)
-    for i in range(1, len(examples) + 1):
-        numbers.add(str(i))
     return numbers
+
+
+def without_citations(text: str) -> str:
+    """Example citations (#3) are not claims, so their digits aren't checked."""
+    return re.sub(r"#\d+", "", text)
 
 
 def verified(text: str, numbers: set[str]) -> bool:
@@ -183,7 +189,7 @@ def write_summary(
         "policy or behaviour, never 'some users had issues'."
     )
     raw = chat_json(_SYSTEM, prompt, tier=THINKING, max_tokens=2200, temperature=0.3, spend=spend)
-    numbers = allowed_numbers(result, examples)
+    numbers = allowed_numbers(result)
     ids = {c["id"] for c in categories}
     points, findings, dropped = [], [], 0
     raw_points = (raw.get("findings") or raw.get("key_points") or []) if isinstance(raw, dict) else []
@@ -198,7 +204,7 @@ def write_summary(
         text = " ".join(p for p in (headline, detail) if p)
         if not text:
             continue
-        if not verified(text, numbers):
+        if not verified(without_citations(f"{text} {action}"), numbers):
             dropped += 1
             continue
         refs = sorted({

@@ -125,6 +125,41 @@ describe("verificationNote", () => {
       false,
     );
   });
+
+  it("names only the checks that ran", () => {
+    // The built-in engine checks numbers against the statistics, not the
+    // examples its findings cite.
+    const builtIn = {
+      ...enriched,
+      findings: enriched.findings.map((f) => ({ ...f, evidence: [] })),
+      verification: { numbers: true, quotes: false, audit: false },
+    };
+    expect(verificationNote(builtIn, 5)).toEqual({
+      checked: true,
+      verifier: false,
+      text: "5 findings checked against the report's statistics · 1 dropped",
+    });
+    // What the summary says ran wins over whether quotes are shown.
+    expect(
+      verificationNote(
+        { ...enriched, verification: { numbers: true, quotes: false } },
+        5,
+      ).text,
+    ).toBe("5 findings checked against the report's statistics · 1 dropped");
+    expect(
+      verificationNote(
+        { ...builtIn, verification: { numbers: true, quotes: true } },
+        5,
+      ).text,
+    ).toBe(
+      "5 findings checked against the report's statistics and the cited examples · 1 dropped",
+    );
+    // A run from before the summary said so: no quotes, no examples checked.
+    const { verification: _ignored, ...older } = builtIn;
+    expect(verificationNote(older, 5).text).toBe(
+      "5 findings checked against the report's statistics · 1 dropped",
+    );
+  });
 });
 
 describe("real Omega summaries", () => {

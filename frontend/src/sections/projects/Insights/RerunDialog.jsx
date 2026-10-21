@@ -145,6 +145,7 @@ function RerunForm({
     total,
     isLowerBound,
     sampleSize,
+    handedOver: sameRows,
   });
 
   return (

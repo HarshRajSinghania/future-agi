@@ -47,6 +47,50 @@ describe("insightsErrorMessage", () => {
     ).toBe("Insights isn't available on this plan.");
   });
 
+  it("says why a plan refused, when the server does", () => {
+    // Insights is on the plan, the Turing models it runs on aren't.
+    const turing =
+      "Insights runs on Turing models, which aren't available on this organization's plan.";
+    expect(
+      insightsErrorMessage({
+        status: false,
+        statusCode: 402,
+        code: "CAPABILITY_DENIED",
+        message: turing,
+        result: turing,
+      }),
+    ).toBe(turing);
+    // A message that isn't one short line isn't shown.
+    expect(
+      insightsErrorMessage({
+        statusCode: 402,
+        code: "CAPABILITY_DENIED",
+        message: "Denied\nTraceback (most recent call last)",
+      }),
+    ).toBe("Insights isn't available on this plan.");
+    expect(
+      insightsErrorMessage({ statusCode: 402, message: "x".repeat(300) }),
+    ).toBe("Insights isn't available on this plan.");
+  });
+
+  it("keeps the plan wording for licence refusals", () => {
+    // The licence gate names the feature key; only the Turing denial says why.
+    expect(
+      insightsErrorMessage({
+        statusCode: 402,
+        code: "LICENSE_MISSING",
+        message: "'insights' is not available. Upgrade your plan.",
+      }),
+    ).toBe("Insights isn't available on this plan.");
+    expect(
+      insightsErrorMessage({
+        statusCode: 402,
+        code: "ENTITLEMENT_DENIED",
+        message: "This feature is not available on your current plan.",
+      }),
+    ).toBe("Insights isn't available on this plan.");
+  });
+
   it("shows rate-limit and model messages as written", () => {
     expect(
       insightsErrorMessage({

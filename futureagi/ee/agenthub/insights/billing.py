@@ -78,6 +78,25 @@ def preview_cost() -> float:
     return PREVIEW_UNITS * _price(FAST, READ_TOKENS)
 
 
+def applies() -> bool:
+    """Whether Insights is billed here: on Cloud, with a billing config that
+    loads. Elsewhere (OSS, a licensed self-host) nothing is estimated or
+    checked in credits, as with Instant eval."""
+    try:
+        from ee.usage.deployment import DeploymentMode
+        from ee.usage.services.config import BillingConfig
+    except ImportError:
+        return False
+    if not DeploymentMode.is_cloud():
+        return False
+    try:
+        BillingConfig.get()
+    except Exception:
+        logger.warning("insight_billing_unavailable", exc_info=True)
+        return False
+    return True
+
+
 def credits(cost_usd: float) -> float:
     """AI credits for a model cost; 0 for nothing spent (billing's own
     conversion charges 1 credit for an unknown cost)."""

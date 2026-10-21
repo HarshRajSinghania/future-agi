@@ -4,10 +4,15 @@ With the Insights agent the analyst reads examples through tools and writes
 findings with cited evidence; everything it returns is checked again here
 (numbers must be in the report's statistics, quotes must occur in the unit's
 text, citations must name units of the run). Without the agent the built-in
-summary writes findings in the same shape.
+summary writes findings in the same shape, checked for their numbers only.
+``summary["verification"]`` records which checks ran: ``numbers``, ``quotes``
+(quotes on findings found in the units they cite) and ``audit`` (an
+independent verifier passed the findings).
 """
 
 from __future__ import annotations
+
+import re
 
 from ee.agenthub.insights import agent as insight_agent
 from ee.agenthub.insights.llm import Spend
@@ -90,7 +95,7 @@ def checked_numbers(result: dict, units: list[dict]) -> set[str]:
     per-user counts the analyst can look up (``list_users``)."""
     from collections import Counter, defaultdict
 
-    numbers = allowed_numbers(result, [])
+    numbers = allowed_numbers(result)
     per_user: dict[str, Counter] = defaultdict(Counter)
     for unit in units:
         user = unit.get("user_id")
@@ -116,6 +121,26 @@ def _without_ids(text: str, units: list[dict]) -> str:
     for user in {u.get("user_id") for u in units if u.get("user_id")}:
         text = text.replace(user, "")
     return text
+
+
+def _inline_citations(text: str, units_by_key: dict[str, dict], categories) -> tuple[str, list, list]:
+    """Examples and categories cited in the text as [key] or [id] (unit keys
+    are row ids, category ids carry digits) are citations, not claims. They
+    leave the text, which the page follows with chips for cited examples, and
+    join the paragraph's unit keys and category ids. A bracket holding
+    anything else stays and is checked like the rest."""
+    keys: list[str] = []
+    ids: list[str] = []
+
+    def take(match):
+        tokens = [t for t in re.split(r"[\s,]+", match.group(1)) if t]
+        if not tokens or not all(t in units_by_key or t in categories for t in tokens):
+            return match.group(0)
+        keys.extend(t for t in tokens if t in units_by_key)
+        ids.extend(t for t in tokens if t not in units_by_key)
+        return ""
+
+    return re.sub(r"\s*\[([^\[\]]+)\]", take, text).strip(), keys, ids
 
 
 class _Refs:
@@ -158,7 +183,10 @@ def from_agent(reply: dict, result: dict, units: list[dict], contents: dict[str,
             continue
         headline = _clean(raw.get("headline"), 200)
         detail = _clean(raw.get("detail"), 600)
-        if not headline or not verified(_without_ids(f"{headline} {detail}", units), numbers):
+        action = _clean(raw.get("action"), 200)
+        if not headline or not verified(
+            _without_ids(f"{headline} {detail} {action}", units), numbers
+        ):
             dropped += 1
             continue
         keys = [str(k) for k in raw.get("unit_keys") or []]
@@ -167,7 +195,7 @@ def from_agent(reply: dict, result: dict, units: list[dict], contents: dict[str,
         findings.append({
             "headline": headline,
             "detail": detail,
-            "action": _clean(raw.get("action"), 200),
+            "action": action,
             "severity": raw.get("severity") if raw.get("severity") in ("high", "medium", "low") else "medium",
             "category_ids": [c for c in raw.get("category_ids") or [] if c in categories],
             "refs": [
@@ -211,6 +239,12 @@ def from_agent(reply: dict, result: dict, units: list[dict], contents: dict[str,
                 "fix": _clean(raw.get("fix"), 200),
                 "evidence": _evidence(raw.get("evidence"), units_by_key, contents),
             }
+    verification = dict(reply.get("verification") or {})
+    verification.update({
+        "numbers": True,
+        "quotes": any(f["evidence"] for f in findings),
+        "audit": verification.get("model_verifier") == "passed",
+    })
     return {
         "title": _clean(reply.get("title"), 200),
         "findings": findings,
@@ -223,8 +257,7 @@ def from_agent(reply: dict, result: dict, units: list[dict], contents: dict[str,
         ],
         "category_insights": insights,
         "dropped_points": dropped,
-        "verified": True,
-        "verification": reply.get("verification") or {},
+        "verification": verification,
     }
 
 
@@ -261,7 +294,7 @@ def write(run, result: dict, units: list[dict], contents: dict[str, str], spend:
          "evidence": []}
         for p in summary.get("key_points", [])
     ])
-    summary["verified"] = True
+    summary["verification"] = {"numbers": True, "quotes": False, "audit": False}
     return summary
 
 
@@ -282,17 +315,20 @@ def _answer_payload(reply: dict, result: dict, units: list[dict], contents: dict
     numbers = checked_numbers(result, units)
     paragraphs, dropped = [], 0
     for raw in reply.get("answer") or []:
-        text = _clean((raw or {}).get("text"), 1200)
+        text, cited, cited_ids = _inline_citations(
+            _clean((raw or {}).get("text"), 1200), units_by_key, categories
+        )
         if not text:
             continue
         if not verified(_without_ids(text, units), numbers):
             dropped += 1
             continue
-        keys = [str(k) for k in raw.get("unit_keys") or [] if str(k) in units_by_key]
+        keys = [str(k) for k in raw.get("unit_keys") or [] if str(k) in units_by_key] + cited
+        ids = [c for c in raw.get("category_ids") or [] if c in categories] + cited_ids
         paragraphs.append({
             "text": text,
             "unit_ids": [units_by_key[k]["unit_id"] for k in dict.fromkeys(keys)],
-            "category_ids": [c for c in raw.get("category_ids") or [] if c in categories],
+            "category_ids": list(dict.fromkeys(ids)),
             "evidence": _evidence(raw.get("evidence"), units_by_key, contents),
         })
     dropped_reply = reply.get("dropped")

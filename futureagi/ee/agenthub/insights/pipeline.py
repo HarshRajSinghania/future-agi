@@ -9,7 +9,6 @@ finish   -> statistics, executive summary, freeze the taxonomy on first run
 
 from __future__ import annotations
 
-import random
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
@@ -27,7 +26,6 @@ from ee.agenthub.insights.units import load_units
 logger = structlog.get_logger(__name__)
 
 MAX_SAMPLE = 1000
-EXTRACT_BATCH = 24
 EXTRACT_WORKERS = 8
 STAGES = ["queued", "reading", "summarising", "grouping", "measuring", "writing", "done"]
 
@@ -52,6 +50,20 @@ def sample_evenly(population: list[dict], size: int) -> list[dict]:
     if size <= 1:
         return ordered[-1:] if size == 1 else []
     return [ordered[round(i * (len(ordered) - 1) / (size - 1))] for i in range(size)]
+
+
+def sampling_method(population: list[dict], sampled: list[dict], *, drawn: bool, total: int) -> str:
+    """How a run's units were chosen, as "How this report was made" says it:
+    "all" (every unit was read), "uniform" (the server's hash-ordered draw
+    from a scope), "even_over_time" (rows handed over with their times) or
+    "even" (rows handed over without times, spread through the selection)."""
+    if len(sampled) >= total:
+        return "all"
+    if drawn:
+        return "uniform"
+    if all(entry.get("time") for entry in population):
+        return "even_over_time"
+    return "even"
 
 
 def _log_spend(run_id, stage: str, spend: Spend) -> None:
@@ -93,7 +105,8 @@ def create_run(
 
     ``population`` is every row handed over, or a sample the server already
     drew from the scope; then ``population_size`` is how many the scope held.
-    The run reads each unit inside ``scope["window"]``."""
+    The run reads each unit inside ``scope["window"]``. How the units were
+    chosen is kept in ``settings["sampling"]`` (see ``sampling_method``)."""
     InsightRun, InsightUnit = _models()
     seen, unique = set(), []
     for entry in population:
@@ -103,6 +116,7 @@ def create_run(
             unique.append(entry)
     size = max(1, min(MAX_SAMPLE, int(sample_size or config.sample_size)))
     sampled = sample_evenly(unique, size)
+    total = len(unique) if population_size is None else population_size
     taxonomy = config.taxonomy or {}
     with transaction.atomic():
         run = InsightRun.objects.create(
@@ -120,8 +134,11 @@ def create_run(
                 "agent_description": config.agent_description,
                 "instructions": config.instructions,
                 "attributes": clean_attributes(config.attributes),
+                "sampling": sampling_method(
+                    unique, sampled, drawn=population_size is not None, total=total
+                ),
             },
-            population_size=len(unique) if population_size is None else population_size,
+            population_size=total,
             sample_size=len(sampled),
             taxonomy_mode="classify" if taxonomy.get("subs") else "discover",
             models_used={"fast": model_for(FAST), "thinking": model_for(THINKING)},
@@ -526,25 +543,3 @@ def fail(run_id: str, message: str) -> None:
     run.error = message[:2000]
     run.finished_at = timezone.now()
     run.save(update_fields=["status", "error", "finished_at", "updated_at"])
-
-
-def run_inline(run_id: str) -> None:
-    """Run every stage in-process (tests and environments without Temporal)."""
-    try:
-        ready = prepare(run_id)
-        for start in range(0, len(ready), EXTRACT_BATCH):
-            extract_batch(run_id, ready[start : start + EXTRACT_BATCH])
-        retry = retry_failed(run_id)
-        for start in range(0, len(retry), EXTRACT_BATCH):
-            extract_batch(run_id, retry[start : start + EXTRACT_BATCH])
-        organise(run_id)
-        finish(run_id)
-    except Exception as exc:  # pragma: no cover - surfaced on the run
-        logger.exception("insight_run_failed", run_id=run_id)
-        fail(run_id, str(exc) if isinstance(exc, InsightModelError) else "The report could not be completed.")
-        raise
-
-
-def random_preview_sample(population: list[dict], n: int = 3) -> list[dict]:
-    rng = random.Random(7)
-    return rng.sample(population, min(n, len(population)))

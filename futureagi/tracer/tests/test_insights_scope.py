@@ -147,6 +147,8 @@ def test_a_report_over_a_scope_reads_a_sample_the_server_draws(
     assert run.scope["preset"] == "7D" and run.scope["label"] == "Past 7D · 1 filter"
     config = InsightConfig.objects.get(id=response.json()["result"]["config_id"])
     assert config.scope["filters"] == [ERRORED] and config.sample_size == 50
+    # The server's draw is a uniform sample, not one spread over time.
+    assert run.settings["sampling"] == "uniform"
 
 
 @pytest.mark.django_db
@@ -178,6 +180,7 @@ def test_a_report_over_fewer_units_than_its_sample_reads_them_all(
     assert response.status_code == status.HTTP_200_OK, response.json()
     run = InsightRun.objects.get(id=response.json()["result"]["run_id"])
     assert (run.population_size, run.sample_size, picks) == (7, 7, [7])
+    assert run.settings["sampling"] == "all"
 
 
 @pytest.mark.django_db
@@ -201,6 +204,8 @@ def test_rows_handed_over_by_id_still_run_as_they_are(
     assert run.population_size == 12 and run.sample_size == 10
     assert not scope_view["count"] and not scope_view["pick"]
     assert run.scope["preset"] == "fixed"
+    # Rows handed over with their times are spread evenly over time.
+    assert run.settings["sampling"] == "even_over_time"
 
 
 @pytest.mark.django_db

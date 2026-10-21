@@ -27,6 +27,8 @@ from ee.agenthub.insights.llm import InsightModelError, Spend, call_cost
 logger = structlog.get_logger(__name__)
 
 ENGINE_VERSION = "insights-agent/v1"
+# The in-process engine that runs every step when no agent is configured.
+BUILTIN_ENGINE_VERSION = "builtin/v1"
 _TIMEOUTS = {
     "/v1/read-units": 120.0,
     "/v1/name-taxonomy": 240.0,
@@ -51,7 +53,9 @@ def enabled() -> bool:
 
 
 def engine() -> dict:
-    return {"kind": "omega" if enabled() else "builtin", "version": ENGINE_VERSION}
+    if enabled():
+        return {"kind": "omega", "version": ENGINE_VERSION}
+    return {"kind": "builtin", "version": BUILTIN_ENGINE_VERSION}
 
 
 def _post(path: str, payload: dict, spend: Spend | None = None) -> dict:

@@ -61,7 +61,6 @@ class InsightConfig(BaseModel):
     taxonomy = models.JSONField(default=dict, blank=True)
     scope = models.JSONField(default=dict, blank=True)
     sample_size = models.PositiveIntegerField(default=300)
-    schedule = models.CharField(max_length=32, blank=True, default="")
 
     class Meta:
         db_table = "tracer_insight_config"

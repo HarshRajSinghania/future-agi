@@ -12,6 +12,14 @@ from tracer.tests.test_insights_api import RUNS, insight_enabled, new_run_body  
 from tracer.views import insights as views
 
 
+@pytest.fixture(autouse=True)
+def on_cloud(monkeypatch):
+    """Insights is billed on Cloud only."""
+    from ee.usage.deployment import DeploymentMode
+
+    monkeypatch.setattr(DeploymentMode, "is_cloud", staticmethod(lambda: True))
+
+
 @pytest.fixture
 def started(request):
     """Runs the view handed to Temporal (the API tests' autouse stub)."""
@@ -277,3 +285,50 @@ def test_the_estimate_carries_the_credit_fields(monkeypatch, refuse):
     assert out["credits_left"] == 0.0
     assert out["credit_max_sample"] is None
     assert "This report needs about" in out["credit_message"]
+
+
+class Org:
+    id = "org-1"
+
+
+def test_off_cloud_nothing_is_estimated_or_checked_in_credits(monkeypatch, refuse):
+    from ee.usage.deployment import DeploymentMode
+
+    monkeypatch.setattr(DeploymentMode, "is_cloud", staticmethod(lambda: False))
+    checked = refuse(left=0.0)
+    out = views._credit_estimate(Org(), 300, "sessions")
+    assert out == {
+        "credits_estimate": None,
+        "credit_limited": False,
+        "credits_left": None,
+        "credit_max_sample": None,
+        "credit_message": None,
+    }
+    assert views._credits_refused(views.GeneralMethods(), Org(), "ask") is None
+    assert checked == []
+
+
+def test_a_cloud_without_its_billing_config_estimates_nothing(monkeypatch, refuse):
+    from ee.usage.services.config import BillingConfig
+
+    def missing():
+        raise RuntimeError("no billing config")
+
+    monkeypatch.setattr(BillingConfig, "get", staticmethod(missing))
+    checked = refuse(left=0.0)
+    assert views._credit_estimate(Org(), 300, "sessions")["credits_estimate"] is None
+    assert checked == []
+
+
+@pytest.mark.django_db
+def test_off_cloud_a_report_over_any_cap_starts(
+    auth_client, observe_project, started, refuse, monkeypatch
+):
+    from ee.usage.deployment import DeploymentMode
+
+    monkeypatch.setattr(DeploymentMode, "is_cloud", staticmethod(lambda: False))
+    checked = refuse(left=0.0)
+    response = auth_client.post(RUNS, new_run_body(observe_project), format="json")
+    assert response.status_code == 200, response.content
+    assert len(started) == 1
+    assert checked == []

@@ -528,6 +528,7 @@ export default function NewReport({
     total,
     isLowerBound: population?.isLowerBound,
     sampleSize: draft.sampleSize,
+    handedOver: fixed,
   });
   const estimate = Number.isFinite(total)
     ? estimateMinutes(effectiveSample(total, draft.sampleSize))

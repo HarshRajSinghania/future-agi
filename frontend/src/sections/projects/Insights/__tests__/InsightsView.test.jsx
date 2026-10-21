@@ -1122,6 +1122,24 @@ describe("InsightsView", () => {
       expect(screen.getByRole("button", { name: "Run report" })).toBeEnabled();
     });
 
+    it("says nothing of credits where reports aren't billed", async () => {
+      mocks.post.mockImplementation((url, body) =>
+        url === "/tracer/insights/estimate/"
+          ? estimate(body.sample_size, {
+              credits_estimate: null,
+              credits_left: null,
+            })
+          : ok({ run_id: RUN_ID, config_id: CONFIG_ID }),
+      );
+      renderAt("?new=1&lens=failures");
+      const [line] = await screen.findAllByText(
+        /Analysing all 108 sessions · about \d+ minutes/,
+      );
+      expect(line.textContent).not.toMatch(/credit/);
+      expect(screen.queryByText(/credit/i)).toBeNull();
+      expect(screen.getByRole("button", { name: "Run report" })).toBeEnabled();
+    });
+
     it("holds a report the credits don't cover, and offers a sample that fits", async () => {
       mocks.post.mockImplementation((url, body) =>
         url !== "/tracer/insights/estimate/"

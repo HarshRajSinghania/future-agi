@@ -1,16 +1,17 @@
 """
 Insights: LangSmith-Insights-style reports over traces, sessions and users.
 
-GET    /tracer/analyse/configs/                 saved reports of a project
-GET    /tracer/analyse/configs/<id>/            one report: config and its runs
-PATCH  /tracer/analyse/configs/<id>/            rename, or reset the taxonomy
-DELETE /tracer/analyse/configs/<id>/            delete a report
-POST   /tracer/analyse/draft/                   guided setup from a goal + examples
-POST   /tracer/analyse/preview/                 what the extractor reads from 3 units
-POST   /tracer/analyse/runs/                    start a run (new or saved report)
-GET    /tracer/analyse/runs/<id>/               run status and results
-GET    /tracer/analyse/runs/<id>/units/         analysed units, by category
+GET    /tracer/insights/configs/                saved reports of a project
+GET    /tracer/insights/configs/<id>/           one report: config and its runs
+PATCH  /tracer/insights/configs/<id>/           edit a report, or reset its taxonomy
+DELETE /tracer/insights/configs/<id>/           delete a report
+POST   /tracer/insights/draft/                  guided setup from a goal + examples
+POST   /tracer/insights/preview/                what the extractor reads from 3 units
 POST   /tracer/insights/estimate/               how many units a scope holds
+POST   /tracer/insights/runs/                   start a run (new or saved report)
+GET    /tracer/insights/runs/<id>/              run status and results
+GET    /tracer/insights/runs/<id>/units/        analysed units, by category
+POST   /tracer/insights/runs/<id>/ask/          a question about a run's report
 
 A run reads a sample of a scope: the rows of a Traces, Sessions or Users view
 (its filters and window), which the server resolves itself like Instant eval
@@ -383,7 +384,8 @@ class InsightEstimateResultSerializer(serializers.Serializer):
     sample_ids = serializers.ListField(child=serializers.CharField())
     # About what the report costs in AI credits (it is charged its actual
     # model cost once written), and the organization's credit cap against it.
-    credits_estimate = serializers.FloatField()
+    # Null where reports aren't billed (off Cloud).
+    credits_estimate = serializers.FloatField(allow_null=True)
     credit_limited = serializers.BooleanField()
     # Credits left this month, when the cap is what refuses the report.
     credits_left = serializers.FloatField(allow_null=True)
@@ -581,11 +583,13 @@ def _pipeline():
 
 
 def _billing():
+    """Insights' billing, or None where reports aren't billed: off Cloud, or
+    on a Cloud without its billing config."""
     try:
         from ee.agenthub.insights import billing
     except ImportError:
         return None
-    return billing
+    return billing if billing.applies() else None
 
 
 def _charge(org, cost_usd, source: str, source_id) -> None:
@@ -673,16 +677,20 @@ def _step_cost(billing, step: str, sample_size: int | None = None) -> float:
 
 def _credit_estimate(org, sample_size: int, unit: str) -> dict:
     """The estimate's credit fields: about what a report over
-    ``sample_size`` units costs, and whether the credit cap lets it start."""
+    ``sample_size`` units costs, and whether the credit cap lets it start.
+    The estimate is None where reports aren't billed."""
     out = {
-        "credits_estimate": 0.0,
+        "credits_estimate": None,
         "credit_limited": False,
         "credits_left": None,
         "credit_max_sample": None,
         "credit_message": None,
     }
     billing = _billing()
-    if billing is None or sample_size <= 0:
+    if billing is None:
+        return out
+    out["credits_estimate"] = 0.0
+    if sample_size <= 0:
         return out
     cost = billing.run_cost(sample_size)
     out["credits_estimate"] = billing.credits(cost)

@@ -253,10 +253,11 @@ describe("sampleSentence", () => {
     ).toBe("Analysing all 108 sessions");
   });
 
-  it("says how large the sample is", () => {
+  it("says how large the sample is and how it is drawn", () => {
+    // A scope's sample is the server's uniform random draw.
     expect(
       sampleSentence({ unit: "traces", total: 12345, sampleSize: 300 }),
-    ).toBe("Analysing an even sample of 300 of 12,345 traces");
+    ).toBe("Analysing a random sample of 300 of 12,345 traces");
     expect(
       sampleSentence({
         unit: "users",
@@ -264,7 +265,16 @@ describe("sampleSentence", () => {
         isLowerBound: true,
         sampleSize: 300,
       }),
-    ).toBe("Analysing an even sample of 300 of 1,000+ users");
+    ).toBe("Analysing a random sample of 300 of 1,000+ users");
+    // Rows handed over are sampled evenly across them.
+    expect(
+      sampleSentence({
+        unit: "traces",
+        total: 1200,
+        sampleSize: 300,
+        handedOver: true,
+      }),
+    ).toBe("Analysing an even sample of 300 of 1,200 traces");
   });
 });
 

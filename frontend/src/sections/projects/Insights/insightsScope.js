@@ -266,17 +266,25 @@ export function buildRerunPayload({
 }
 
 /**
- * "Analysing all 108 sessions" / "Analysing an even sample of 300 of 12,345
- * sessions".
+ * "Analysing all 108 sessions" / "Analysing a random sample of 300 of 12,345
+ * sessions". The server draws a scope's sample uniformly at random; rows
+ * handed over (`handedOver`) are sampled evenly across them.
  */
-export function sampleSentence({ unit, total, isLowerBound, sampleSize }) {
+export function sampleSentence({
+  unit,
+  total,
+  isLowerBound,
+  sampleSize,
+  handedOver = false,
+}) {
   if (!Number.isFinite(total) || total <= 0) return "";
   const word = unitWord(unit, total);
   const totalText = `${formatCount(total)}${isLowerBound ? "+" : ""}`;
   if (total <= sampleSize && !isLowerBound)
     return `Analysing all ${totalText} ${word}`;
   const size = Math.min(sampleSize, total);
-  return `Analysing an even sample of ${formatCount(size)} of ${totalText} ${word}`;
+  const kind = handedOver ? "an even sample" : "a random sample";
+  return `Analysing ${kind} of ${formatCount(size)} of ${totalText} ${word}`;
 }
 
 export const effectiveSample = (total, sampleSize) =>

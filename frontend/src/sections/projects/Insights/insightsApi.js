@@ -8,7 +8,6 @@ import {
 } from "src/sections/projects/requestErrors";
 import { collectPopulation } from "src/sections/projects/observePopulation";
 import { isRunActive } from "./insightsLenses";
-import { isFixedScope } from "./insightsScope";
 
 // Reads and writes of the Insights endpoints. Every response is
 // {status, result}; the hooks hand back `result`.
@@ -163,12 +162,16 @@ export function insightsErrorMessage(
   if (credits) return credits.message;
   const status = errorStatus(error);
   const code = error?.code;
-  if (status === 402 || code === "CAPABILITY_DENIED")
-    return "Insights isn't available on this plan.";
   const message = messageOf(error).trim();
-  const userFacing = status === 429 || USER_FACING_CODES.has(code);
-  if (userFacing && message && message.length <= 240 && !/[\r\n]/.test(message))
-    return message;
+  const shown = message && message.length <= 240 && !/[\r\n]/.test(message);
+  // Only the Turing denial (code CAPABILITY_DENIED: Insights is on the plan,
+  // the Turing models it runs on aren't) says why. Licence refusals
+  // (LICENSE_MISSING and the like) name a feature key, so they read the same.
+  if (status === 402 || code === "CAPABILITY_DENIED")
+    return code === "CAPABILITY_DENIED" && shown
+      ? message
+      : "Insights isn't available on this plan.";
+  if (shown && (status === 429 || USER_FACING_CODES.has(code))) return message;
   return actionErrorMessage(error, { fallback, retry });
 }
 
@@ -275,14 +278,9 @@ export function useRunUnit(
  * Resolves to the response's result ({answer, follow_ups}).
  */
 export async function askRun(runId, body, signal) {
-  const endpoint = endpoints.project.insightsRunAsk;
-  if (typeof endpoint !== "function") {
-    const error = new Error("Asking about a report isn't available yet.");
-    error.code = "feature_unavailable";
-    error.statusCode = 503;
-    throw error;
-  }
-  return result(await axios.post(endpoint(runId), body, { signal }));
+  return result(
+    await axios.post(endpoints.project.insightsRunAsk(runId), body, { signal }),
+  );
 }
 
 /**
@@ -425,10 +423,3 @@ export function recallPopulation(configId) {
     return null;
   }
 }
-
-/**
- * Whether a saved scope can be collected again from its filters. A scope
- * without filters ("All") reads the whole project; only a handed-over set
- * cannot be rebuilt.
- */
-export const canRecollect = (scope) => !isFixedScope(scope);

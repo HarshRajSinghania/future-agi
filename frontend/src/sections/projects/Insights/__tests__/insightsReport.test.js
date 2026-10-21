@@ -8,9 +8,11 @@ import { formatDayRange } from "../insightsFormat";
 import { unitsGridLink } from "../insightsLinks";
 import {
   askHistory,
+  engineLabel,
   normalizeAnswer,
   readAskThread,
   reportMetaParts,
+  samplingText,
   suggestedQuestions,
   writeAskThread,
 } from "../insightsReport";
@@ -69,6 +71,52 @@ describe("reportMetaParts", () => {
       "108 users sampled of 108",
       "40 analysed (6 not relevant to the question)",
     ]);
+  });
+});
+
+describe("samplingText", () => {
+  const sampled = (sampling, extra = {}) => ({
+    unit: "sessions",
+    sample_size: 300,
+    population_size: 12345,
+    settings: sampling ? { sampling } : {},
+    ...extra,
+  });
+
+  it("names how the run chose what it read", () => {
+    // A scope's sample is the server's uniform draw, not spread over time.
+    expect(samplingText(sampled("uniform"))).toBe(
+      "300 of 12,345 sessions, a uniform random sample",
+    );
+    expect(samplingText(sampled("even_over_time"))).toBe(
+      "300 of 12,345 sessions, spread evenly over time",
+    );
+    expect(samplingText(sampled("even"))).toBe(
+      "300 of 12,345 sessions, spread evenly through the selection",
+    );
+  });
+
+  it("says when everything was read, and claims no method it wasn't told", () => {
+    expect(
+      samplingText(sampled("all", { sample_size: 108, population_size: 108 })),
+    ).toBe("All 108 sessions");
+    expect(
+      samplingText(sampled(null, { sample_size: 7, population_size: 7 })),
+    ).toBe("All 7 sessions");
+    expect(samplingText(sampled(null))).toBe("300 of 12,345 sessions");
+  });
+});
+
+describe("engineLabel", () => {
+  it("tells the built-in engine from the Insights agent", () => {
+    expect(engineLabel({ kind: "builtin", version: "builtin/v1" })).toBe(
+      "Built-in engine (builtin/v1)",
+    );
+    expect(engineLabel({ kind: "omega", version: "insights-agent/v1" })).toBe(
+      "Insights agent (insights-agent/v1)",
+    );
+    expect(engineLabel({ kind: "omega" })).toBe("Insights agent");
+    expect(engineLabel(undefined)).toBeNull();
   });
 });
 

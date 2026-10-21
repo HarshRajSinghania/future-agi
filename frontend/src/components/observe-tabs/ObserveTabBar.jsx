@@ -253,7 +253,8 @@ const ObserveTabBar = ({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === "a" || e.key === "A") {
-        // Already on Insights: keep its mode and any proposal under review.
+        // Already on Insights: keep its URL (the report, run or new report
+        // open there).
         if (
           activeTab !== "insights" &&
           visibleFixedTabs.some((t) => t.key === "insights")

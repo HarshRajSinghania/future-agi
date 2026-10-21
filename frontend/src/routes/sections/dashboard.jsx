@@ -1167,11 +1167,6 @@ export const dashboardRoutes = (
             </CapabilityGate>
           ),
         },
-        // Insights was called Analyse; keep old links working.
-        {
-          path: "analyse",
-          element: <Navigate to="../insights" relative="path" replace />,
-        },
       ],
     },
     {

@@ -2,7 +2,6 @@ import React from "react";
 import PropTypes from "prop-types";
 import { Box, Button, Collapse, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { unitWord } from "src/sections/projects/observePopulation";
 import {
   formatCost,
   formatCount,
@@ -11,6 +10,7 @@ import {
   humanizeKey,
 } from "./insightsFormat";
 import { lensFor } from "./insightsLenses";
+import { engineLabel, samplingText } from "./insightsReport";
 
 const STATUS_LABEL = {
   completed: "Completed",
@@ -23,9 +23,7 @@ function rowsFor(run, config) {
   const settings = run.settings || {};
   const result = run.result || {};
   const models = run.models_used || {};
-  const engine = result.engine;
   const lens = settings.lens || config?.lens;
-  const unit = run.unit;
   const analysed = result.totals?.count ?? run.analysed_count;
   const excluded = Number(result.excluded) || 0;
   const failed = Number(result.failed) || 0;
@@ -44,13 +42,7 @@ function rowsFor(run, config) {
         .join(" "),
     ],
     ["Scope", run.scope?.label],
-    [
-      "Sampled",
-      `${formatCount(run.sample_size)} of ${formatCount(run.population_size)} ${unitWord(
-        unit,
-        run.population_size,
-      )}, spread evenly over time`,
-    ],
+    ["Sampled", samplingText(run)],
     ["Analysed", Number.isFinite(analysed) ? formatCount(analysed) : null],
     [
       "Left out",
@@ -88,12 +80,7 @@ function rowsFor(run, config) {
         )
         .join(", "),
     ],
-    [
-      "Engine",
-      engine?.kind
-        ? `${humanizeKey(engine.kind)}${engine.version ? ` ${engine.version}` : ""}`
-        : null,
-    ],
+    ["Engine", engineLabel(result.engine)],
     [
       "Models",
       [
