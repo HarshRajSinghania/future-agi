@@ -125,8 +125,8 @@ const ObserveToolbar = ({
   filterTarget,
   onApplyCompareExtraFilters,
   // Evaluate menu: Add evaluators opens a prefilled task-create draft;
-  // Ask a question opens the Instant eval drawer; Find patterns hands the
-  // rows in view to a new Insights report.
+  // Ask a question opens the Ask page on this view's date and filters; Find
+  // patterns hands the view to a new Insights report.
   onAddEvals,
   onInstantEval,
   onInsights,
@@ -422,8 +422,8 @@ const ObserveToolbar = ({
             onToggleSimulationCalls={onToggleSimulationCalls}
           />
 
-          {/* Evaluate: ask Jev a question about every row in view, find
-              patterns with Insights, or run saved evaluators. */}
+          {/* Evaluate: ask Jev a question about a sample or every row in
+              view, find patterns with Insights, or run saved evaluators. */}
           <EvaluateMenu
             unit={askUnit}
             onAsk={canAsk ? onInstantEval : undefined}

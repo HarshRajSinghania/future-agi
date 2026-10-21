@@ -34,6 +34,7 @@ import {
 } from "src/sections/projects/observeScope";
 import {
   AskBusy,
+  AskKeyMissing,
   AskNoCredits,
   AskRefused,
   AskSampleTooLarge,
@@ -46,7 +47,7 @@ import { answerLabels } from "../instantEvalPayloads";
 import AskComposer from "./AskComposer";
 import AskRail from "./AskRail";
 import AskRunView from "./AskRunView";
-import { useAskRun } from "./useAskRun";
+import { RERUNNABLE_STATES, useAskRun } from "./useAskRun";
 import { rerunScope, seedScope } from "./askScope";
 import {
   ASK_RUN_PARAM,
@@ -83,6 +84,8 @@ function RunPane({
   onFinished,
   onUnitKnown,
   rerunning,
+  runAgainConfirm,
+  onCancelRunAgain,
 }) {
   const run = useAskRun({
     projectId,
@@ -113,12 +116,14 @@ function RunPane({
       scope={launch ? { label: launch.label, filters: launch.filters } : null}
       creating={!taskId}
       onRunAgain={
-        (run.status === "done" || run.status === "cancelled") &&
+        RERUNNABLE_STATES.has(run.status) &&
         run.questions.every((q) => q.configId)
-          ? () => onRunAgain(run)
+          ? (options) => onRunAgain(run, options)
           : undefined
       }
       rerunning={rerunning}
+      runAgainConfirm={runAgainConfirm}
+      onCancelRunAgain={onCancelRunAgain}
     />
   );
 }
@@ -132,6 +137,8 @@ RunPane.propTypes = {
   onFinished: PropTypes.func,
   onUnitKnown: PropTypes.func,
   rerunning: PropTypes.bool,
+  runAgainConfirm: PropTypes.object,
+  onCancelRunAgain: PropTypes.func,
 };
 
 function Welcome({ onNew }) {
@@ -142,12 +149,13 @@ function Welcome({ onNew }) {
         component="h1"
         sx={{ fontSize: 22, lineHeight: "30px", fontWeight: 600 }}
       >
-        Ask Jev a question about every row
+        Ask Jev a question about each row
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
         Open Traces, Sessions or Users, narrow the view to the rows you care
         about, then choose Evaluate → Ask a question. Jev answers for each row
-        in seconds, and the answers land on a timeline where the patterns show.
+        it reads, a sample of the view or every row. The first answers come in
+        seconds and land on a timeline where the patterns show.
       </Typography>
       <Stack direction="row" spacing={1} sx={{ mt: 2.5 }}>
         <Button variant="contained" onClick={() => onNew("sessions")}>
@@ -197,6 +205,10 @@ export default function AskPage() {
   const [pending, setPending] = useState(null);
   const [startError, setStartError] = useState(null);
   const [rerunning, setRerunning] = useState(false);
+  // A Run again the server holds back until its credits are confirmed:
+  // {taskId, rows, credits}, confirmed or dropped on that run's page.
+  const [rerunConfirm, setRerunConfirm] = useState(null);
+  useEffect(() => setRerunConfirm(null), [runId]);
 
   const railFits = useMediaQuery(`(min-width:${RAIL_FITS_WIDTH}px)`, {
     noSsr: true,
@@ -302,6 +314,7 @@ export default function AskPage() {
     window,
     datePreset,
     label,
+    onNeedsConfirm,
   }) => {
     const startedAt = new Date().toISOString();
     const shown = {
@@ -347,12 +360,25 @@ export default function AskPage() {
       );
     } catch (error) {
       setPending(null);
+      if (onNeedsConfirm && error?.name === "AskNeedsConfirm") {
+        onNeedsConfirm(error);
+        return;
+      }
       setStartError(
         error instanceof AskNoCredits ? (
           <>
             {error.message}{" "}
             <Link component={RouterLink} to={paths.dashboard.settings.billing}>
               Open billing
+            </Link>
+          </>
+        ) : error instanceof AskKeyMissing ? (
+          // The questions run on Jev and the organization's TypeSafe key
+          // isn't saved: the server's words, and where to add it.
+          <>
+            {error.message}{" "}
+            <Link component={RouterLink} to={error.settingsPath}>
+              Open AI Providers
             </Link>
           </>
         ) : error instanceof AskBusy ||
@@ -373,13 +399,16 @@ export default function AskPage() {
 
   // The same questions over the same filters and sample (the same
   // hash-ordered rows), a date preset re-anchored to now, or the same rows
-  // handed over.
-  const runAgain = async (run) => {
+  // handed over. A window moved to now can hold more rows than were
+  // confirmed (or than whoever started the run confirmed), so a run past
+  // the confirm size restates its credits here first, as the composer does.
+  const runAgain = async (run, { confirm = false } = {}) => {
     const asked = run.summary?.scope || {};
     const again = rerunScope(asked, {
       label: launches[runId]?.label,
       window: run.window,
     });
+    setRerunConfirm(null);
     setRerunning(true);
     try {
       await launchRun({
@@ -388,10 +417,16 @@ export default function AskPage() {
         search: asked.search || undefined,
         ids: asked.ids || undefined,
         sampleSize: asked.sample_size ?? null,
-        confirm: true,
+        confirm,
         window: again.window,
         datePreset: again.datePreset,
         label: again.label,
+        onNeedsConfirm: (held) =>
+          setRerunConfirm({
+            taskId: run.taskId,
+            rows: held.rows,
+            credits: held.credits,
+          }),
       });
     } finally {
       setRerunning(false);
@@ -478,6 +513,10 @@ export default function AskPage() {
         onFinished={refreshHistory}
         onUnitKnown={syncRunUnit}
         rerunning={rerunning}
+        runAgainConfirm={
+          rerunConfirm?.taskId === runId ? rerunConfirm : undefined
+        }
+        onCancelRunAgain={() => setRerunConfirm(null)}
       />
     );
   } else if (!latest.isLoading && !latest.runs.length) {

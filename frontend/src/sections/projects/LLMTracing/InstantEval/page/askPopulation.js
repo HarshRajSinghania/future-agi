@@ -13,11 +13,12 @@ import { estimateAsk } from "../useInstantEval";
 
 // What a new question is about, as the server counts it: the view's rows
 // (its filters and date window), or exactly the rows handed over by id.
-// The count comes with what reading a sample or every row would cost.
+// The count comes with what reading a sample or every row would cost: in
+// credits where answers are billed (the server's per-answer rate), else in
+// rows and time only.
 
-// Ids a hand-over may name; past this a view hands over its filters instead.
+// Ids one hand-over names, into this page or from it to Insights.
 export const MAX_HANDOVER = 5000;
-const CREDITS_PER_ANSWER = 0.06;
 // Edits to the date or filters settle this long before the count is asked
 // for again, so picking several values reads once.
 export const SCOPE_SETTLE_MS = 300;
@@ -110,8 +111,18 @@ export function offeredSizes(estimate, questions = 1) {
 }
 
 /**
- * One choice's cost for `questions` questions: rows read, credits, time,
- * whether it needs a confirm and whether the server would take it at all.
+ * What one answer costs, in credits, as the server bills it; null where
+ * answers aren't billed (self-hosted, or no billing set up).
+ */
+export const creditsPerAnswer = (estimate) =>
+  Number.isFinite(estimate?.credits_per_answer)
+    ? estimate.credits_per_answer
+    : null;
+
+/**
+ * One choice's cost for `questions` questions: rows read, credits (null when
+ * not billed), time, whether it needs a confirm and whether the server would
+ * take it at all.
  */
 export function choiceCost(estimate, size, questions = 1) {
   if (!estimate) return null;
@@ -133,14 +144,16 @@ export function choiceCost(estimate, size, questions = 1) {
   }
   const rows = choice.rows_to_read;
   const q = Math.max(1, questions);
-  const credits = rows * q * CREDITS_PER_ANSWER;
+  const rate = creditsPerAnswer(estimate);
+  const credits = rate == null ? null : rows * q * rate;
   // The credits left this month (null: no cap this view can reach), and
   // whether billing stops every run (a paused budget, an unpaid invoice).
   const check = estimate.credit_check || {};
   const creditsLeft = check.credits_left ?? null;
   const blocked = Boolean(check.blocked);
   const creditLimited =
-    blocked || (creditsLeft != null && credits > creditsLeft + 1e-9);
+    blocked ||
+    (credits != null && creditsLeft != null && credits > creditsLeft + 1e-9);
   return {
     size,
     rows,
@@ -153,13 +166,11 @@ export function choiceCost(estimate, size, questions = 1) {
     blocked,
     // The largest sample the credits left pay for, in the view's unit.
     fitsSize:
-      creditsLeft == null || blocked
+      creditsLeft == null || blocked || !rate
         ? null
         : Math.min(
             estimate.population,
-            Math.floor(
-              (creditsLeft + 1e-9) / (q * CREDITS_PER_ANSWER * perUnit),
-            ),
+            Math.floor((creditsLeft + 1e-9) / (q * rate * perUnit)),
           ),
     allowed: rows > 0 && rows <= estimate.max_rows && !creditLimited,
   };

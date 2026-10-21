@@ -67,7 +67,9 @@ describe("ObserveToolbar Evaluate menu", () => {
       "Add evaluators",
     ]);
     expect(
-      screen.getByText(`Jev answers it for every ${noun} in view, in seconds.`),
+      screen.getByText(
+        `Jev answers it for a sample or every ${noun} in view; the first answers come in seconds.`,
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(`Start an Insights report on these ${plural}.`),
@@ -89,7 +91,9 @@ describe("ObserveToolbar Evaluate menu", () => {
     openMenu();
     expect(menuTitles()).toEqual(["Ask a question", "Add evaluators"]);
     expect(
-      screen.getByText("Jev answers it for every span in view, in seconds."),
+      screen.getByText(
+        "Jev answers it for a sample or every span in view; the first answers come in seconds.",
+      ),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: /Ask a question/ }));
     expect(props.onInstantEval).toHaveBeenCalledTimes(1);

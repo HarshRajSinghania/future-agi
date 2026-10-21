@@ -8,7 +8,12 @@ import {
   summaryWindow,
   toRecord,
 } from "../useAskRun";
-import { rowsGridLink, sourceViewLink, tabForUnit } from "../askLinks";
+import {
+  GRID_LINK_MAX,
+  rowsGridLink,
+  sourceViewLink,
+  tabForUnit,
+} from "../askLinks";
 import {
   dayGroup,
   facetLine,
@@ -122,7 +127,10 @@ describe("a run read from its summary", () => {
     expect(runStatus({ status: "paused" })).toBe("paused");
     expect(runStatus({ status: "cancelled" })).toBe("cancelled");
     expect(runStatus({ status: "completed" })).toBe("done");
-    expect(runStatus({ status: "failed" })).toBe("done");
+    // Failed before a row was read; one that stopped partway is stalled.
+    expect(runStatus({ status: "failed", total: 0, pending: 0 })).toBe(
+      "failed",
+    );
     expect(runStatus({ status: "stalled" })).toBe("stalled");
   });
 
@@ -303,6 +311,7 @@ describe("how much of a view to read", () => {
     confirm_rows: 5000,
     max_rows: 100000,
     default_sample_size: 1000,
+    credits_per_answer: 0.06,
     choices: [
       { sample_size: 500, rows_to_read: 500, seconds_estimate: 110 },
       { sample_size: 1000, rows_to_read: 1000, seconds_estimate: 210 },
@@ -366,6 +375,40 @@ describe("how much of a view to read", () => {
     expect(all).toMatchObject({ rows: 104233, needsConfirm: true });
     expect(all.allowed).toBe(false);
     expect(durationWords(20857)).toBe("about 5 h 48 min");
+  });
+
+  it("costs credits at the server's rate, and none where nothing is billed", () => {
+    expect(
+      choiceCost({ ...estimate, credits_per_answer: 0.05 }, 1000, 2).credits,
+    ).toBeCloseTo(100);
+    // Self-hosted, or no billing set up: rows and time only.
+    const unbilled = {
+      ...estimate,
+      credits_per_answer: null,
+      credit_check: { allowed: true, credits_left: null, blocked: false },
+    };
+    expect(choiceCost(unbilled, 1000, 2)).toEqual({
+      size: 1000,
+      rows: 1000,
+      credits: null,
+      seconds: 410,
+      needsConfirm: false,
+      creditLimited: false,
+      creditsLeft: null,
+      blocked: false,
+      fitsSize: null,
+      allowed: true,
+    });
+    // Reading every row still needs a confirm past the confirm size.
+    expect(choiceCost(unbilled, null, 1)).toMatchObject({
+      credits: null,
+      needsConfirm: true,
+    });
+    // Never a client-side price: no rate, no credits.
+    expect(
+      choiceCost({ ...estimate, credits_per_answer: undefined }, 1000, 1)
+        .credits,
+    ).toBeNull();
   });
 
   it("prints credits whole from 10 up and to a tenth below", () => {
@@ -458,6 +501,14 @@ describe("links keep the tab bar on the view the rows came from", () => {
     // Users have no list filter by id.
     expect(rowsGridLink("p1", "users", rows)).toBeNull();
     expect(rowsGridLink("p1", "sessions", [])).toBeNull();
+    // More rows than one link names: refused, never cut short.
+    const many = Array.from({ length: GRID_LINK_MAX + 1 }, (_, n) =>
+      record(`s${n}`, "2026-10-13T14:00:00Z"),
+    );
+    expect(rowsGridLink("p1", "sessions", many)).toBeNull();
+    expect(
+      rowsGridLink("p1", "sessions", many.slice(0, GRID_LINK_MAX)),
+    ).toContain("llm-tracing");
   });
 });
 

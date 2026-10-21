@@ -2,19 +2,27 @@ import React, { useState } from "react";
 import PropTypes from "prop-types";
 import { Alert, Button, Stack } from "@mui/material";
 import Iconify from "src/components/iconify";
+import { useSafeAuthContext } from "src/auth/hooks/use-auth-context";
 import { getSafeActionErrorMessage } from "src/utils/errorUtils";
-import { createContinuousTask, findContinuousTask } from "../useInstantEval";
+import {
+  LiveTaskUnchecked,
+  createContinuousTask,
+  findContinuousTask,
+} from "../useInstantEval";
 import { unitMeta } from "../instantEvalUnits";
 
 // Turns a trace (or span) run's questions into a live task: every new trace
-// that matches the run's filters is answered as it arrives.
+// that matches the run's filters is answered as it arrives. `billed` says
+// whether each answer costs credits here (on Cloud).
 export default function KeepAnswering({
   projectId,
   run,
   navigate,
   unit = "traces",
+  billed = false,
 }) {
   const noun = unitMeta(unit);
+  const { user } = useSafeAuthContext();
   const [state, setState] = useState({ step: "idle" });
   const start = async () => {
     setState({ step: "working" });
@@ -22,6 +30,9 @@ export default function KeepAnswering({
       const existing = await findContinuousTask({
         projectId,
         items: run.items,
+        scopeFilters: run.scopeFilters || [],
+        unit,
+        userId: user?.id,
       });
       if (existing) {
         setState({ step: "done", taskId: existing.id, existed: true });
@@ -37,10 +48,14 @@ export default function KeepAnswering({
     } catch (error) {
       setState({
         step: "error",
-        error: getSafeActionErrorMessage(
-          error,
-          "The live task could not be created.",
-        ),
+        // Nothing was started when the check couldn't be made; it says why.
+        error:
+          error instanceof LiveTaskUnchecked
+            ? error.message
+            : getSafeActionErrorMessage(
+                error,
+                "The live task could not be created.",
+              ),
       });
     }
   };
@@ -59,7 +74,7 @@ export default function KeepAnswering({
         }
       >
         {state.existed
-          ? `These questions are already being answered for new ${noun.plural}.`
+          ? `These questions are already being answered for new ${noun.plural} that match this view.`
           : `Live. New ${noun.plural} that match this view will be answered as they arrive.`}
       </Alert>
     );
@@ -93,9 +108,9 @@ export default function KeepAnswering({
         {run.items.length > 1
           ? `these ${run.items.length} questions`
           : "this question"}{" "}
-        for every new {noun.noun} that matches this view&apos;s filters. Every
-        answer is billed as one eval run; TypeSafe bills its tokens to your own
-        key.
+        for every new {noun.noun} that matches this view&apos;s filters.
+        {billed ? " Every answer is billed as one eval run;" : ""} TypeSafe
+        bills its tokens to your own key.
       </Alert>
     );
   return (
@@ -127,4 +142,5 @@ KeepAnswering.propTypes = {
   run: PropTypes.object.isRequired,
   navigate: PropTypes.func.isRequired,
   unit: PropTypes.oneOf(["traces", "spans"]),
+  billed: PropTypes.bool,
 };

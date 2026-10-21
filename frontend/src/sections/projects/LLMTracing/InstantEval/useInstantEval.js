@@ -2,6 +2,10 @@ import { useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import axios, { endpoints } from "src/utils/axios";
 import {
+  FIELD_TYPE_ALIASES,
+  LIST_FILTER_OPS,
+} from "src/api/contracts/filter-contract.generated";
+import {
   ANSWER_TYPES,
   INSTANT_EVAL_MODEL,
   YES_NO_LABELS,
@@ -10,15 +14,7 @@ import {
   buildTemplatePayload,
   cleanDefinitions,
 } from "./instantEvalPayloads";
-import {
-  endUserIds,
-  idsTaskPayload,
-  normalizeReads,
-  sessionIdsFromUserSessions,
-  splitScopeFilters,
-  unitMeta,
-  userSessionsRequest,
-} from "./instantEvalUnits";
+import { normalizeReads, splitScopeFilters } from "./instantEvalUnits";
 import { ERROR_ANSWER } from "./instantEvalAnswers";
 
 export { ERROR_ANSWER };
@@ -171,93 +167,6 @@ export async function resolveEvaluators({ projectId, questions, reads, unit }) {
 }
 
 /**
- * The rows a run names, by id. Traces, spans and sessions are the rows
- * themselves; a user question asks about each user's latest sessions in the
- * view's window. `items` are the rows the page shows from the start: for a
- * user question, the users who had a session.
- */
-async function askedRows({ projectId, unit, items, filters, handedOver }) {
-  const noun = unitMeta(unit).plural;
-  const ids = items.map((item) => item.id);
-  if (unit !== "users") {
-    if (!ids.length)
-      return { empty: `There are no ${noun} in this view to ask about.` };
-    return { ids, items };
-  }
-  const userIds = endUserIds(ids);
-  if (!userIds.length)
-    return { empty: "There are no users in this view to ask about." };
-  const response = await axios.post(
-    endpoints.project.instantEvalUserSessions(),
-    userSessionsRequest({
-      projectId,
-      userIds,
-      // A hand-off names its users; their latest sessions are read whenever
-      // they happened.
-      filters: handedOver ? [] : filters,
-    }),
-  );
-  const sessions = result(response)?.sessions || [];
-  const sessionIds = sessionIdsFromUserSessions(result(response));
-  if (!sessionIds.length)
-    return { empty: "None of these users had a session in this window." };
-  const withSessions = new Set(sessions.map((session) => session.end_user_id));
-  return {
-    ids: sessionIds,
-    items: items.filter((item) => withSessions.has(item.id)),
-    sessions: sessionIds.length,
-  };
-}
-
-/**
- * Ask Jev the questions about these rows: save each question as a Jev
- * evaluator (or reuse the saved one) while the rows are named, then start one
- * eval task over exactly those ids, which the backend answers on its fast
- * path. Returns the task, the rows the page shows, or `empty` when there is
- * nothing to ask about.
- */
-export async function startAsk({
-  projectId,
-  unit,
-  questions,
-  existingItems,
-  reads,
-  items,
-  filters = [],
-  handedOver = false,
-}) {
-  const runReads = normalizeReads(unit, reads || existingItems?.[0]?.reads);
-  const evaluators = existingItems
-    ? Promise.resolve(existingItems)
-    : resolveEvaluators({ projectId, questions, reads: runReads, unit });
-  // Saving doesn't depend on the rows; a failure surfaces below.
-  evaluators.catch(() => {});
-  const target = await askedRows({
-    projectId,
-    unit,
-    items,
-    filters,
-    handedOver,
-  });
-  if (target.empty) return { empty: target.empty };
-  const saved = await evaluators;
-  if (saved.some((item) => !item.configId))
-    throw new Error("The question could not be saved as an evaluator.");
-  const response = await axios.post(
-    endpoints.project.createEvalTask(),
-    idsTaskPayload({ projectId, items: saved, unit, ids: target.ids }),
-  );
-  const taskId = result(response)?.id;
-  if (!taskId) throw new Error("The run could not be started.");
-  return {
-    taskId,
-    questions: saved,
-    items: target.items,
-    sessions: target.sessions ?? null,
-  };
-}
-
-/**
  * The server's answer to "how many rows does this view hold, and what would
  * reading a sample or all of it cost": one count with the grid's own filters.
  */
@@ -356,6 +265,27 @@ export class AskRefused extends Error {
   }
 }
 
+// Jev runs on the organization's own TypeSafe key; key problems point to the
+// AI Providers settings where it is added or replaced.
+export const AI_PROVIDERS_SETTINGS_PATH = "/dashboard/settings/ai-providers";
+export const JEV_KEY_NEEDED =
+  "Jev runs on your own TypeSafe key. Add it in Settings → AI Providers to start.";
+const JEV_KEY_MISSING = "JEV_KEY_MISSING";
+
+/**
+ * A start, read more, resume or retry refused because the questions run on
+ * Jev and the organization has no TypeSafe key saved: every row would fail
+ * on it. The server names the same settings page the app links to.
+ */
+export class AskKeyMissing extends Error {
+  constructor(detail) {
+    super(detail?.message || JEV_KEY_NEEDED);
+    this.name = "AskKeyMissing";
+    this.code = JEV_KEY_MISSING;
+    this.settingsPath = AI_PROVIDERS_SETTINGS_PATH;
+  }
+}
+
 // The app's axios rejects with the response's error envelope and its
 // `statusCode`; a raw Axios error carries them under `response`.
 const errorStatus = (error) => error?.response?.status ?? error?.statusCode;
@@ -373,6 +303,11 @@ export function askError(error) {
     return new AskNeedsConfirm(detail);
   if ((status === 402 || status === 403) && detail.credits_estimate != null)
     return new AskNoCredits(detail);
+  if (
+    status === 400 &&
+    [detail.error_code, detail.code, error?.code].includes(JEV_KEY_MISSING)
+  )
+    return new AskKeyMissing(detail);
   if (
     status === 400 &&
     (detail.code === "instant_eval_sample_too_large" ||
@@ -478,17 +413,133 @@ export async function createContinuousTask({
   return result(response)?.id;
 }
 
-// One live task per set of questions: re-creating it would answer every new
-// trace twice and bill twice.
+/**
+ * Whether a live task already answers these questions couldn't be told, so
+ * none was started: starting one blind could answer every new trace twice.
+ */
+export class LiveTaskUnchecked extends Error {
+  constructor(
+    message = "Couldn't check whether these questions are already answered live, so nothing was started. Try again in a moment.",
+  ) {
+    super(message);
+    this.name = "LiveTaskUnchecked";
+  }
+}
+
+// The task list names a task's evaluators by config name, which is unique in
+// a project. The names are read fresh by config id, so a question shown
+// without its name, or renamed since, still finds its task.
+async function liveTaskNames(projectId, items) {
+  const ids = items.map((item) => item.configId);
+  if (!ids.length || ids.some((id) => !id)) throw new LiveTaskUnchecked();
+  const configs = await listProjectConfigs(projectId);
+  const byId = new Map(configs.map((config) => [String(config.id), config]));
+  const names = ids.map((id) => byId.get(String(id))?.name);
+  if (names.some((name) => !name))
+    throw new LiveTaskUnchecked(
+      "One of these questions' evaluators is gone, so it can't be answered live.",
+    );
+  return new Set(names);
+}
+
+const CANONICAL_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const isPlainObject = (value) =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+// A filter as the server saves it (FilterItemField and
+// bind_my_annotations_principal): its type lowercased and de-aliased, a JSON
+// span attribute matched against an object read as a map, comma-joined ids
+// pasted into a text list split into one member per id, and "My annotations"
+// bound to the user who saved it.
+function savedFilter(item, userId) {
+  const config = item?.filter_config;
+  if (!isPlainObject(config)) return item;
+  const raw = String(config.filter_type ?? "").toLowerCase();
+  const type =
+    config.col_type === "SPAN_ATTRIBUTE" &&
+    raw === "json" &&
+    isPlainObject(config.filter_value)
+      ? "map"
+      : FIELD_TYPE_ALIASES[raw] || raw;
+  const saved = { ...config, filter_type: type };
+  if (
+    config.attribute_value_types == null &&
+    LIST_FILTER_OPS.includes(config.filter_op) &&
+    Array.isArray(config.filter_value) &&
+    type === "text"
+  ) {
+    saved.filter_value = config.filter_value.flatMap((member) => {
+      if (typeof member !== "string" || !member.includes(",")) return [member];
+      const ids = member
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      return ids.length && ids.every((id) => CANONICAL_UUID.test(id))
+        ? ids
+        : [member];
+    });
+  }
+  if (item.column_id === "my_annotations") saved.user_id = String(userId);
+  return { ...item, filter_config: saved };
+}
+
+// A view's filters as one comparable key: in any order, with keys sorted.
+// `userId` binds the browser's filters as the server would for this user; a
+// saved task's are already bound to whoever saved it.
+function filtersKey(filters = [], userId) {
+  const canonical = (value) => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonical(value[key])]),
+    );
+  };
+  return JSON.stringify(
+    (Array.isArray(filters) ? filters : [])
+      .map((item) =>
+        JSON.stringify(
+          canonical(userId === undefined ? item : savedFilter(item, userId)),
+        ),
+      )
+      .sort(),
+  );
+}
+
+// One live task per set of questions and view: re-creating it would answer
+// every new trace twice and bill twice. The same questions over another
+// view's filters are another task.
 // Live tasks are found by name, page by page, so a long run history can't hide
-// an existing one and cause a duplicate.
-export async function findContinuousTask({ projectId, items }) {
-  const wanted = new Set(items.map((item) => item.name).filter(Boolean));
+// an existing one. A list too long to read to its end refuses rather than
+// risk a duplicate.
+export async function findContinuousTask({
+  projectId,
+  items,
+  scopeFilters,
+  unit = "traces",
+  userId,
+}) {
+  const wanted = await liveTaskNames(projectId, items);
+  const { filters } = splitScopeFilters(scopeFilters || []);
+  // "My annotations" means this user's: without knowing who that is, a task
+  // over it can't be matched.
+  if (
+    userId == null &&
+    filters.some((item) => item?.column_id === "my_annotations")
+  )
+    throw new LiveTaskUnchecked();
+  const view = filtersKey(filters, userId ?? null);
+  const rowType = unit === "spans" ? "spans" : "traces";
   const matches = (task) =>
     task.run_type === "continuous" &&
+    task.row_type === rowType &&
     !["deleted", "failed"].includes(task.status) &&
     (task.evals_applied || []).length === wanted.size &&
-    (task.evals_applied || []).every((name) => wanted.has(name));
+    (task.evals_applied || []).every((name) => wanted.has(name)) &&
+    filtersKey(task.filters_applied?.filters) === view;
   for (let page = 0; page < LIVE_TASK_MAX_PAGES; page += 1) {
     // eslint-disable-next-line no-await-in-loop
     const response = await axios.get(endpoints.project.getEvalTaskList(), {
@@ -504,12 +555,8 @@ export async function findContinuousTask({ projectId, items }) {
     if (found) return found;
     if (rows.length < LIVE_TASK_PAGE_SIZE) return undefined;
   }
-  return undefined;
+  throw new LiveTaskUnchecked();
 }
-
-// Jev runs on the organization's own TypeSafe key; key problems point to the
-// AI Providers settings where it is added or replaced.
-export const AI_PROVIDERS_SETTINGS_PATH = "/dashboard/settings/ai-providers";
 
 /**
  * Questions saved by Instant eval in this project. `items` has one entry per
@@ -569,6 +616,18 @@ const ENDED_RUN_STATUSES = new Set([
 export const isLiveRun = (runItem) =>
   LIVE_RUN_STATUSES.has(runItem.status) ||
   (runItem.pending > 0 && !ENDED_RUN_STATUSES.has(runItem.status));
+
+// Live tasks ("Keep answering") share the runs' name but never finish;
+// History lists runs only.
+const isHistorical = (run) => (run.run_type || "historical") === "historical";
+
+/** How often History's pages are read again: while a run on them is live. */
+export const historyRefetchMs = (pages = []) =>
+  pages.some((page) =>
+    page.runs.some((run) => isHistorical(run) && isLiveRun(run)),
+  )
+    ? HISTORY_LIVE_MS
+    : false;
 
 // A question whose evaluator config is gone, rebuilt from what the run
 // counted, so its answers still read.
@@ -650,17 +709,13 @@ export function useInstantEvalHistory(
     },
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     staleTime: 10_000,
-    refetchInterval: (current) =>
-      current.state.data?.pages.some((page) => page.runs.some(isLiveRun))
-        ? HISTORY_LIVE_MS
-        : false,
+    refetchInterval: (current) => historyRefetchMs(current.state.data?.pages),
   });
   const runs = useMemo(
     () =>
       (query.data?.pages || [])
         .flatMap((page) => page.runs)
-        // Live tasks ("Keep answering") share the name; History lists runs.
-        .filter((run) => (run.run_type || "historical") === "historical")
+        .filter(isHistorical)
         .map((run) => historyRun(run, configsById)),
     [query.data, configsById],
   );

@@ -12,9 +12,9 @@ import {
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { palette } from "src/theme/palette";
-import { askLink } from "src/sections/projects/observeHandoff";
+import { askLink, readHandoff } from "src/sections/projects/observeHandoff";
 
 const fakes = vi.hoisted(() => ({
   startAskRun: vi.fn(),
@@ -27,6 +27,10 @@ const fakes = vi.hoisted(() => ({
   control: vi.fn(),
   // Features the deployment's license or plan denies.
   denied: new Set(),
+  // What Keep answering was given, each time it rendered.
+  keep: [],
+  // The rows a filter selects, when more than the run's records.
+  rowsTotal: null,
 }));
 
 vi.mock("src/components/iconify", () => ({ default: () => null }));
@@ -66,7 +70,12 @@ vi.mock("src/sections/projects/LLMTracing/TraceFilterPanel", () => ({
 vi.mock("src/components/traceDetail/TraceDetailDrawerV2", () => ({
   default: () => null,
 }));
-vi.mock("../../results/KeepAnswering", () => ({ default: () => null }));
+vi.mock("../../results/KeepAnswering", () => ({
+  default: (props) => {
+    fakes.keep.push(props);
+    return <span>Keep answering new traces</span>;
+  },
+}));
 vi.mock("../../useJevAvailability", () => ({
   useJevAvailability: () => ({ available: true, isLoading: false }),
 }));
@@ -134,7 +143,7 @@ vi.mock("../useAskRows", () => ({
     );
     return {
       rows,
-      total: rows.length,
+      total: fakes.rowsTotal ?? rows.length,
       isLoading: false,
       hasMore: false,
       isFetchingMore: false,
@@ -319,6 +328,16 @@ const runOf = ({
 
 const doneRun = runOf();
 
+// The server's refusal of a question on Jev without the organization's
+// TypeSafe key (tracer/views/instant_eval_scale.py _jev_key_missing).
+const KEY_MISSING = {
+  message:
+    "API key not configured for typesafe. Please add your API key in settings.",
+  error_code: "JEV_KEY_MISSING",
+  settings_path: "/dashboard/settings/ai-providers",
+};
+const AI_PROVIDERS = "/dashboard/settings/ai-providers";
+
 const ESTIMATE = {
   population: 104233,
   population_is_lower_bound: false,
@@ -331,6 +350,8 @@ const ESTIMATE = {
   confirm_rows: 5000,
   default_sample_size: 1000,
   sessions_per_user: null,
+  // Cloud: each answer is billed at the server's rate.
+  credits_per_answer: 0.06,
   choices: [
     {
       sample_size: 500,
@@ -417,6 +438,8 @@ beforeEach(() => {
   fakes.askRunArgs = [];
   fakes.rowsArgs = [];
   fakes.denied = new Set();
+  fakes.keep = [];
+  fakes.rowsTotal = null;
   globalThis.sessionStorage?.clear?.();
   globalThis.localStorage?.clear?.();
 });
@@ -1148,6 +1171,31 @@ describe("a start that fails", () => {
     );
   });
 
+  it("points to AI Providers when Jev's TypeSafe key is missing", async () => {
+    const { askError } = await import("../../useInstantEval");
+    // As startAskRun hands over the server's 400.
+    fakes.startAskRun.mockRejectedValue(
+      askError({
+        status: false,
+        code: "JEV_KEY_MISSING",
+        message: KEY_MISSING.message,
+        statusCode: 400,
+        result: KEY_MISSING,
+      }),
+    );
+    await start();
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(KEY_MISSING.message);
+    expect(
+      within(alert).getByRole("link", { name: "Open AI Providers" }),
+    ).toHaveAttribute("href", AI_PROVIDERS);
+    // The question stays as typed, ready once the key is added.
+    expect(screen.getByRole("textbox", { name: "Question 1" })).toHaveValue(
+      QUESTION,
+    );
+    expect(where().params.new).toBe("1");
+  });
+
   it("says a Users count is still under way as the server words it", async () => {
     const { AskRefused } = await import("../../useInstantEval");
     fakes.startAskRun.mockRejectedValue(
@@ -1211,8 +1259,9 @@ describe("a cancelled run, and controls the server refuses", () => {
     await act(async () => {
       fireEvent.click(again);
     });
+    // The server holds a run past the confirm size back for a confirm.
     expect(fakes.startAskRun).toHaveBeenCalledWith(
-      expect.objectContaining({ sampleSize: 1000, confirm: true }),
+      expect.objectContaining({ sampleSize: 1000, confirm: false }),
     );
   });
 
@@ -1236,6 +1285,60 @@ describe("a cancelled run, and controls the server refuses", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "This run was cancelled. Use Run again to ask these questions again.",
     );
+  });
+
+  it("points a read more or resume refused for the TypeSafe key to AI Providers", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "done",
+      total: 1000,
+      answered: 1000,
+      sample: SAMPLE,
+      records: null,
+    });
+    fakes.control.mockRejectedValue(
+      Object.assign(new Error("Request failed with status code 400"), {
+        response: {
+          status: 400,
+          data: { status: false, code: "JEV_KEY_MISSING", result: KEY_MISSING },
+        },
+      }),
+    );
+    const { unmount } = renderAt(OPEN);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Read 1,000 more" }));
+    });
+    expect(fakes.control).toHaveBeenCalledWith("read_more", { more: 1000 });
+    let alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(KEY_MISSING.message);
+    expect(
+      within(alert).getByRole("link", { name: "Open AI Providers" }),
+    ).toHaveAttribute("href", AI_PROVIDERS);
+    unmount();
+
+    // A resume, as the app's axios hands over the error envelope.
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "paused",
+      total: 1000,
+      answered: 340,
+      records: null,
+    });
+    fakes.control.mockRejectedValue({
+      status: false,
+      code: "JEV_KEY_MISSING",
+      message: KEY_MISSING.message,
+      statusCode: 400,
+      result: KEY_MISSING,
+    });
+    renderAt(OPEN);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    });
+    expect(fakes.control).toHaveBeenCalledWith("resume", {});
+    alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(KEY_MISSING.message);
+    expect(
+      within(alert).getByRole("link", { name: "Open AI Providers" }),
+    ).toHaveAttribute("href", AI_PROVIDERS);
   });
 
   it("reads more only once a run stops answering", async () => {
@@ -1532,7 +1635,7 @@ describe("running a question again", () => {
         datePreset: "7D",
         label: "Past 7D · 1 filter",
         sampleSize: 1000,
-        confirm: true,
+        confirm: false,
       }),
     );
   });
@@ -1911,5 +2014,568 @@ describe("a sample size typed in", () => {
         expect.objectContaining({ sampleSize: null }),
       );
     });
+  });
+});
+
+describe("a run that failed before reading a row", () => {
+  it("says so in red and offers Run again", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "failed",
+      total: 0,
+      answered: 0,
+      records: [],
+    });
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-again",
+      questions: QUESTIONS,
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    const status = screen.getByText(
+      "This run failed before Jev could read the rows. Run it again.",
+    );
+    expect(status).toBeInTheDocument();
+    expect(screen.queryByText(/answered in/)).toBeNull();
+    // Nothing was read, so there is no sample to read more of.
+    expect(screen.queryByRole("button", { name: /^Read all/ })).toBeNull();
+    const again = screen.getByRole("button", { name: "Run again" });
+    expect(again).toHaveClass("MuiButton-contained");
+    await act(async () => {
+      fireEvent.click(again);
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a run that failed partway", () => {
+  it("says how far it got in red, offers Run again and keeps its sample", async () => {
+    fakes.askRuns["task-sessions"] = runOf({
+      status: "failed",
+      total: 10,
+      answered: 4,
+      sample: {
+        is_sample: true,
+        population: 1000,
+        population_is_lower_bound: false,
+        requested: 10,
+        read: 4,
+        next_size: 10,
+        can_extend: false,
+      },
+      records: null,
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(
+      screen.getByText("This run failed: 4 of 10 answered. Run it again."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run again" })).toHaveClass(
+      "MuiButton-contained",
+    );
+    // The rows it read still estimate the view.
+    expect(
+      screen.getByText(/^4 of 1,000 sessions read, picked at random/),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("running a question again past the confirm size", () => {
+  const OPEN = `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`;
+  const held = async (credits) => {
+    const { AskNeedsConfirm } = await import("../../useInstantEval");
+    fakes.askRuns["task-sessions"] = runOf({ total: 6000, answered: 6000 });
+    fakes.startAskRun
+      .mockRejectedValueOnce(
+        new AskNeedsConfirm({
+          message: "Confirm to start.",
+          rows_to_read: 6000,
+          credits_estimate: credits,
+        }),
+      )
+      .mockResolvedValue({ taskId: "task-again", questions: QUESTIONS });
+    renderAt(OPEN);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Run again" }));
+    });
+  };
+
+  it("restates the credits inline and starts only once confirmed", async () => {
+    await held(360);
+    expect(fakes.startAskRun).toHaveBeenCalledTimes(1);
+    expect(fakes.startAskRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ confirm: false }),
+    );
+    expect(
+      screen.getByText(
+        /Read 6,000 sessions again\? That is about 360 credits\./,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run again" })).toBeDisabled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledTimes(2);
+    expect(fakes.startAskRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ confirm: true, sampleSize: null }),
+    );
+    expect(where().params.run).toBe("task-again");
+  });
+
+  it("goes back without starting, and names no credits where none are billed", async () => {
+    await held(null);
+    const confirm = screen.getByText(/Read 6,000 sessions again\?/);
+    expect(confirm).toHaveTextContent(
+      "Read 6,000 sessions again? You can pause or cancel it while it runs.",
+    );
+    expect(confirm).not.toHaveTextContent(/credit/);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.queryByText(/Read 6,000 sessions again/)).toBeNull();
+    expect(fakes.startAskRun).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Run again" })).toBeEnabled();
+  });
+});
+
+describe("handing a selection over", () => {
+  const OPEN = (unit) =>
+    `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=${unit}&tab=${unit}`;
+  const idsOf = (count) =>
+    Array.from({ length: count }, (_, n) => ({
+      id: `s${n}`,
+      time: "2026-10-13T14:10:00Z",
+      user_id: "",
+      trace_id: `t${n}`,
+    }));
+  const bar = () => screen.getByRole("region", { name: "Selected rows" });
+
+  beforeEach(() => {
+    fetchRowIds.mockReset();
+  });
+
+  it("refuses Find patterns past 5,000 rows, rather than the whole view", async () => {
+    fakes.askRuns["task-sessions"] = runOf();
+    fakes.rowsTotal = 6000;
+    renderAt(OPEN("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: /Find patterns/ }),
+      );
+    });
+    expect(within(bar()).getByRole("alert")).toHaveTextContent(
+      "Narrow the selection to 5,000 sessions or fewer to find patterns.",
+    );
+    expect(fetchRowIds).not.toHaveBeenCalled();
+    expect(where().path).toBe(`/dashboard/observe/${PROJECT}/ask`);
+    // Another selection starts afresh.
+    fireEvent.click(screen.getByRole("button", { name: "Select the outage" }));
+    expect(within(bar()).queryByRole("alert")).toBeNull();
+  });
+
+  it("refuses when the rows read turn out to be more than the count said", async () => {
+    fakes.askRuns["task-sessions"] = runOf();
+    fakes.rowsTotal = 4000;
+    fetchRowIds.mockResolvedValue(idsOf(5001));
+    renderAt(OPEN("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: /Find patterns/ }),
+      );
+    });
+    expect(fetchRowIds).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 5001 }),
+    );
+    expect(within(bar()).getByRole("alert")).toHaveTextContent(
+      /Narrow the selection to 5,000 sessions/,
+    );
+    expect(where().path).toBe(`/dashboard/observe/${PROJECT}/ask`);
+  });
+
+  it("hands Insights exactly the selected rows by id", async () => {
+    fakes.askRuns["task-sessions"] = runOf();
+    fetchRowIds.mockResolvedValue(idsOf(2));
+    renderAt(OPEN("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: /Find patterns/ }),
+      );
+    });
+    expect(where().path).toBe(`/dashboard/observe/${PROJECT}/insights`);
+    const seed = readHandoff(where().params.seed);
+    expect(seed.population.map((item) => item.id)).toEqual(["s0", "s1"]);
+    expect(seed).not.toHaveProperty("filters");
+    expect(seed.label).toBe(`No · ${QUESTION}`);
+  });
+
+  it("refuses Show in Traces past what one link names, never cutting it short", async () => {
+    fakes.askRuns["task-sessions"] = runOf();
+    fakes.rowsTotal = 300;
+    renderAt(OPEN("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: "Show in Traces" }),
+      );
+    });
+    expect(within(bar()).getByRole("alert")).toHaveTextContent(
+      "Narrow the selection to 200 sessions or fewer to show it in Traces.",
+    );
+    expect(where().path).toBe(`/dashboard/observe/${PROJECT}/ask`);
+  });
+
+  it("shows up to 200 rows in Traces by id", async () => {
+    fakes.askRuns["task-sessions"] = runOf();
+    fetchRowIds.mockResolvedValue(idsOf(2));
+    renderAt(OPEN("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: "Show in Traces" }),
+      );
+    });
+    expect(fetchRowIds).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 201 }),
+    );
+    expect(where().path).toBe(`/dashboard/observe/${PROJECT}/llm-tracing`);
+    const [filter] = JSON.parse(where().params.observeLinkFilter);
+    expect(filter).toMatchObject({
+      column_id: "session_id",
+      filter_config: { filter_value: ["s0", "s1"] },
+    });
+  });
+
+  it("shows a trace run's focused answer in Traces by id, up to 200", async () => {
+    fakes.askRuns["task-sessions"] = {
+      ...runOf(),
+      unit: "traces",
+      knownUnit: "traces",
+    };
+    fetchRowIds.mockResolvedValue(idsOf(2));
+    renderAt(OPEN("traces"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    expect(within(bar()).queryByText(/every trace this evaluator/)).toBeNull();
+    // One way to Traces: the bar's, which names the rows first.
+    expect(screen.queryByRole("link", { name: "Show in Traces" })).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "Show in Traces" }),
+    ).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: "Show in Traces" }),
+      );
+    });
+    expect(fetchRowIds).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 201 }),
+    );
+    expect(where().path).toBe(`/dashboard/observe/${PROJECT}/llm-tracing`);
+    const [filter] = JSON.parse(where().params.observeLinkFilter);
+    expect(filter).toMatchObject({
+      column_id: "trace_id",
+      filter_config: { filter_value: ["s0", "s1"] },
+    });
+  });
+
+  it("falls back to the answer filter when the rows read pass 200", async () => {
+    fakes.askRuns["task-sessions"] = {
+      ...runOf(),
+      unit: "traces",
+      knownUnit: "traces",
+    };
+    // The count said 150; the read found more.
+    fakes.rowsTotal = 150;
+    fetchRowIds.mockResolvedValue(idsOf(201));
+    renderAt(OPEN("traces"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: "Show in Traces" }),
+      );
+    });
+    const [filter] = JSON.parse(where().params.observeLinkFilter);
+    expect(filter).toMatchObject({
+      column_id: CONFIG,
+      filter_config: { filter_value: ["No"], col_type: "EVAL_METRIC" },
+    });
+  });
+
+  it("past 200, shows a trace run's focused answer in Traces as a filter, and says what it lists", async () => {
+    fakes.askRuns["task-sessions"] = {
+      ...runOf(),
+      unit: "traces",
+      knownUnit: "traces",
+    };
+    fakes.rowsTotal = 60000;
+    renderAt(OPEN("traces"));
+    fireEvent.click(screen.getByRole("button", { name: "Focus No" }));
+    expect(
+      within(bar()).getByText(
+        "Over 200 traces, Show in Traces filters on this answer: it lists every trace this evaluator answered that way in the window, not only this run's.",
+      ),
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(
+        within(bar()).getByRole("button", { name: "Show in Traces" }),
+      );
+    });
+    expect(fetchRowIds).not.toHaveBeenCalled();
+    expect(where().path).toBe(`/dashboard/observe/${PROJECT}/llm-tracing`);
+    const [filter] = JSON.parse(where().params.observeLinkFilter);
+    expect(filter).toMatchObject({
+      column_id: CONFIG,
+      filter_config: { filter_value: ["No"], col_type: "EVAL_METRIC" },
+    });
+  });
+});
+
+describe("Keep answering", () => {
+  const STATUS = {
+    column_id: "status",
+    filter_config: {
+      filter_type: "text",
+      filter_op: "equals",
+      filter_value: "ERROR",
+    },
+  };
+  const traceRun = (scope, extra = {}) => {
+    const run = runOf();
+    return {
+      ...run,
+      unit: "traces",
+      knownUnit: "traces",
+      creditsUsed: 0.18,
+      ...extra,
+      summary: {
+        ...run.summary,
+        scope: { ...run.summary.scope, ...scope },
+      },
+    };
+  };
+  const OPEN = `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=traces&tab=traces`;
+
+  it("is offered for a run opened by its link, with the filters the server kept", () => {
+    fakes.askRuns["task-sessions"] = traceRun({ filters: [STATUS] });
+    renderAt(OPEN);
+    expect(screen.getByText("Keep answering new traces")).toBeInTheDocument();
+    expect(fakes.keep.at(-1)).toMatchObject({
+      unit: "traces",
+      billed: true,
+      run: { items: QUESTIONS, scopeFilters: [STATUS] },
+    });
+  });
+
+  it("isn't offered for rows handed over by id, which have no view to keep to", () => {
+    fakes.askRuns["task-sessions"] = traceRun({
+      filters: [],
+      ids: ["t1", "t2"],
+    });
+    renderAt(OPEN);
+    expect(screen.queryByText("Keep answering new traces")).toBeNull();
+  });
+
+  it("says nothing of billing where answers aren't billed", () => {
+    fakes.askRuns["task-sessions"] = traceRun(
+      { filters: [STATUS] },
+      { creditsUsed: null },
+    );
+    renderAt(OPEN);
+    expect(fakes.keep.at(-1).billed).toBe(false);
+  });
+});
+
+describe("copying a run's link", () => {
+  const OPEN = `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`;
+  const original = Object.getOwnPropertyDescriptor(
+    globalThis.navigator,
+    "clipboard",
+  );
+  const withClipboard = (clipboard) =>
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: clipboard,
+      configurable: true,
+    });
+  const copy = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Copy link to this run" }),
+      );
+    });
+  };
+
+  afterEach(() => {
+    if (original)
+      Object.defineProperty(globalThis.navigator, "clipboard", original);
+    else delete globalThis.navigator.clipboard;
+  });
+
+  it("says the link was copied once the clipboard has it", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    withClipboard({ writeText });
+    fakes.askRuns["task-sessions"] = doneRun;
+    renderAt(OPEN);
+    await copy();
+    expect(writeText).toHaveBeenCalledWith(globalThis.location.href);
+    expect(
+      screen.getByText("Link copied. It opens this run with its answers."),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["there is no clipboard (plain http)", undefined],
+    [
+      "the browser refuses",
+      { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    ],
+  ])("points to the address bar when %s", async (_, clipboard) => {
+    withClipboard(clipboard);
+    fakes.askRuns["task-sessions"] = doneRun;
+    renderAt(OPEN);
+    await copy();
+    expect(screen.queryByText(/Link copied/)).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The link couldn't be copied here. Copy it from the address bar.",
+    );
+  });
+
+  it("clears an earlier failure once a copy works", async () => {
+    withClipboard(undefined);
+    fakes.askRuns["task-sessions"] = doneRun;
+    renderAt(OPEN);
+    await copy();
+    expect(screen.getByText(/The link couldn't be copied here/)).toBeVisible();
+
+    withClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
+    await copy();
+    expect(
+      screen.getByText("Link copied. It opens this run with its answers."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/The link couldn't be copied here/)).toBeNull();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+});
+
+describe("where answers aren't billed", () => {
+  // Self-hosted, or no billing set up: the server sends no credit figures.
+  const UNBILLED = {
+    ...ESTIMATE,
+    credits_estimate: null,
+    credits_per_answer: null,
+    credit_check: {
+      allowed: true,
+      error_code: null,
+      current_usage: null,
+      limit: null,
+      credits_left: null,
+      blocked: false,
+      message: null,
+    },
+    credit_max_sample: null,
+    choices: ESTIMATE.choices.map((choice) => ({
+      ...choice,
+      credits_estimate: null,
+    })),
+  };
+  const noCredits = () =>
+    expect(screen.queryAllByText(/credit/i)).toHaveLength(0);
+
+  it("costs a question in rows and time only, and confirms without credits", async () => {
+    fakes.estimate.mockResolvedValue({
+      ...UNBILLED,
+      population: 20000,
+      choices: [
+        ...UNBILLED.choices.slice(0, 4),
+        {
+          sample_size: null,
+          rows_to_read: 20000,
+          seconds_estimate: 4010,
+          needs_confirm: true,
+          allowed: true,
+          credits_estimate: null,
+        },
+      ],
+    });
+    fakes.startAskRun.mockResolvedValue({
+      taskId: "task-2",
+      questions: QUESTIONS,
+    });
+    renderAt(askLink(PROJECT, { unit: "sessions", filters: [] }));
+    const sample = await screen.findByRole("radio", {
+      name: /A sample of 1,000/,
+    });
+    expect(
+      within(sample).getByText("Reads 1,000 sessions · about 4 min", {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("You confirm before it starts.")).toBeVisible();
+    expect(screen.getByText(/TypeSafe bills its tokens/)).not.toHaveTextContent(
+      /billed as one eval run/,
+    );
+    noCredits();
+
+    fireEvent.click(screen.getByRole("radio", { name: /All 20,000/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Question 1" }), {
+      target: { value: QUESTION },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Ask Jev about 20,000 sessions" }),
+    );
+    expect(
+      screen.getByText(
+        /Read 20,000 sessions for 1 question\? It takes about 1 h 7 min\./,
+      ),
+    ).toBeInTheDocument();
+    noCredits();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    });
+    expect(fakes.startAskRun).toHaveBeenCalledWith(
+      expect.objectContaining({ sampleSize: null, confirm: true }),
+    );
+  });
+
+  it("shows a run, and a read-more confirm, without credits", async () => {
+    const sample = {
+      population: 104233,
+      population_is_lower_bound: false,
+      requested: 1000,
+      read: 1000,
+      is_sample: true,
+      can_extend: true,
+      next_size: 6000,
+    };
+    const run = runOf({ total: 1000, answered: 1000, sample, records: null });
+    fakes.askRuns["task-sessions"] = {
+      ...run,
+      creditsUsed: null,
+      summary: { ...run.summary, credits_estimate: null },
+    };
+    fakes.control.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          result: {
+            message: "Reading 6,000 more rows. Confirm to start.",
+            error_code: "INSTANT_EVAL_CONFIRM",
+            rows_to_read: 6000,
+            credits_estimate: null,
+          },
+        },
+      },
+    });
+    renderAt(
+      `/dashboard/observe/${PROJECT}/ask?run=task-sessions&unit=sessions&tab=sessions`,
+    );
+    expect(screen.getByText(/^Started by Nikhil/)).not.toHaveTextContent(
+      /credit/,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Read 6,000 more" }));
+    });
+    expect(screen.getByText("Read 6,000 more sessions?")).toBeInTheDocument();
+    noCredits();
   });
 });

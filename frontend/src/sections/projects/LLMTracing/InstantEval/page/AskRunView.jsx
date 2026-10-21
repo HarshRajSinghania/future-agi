@@ -29,7 +29,13 @@ import { insightsReportLink } from "src/sections/projects/observeHandoff";
 import { ANSWER_TYPES, readOption } from "../instantEvalPayloads";
 import { answerText, quoted } from "../instantEvalAnswers";
 import { formatWhen, unitMeta } from "../instantEvalUnits";
-import { AskBusy, AskNoCredits, AskRefused, askError } from "../useInstantEval";
+import {
+  AskBusy,
+  AskKeyMissing,
+  AskNoCredits,
+  AskRefused,
+  askError,
+} from "../useInstantEval";
 import KeepAnswering from "../results/KeepAnswering";
 import { AskCrossTab, AskHeatmap, AskPatterns, AskTimeline } from "./viz";
 import AskChartBoundary from "./AskChartBoundary";
@@ -49,7 +55,9 @@ import {
 } from "./askFilter";
 import { MAX_HANDOVER } from "./askPopulation";
 import { downloadRowsCsv, fetchRowIds, useAskRows } from "./useAskRows";
+import { RERUNNABLE_STATES } from "./useAskRun";
 import {
+  GRID_LINK_MAX,
   answerGridLink,
   rowsGridLink,
   sourceViewLink,
@@ -86,6 +94,10 @@ function StatusLine({ run, unit, creating }) {
     text = `Picking the ${run.total.toLocaleString()} ${noun(run.total)} to read…`;
   else if (run.status === "stalled")
     text = `This run stopped before finishing: ${run.answered.toLocaleString()} of ${run.total.toLocaleString()} answered`;
+  else if (run.status === "failed")
+    text = settled
+      ? `This run failed: ${run.answered.toLocaleString()} of ${run.total.toLocaleString()} answered. Run it again.`
+      : "This run failed before Jev could read the rows. Run it again.";
   else if (run.status === "done")
     text = `${run.answered.toLocaleString()}${
       run.answered < run.total ? ` of ${run.total.toLocaleString()}` : ""
@@ -128,7 +140,7 @@ function StatusLine({ run, unit, creating }) {
             borderRadius: "50%",
             flexShrink: 0,
             bgcolor:
-              run.status === "error"
+              run.status === "error" || run.status === "failed"
                 ? "error.main"
                 : run.status === "stalled"
                   ? "warning.main"
@@ -148,7 +160,11 @@ function StatusLine({ run, unit, creating }) {
           aria-live="polite"
           noWrap
           title={[text, failedRows].filter(Boolean).join(" · ")}
-          sx={{ fontVariantNumeric: "tabular-nums", minWidth: 0 }}
+          sx={{
+            fontVariantNumeric: "tabular-nums",
+            minWidth: 0,
+            ...(run.status === "failed" && { color: "error.main" }),
+          }}
         >
           {text}
           {failedRows && run.status !== "loading" && (
@@ -478,6 +494,8 @@ function SelectionBar({
   onFindPatterns,
   patternsLocked = false,
   gridLink,
+  gridHint,
+  notice,
   onClear,
 }) {
   const meta = unitMeta(unit);
@@ -547,6 +565,25 @@ function SelectionBar({
       <Button size="small" onClick={onClear}>
         Clear
       </Button>
+      {gridLink && gridHint && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ flexBasis: "100%" }}
+        >
+          {gridHint}
+        </Typography>
+      )}
+      {notice && (
+        <Typography
+          variant="caption"
+          color="text.primary"
+          role="alert"
+          sx={{ flexBasis: "100%" }}
+        >
+          {notice}
+        </Typography>
+      )}
     </Paper>
   );
 }
@@ -558,6 +595,10 @@ SelectionBar.propTypes = {
   onFindPatterns: PropTypes.func,
   patternsLocked: PropTypes.bool,
   gridLink: PropTypes.func,
+  // What Show in Traces opens when it can't name the selected rows.
+  gridHint: PropTypes.string,
+  // Why a hand-off was refused (the selection is too big for it).
+  notice: PropTypes.string,
   onClear: PropTypes.func.isRequired,
 };
 
@@ -576,9 +617,13 @@ export default function AskRunView({
   creating,
   onRunAgain,
   rerunning,
+  runAgainConfirm,
+  onCancelRunAgain,
 }) {
   const navigate = useNavigate();
   const meta = unitMeta(unit);
+  // What a run reads: a user question reads its users' sessions.
+  const rowNoun = unit === "users" ? "sessions" : meta.plural;
   const { questions, records, summary } = run;
   const [focus, setFocus] = useState({ configId: null, answer: null });
   // {filter, label} from a chart, or {ids, label} from a chart that still
@@ -590,6 +635,9 @@ export default function AskRunView({
   const [actionError, setActionError] = useState(null);
   const [confirmMore, setConfirmMore] = useState(null);
   const [handing, setHanding] = useState(false);
+  // Why a hand-off of the selection was refused: {label, message}, shown
+  // while that selection stays.
+  const [refused, setRefused] = useState(null);
 
   // Focus the first question once the questions are known.
   const firstConfigId = questions[0]?.configId || null;
@@ -635,6 +683,9 @@ export default function AskRunView({
     setSelection(null);
     setFocus((current) => ({ ...current, answer: null }));
   };
+  const handoverNotice =
+    refused && refused.label === filterLabel ? refused.message : null;
+  const refuse = (message) => setRefused({ label: filterLabel, message });
 
   // Rows read from the server; while a run is live they are read again as
   // answers land.
@@ -693,6 +744,16 @@ export default function AskRunView({
             </Link>
           </>,
         );
+      else if (known instanceof AskKeyMissing)
+        // Resume, retry and read more need Jev's TypeSafe key, as a start does.
+        setActionError(
+          <>
+            {known.message}{" "}
+            <Link component={RouterLink} to={known.settingsPath}>
+              Open AI Providers
+            </Link>
+          </>,
+        );
       else
         setActionError(
           known instanceof AskBusy || known instanceof AskRefused
@@ -704,21 +765,21 @@ export default function AskRunView({
     }
   };
 
-  // The rows a hand-off names: ids up to 5,000, else the run's own view.
-  const handOverRows = async () => {
-    if (selectedRecords) return { rows: selectedRecords };
-    if ((tableTotal ?? 0) <= MAX_HANDOVER)
-      return {
-        rows: await fetchRowIds({
-          projectId,
-          taskId: run.taskId,
-          tz: run.tz,
-          filter,
-          limit: MAX_HANDOVER,
-          unit,
-        }),
-      };
-    return { filters: summary?.scope?.filters || scope?.filters || [] };
+  // The rows a hand-off names, by id, up to `cap`. A bigger selection is
+  // refused (null), never cut short or swapped for the run's whole view.
+  const handOverRows = async (cap) => {
+    if (selectedRecords)
+      return selectedRecords.length <= cap ? selectedRecords : null;
+    if (tableTotal != null && tableTotal > cap) return null;
+    const rows = await fetchRowIds({
+      projectId,
+      taskId: run.taskId,
+      tz: run.tz,
+      filter,
+      limit: cap + 1,
+      unit,
+    });
+    return rows.length <= cap ? rows : null;
   };
 
   // Insights is Enterprise: without it, Find patterns opens its gate rather
@@ -730,24 +791,27 @@ export default function AskRunView({
       : insightsDenied
         ? () => navigate(`/dashboard/observe/${projectId}/insights`)
         : async () => {
+            setRefused(null);
             setHanding(true);
             try {
-              const handed = await handOverRows();
-              const count = handed.rows ? handed.rows.length : tableTotal;
-              const noun = count === 1 ? meta.noun : meta.plural;
-              const subject = count === 1 ? `this ${noun}` : `these ${noun}`;
+              const rows = await handOverRows(MAX_HANDOVER);
+              if (!rows) {
+                refuse(
+                  `Narrow the selection to ${MAX_HANDOVER.toLocaleString()} ${meta.plural} or fewer to find patterns.`,
+                );
+                return;
+              }
+              const noun = rows.length === 1 ? meta.noun : meta.plural;
+              const subject =
+                rows.length === 1 ? `this ${noun}` : `these ${noun}`;
               navigate(
                 insightsReportLink(projectId, {
                   unit,
-                  ...(handed.rows
-                    ? {
-                        population: handed.rows.map((record) => ({
-                          id: record.id,
-                          time: record.time || "",
-                          user_id: record.user_id || "",
-                        })),
-                      }
-                    : { filters: handed.filters }),
+                  population: rows.map((record) => ({
+                    id: record.id,
+                    time: record.time || "",
+                    user_id: record.user_id || "",
+                  })),
                   question: focus.answer
                     ? `Why did ${subject} get ${quoted(answerText(focus.answer))} for ${quoted(question.question)}?`
                     : `What do ${subject} have in common?`,
@@ -764,26 +828,8 @@ export default function AskRunView({
             }
           };
 
-  const showSelectionInTraces =
-    unit === "users"
-      ? null
-      : async () => {
-          const handed = await handOverRows();
-          const link = handed.rows
-            ? rowsGridLink(projectId, unit, handed.rows)
-            : sourceViewLink(projectId, unit);
-          if (link) navigate(link);
-        };
-
-  const copyLink = () => {
-    try {
-      globalThis.navigator?.clipboard?.writeText(globalThis.location.href);
-      setCopied(true);
-    } catch {
-      // Copying is a convenience; the address bar has the link.
-    }
-  };
-
+  // An answer in focus is shown in Traces from the selection bar, which
+  // names the rows first and falls back to this filter only past one link.
   const showInTraces =
     unit === "traces" && question && focus.answer
       ? answerGridLink({
@@ -793,6 +839,63 @@ export default function AskRunView({
           window: run.window,
         })
       : null;
+
+  // A selection names its rows, up to what one link holds. Past that, the
+  // answer in focus on a trace run is still a filter of the Traces list
+  // itself; that filter lists every trace its evaluator answered that way in
+  // the window, other runs' included, so the bar says so.
+  const answerOnly = Boolean(showInTraces && !selection);
+  const tracesByFilter =
+    answerOnly && tableTotal != null && tableTotal > GRID_LINK_MAX;
+  const showSelectionInTraces =
+    unit === "users"
+      ? null
+      : async () => {
+          setRefused(null);
+          try {
+            const rows = await handOverRows(GRID_LINK_MAX);
+            const link = rows
+              ? rowsGridLink(projectId, unit, rows)
+              : answerOnly
+                ? showInTraces
+                : null;
+            if (link) navigate(link);
+            else if (!rows)
+              refuse(
+                `Narrow the selection to ${GRID_LINK_MAX.toLocaleString()} ${meta.plural} or fewer to show it in Traces.`,
+              );
+          } catch (error) {
+            setActionError(
+              getSafeActionErrorMessage(error, "The rows couldn't be read."),
+            );
+          }
+        };
+
+  // "Link copied" only once the clipboard took it. Without a clipboard (a
+  // page served over plain http), or when the browser refuses, the address
+  // bar has the link.
+  const copyLink = async () => {
+    setCopied(false);
+    // A copy that works never sits beside an earlier failure's alert.
+    setActionError(null);
+    const clipboard = globalThis.navigator?.clipboard;
+    try {
+      if (!clipboard?.writeText) throw new Error("No clipboard");
+      await clipboard.writeText(globalThis.location.href);
+      setCopied(true);
+    } catch {
+      setActionError(
+        "The link couldn't be copied here. Copy it from the address bar.",
+      );
+    }
+  };
+
+  // Keep answering reads the run's view filters: those it was started with
+  // here, else those the server kept with it. Rows handed over by id have no
+  // view to keep answering.
+  const liveFilters = summary?.scope?.ids?.length
+    ? null
+    : scope?.filters ?? summary?.scope?.filters ?? null;
 
   // Charts: the server's counts always; every row as well when there are
   // few enough to draw one square each.
@@ -908,40 +1011,27 @@ export default function AskRunView({
                   )}
                 />
               )}
-              {onRunAgain &&
-                (run.status === "done" || run.status === "cancelled") && (
-                  <Button
-                    size="small"
-                    // The way forward from a cancelled run.
-                    variant={
-                      run.status === "cancelled" ? "contained" : "outlined"
-                    }
-                    disabled={rerunning}
-                    startIcon={<Iconify icon="mdi:refresh" width={16} />}
-                    onClick={onRunAgain}
-                  >
-                    {rerunning ? "Starting…" : "Run again"}
-                  </Button>
-                )}
-              {showInTraces && (
+              {onRunAgain && RERUNNABLE_STATES.has(run.status) && (
                 <Button
                   size="small"
-                  variant="outlined"
-                  component={RouterLink}
-                  to={showInTraces}
-                  startIcon={<Iconify icon="mdi:filter-outline" width={16} />}
+                  // The way forward from a cancelled or failed run.
+                  variant={run.status === "done" ? "outlined" : "contained"}
+                  disabled={rerunning || Boolean(runAgainConfirm)}
+                  startIcon={<Iconify icon="mdi:refresh" width={16} />}
+                  onClick={() => onRunAgain()}
                 >
-                  Show in Traces
+                  {rerunning ? "Starting…" : "Run again"}
                 </Button>
               )}
               {(unit === "traces" || unit === "spans") &&
-                scope?.filters &&
+                liveFilters &&
                 run.status === "done" && (
                   <KeepAnswering
                     projectId={projectId}
-                    run={{ items: questions, scopeFilters: scope.filters }}
+                    run={{ items: questions, scopeFilters: liveFilters }}
                     navigate={navigate}
                     unit={unit}
+                    billed={run.creditsUsed != null}
                   />
                 )}
               <MoreMenu questions={questions} onCopyLink={copyLink} />
@@ -1024,21 +1114,54 @@ export default function AskRunView({
               </Stack>
             }
           >
-            Read {Number(confirmMore.rows || 0).toLocaleString()} more{" "}
-            {meta.plural}? That is {creditWords(confirmMore.credits)}.
+            {`Read ${Number(confirmMore.rows || 0).toLocaleString()} more ${rowNoun}?`}
+            {confirmMore.credits != null
+              ? ` That is ${creditWords(confirmMore.credits)}.`
+              : ""}
+          </Alert>
+        )}
+        {runAgainConfirm && (
+          <Alert
+            severity="warning"
+            action={
+              <Stack direction="row" spacing={1}>
+                <Button size="small" onClick={onCancelRunAgain}>
+                  Back
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="warning"
+                  disabled={rerunning}
+                  onClick={() => onRunAgain({ confirm: true })}
+                >
+                  Start
+                </Button>
+              </Stack>
+            }
+          >
+            Read {Number(runAgainConfirm.rows || 0).toLocaleString()} {rowNoun}{" "}
+            again?
+            {runAgainConfirm.credits != null
+              ? ` That is ${creditWords(runAgainConfirm.credits)}.`
+              : ""}{" "}
+            You can pause or cancel it while it runs.
           </Alert>
         )}
 
-        <SampleBanner
-          run={run}
-          unit={unit}
-          question={question}
-          focusAnswer={
-            focus.configId === question?.configId ? focus.answer : null
-          }
-          onControl={control}
-          busy={acting}
-        />
+        {/* A run that failed before reading a row has no sample to estimate from. */}
+        {!(run.status === "failed" && !(run.answered + run.failed)) && (
+          <SampleBanner
+            run={run}
+            unit={unit}
+            question={question}
+            focusAnswer={
+              focus.configId === question?.configId ? focus.answer : null
+            }
+            onControl={control}
+            busy={acting}
+          />
+        )}
 
         {run.status === "error" ? (
           <Alert
@@ -1094,6 +1217,12 @@ export default function AskRunView({
             onFindPatterns={findPatterns}
             patternsLocked={insightsDenied}
             gridLink={showSelectionInTraces}
+            gridHint={
+              tracesByFilter
+                ? `Over ${GRID_LINK_MAX.toLocaleString()} traces, Show in Traces filters on this answer: it lists every trace this evaluator answered that way in the window, not only this run's.`
+                : undefined
+            }
+            notice={handoverNotice}
             onClear={clearFilter}
           />
         )}
@@ -1131,6 +1260,13 @@ AskRunView.propTypes = {
     filters: PropTypes.array,
   }),
   creating: PropTypes.bool,
+  // Run again; `{confirm: true}` once the person confirmed its credits.
   onRunAgain: PropTypes.func,
   rerunning: PropTypes.bool,
+  // A Run again held back for the person to confirm: {rows, credits}.
+  runAgainConfirm: PropTypes.shape({
+    rows: PropTypes.number,
+    credits: PropTypes.number,
+  }),
+  onCancelRunAgain: PropTypes.func,
 };

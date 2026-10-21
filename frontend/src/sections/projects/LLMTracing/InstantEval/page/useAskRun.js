@@ -12,7 +12,7 @@ import { useInstantEvals } from "../useInstantEval";
 //
 //   useAskRun({ projectId, taskId, unit, questions, startedAt, tz }) -> {
 //     status: "loading" | "preparing" | "running" | "paused" | "done"
-//             | "cancelled" | "stalled" | "error",
+//             | "cancelled" | "stalled" | "failed" | "error",
 //     summary,              // GET /tracer/instant-eval/summary/ result
 //     records | null,       // every row, when the run has ≤ 1,500
 //     questions: [{ configId, question, answerType, labels, ... }],
@@ -164,11 +164,16 @@ export function summaryWindow(summary) {
   return null;
 }
 
+// Runs that ended and can be asked again.
+export const RERUNNABLE_STATES = new Set(["done", "cancelled", "failed"]);
+
 /** The page's status word for a summary. */
 export function runStatus(summary) {
   if (!summary) return "loading";
   if (summary.status === "cancelled") return "cancelled";
   if (summary.status === "stalled") return "stalled";
+  // Failed before Jev read a row (a run that stopped partway is stalled).
+  if (summary.status === "failed") return "failed";
   if (summary.status === "pausing") return "pausing";
   if (summary.status === "paused") return "paused";
   if (LIVE.has(summary.status))

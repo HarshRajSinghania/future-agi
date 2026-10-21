@@ -41,7 +41,7 @@ export default function EvaluateMenu({
       key: "ask",
       icon: "mdi:creation-outline",
       title: "Ask a question",
-      detail: `Jev answers it for every ${meta.noun} in view, in seconds.`,
+      detail: `Jev answers it for a sample or every ${meta.noun} in view; the first answers come in seconds.`,
       feature: CAPABILITY.INSTANT_EVAL,
       onClick: onAsk,
     },

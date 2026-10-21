@@ -3,7 +3,6 @@ import { buildJevMapping } from "src/sections/evals/utils/jevMapping";
 export const INSTANT_EVAL_TAG = "instant-eval";
 export const INSTANT_EVAL_MODEL = "jev-latest";
 export const YES_NO_LABELS = ["Yes", "No"];
-export const TRACE_LIMIT_OPTIONS = [50, 100, 200, 500];
 export const MAX_QUESTION_LENGTH = 2000;
 export const MAX_CATEGORIES = 10;
 export const MAX_QUESTIONS = 5;
@@ -77,9 +76,6 @@ export const UNIT_READS = {
   sessions: ["transcript", "transcript_full"],
   users: ["transcript", "transcript_full"],
 };
-
-// Kept for callers that only know traces.
-export const TRACE_READS = UNIT_READS.traces;
 
 export const readsFor = (unit) => UNIT_READS[unit] || UNIT_READS.traces;
 

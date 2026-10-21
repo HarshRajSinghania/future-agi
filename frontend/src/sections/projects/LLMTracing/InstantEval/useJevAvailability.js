@@ -1,7 +1,7 @@
 import { useApiKeysStatus } from "src/api/model/api-keys";
 import { CAPABILITY, useFeatureAllowed } from "src/hooks/useCapabilities";
 import { useDeploymentMode } from "src/hooks/useDeploymentMode";
-import { AI_PROVIDERS_SETTINGS_PATH } from "./useInstantEval";
+import { AI_PROVIDERS_SETTINGS_PATH, JEV_KEY_NEEDED } from "./useInstantEval";
 
 export const JEV_PROVIDER = "typesafe";
 
@@ -36,8 +36,7 @@ export function useJevAvailability() {
     return {
       available: false,
       isLoading,
-      reason:
-        "Jev runs on your own TypeSafe key. Add it in Settings → AI Providers to start.",
+      reason: JEV_KEY_NEEDED,
       settingsPath: AI_PROVIDERS_SETTINGS_PATH,
     };
   return { available: true, isLoading, reason: null };

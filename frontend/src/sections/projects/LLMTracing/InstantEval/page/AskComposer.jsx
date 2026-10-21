@@ -38,6 +38,7 @@ import { EXAMPLES } from "./askExamples";
 import {
   MAX_HANDOVER,
   choiceCost,
+  creditsPerAnswer,
   defaultChoice,
   maxSampleSize,
   offeredSizes,
@@ -178,6 +179,8 @@ ChoiceCard.propTypes = {
   children: PropTypes.node,
 };
 
+// "Reads 1,000 sessions · about 60 credits · about 4 min"; without credits
+// where answers aren't billed.
 const costLine = (cost, unit, estimate) => {
   if (!cost) return "";
   const noun = unit === "users" ? "sessions" : unitMeta(unit).plural;
@@ -185,9 +188,13 @@ const costLine = (cost, unit, estimate) => {
   const perUser = estimate?.sessions_per_user
     ? ` (${estimate.sessions_per_user} per user)`
     : "";
-  return `Reads ${upTo}${cost.rows.toLocaleString()} ${noun}${perUser} · ${creditWords(
-    cost.credits,
-  )} · ${durationWords(cost.seconds)}`;
+  return [
+    `Reads ${upTo}${cost.rows.toLocaleString()} ${noun}${perUser}`,
+    cost.credits != null ? creditWords(cost.credits) : null,
+    durationWords(cost.seconds),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 };
 
 const billingLink = (
@@ -537,7 +544,11 @@ function ScopeCard({
               ) : !allCost?.allowed ? (
                 `Over the ${estimate.max_rows.toLocaleString()}-row limit for one run. Read a sample, or narrow the filters.`
               ) : allCost.needsConfirm ? (
-                "You confirm the credits before it starts."
+                allCost.credits != null ? (
+                  "You confirm the credits before it starts."
+                ) : (
+                  "You confirm before it starts."
+                )
               ) : null
             }
           />
@@ -684,6 +695,9 @@ export default function AskComposer({
   );
   const readChoices = readsFor(unit);
   const estimate = population.estimate;
+  // Whether answers cost credits here; where they don't, no credit figure
+  // or billing line is shown.
+  const billed = creditsPerAnswer(estimate) != null;
   const filled = Math.max(1, questions.filter((q) => q.question.trim()).length);
   const sizes = offeredSizes(estimate, filled);
   const sampling = sizes.length > 0;
@@ -860,6 +874,12 @@ export default function AskComposer({
     });
   };
 
+  // The confirm's words: the rows read (a user question reads sessions).
+  const rowWords = cost
+    ? `${cost.rows.toLocaleString()} ${unit === "users" ? "sessions" : meta.plural}`
+    : "";
+  const questionWords = `${filled} question${filled === 1 ? "" : "s"}`;
+
   const showExamples = !questions.some((question) => question.question.trim());
   const recent = (saved.items || []).slice(0, 6);
   const nothingInView =
@@ -880,8 +900,9 @@ export default function AskComposer({
           Ask Jev about these {meta.plural}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Jev reads every {meta.noun} and answers your question for each, in
-          seconds. The answers land on a timeline as they come in.
+          Jev answers your question for each {meta.noun} it reads, a sample of
+          the view or every one. The first answers come in seconds and land on a
+          timeline as they arrive.
         </Typography>
       </Box>
 
@@ -1062,9 +1083,9 @@ export default function AskComposer({
             </Stack>
           }
         >
-          Read {cost.rows.toLocaleString()} {meta.plural}? That is{" "}
-          {creditWords(cost.credits)} for {filled} question
-          {filled === 1 ? "" : "s"}, and takes {durationWords(cost.seconds)}.
+          {cost.credits != null
+            ? `Read ${rowWords}? That is ${creditWords(cost.credits)} for ${questionWords}, and takes ${durationWords(cost.seconds)}.`
+            : `Read ${rowWords} for ${questionWords}? It takes ${durationWords(cost.seconds)}.`}{" "}
           You can pause or cancel it while it runs.
         </Alert>
       )}
@@ -1113,9 +1134,9 @@ export default function AskComposer({
           component="p"
           sx={{ mt: 1, maxWidth: 640 }}
         >
-          Each question is saved as a Jev evaluator you can reuse or edit. Every
-          answer is billed as one eval run; TypeSafe bills its tokens to your
-          own key.
+          Each question is saved as a Jev evaluator you can reuse or edit.
+          {billed ? " Every answer is billed as one eval run;" : ""} TypeSafe
+          bills its tokens to your own key.
         </Typography>
       </Box>
 

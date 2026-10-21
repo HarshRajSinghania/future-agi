@@ -49,22 +49,22 @@ function dateParam(times) {
 /**
  * The Traces list filtered to some rows of a run: traces by id, the traces
  * of sessions, or the traces the spans belong to. Users have no list filter
- * by id, so null.
+ * by id, and more rows than one link names are never cut short, so null.
  */
 export function rowsGridLink(projectId, unit, records = []) {
-  if (unit === "users" || !records.length) return null;
-  const rows = records.slice(0, GRID_LINK_MAX);
+  if (unit === "users" || !records.length || records.length > GRID_LINK_MAX)
+    return null;
   const column = unit === "sessions" ? "session_id" : "trace_id";
   const ids = [
     ...new Set(
-      rows
+      records
         .map((record) => (unit === "spans" ? record.trace_id : record.id))
         .filter(Boolean),
     ),
   ];
   if (!ids.length) return null;
   const params = new URLSearchParams({ tab: "traces", selectedTab: "trace" });
-  const dates = dateParam(rows.map((record) => record.time));
+  const dates = dateParam(records.map((record) => record.time));
   if (dates) params.set("primaryTraceDateFilter", dates);
   params.set(
     OBSERVE_LINK_FILTER_PARAM,

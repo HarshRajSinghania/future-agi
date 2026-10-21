@@ -74,7 +74,7 @@ export const FEATURES = {
     eyebrow: "Cloud feature",
     title: "Upgrade to use Instant eval",
     description:
-      "Ask a question in plain English and Jev answers it for every trace, session or user in view, in seconds.",
+      "Ask a question in plain English and Jev answers it for a sample or every trace, session or user in view; the first answers come in seconds.",
     image: instantEvalPreview,
     imageDark: instantEvalPreviewDark,
     steps: [
