@@ -1882,6 +1882,60 @@
 - Custom links and views send and keep their stored range verbatim and list no span
 - opening the views writes nothing back: every tracer_saved_view row in PG still holds its stored range
 
+### OBS-E2E-052 — without a licence, Ask a question opens the Instant eval upgrade page and its API answers 402
+
+**Goal:** Try Instant eval on a self-hosted install with no Enterprise licence and be shown its upgrade page instead of the feature (nothing stubbed)  
+**Spec:** `flows/observe/instant-eval-insights-gates.spec.ts:106`  
+**Tags:** —
+
+**User steps:**
+
+1. create an Observe project through the API
+2. open the project's Traces view and its Evaluate menu
+3. choose Ask a question
+4. open the Ask page from a bookmarked link
+5. post an Instant eval estimate for the project through the API
+
+**Backend state verified:**
+
+- the project row exists in PG tracer_project under the actor org
+- the capabilities API denies instant_eval with LICENSE_MISSING
+- the estimate API answers 402 with upgrade_required, code LICENSE_MISSING and feature instant_eval
+
+**Browser observations:**
+
+- the Evaluate menu lists Ask a question, Find patterns, Add evaluators, and only the first two carry the Enterprise mark
+- Ask a question lands on /observe/:id/ask showing the Instant eval upgrade page, its upgrade link and the Jev footnote
+- the bookmarked /ask link shows the same upgrade page
+- the browser never requests an Instant eval endpoint
+
+### OBS-E2E-053 — without a licence, Find patterns opens the Insights upgrade page and its API answers 402
+
+**Goal:** Try Insights on a self-hosted install with no Enterprise licence and be shown its upgrade page instead of the feature (nothing stubbed)  
+**Spec:** `flows/observe/instant-eval-insights-gates.spec.ts:168`  
+**Tags:** —
+
+**User steps:**
+
+1. create an Observe project through the API
+2. open the project's Traces view and its Evaluate menu
+3. choose Find patterns
+4. open the Insights page from a bookmarked link
+5. list the project's Insights reports through the API
+
+**Backend state verified:**
+
+- the project row exists in PG tracer_project under the actor org
+- the capabilities API denies insights with LICENSE_MISSING
+- the report list API answers 402 with upgrade_required, code LICENSE_MISSING and feature insights
+
+**Browser observations:**
+
+- the Evaluate menu lists Ask a question, Find patterns, Add evaluators, and only the first two carry the Enterprise mark
+- Find patterns lands on /observe/:id/insights showing the Insights upgrade page and its upgrade link
+- the bookmarked /insights link shows the same upgrade page
+- the browser never requests an Insights endpoint
+
 ## prompts
 
 ### PROMPT-E2E-001 — a mock-run prompt exposes its current evaluation configuration lifecycle
