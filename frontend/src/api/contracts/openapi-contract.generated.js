@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1088,
+  endpointCount: 1086,
   endpoints: {
     "/accounts/2fa/recovery-codes/": {
       get: {
@@ -35522,74 +35522,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    "/tracer/instant-eval/answers/": {
-      get: {
-        operationId: "tracer_instant-eval_answers_list",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: null,
-        queryParameters: {
-          project_id: {
-            required: true,
-            schema: {
-              type: "string",
-              format: "uuid",
-            },
-          },
-          eval_task_id: {
-            required: true,
-            schema: {
-              type: "string",
-              format: "uuid",
-            },
-          },
-          unit: {
-            required: true,
-            schema: {
-              type: "string",
-              enum: ["traces", "spans", "sessions", "users"],
-            },
-          },
-          config_ids: {
-            required: false,
-            schema: {
-              type: "string",
-              maxLength: 2000,
-            },
-          },
-          counts_only: {
-            required: false,
-            schema: {
-              type: "boolean",
-              default: false,
-            },
-          },
-        },
-        responses: {
-          200: {
-            $ref: "#/definitions/InstantEvalAnswersResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
     "/tracer/instant-eval/control/": {
       post: {
         operationId: "tracer_instant-eval_control_create",
@@ -35604,7 +35536,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
             $ref: "#/definitions/InstantEvalControlResponse",
           },
           400: {
-            $ref: "#/definitions/ApiErrorResponse",
+            $ref: "#/definitions/InstantEvalBadRequest",
           },
           402: {
             $ref: "#/definitions/InstantEvalLimitError",
@@ -36148,7 +36080,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
             $ref: "#/definitions/InstantEvalStartResponse",
           },
           400: {
-            $ref: "#/definitions/ApiErrorResponse",
+            $ref: "#/definitions/InstantEvalBadRequest",
           },
           402: {
             $ref: "#/definitions/InstantEvalLimitError",
@@ -36228,40 +36160,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         responses: {
           200: {
             $ref: "#/definitions/InstantEvalSummaryResponse",
-          },
-          400: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          403: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          404: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          500: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          503: {
-            $ref: "#/definitions/ApiErrorResponse",
-          },
-          default: {
-            $ref: "#/definitions/ManagementAPIErrorResponse",
-          },
-        },
-      },
-    },
-    "/tracer/instant-eval/user-sessions/": {
-      post: {
-        operationId: "tracer_instant-eval_user-sessions_create",
-        runtimeRequestValidation: true,
-        runtimeResponseValidation: true,
-        requestBody: {
-          $ref: "#/definitions/InstantEvalUserSessions",
-        },
-        queryParameters: {},
-        responses: {
-          200: {
-            $ref: "#/definitions/InstantEvalUserSessionsResponse",
           },
           400: {
             $ref: "#/definitions/ApiErrorResponse",
@@ -66331,17 +66229,86 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    InstantEvalAnswersResponse: {
-      required: ["result"],
+    InstantEvalBadRequest: {
       type: "object",
       properties: {
         status: {
           title: "Status",
           type: "boolean",
-          default: true,
+          default: false,
+        },
+        type: {
+          title: "Type",
+          type: "string",
+          enum: [
+            "validation_error",
+            "authentication_error",
+            "payment_required",
+            "entitlement_error",
+            "permission_error",
+            "not_found",
+            "conflict",
+            "client_error",
+            "rate_limit",
+            "server_error",
+            "service_unavailable",
+            "timeout",
+            "api_error",
+          ],
+          "x-nullable": true,
+        },
+        code: {
+          title: "Code",
+          type: "string",
+          "x-nullable": true,
+        },
+        detail: {
+          title: "Detail",
+          type: "string",
+          "x-nullable": true,
         },
         result: {
-          $ref: "#/definitions/InstantEvalAnswersResult",
+          title: "Result",
+          type: "object",
+          "x-string-or-object": true,
+          description: "String or JSON object.",
+          properties: {
+            message: {
+              type: "string",
+            },
+            error_code: {
+              type: "string",
+            },
+            settings_path: {
+              type: "string",
+            },
+          },
+        },
+        message: {
+          title: "Message",
+          type: "string",
+          "x-nullable": true,
+        },
+        error: {
+          title: "Error",
+          type: "string",
+          "x-nullable": true,
+        },
+        attr: {
+          title: "Attr",
+          type: "string",
+          "x-nullable": true,
+        },
+        details: {
+          title: "Details",
+          type: "object",
+          additionalProperties: {
+            type: "array",
+            items: {
+              type: "string",
+              minLength: 1,
+            },
+          },
         },
       },
     },
@@ -66771,55 +66738,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         result: {
           $ref: "#/definitions/InstantEvalSummary",
-        },
-      },
-    },
-    InstantEvalUserSessions: {
-      required: ["project_id", "end_user_ids"],
-      type: "object",
-      properties: {
-        project_id: {
-          title: "Project id",
-          type: "string",
-          format: "uuid",
-        },
-        end_user_ids: {
-          type: "array",
-          items: {
-            type: "string",
-            format: "uuid",
-          },
-          maxItems: 500,
-          minItems: 1,
-        },
-        window: {
-          type: "array",
-          items: {
-            type: "string",
-            format: "date-time",
-          },
-          maxItems: 2,
-        },
-        per_user: {
-          title: "Per user",
-          type: "integer",
-          default: 5,
-          maximum: 20,
-          minimum: 1,
-        },
-      },
-    },
-    InstantEvalUserSessionsResponse: {
-      required: ["result"],
-      type: "object",
-      properties: {
-        status: {
-          title: "Status",
-          type: "boolean",
-          default: true,
-        },
-        result: {
-          $ref: "#/definitions/InstantEvalUserSessionsResult",
         },
       },
     },
@@ -97195,6 +97113,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+          "x-nullable": true,
         },
         credit_limited: {
           title: "Credit limited",
@@ -97467,41 +97386,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    InstantEvalAnswersResult: {
-      required: ["unit", "rows", "counts", "answered"],
-      type: "object",
-      properties: {
-        unit: {
-          title: "Unit",
-          type: "string",
-          minLength: 1,
-        },
-        rows: {
-          type: "array",
-          items: {
-            $ref: "#/definitions/InstantEvalAnswerRow",
-          },
-        },
-        counts: {
-          title: "Counts",
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            additionalProperties: {
-              type: "integer",
-            },
-          },
-        },
-        answered: {
-          title: "Answered",
-          type: "integer",
-        },
-        pending: {
-          title: "Pending",
-          type: "integer",
-        },
-      },
-    },
     InstantEvalControl: {
       required: ["status", "message"],
       type: "object",
@@ -97533,6 +97417,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "rows_to_read",
         "questions",
         "credits_estimate",
+        "credits_per_answer",
         "seconds_estimate",
         "needs_confirm",
         "max_rows",
@@ -97566,6 +97451,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+          "x-nullable": true,
+        },
+        credits_per_answer: {
+          title: "Credits per answer",
+          type: "number",
+          "x-nullable": true,
         },
         seconds_estimate: {
           title: "Seconds estimate",
@@ -97637,6 +97528,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+          "x-nullable": true,
         },
         credits_left: {
           title: "Credits left",
@@ -97732,6 +97624,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+          "x-nullable": true,
         },
         date_preset: {
           title: "Date preset",
@@ -97841,10 +97734,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+          "x-nullable": true,
         },
         credits_used: {
           title: "Credits used",
           type: "number",
+          "x-nullable": true,
         },
         in_flight: {
           title: "In flight",
@@ -97907,22 +97802,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           title: "Sessions read",
           type: "integer",
           "x-nullable": true,
-        },
-      },
-    },
-    InstantEvalUserSessionsResult: {
-      required: ["sessions", "users"],
-      type: "object",
-      properties: {
-        sessions: {
-          type: "array",
-          items: {
-            $ref: "#/definitions/InstantEvalUserSession",
-          },
-        },
-        users: {
-          title: "Users",
-          type: "integer",
         },
       },
     },
@@ -114444,68 +114323,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
       },
     },
-    InstantEvalAnswerRow: {
-      required: [
-        "id",
-        "label",
-        "excerpt",
-        "time",
-        "user_id",
-        "end_user_id",
-        "answers",
-      ],
-      type: "object",
-      properties: {
-        id: {
-          title: "Id",
-          type: "string",
-          minLength: 1,
-        },
-        label: {
-          title: "Label",
-          type: "string",
-        },
-        excerpt: {
-          title: "Excerpt",
-          type: "string",
-        },
-        time: {
-          title: "Time",
-          type: "string",
-          minLength: 1,
-          "x-nullable": true,
-        },
-        user_id: {
-          title: "User id",
-          type: "string",
-          "x-nullable": true,
-        },
-        end_user_id: {
-          title: "End user id",
-          type: "string",
-          "x-nullable": true,
-        },
-        sessions: {
-          title: "Sessions",
-          type: "integer",
-        },
-        trace_id: {
-          title: "Trace id",
-          type: "string",
-          "x-nullable": true,
-        },
-        facets: {
-          $ref: "#/definitions/InstantEvalRowFacets",
-        },
-        answers: {
-          title: "Answers",
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/InstantEvalAnswer",
-          },
-        },
-      },
-    },
     InstantEvalChoice: {
       required: [
         "sample_size",
@@ -114530,6 +114347,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         credits_estimate: {
           title: "Credits estimate",
           type: "number",
+          "x-nullable": true,
         },
         seconds_estimate: {
           title: "Seconds estimate",
@@ -114884,28 +114702,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         next_size: {
           title: "Next size",
           type: "integer",
-        },
-      },
-    },
-    InstantEvalUserSession: {
-      required: ["session_id", "end_user_id", "start_time"],
-      type: "object",
-      properties: {
-        session_id: {
-          title: "Session id",
-          type: "string",
-          minLength: 1,
-        },
-        end_user_id: {
-          title: "End user id",
-          type: "string",
-          minLength: 1,
-        },
-        start_time: {
-          title: "Start time",
-          type: "string",
-          minLength: 1,
-          "x-nullable": true,
         },
       },
     },
@@ -121032,6 +120828,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "name",
         "status",
         "run_type",
+        "row_type",
         "filters_applied",
         "created_at",
         "evals_applied",
@@ -121064,6 +120861,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         run_type: {
           title: "Run type",
+          type: "string",
+          minLength: 1,
+          "x-nullable": true,
+        },
+        row_type: {
+          title: "Row type",
           type: "string",
           minLength: 1,
           "x-nullable": true,
@@ -122121,64 +121924,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         evidence_id: {
           title: "Evidence id",
           type: "string",
-        },
-      },
-    },
-    InstantEvalAnswer: {
-      required: ["answer", "explanation"],
-      type: "object",
-      properties: {
-        answer: {
-          title: "Answer",
-          type: "string",
-          minLength: 1,
-          "x-nullable": true,
-        },
-        explanation: {
-          title: "Explanation",
-          type: "string",
-          "x-nullable": true,
-        },
-        confidence: {
-          title: "Confidence",
-          type: "number",
-          "x-nullable": true,
-        },
-        status: {
-          title: "Status",
-          type: "string",
-        },
-        counts: {
-          title: "Counts",
-          type: "object",
-          additionalProperties: {
-            type: "integer",
-          },
-        },
-      },
-    },
-    InstantEvalRowFacets: {
-      required: ["model", "turns", "duration_ms", "error"],
-      type: "object",
-      properties: {
-        model: {
-          title: "Model",
-          type: "string",
-          "x-nullable": true,
-        },
-        turns: {
-          title: "Turns",
-          type: "integer",
-          "x-nullable": true,
-        },
-        duration_ms: {
-          title: "Duration ms",
-          type: "integer",
-          "x-nullable": true,
-        },
-        error: {
-          title: "Error",
-          type: "boolean",
         },
       },
     },

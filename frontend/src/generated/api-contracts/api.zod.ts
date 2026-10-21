@@ -53820,6 +53820,7 @@ export const TracerEvalTaskListEvalTasksResponse = zod.object({
         project_name: zod.string().min(1).optional(),
         status: zod.string().min(1),
         run_type: zod.string().min(1),
+        row_type: zod.string().min(1),
         filters_applied: zod.object({}).passthrough(),
         created_at: zod.string().datetime({ offset: true }),
         evals_applied: zod.array(zod.string().min(1)),
@@ -53892,6 +53893,7 @@ export const TracerEvalTaskListEvalTasksWithProjectNameResponse = zod.object({
         project_name: zod.string().min(1).optional(),
         status: zod.string().min(1),
         run_type: zod.string().min(1),
+        row_type: zod.string().min(1),
         filters_applied: zod.object({}).passthrough(),
         created_at: zod.string().datetime({ offset: true }),
         evals_applied: zod.array(zod.string().min(1)),
@@ -57005,70 +57007,6 @@ export const TracerInsightsRunsUnitsListResponse = zod.object({
 });
 
 /**
- * Answers of an Instant eval task, per trace, session or user.
- */
-export const tracerInstantEvalAnswersListQueryConfigIdsMax = 2000;
-
-export const tracerInstantEvalAnswersListQueryCountsOnlyDefault = false;
-
-export const TracerInstantEvalAnswersListQueryParams = zod.object({
-  project_id: zod.string().uuid(),
-  eval_task_id: zod.string().uuid(),
-  unit: zod.enum(["traces", "spans", "sessions", "users"]),
-  config_ids: zod
-    .string()
-    .max(tracerInstantEvalAnswersListQueryConfigIdsMax)
-    .optional(),
-  counts_only: zod
-    .boolean()
-    .default(tracerInstantEvalAnswersListQueryCountsOnlyDefault),
-});
-
-export const tracerInstantEvalAnswersListResponseStatusDefault = true;
-
-export const TracerInstantEvalAnswersListResponse = zod.object({
-  status: zod
-    .boolean()
-    .default(tracerInstantEvalAnswersListResponseStatusDefault),
-  result: zod.object({
-    unit: zod.string().min(1),
-    rows: zod.array(
-      zod.object({
-        id: zod.string().min(1),
-        label: zod.string(),
-        excerpt: zod.string(),
-        time: zod.string().min(1),
-        user_id: zod.string(),
-        end_user_id: zod.string(),
-        sessions: zod.number().optional(),
-        trace_id: zod.string().optional(),
-        facets: zod
-          .object({
-            model: zod.string(),
-            turns: zod.number(),
-            duration_ms: zod.number(),
-            error: zod.boolean(),
-          })
-          .optional(),
-        answers: zod.record(
-          zod.string(),
-          zod.object({
-            answer: zod.string().min(1),
-            explanation: zod.string(),
-            confidence: zod.number().optional(),
-            status: zod.string().optional(),
-            counts: zod.record(zod.string(), zod.number()).optional(),
-          }),
-        ),
-      }),
-    ),
-    counts: zod.record(zod.string(), zod.record(zod.string(), zod.number())),
-    answered: zod.number(),
-    pending: zod.number().optional(),
-  }),
-});
-
-/**
  * Pause, resume or cancel a run, retry the rows Jev failed on, or
 read more of a sample. Resuming, retrying and reading more count
 against the organization's runs in flight.
@@ -57214,6 +57152,7 @@ export const TracerInstantEvalEstimateCreateResponse = zod.object({
     rows_to_read: zod.number(),
     questions: zod.number(),
     credits_estimate: zod.number(),
+    credits_per_answer: zod.number(),
     seconds_estimate: zod.number(),
     needs_confirm: zod.boolean(),
     max_rows: zod.number(),
@@ -57739,51 +57678,6 @@ export const TracerInstantEvalSummaryListResponse = zod.object({
     groups: zod.object({}).passthrough(),
     cross: zod.object({}).passthrough(),
     sessions_read: zod.number().optional(),
-  }),
-});
-
-/**
- * The latest sessions of each user, for asking a question per user.
- */
-export const tracerInstantEvalUserSessionsCreateBodyEndUserIdsMax = 500;
-
-export const tracerInstantEvalUserSessionsCreateBodyWindowMax = 2;
-
-export const tracerInstantEvalUserSessionsCreateBodyPerUserDefault = 5;
-export const tracerInstantEvalUserSessionsCreateBodyPerUserMax = 20;
-
-export const TracerInstantEvalUserSessionsCreateBody = zod.object({
-  project_id: zod.string().uuid(),
-  end_user_ids: zod
-    .array(zod.string().uuid())
-    .min(1)
-    .max(tracerInstantEvalUserSessionsCreateBodyEndUserIdsMax),
-  window: zod
-    .array(zod.string().datetime({ offset: true }))
-    .max(tracerInstantEvalUserSessionsCreateBodyWindowMax)
-    .optional(),
-  per_user: zod
-    .number()
-    .min(1)
-    .max(tracerInstantEvalUserSessionsCreateBodyPerUserMax)
-    .default(tracerInstantEvalUserSessionsCreateBodyPerUserDefault),
-});
-
-export const tracerInstantEvalUserSessionsCreateResponseStatusDefault = true;
-
-export const TracerInstantEvalUserSessionsCreateResponse = zod.object({
-  status: zod
-    .boolean()
-    .default(tracerInstantEvalUserSessionsCreateResponseStatusDefault),
-  result: zod.object({
-    sessions: zod.array(
-      zod.object({
-        session_id: zod.string().min(1),
-        end_user_id: zod.string().min(1),
-        start_time: zod.string().min(1),
-      }),
-    ),
-    users: zod.number(),
   }),
 });
 

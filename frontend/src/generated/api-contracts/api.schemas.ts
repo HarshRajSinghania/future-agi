@@ -25415,6 +25415,8 @@ export interface _EvalTaskListRowResponseApi {
   status: string;
   /** @minLength 1 */
   run_type: string;
+  /** @minLength 1 */
+  row_type: string;
   filters_applied: _EvalTaskListRowResponseApiFiltersApplied;
   created_at: string;
   evals_applied: string[];
@@ -26701,61 +26703,6 @@ export interface InsightUnitsResponseApi {
   result: InsightUnitsResultApi;
 }
 
-export interface InstantEvalRowFacetsApi {
-  model: string;
-  turns: number;
-  duration_ms: number;
-  error: boolean;
-}
-
-export type InstantEvalAnswerApiCounts = { [key: string]: number };
-
-export interface InstantEvalAnswerApi {
-  /** @minLength 1 */
-  answer: string;
-  explanation: string;
-  confidence?: number;
-  status?: string;
-  counts?: InstantEvalAnswerApiCounts;
-}
-
-export type InstantEvalAnswerRowApiAnswers = {
-  [key: string]: InstantEvalAnswerApi;
-};
-
-export interface InstantEvalAnswerRowApi {
-  /** @minLength 1 */
-  id: string;
-  label: string;
-  excerpt: string;
-  /** @minLength 1 */
-  time: string;
-  user_id: string;
-  end_user_id: string;
-  sessions?: number;
-  trace_id?: string;
-  facets?: InstantEvalRowFacetsApi;
-  answers: InstantEvalAnswerRowApiAnswers;
-}
-
-export type InstantEvalAnswersResultApiCounts = {
-  [key: string]: { [key: string]: number };
-};
-
-export interface InstantEvalAnswersResultApi {
-  /** @minLength 1 */
-  unit: string;
-  rows: InstantEvalAnswerRowApi[];
-  counts: InstantEvalAnswersResultApiCounts;
-  answered: number;
-  pending?: number;
-}
-
-export interface InstantEvalAnswersResponseApi {
-  status?: boolean;
-  result: InstantEvalAnswersResultApi;
-}
-
 export type InstantEvalControlRequestApiAction =
   (typeof InstantEvalControlRequestApiAction)[keyof typeof InstantEvalControlRequestApiAction];
 
@@ -26788,6 +26735,49 @@ export interface InstantEvalControlApi {
 export interface InstantEvalControlResponseApi {
   status?: boolean;
   result: InstantEvalControlApi;
+}
+
+export type InstantEvalBadRequestApiType =
+  (typeof InstantEvalBadRequestApiType)[keyof typeof InstantEvalBadRequestApiType];
+
+export const InstantEvalBadRequestApiType = {
+  validation_error: "validation_error",
+  authentication_error: "authentication_error",
+  payment_required: "payment_required",
+  entitlement_error: "entitlement_error",
+  permission_error: "permission_error",
+  not_found: "not_found",
+  conflict: "conflict",
+  client_error: "client_error",
+  rate_limit: "rate_limit",
+  server_error: "server_error",
+  service_unavailable: "service_unavailable",
+  timeout: "timeout",
+  api_error: "api_error",
+} as const;
+
+/**
+ * String or JSON object.
+ */
+export type InstantEvalBadRequestApiResult = {
+  message?: string;
+  error_code?: string;
+  settings_path?: string;
+};
+
+export type InstantEvalBadRequestApiDetails = { [key: string]: string[] };
+
+export interface InstantEvalBadRequestApi {
+  status?: boolean;
+  type?: InstantEvalBadRequestApiType;
+  code?: string;
+  detail?: string;
+  /** String or JSON object. */
+  result?: InstantEvalBadRequestApiResult;
+  message?: string;
+  error?: string;
+  attr?: string;
+  details?: InstantEvalBadRequestApiDetails;
 }
 
 export interface InstantEvalBusyRunApi {
@@ -26943,6 +26933,7 @@ export interface InstantEvalEstimateApi {
   rows_to_read: number;
   questions: number;
   credits_estimate: number;
+  credits_per_answer: number;
   seconds_estimate: number;
   needs_confirm: boolean;
   max_rows: number;
@@ -27204,41 +27195,6 @@ export interface InstantEvalSummaryApi {
 export interface InstantEvalSummaryResponseApi {
   status?: boolean;
   result: InstantEvalSummaryApi;
-}
-
-export interface InstantEvalUserSessionsApi {
-  project_id: string;
-  /**
-   * @minItems 1
-   * @maxItems 500
-   */
-  end_user_ids: string[];
-  /** @maxItems 2 */
-  window?: string[];
-  /**
-   * @minimum 1
-   * @maximum 20
-   */
-  per_user?: number;
-}
-
-export interface InstantEvalUserSessionApi {
-  /** @minLength 1 */
-  session_id: string;
-  /** @minLength 1 */
-  end_user_id: string;
-  /** @minLength 1 */
-  start_time: string;
-}
-
-export interface InstantEvalUserSessionsResultApi {
-  sessions: InstantEvalUserSessionApi[];
-  users: number;
-}
-
-export interface InstantEvalUserSessionsResponseApi {
-  status?: boolean;
-  result: InstantEvalUserSessionsResultApi;
 }
 
 export type UpdateInvestigationAttemptRequestApiAction =
@@ -37190,27 +37146,6 @@ export type TracerInsightsRunsUnitsListParams = {
   limit?: number;
   include_content?: boolean;
 };
-
-export type TracerInstantEvalAnswersListParams = {
-  project_id: string;
-  eval_task_id: string;
-  unit: TracerInstantEvalAnswersListUnit;
-  /**
-   * @maxLength 2000
-   */
-  config_ids?: string;
-  counts_only?: boolean;
-};
-
-export type TracerInstantEvalAnswersListUnit =
-  (typeof TracerInstantEvalAnswersListUnit)[keyof typeof TracerInstantEvalAnswersListUnit];
-
-export const TracerInstantEvalAnswersListUnit = {
-  traces: "traces",
-  spans: "spans",
-  sessions: "sessions",
-  users: "users",
-} as const;
 
 export type TracerInstantEvalExportListParams = {
   project_id: string;

@@ -63777,104 +63777,6 @@
                 }
             ]
         },
-        "/tracer/instant-eval/answers/": {
-            "get": {
-                "operationId": "tracer_instant-eval_answers_list",
-                "description": "Answers of an Instant eval task, per trace, session or user.",
-                "parameters": [
-                    {
-                        "name": "project_id",
-                        "in": "query",
-                        "required": true,
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    {
-                        "name": "eval_task_id",
-                        "in": "query",
-                        "required": true,
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    {
-                        "name": "unit",
-                        "in": "query",
-                        "required": true,
-                        "type": "string",
-                        "enum": [
-                            "traces",
-                            "spans",
-                            "sessions",
-                            "users"
-                        ]
-                    },
-                    {
-                        "name": "config_ids",
-                        "in": "query",
-                        "required": false,
-                        "type": "string",
-                        "maxLength": 2000
-                    },
-                    {
-                        "name": "counts_only",
-                        "in": "query",
-                        "required": false,
-                        "type": "boolean",
-                        "default": false
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/InstantEvalAnswersResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": []
-        },
         "/tracer/instant-eval/control/": {
             "post": {
                 "operationId": "tracer_instant-eval_control_create",
@@ -63899,7 +63801,7 @@
                     "400": {
                         "description": "",
                         "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
+                            "$ref": "#/definitions/InstantEvalBadRequest"
                         }
                     },
                     "403": {
@@ -64622,7 +64524,7 @@
                     "400": {
                         "description": "",
                         "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
+                            "$ref": "#/definitions/InstantEvalBadRequest"
                         }
                     },
                     "403": {
@@ -64741,72 +64643,6 @@
                         "description": "",
                         "schema": {
                             "$ref": "#/definitions/InstantEvalSummaryResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/ApiErrorResponse"
-                        }
-                    },
-                    "default": {
-                        "description": "Default error response",
-                        "schema": {
-                            "$ref": "#/definitions/ManagementAPIErrorResponse"
-                        }
-                    }
-                },
-                "tags": [
-                    "tracer"
-                ],
-                "x-runtime-request-validation": true,
-                "x-runtime-response-validation": true
-            },
-            "parameters": []
-        },
-        "/tracer/instant-eval/user-sessions/": {
-            "post": {
-                "operationId": "tracer_instant-eval_user-sessions_create",
-                "description": "The latest sessions of each user, for asking a question per user.",
-                "parameters": [
-                    {
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/InstantEvalUserSessions"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "",
-                        "schema": {
-                            "$ref": "#/definitions/InstantEvalUserSessionsResponse"
                         }
                     },
                     "400": {
@@ -145136,6 +144972,7 @@
                 "name",
                 "status",
                 "run_type",
+                "row_type",
                 "filters_applied",
                 "created_at",
                 "evals_applied",
@@ -145168,6 +145005,12 @@
                 },
                 "run_type": {
                     "title": "Run type",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "row_type": {
+                    "title": "Row type",
                     "type": "string",
                     "minLength": 1,
                     "x-nullable": true
@@ -148077,7 +147920,8 @@
                 },
                 "credits_estimate": {
                     "title": "Credits estimate",
-                    "type": "number"
+                    "type": "number",
+                    "x-nullable": true
                 },
                 "credit_limited": {
                     "title": "Credit limited",
@@ -148736,190 +148580,6 @@
                 }
             }
         },
-        "InstantEvalRowFacets": {
-            "required": [
-                "model",
-                "turns",
-                "duration_ms",
-                "error"
-            ],
-            "type": "object",
-            "properties": {
-                "model": {
-                    "title": "Model",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "turns": {
-                    "title": "Turns",
-                    "type": "integer",
-                    "x-nullable": true
-                },
-                "duration_ms": {
-                    "title": "Duration ms",
-                    "type": "integer",
-                    "x-nullable": true
-                },
-                "error": {
-                    "title": "Error",
-                    "type": "boolean"
-                }
-            }
-        },
-        "InstantEvalAnswer": {
-            "required": [
-                "answer",
-                "explanation"
-            ],
-            "type": "object",
-            "properties": {
-                "answer": {
-                    "title": "Answer",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                },
-                "explanation": {
-                    "title": "Explanation",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "confidence": {
-                    "title": "Confidence",
-                    "type": "number",
-                    "x-nullable": true
-                },
-                "status": {
-                    "title": "Status",
-                    "type": "string"
-                },
-                "counts": {
-                    "title": "Counts",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "integer"
-                    }
-                }
-            }
-        },
-        "InstantEvalAnswerRow": {
-            "required": [
-                "id",
-                "label",
-                "excerpt",
-                "time",
-                "user_id",
-                "end_user_id",
-                "answers"
-            ],
-            "type": "object",
-            "properties": {
-                "id": {
-                    "title": "Id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "label": {
-                    "title": "Label",
-                    "type": "string"
-                },
-                "excerpt": {
-                    "title": "Excerpt",
-                    "type": "string"
-                },
-                "time": {
-                    "title": "Time",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                },
-                "user_id": {
-                    "title": "User id",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "end_user_id": {
-                    "title": "End user id",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "sessions": {
-                    "title": "Sessions",
-                    "type": "integer"
-                },
-                "trace_id": {
-                    "title": "Trace id",
-                    "type": "string",
-                    "x-nullable": true
-                },
-                "facets": {
-                    "$ref": "#/definitions/InstantEvalRowFacets"
-                },
-                "answers": {
-                    "title": "Answers",
-                    "type": "object",
-                    "additionalProperties": {
-                        "$ref": "#/definitions/InstantEvalAnswer"
-                    }
-                }
-            }
-        },
-        "InstantEvalAnswersResult": {
-            "required": [
-                "unit",
-                "rows",
-                "counts",
-                "answered"
-            ],
-            "type": "object",
-            "properties": {
-                "unit": {
-                    "title": "Unit",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InstantEvalAnswerRow"
-                    }
-                },
-                "counts": {
-                    "title": "Counts",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "integer"
-                        }
-                    }
-                },
-                "answered": {
-                    "title": "Answered",
-                    "type": "integer"
-                },
-                "pending": {
-                    "title": "Pending",
-                    "type": "integer"
-                }
-            }
-        },
-        "InstantEvalAnswersResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InstantEvalAnswersResult"
-                }
-            }
-        },
         "InstantEvalControlRequest": {
             "required": [
                 "project_id",
@@ -149005,6 +148665,89 @@
                 }
             }
         },
+        "InstantEvalBadRequest": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": false
+                },
+                "type": {
+                    "title": "Type",
+                    "type": "string",
+                    "enum": [
+                        "validation_error",
+                        "authentication_error",
+                        "payment_required",
+                        "entitlement_error",
+                        "permission_error",
+                        "not_found",
+                        "conflict",
+                        "client_error",
+                        "rate_limit",
+                        "server_error",
+                        "service_unavailable",
+                        "timeout",
+                        "api_error"
+                    ],
+                    "x-nullable": true
+                },
+                "code": {
+                    "title": "Code",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "detail": {
+                    "title": "Detail",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "result": {
+                    "title": "Result",
+                    "type": "object",
+                    "x-string-or-object": true,
+                    "description": "String or JSON object.",
+                    "properties": {
+                        "message": {
+                            "type": "string"
+                        },
+                        "error_code": {
+                            "type": "string"
+                        },
+                        "settings_path": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "message": {
+                    "title": "Message",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "error": {
+                    "title": "Error",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "attr": {
+                    "title": "Attr",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "details": {
+                    "title": "Details",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    }
+                }
+            }
+        },
         "InstantEvalBusyRun": {
             "required": [
                 "task_id",
@@ -149069,7 +148812,8 @@
                 },
                 "credits_estimate": {
                     "title": "Credits estimate",
-                    "type": "number"
+                    "type": "number",
+                    "x-nullable": true
                 },
                 "credits_left": {
                     "title": "Credits left",
@@ -149294,7 +149038,8 @@
                 },
                 "credits_estimate": {
                     "title": "Credits estimate",
-                    "type": "number"
+                    "type": "number",
+                    "x-nullable": true
                 },
                 "seconds_estimate": {
                     "title": "Seconds estimate",
@@ -149395,6 +149140,7 @@
                 "rows_to_read",
                 "questions",
                 "credits_estimate",
+                "credits_per_answer",
                 "seconds_estimate",
                 "needs_confirm",
                 "max_rows",
@@ -149427,7 +149173,13 @@
                 },
                 "credits_estimate": {
                     "title": "Credits estimate",
-                    "type": "number"
+                    "type": "number",
+                    "x-nullable": true
+                },
+                "credits_per_answer": {
+                    "title": "Credits per answer",
+                    "type": "number",
+                    "x-nullable": true
                 },
                 "seconds_estimate": {
                     "title": "Seconds estimate",
@@ -149898,7 +149650,8 @@
                 },
                 "credits_estimate": {
                     "title": "Credits estimate",
-                    "type": "number"
+                    "type": "number",
+                    "x-nullable": true
                 },
                 "date_preset": {
                     "title": "Date preset",
@@ -150121,11 +149874,13 @@
                 },
                 "credits_estimate": {
                     "title": "Credits estimate",
-                    "type": "number"
+                    "type": "number",
+                    "x-nullable": true
                 },
                 "credits_used": {
                     "title": "Credits used",
-                    "type": "number"
+                    "type": "number",
+                    "x-nullable": true
                 },
                 "in_flight": {
                     "title": "In flight",
@@ -150204,105 +149959,6 @@
                 },
                 "result": {
                     "$ref": "#/definitions/InstantEvalSummary"
-                }
-            }
-        },
-        "InstantEvalUserSessions": {
-            "required": [
-                "project_id",
-                "end_user_ids"
-            ],
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "title": "Project id",
-                    "type": "string",
-                    "format": "uuid"
-                },
-                "end_user_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    "maxItems": 500,
-                    "minItems": 1
-                },
-                "window": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "maxItems": 2
-                },
-                "per_user": {
-                    "title": "Per user",
-                    "type": "integer",
-                    "default": 5,
-                    "maximum": 20,
-                    "minimum": 1
-                }
-            }
-        },
-        "InstantEvalUserSession": {
-            "required": [
-                "session_id",
-                "end_user_id",
-                "start_time"
-            ],
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "title": "Session id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "end_user_id": {
-                    "title": "End user id",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "start_time": {
-                    "title": "Start time",
-                    "type": "string",
-                    "minLength": 1,
-                    "x-nullable": true
-                }
-            }
-        },
-        "InstantEvalUserSessionsResult": {
-            "required": [
-                "sessions",
-                "users"
-            ],
-            "type": "object",
-            "properties": {
-                "sessions": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/InstantEvalUserSession"
-                    }
-                },
-                "users": {
-                    "title": "Users",
-                    "type": "integer"
-                }
-            }
-        },
-        "InstantEvalUserSessionsResponse": {
-            "required": [
-                "result"
-            ],
-            "type": "object",
-            "properties": {
-                "status": {
-                    "title": "Status",
-                    "type": "boolean",
-                    "default": true
-                },
-                "result": {
-                    "$ref": "#/definitions/InstantEvalUserSessionsResult"
                 }
             }
         },

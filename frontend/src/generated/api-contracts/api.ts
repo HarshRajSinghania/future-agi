@@ -661,7 +661,7 @@ import type {
   InsightRunCreatedResponseApi,
   InsightRunResponseApi,
   InsightUnitsResponseApi,
-  InstantEvalAnswersResponseApi,
+  InstantEvalBadRequestApi,
   InstantEvalControlRequestApi,
   InstantEvalControlResponseApi,
   InstantEvalEstimateRequestApi,
@@ -672,8 +672,6 @@ import type {
   InstantEvalStartRequestApi,
   InstantEvalStartResponseApi,
   InstantEvalSummaryResponseApi,
-  InstantEvalUserSessionsApi,
-  InstantEvalUserSessionsResponseApi,
   IntegrationConnectionCreateApi,
   IntegrationConnectionDetailApi,
   IntegrationConnectionDetailResponseApi,
@@ -1348,7 +1346,6 @@ import type {
   TracerImagineAnalysisListParams,
   TracerInsightsConfigsListParams,
   TracerInsightsRunsUnitsListParams,
-  TracerInstantEvalAnswersListParams,
   TracerInstantEvalExportListParams,
   TracerInstantEvalRowsListParams,
   TracerInstantEvalRunsListParams,
@@ -73708,105 +73705,13 @@ export const tracerInsightsRunsUnitsList = async (
   );
 };
 
-export type tracerInstantEvalAnswersListResponse200 = {
-  data: InstantEvalAnswersResponseApi;
-  status: 200;
-};
-
-export type tracerInstantEvalAnswersListResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerInstantEvalAnswersListResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerInstantEvalAnswersListResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerInstantEvalAnswersListResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerInstantEvalAnswersListResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerInstantEvalAnswersListResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 500 | 503>;
-};
-
-export type tracerInstantEvalAnswersListResponseSuccess =
-  tracerInstantEvalAnswersListResponse200 & {
-    headers: Headers;
-  };
-export type tracerInstantEvalAnswersListResponseError = (
-  | tracerInstantEvalAnswersListResponse400
-  | tracerInstantEvalAnswersListResponse403
-  | tracerInstantEvalAnswersListResponse404
-  | tracerInstantEvalAnswersListResponse500
-  | tracerInstantEvalAnswersListResponse503
-  | tracerInstantEvalAnswersListResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerInstantEvalAnswersListResponse =
-  | tracerInstantEvalAnswersListResponseSuccess
-  | tracerInstantEvalAnswersListResponseError;
-
-export const getTracerInstantEvalAnswersListUrl = (
-  params: TracerInstantEvalAnswersListParams,
-) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
-      value
-        .filter((item) => item !== undefined && item !== null)
-        .forEach((item) => normalizedParams.append(key, item.toString()));
-    } else if (value !== undefined && value !== null) {
-      normalizedParams.append(key, value.toString());
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0
-    ? `/tracer/instant-eval/answers/?${stringifiedParams}`
-    : `/tracer/instant-eval/answers/`;
-};
-
-/**
- * Answers of an Instant eval task, per trace, session or user.
- */
-export const tracerInstantEvalAnswersList = async (
-  params: TracerInstantEvalAnswersListParams,
-  options?: RequestInit,
-): Promise<tracerInstantEvalAnswersListResponse> => {
-  return apiMutator<tracerInstantEvalAnswersListResponse>(
-    getTracerInstantEvalAnswersListUrl(params),
-    {
-      ...options,
-      method: "GET",
-    },
-  );
-};
-
 export type tracerInstantEvalControlCreateResponse200 = {
   data: InstantEvalControlResponseApi;
   status: 200;
 };
 
 export type tracerInstantEvalControlCreateResponse400 = {
-  data: ApiErrorResponseApi;
+  data: InstantEvalBadRequestApi;
   status: 400;
 };
 
@@ -74273,7 +74178,7 @@ export type tracerInstantEvalStartCreateResponse200 = {
 };
 
 export type tracerInstantEvalStartCreateResponse400 = {
-  data: ApiErrorResponseApi;
+  data: InstantEvalBadRequestApi;
   status: 400;
 };
 
@@ -74462,82 +74367,6 @@ export const tracerInstantEvalSummaryList = async (
     {
       ...options,
       method: "GET",
-    },
-  );
-};
-
-export type tracerInstantEvalUserSessionsCreateResponse200 = {
-  data: InstantEvalUserSessionsResponseApi;
-  status: 200;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponse400 = {
-  data: ApiErrorResponseApi;
-  status: 400;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponse403 = {
-  data: ApiErrorResponseApi;
-  status: 403;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponse404 = {
-  data: ApiErrorResponseApi;
-  status: 404;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponse500 = {
-  data: ApiErrorResponseApi;
-  status: 500;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponse503 = {
-  data: ApiErrorResponseApi;
-  status: 503;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponseDefault = {
-  data: ManagementAPIErrorResponseApi;
-  status: Exclude<HTTPStatusCodes, 200 | 400 | 403 | 404 | 500 | 503>;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponseSuccess =
-  tracerInstantEvalUserSessionsCreateResponse200 & {
-    headers: Headers;
-  };
-export type tracerInstantEvalUserSessionsCreateResponseError = (
-  | tracerInstantEvalUserSessionsCreateResponse400
-  | tracerInstantEvalUserSessionsCreateResponse403
-  | tracerInstantEvalUserSessionsCreateResponse404
-  | tracerInstantEvalUserSessionsCreateResponse500
-  | tracerInstantEvalUserSessionsCreateResponse503
-  | tracerInstantEvalUserSessionsCreateResponseDefault
-) & {
-  headers: Headers;
-};
-
-export type tracerInstantEvalUserSessionsCreateResponse =
-  | tracerInstantEvalUserSessionsCreateResponseSuccess
-  | tracerInstantEvalUserSessionsCreateResponseError;
-
-export const getTracerInstantEvalUserSessionsCreateUrl = () => {
-  return `/tracer/instant-eval/user-sessions/`;
-};
-
-/**
- * The latest sessions of each user, for asking a question per user.
- */
-export const tracerInstantEvalUserSessionsCreate = async (
-  instantEvalUserSessionsApi: InstantEvalUserSessionsApi,
-  options?: RequestInit,
-): Promise<tracerInstantEvalUserSessionsCreateResponse> => {
-  return apiMutator<tracerInstantEvalUserSessionsCreateResponse>(
-    getTracerInstantEvalUserSessionsCreateUrl(),
-    {
-      ...options,
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      body: JSON.stringify(instantEvalUserSessionsApi),
     },
   );
 };

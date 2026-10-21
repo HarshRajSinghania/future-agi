@@ -5,7 +5,7 @@
 export const API_SURFACE_CONTRACT = Object.freeze({
   generatedFrom: "api_contracts/openapi/swagger.json",
   swaggerVersion: "2.0",
-  endpointCount: 1088,
+  endpointCount: 1086,
   groups: {
     accounts: {
       "/accounts/2fa/recovery-codes/": ["get"],
@@ -1104,7 +1104,6 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/tracer/insights/runs/{run_id}/": ["get"],
       "/tracer/insights/runs/{run_id}/ask/": ["post"],
       "/tracer/insights/runs/{run_id}/units/": ["get"],
-      "/tracer/instant-eval/answers/": ["get"],
       "/tracer/instant-eval/control/": ["post"],
       "/tracer/instant-eval/estimate/": ["post"],
       "/tracer/instant-eval/export/": ["get"],
@@ -1112,7 +1111,6 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/tracer/instant-eval/runs/": ["get"],
       "/tracer/instant-eval/start/": ["post"],
       "/tracer/instant-eval/summary/": ["get"],
-      "/tracer/instant-eval/user-sessions/": ["post"],
       "/tracer/internal/error-feed-v2/attempts/{attempt_id}/": ["patch"],
       "/tracer/internal/error-feed-v2/attempts/{attempt_id}/conversation-evidence/":
         ["post"],
@@ -2402,7 +2400,6 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/tracer/insights/runs/{run_id}/": ["get"],
   "/tracer/insights/runs/{run_id}/ask/": ["post"],
   "/tracer/insights/runs/{run_id}/units/": ["get"],
-  "/tracer/instant-eval/answers/": ["get"],
   "/tracer/instant-eval/control/": ["post"],
   "/tracer/instant-eval/estimate/": ["post"],
   "/tracer/instant-eval/export/": ["get"],
@@ -2410,7 +2407,6 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/tracer/instant-eval/runs/": ["get"],
   "/tracer/instant-eval/start/": ["post"],
   "/tracer/instant-eval/summary/": ["get"],
-  "/tracer/instant-eval/user-sessions/": ["post"],
   "/tracer/internal/error-feed-v2/attempts/{attempt_id}/": ["patch"],
   "/tracer/internal/error-feed-v2/attempts/{attempt_id}/conversation-evidence/":
     ["post"],
