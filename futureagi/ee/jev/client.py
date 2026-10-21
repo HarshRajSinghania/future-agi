@@ -26,6 +26,9 @@ PROVIDER_KEY_HEADER = "x-agentcc-provider-key"
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 # Gateway error codes are snake_case identifiers; anything else is not read.
 _GATEWAY_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# The gateway's id for a request (a ULID), which its logs are found by.
+REQUEST_ID_HEADER = "x-agentcc-request-id"
+_REQUEST_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 # The gateway refused to carry the org's key, so the call never reached
 # TypeSafe. These are deployment faults; no retry can fix them.
 _GATEWAY_REFUSALS = frozenset(
@@ -108,6 +111,13 @@ def _upstream_status(response):
     return int(value) if value.isdigit() and len(value) == 3 else None
 
 
+def _request_id(response):
+    """The gateway's id for the call, when it is one; nothing else of the
+    header is kept."""
+    value = response.headers.get(REQUEST_ID_HEADER, "")
+    return value if _REQUEST_ID.fullmatch(value) else None
+
+
 def _internal_api_key():
     return str(
         getattr(settings, "AGENTCC_INTERNAL_API_KEY", "")
@@ -125,6 +135,9 @@ class JevSystemOneClient:
         self.jitter = jitter or (lambda upper: random.uniform(0, upper))
         self.attempt = 0
         self.attempts = []
+        # The gateway's id for the last call, success or error (None on the
+        # direct transport).
+        self.gateway_request_id = None
 
     def _gateway_url(self):
         from agentcc.services.gateway_client import resolve_gateway_internal_url
@@ -158,9 +171,25 @@ class JevSystemOneClient:
             "Content-Type": "application/json",
         }
 
+    def invalid_response(self, reason, code="JEV_PROVIDER_ERROR"):
+        """A 200 whose body can't be used (``reason``: too_large, not_json,
+        not_object or error_body; a caller whose own check rejects the answer
+        reports it the same way), logged with the gateway's id for the call,
+        which finds what came back in the gateway's logs. Returns the error to
+        raise. Nothing of the body is logged."""
+        logger.warning(
+            "jev_invalid_response",
+            reason=reason,
+            code=code,
+            attempt=self.attempt,
+            gateway_request_id=self.gateway_request_id,
+        )
+        return JevGatewayError(code)
+
     def _request(self, payload, timeout):
         import httpx
 
+        self.gateway_request_id = None
         if not self.api_key:
             raise JevGatewayError("JEV_KEY_MISSING")
         # Only an explicit "direct" leaves the gateway.
@@ -186,27 +215,34 @@ class JevSystemOneClient:
             raise JevGatewayError("JEV_TIMEOUT", True) from None
         except httpx.HTTPError:
             raise JevGatewayError("JEV_PROVIDER_ERROR", True) from None
+        if gateway:
+            self.gateway_request_id = _request_id(response)
         if response.status_code != 200:
             retry_after = response.headers.get("Retry-After")
             if gateway:
                 code = _gateway_code(response)
                 upstream_status = _upstream_status(response)
-                # Only the gateway's status and code: never its message, the
-                # body or a header. A refusal by the gateway itself (a rotated
-                # internal key, a gateway without /v1/systemone) shows here.
+                # Only the gateway's status, code and request id: never its
+                # message, the body or another header. A refusal by the gateway
+                # itself (a rotated internal key, a gateway without
+                # /v1/systemone) shows here.
                 logger.warning(
                     "jev_gateway_error",
                     status=response.status_code,
                     code=code,
                     upstream_status=upstream_status,
+                    gateway_request_id=self.gateway_request_id,
                 )
                 raise _gateway_error(
                     response.status_code, code, retry_after, upstream_status
                 )
             raise _provider_error(response.status_code, retry_after)
         if len(response.content) > _MAX_RESPONSE_BYTES:
-            raise JevGatewayError()
-        return response.json()
+            raise self.invalid_response("too_large")
+        try:
+            return response.json()
+        except ValueError:
+            raise self.invalid_response("not_json") from None
 
     def evaluate(self, model, state, questions, *, timeout=35):
         if not is_jev_model(model):
@@ -216,6 +252,7 @@ class JevSystemOneClient:
         payload = {"model": model, "state": state, "questions": questions}
         check_input_size(payload)
         self.attempt, self.attempts = 0, []
+        self.gateway_request_id = None
         deadline = self.clock() + min(getattr(settings, "JEV_TOTAL_DEADLINE", 90), 90)
         semaphore = _semaphore(max(1, int(getattr(settings, "JEV_MAX_CONCURRENT", 8))))
         if not semaphore.acquire(timeout=max(0, deadline - self.clock())):
@@ -231,9 +268,9 @@ class JevSystemOneClient:
                 try:
                     response = self._request(payload, min(timeout, remaining))
                     if not isinstance(response, dict):
-                        raise JevGatewayError()
+                        raise self.invalid_response("not_object")
                     if "error" in response:
-                        raise JevGatewayError()
+                        raise self.invalid_response("error_body")
                     if self.clock() > deadline:
                         raise JevGatewayError("JEV_TIMEOUT", True)
                     # Only allowlisted accounting fields are retained; never the body.
@@ -242,6 +279,7 @@ class JevSystemOneClient:
                             "attempt": attempt,
                             "outcome": "success",
                             "usage": response.get("usage", {}),
+                            "gateway_request_id": self.gateway_request_id,
                         }
                     )
                     return response
@@ -255,6 +293,7 @@ class JevSystemOneClient:
                         "outcome": "error",
                         "usage": {},
                         "code": error.code,
+                        "gateway_request_id": self.gateway_request_id,
                     }
                 )
                 if (

@@ -44,6 +44,7 @@ from rest_framework.views import APIView
 from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_serializers import ApiErrorResponseSerializer
 from tfc.utils.general_methods import GeneralMethods
+from tfc.utils.serializer_fields import StringOrObjectField
 from tracer.models.custom_eval_config import CustomEvalConfig
 from tracer.models.eval_task import (
     RESUMABLE_TASK_STATUSES,
@@ -76,7 +77,6 @@ logger = structlog.get_logger(__name__)
 UNITS = ["traces", "spans", "sessions", "users"]
 # The Observe date options a view's window comes from.
 DATE_PRESETS = ["Today", "Yesterday", "7D", "30D", "3M", "6M", "12M", "Custom"]
-CREDITS_PER_ANSWER = 0.06
 SAMPLE_SIZES = (500, 1000, 2000, 5000)
 DEFAULT_SAMPLE = 1000
 MAX_HANDOVER_IDS = 5000
@@ -136,9 +136,10 @@ class InstantEvalBusyRunSerializer(serializers.Serializer):
 class InstantEvalLimitDetailSerializer(serializers.Serializer):
     message = serializers.CharField()
     error_code = serializers.CharField()
-    # A run waiting for its confirm: what it would read and cost.
+    # A run waiting for its confirm: what it would read and cost (null where
+    # Instant eval isn't billed).
     rows_to_read = serializers.IntegerField(required=False)
-    credits_estimate = serializers.FloatField(required=False)
+    credits_estimate = serializers.FloatField(required=False, allow_null=True)
     # Refused for credits: what is left, and the largest sample that fits.
     credits_left = serializers.FloatField(required=False, allow_null=True)
     sample_size = serializers.IntegerField(required=False, allow_null=True)
@@ -156,8 +157,30 @@ class InstantEvalLimitErrorSerializer(serializers.Serializer):
     result = InstantEvalLimitDetailSerializer(required=False)
 
 
+class InstantEvalRefusalField(StringOrObjectField):
+    """A refusal's text, or for a question on Jev without the organization's
+    TypeSafe key {"message", "error_code": "JEV_KEY_MISSING", "settings_path"}."""
+
+    class Meta:
+        swagger_schema_fields = {
+            "x-string-or-object": True,
+            "description": "String or JSON object.",
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "error_code": {"type": "string"},
+                "settings_path": {"type": "string"},
+            },
+        }
+
+
+class InstantEvalBadRequestSerializer(ApiErrorResponseSerializer):
+    result = InstantEvalRefusalField(required=False)
+
+
 LIMIT_ERRORS = {
     **ERRORS,
+    400: InstantEvalBadRequestSerializer,
     402: InstantEvalLimitErrorSerializer,
     403: InstantEvalLimitErrorSerializer,
     409: InstantEvalLimitErrorSerializer,
@@ -228,7 +251,9 @@ class InstantEvalEstimateRequestSerializer(InstantEvalScopeSerializer):
 class InstantEvalChoiceSerializer(serializers.Serializer):
     sample_size = serializers.IntegerField(allow_null=True)
     rows_to_read = serializers.IntegerField()
-    credits_estimate = serializers.FloatField()
+    # Null where Instant eval isn't billed (off Cloud, or no billing config),
+    # as is every credit figure below.
+    credits_estimate = serializers.FloatField(allow_null=True)
     seconds_estimate = serializers.IntegerField()
     needs_confirm = serializers.BooleanField()
     allowed = serializers.BooleanField()
@@ -263,7 +288,9 @@ class InstantEvalEstimateSerializer(serializers.Serializer):
     population_is_lower_bound = serializers.BooleanField()
     rows_to_read = serializers.IntegerField()
     questions = serializers.IntegerField()
-    credits_estimate = serializers.FloatField()
+    credits_estimate = serializers.FloatField(allow_null=True)
+    # What Jev charges for one answer, in credits.
+    credits_per_answer = serializers.FloatField(allow_null=True)
     seconds_estimate = serializers.IntegerField()
     needs_confirm = serializers.BooleanField()
     max_rows = serializers.IntegerField()
@@ -301,7 +328,7 @@ class InstantEvalStartSerializer(serializers.Serializer):
     population = serializers.IntegerField()
     rows_requested = serializers.IntegerField()
     is_sample = serializers.BooleanField()
-    credits_estimate = serializers.FloatField()
+    credits_estimate = serializers.FloatField(allow_null=True)
     date_preset = serializers.CharField(allow_null=True)
     label = serializers.CharField(allow_null=True, allow_blank=True)
 
@@ -391,9 +418,10 @@ class InstantEvalSummarySerializer(serializers.Serializer):
     rate_per_min = serializers.FloatField(allow_null=True)
     eta_s = serializers.IntegerField(allow_null=True)
     created_by = InstantEvalPersonSerializer(allow_null=True)
-    credits_estimate = serializers.FloatField()
+    # Both null where Instant eval isn't billed.
+    credits_estimate = serializers.FloatField(allow_null=True)
     # What the answers given so far cost (a failed answer isn't billed).
-    credits_used = serializers.FloatField()
+    credits_used = serializers.FloatField(allow_null=True)
     # Paused, with this many answers still being read (they will land).
     in_flight = serializers.IntegerField(allow_null=True)
     # Running, but no answer has landed for this many seconds (two minutes
@@ -456,8 +484,30 @@ class InstantEvalControlResponseSerializer(serializers.Serializer):
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-def _credits(rows: int, questions: int) -> float:
-    return round(rows * questions * CREDITS_PER_ANSWER, 2)
+def credits_per_answer() -> float | None:
+    """What Jev charges for one answer, in credits, or None where Instant
+    eval isn't billed: off Cloud, or on a Cloud without its billing config.
+    Every credit figure and credit check follows from it. A request reads it
+    once and hands it on: a billing config that fails to load is tried again
+    on every read."""
+    try:
+        from ee.jev.metering import credits_per_answer as jev_credits_per_answer
+        from ee.usage.deployment import DeploymentMode
+    except ImportError:
+        return None
+    if not DeploymentMode.is_cloud():
+        return None
+    try:
+        return float(jev_credits_per_answer())
+    except Exception:
+        logger.warning("instant_eval_billing_unavailable", exc_info=True)
+        return None
+
+
+def _credits(rows: int, questions: int, rate: float | None) -> float | None:
+    """What ``rows`` × ``questions`` answers cost at ``rate`` (credits per
+    answer); None where the run isn't billed."""
+    return None if rate is None else round(rows * questions * rate, 2)
 
 
 # Billing's event for a Jev answer; its cap is the organization's credits.
@@ -475,11 +525,11 @@ CREDIT_MESSAGES = {
 }
 
 
-def check_credits(org, credits: float):
+def check_credits(org, credits: float | None):
     """The organization's credit cap against a run costing ``credits``:
     None when it may run (or this deployment has no billing), else billing's
     CheckResult. Read-only."""
-    if org is None or credits <= 0:
+    if org is None or not credits or credits <= 0:
         return None
     try:
         from ee.usage.services.metering import check_usage
@@ -510,11 +560,14 @@ def _blocked(*results) -> bool:
     )
 
 
-def _fits(left: float | None, unit: str, questions: int, population: int) -> int | None:
-    """The largest sample, in the view's unit, that ``left`` credits pay for."""
-    if left is None:
+def _fits(
+    left: float | None, unit: str, questions: int, population: int, rate: float | None
+) -> int | None:
+    """The largest sample, in the view's unit, that ``left`` credits pay for
+    at ``rate`` credits per answer."""
+    if left is None or not rate:
         return None
-    per_unit = _rows_for(unit, 1) * max(1, questions) * CREDITS_PER_ANSWER
+    per_unit = _rows_for(unit, 1) * max(1, questions) * rate
     return min(population, int((left + 1e-9) // per_unit))
 
 
@@ -546,11 +599,11 @@ def _credit_message(result, credits: float, left: float | None, fits, unit) -> s
     )
 
 
-def _credit_refusal(gm, refused, credits, unit, questions, population):
+def _credit_refusal(gm, refused, credits, unit, questions, population, rate):
     """Billing refused a run costing ``credits``: why, and the largest
     sample of ``population`` that fits what is left."""
     left = _credits_left(refused)
-    fits = None if _blocked(refused) else _fits(left, unit, questions, population)
+    fits = None if _blocked(refused) else _fits(left, unit, questions, population, rate)
     return gm.custom_error_response(
         402 if refused.error_code == "PAYMENT_REQUIRED" else 403,
         {
@@ -562,6 +615,23 @@ def _credit_refusal(gm, refused, credits, unit, questions, population):
             "rows_to_read": _rows_for(unit, fits) if fits else 0,
         },
         code="instant_eval_credits",
+    )
+
+
+def _confirm_response(gm, reading: str, rows: int, credits: float | None):
+    """409 holding a large run for its confirm: "Reading 6,000 rows costs
+    about 360 credits. Confirm to start.", without the credits where the run
+    isn't billed."""
+    cost = f" costs about {credits:,.0f} credits" if credits is not None else ""
+    return gm.custom_error_response(
+        409,
+        {
+            "message": f"{reading}{cost}. Confirm to start.",
+            "error_code": "INSTANT_EVAL_CONFIRM",
+            "rows_to_read": rows,
+            "credits_estimate": credits,
+        },
+        code="confirm_required",
     )
 
 
@@ -579,13 +649,16 @@ def _choice(
     population: int,
     size: int | None,
     questions: int,
+    rate: float | None,
     left: float | None = None,
     blocked: bool = False,
 ) -> dict:
     count = population if size is None else min(size, population)
     rows = _rows_for(unit, count)
-    credits = _credits(rows, questions)
-    limited = blocked or (left is not None and credits > left + 1e-9)
+    credits = _credits(rows, questions, rate)
+    limited = blocked or (
+        left is not None and credits is not None and credits > left + 1e-9
+    )
     return {
         "sample_size": size,
         "rows_to_read": rows,
@@ -700,6 +773,75 @@ def _busy_response(gm, runs):
     )
 
 
+JEV_KEY_MISSING = "JEV_KEY_MISSING"
+AI_PROVIDERS_SETTINGS_PATH = "/dashboard/settings/ai-providers"
+
+
+def _questions(task):
+    """A task's questions with their templates, for the Jev key check."""
+    return task.evals.select_related("eval_template")
+
+
+def _jev_key_missing(gm, project, configs):
+    """400 when a question runs on Jev and the organization has no TypeSafe
+    key saved (the lookup the engine makes for every answer): every row would
+    fail on it, so the run doesn't start. None when it can run."""
+    from model_hub.utils.jev_templates import binding_model
+    from tfc.ee_gates import is_jev_model
+
+    if not any(
+        is_jev_model(
+            binding_model(c.eval_template, model=c.model, runtime_config=c.config)
+        )
+        for c in configs
+    ):
+        return None
+    from accounts.models.workspace import Workspace
+    from agentic_eval.core_evals.run_prompt.litellm_models import (
+        MissingProviderKeyError,
+        missing_provider_key_message,
+    )
+    from ee.jev.models import JEV_PROVIDER
+    from evaluations.engine.instance import _get_typesafe_api_key
+    from tfc.middleware.workspace_context import (
+        get_current_workspace,
+        set_workspace_context,
+    )
+
+    # Read as the eval runner reads it, outside any request: in the project's
+    # workspace (else the organization's default), falling back to a key saved
+    # for the whole organization, which the request's workspace scope would
+    # hide from a non-default workspace.
+    scope = get_current_workspace()
+    set_workspace_context(workspace=None)
+    try:
+        workspace_id = project.workspace_id or (
+            Workspace.objects.filter(
+                organization_id=project.organization_id,
+                is_default=True,
+                is_active=True,
+            )
+            .values_list("id", flat=True)
+            .first()
+        )
+        _get_typesafe_api_key(
+            str(project.organization_id), str(workspace_id) if workspace_id else None
+        )
+    except MissingProviderKeyError:
+        return gm.custom_error_response(
+            400,
+            {
+                "message": missing_provider_key_message(JEV_PROVIDER),
+                "error_code": JEV_KEY_MISSING,
+                "settings_path": AI_PROVIDERS_SETTINGS_PATH,
+            },
+            code=JEV_KEY_MISSING,
+        )
+    finally:
+        set_workspace_context(workspace=scope)
+    return None
+
+
 def _start_workflow_on_commit(task, *, replace: bool) -> None:
     from tfc.temporal.eval_tasks.client import start_eval_task_workflow_sync
 
@@ -784,22 +926,26 @@ class InstantEvalEstimateView(InstantEvalLicenseRequired, APIView):
         questions = data.get("questions") or 1
         size = data.get("sample_size")
         org = _org(request)
+        # Read once: every figure below is priced at it.
+        rate = credits_per_answer()
         chosen_rows = _rows_for(unit, count if size is None else min(size, count))
-        chosen_credits = _credits(chosen_rows, questions)
+        chosen_credits = _credits(chosen_rows, questions, rate)
         # The chosen run, and the most the composer can ask (every row, every
         # question): a refusal of either reports the cap, so each choice and
         # any number of questions can be judged from it.
         refused = check_credits(org, chosen_credits)
-        ceiling = check_credits(org, _credits(_rows_for(unit, count), MAX_QUESTIONS))
+        ceiling = check_credits(
+            org, _credits(_rows_for(unit, count), MAX_QUESTIONS, rate)
+        )
         left = _credits_left(refused, ceiling)
         blocked = _blocked(refused, ceiling)
-        fits = None if blocked else _fits(left, unit, questions, count)
+        fits = None if blocked else _fits(left, unit, questions, count, rate)
         default = DEFAULT_SAMPLE if count > DEFAULT_SAMPLE and not ids else None
         sizes = [s for s in SAMPLE_SIZES if s < count] if not ids else []
-        choices = [_choice(unit, count, s, questions, left, blocked) for s in sizes] + [
-            _choice(unit, count, None, questions, left, blocked)
-        ]
-        chosen = _choice(unit, count, size, questions, left, blocked)
+        choices = [
+            _choice(unit, count, s, questions, rate, left, blocked) for s in sizes
+        ] + [_choice(unit, count, None, questions, rate, left, blocked)]
+        chosen = _choice(unit, count, size, questions, rate, left, blocked)
         reported = refused or ceiling
         credit_check = {
             "allowed": refused is None,
@@ -821,6 +967,7 @@ class InstantEvalEstimateView(InstantEvalLicenseRequired, APIView):
                 "rows_to_read": chosen["rows_to_read"],
                 "questions": questions,
                 "credits_estimate": chosen["credits_estimate"],
+                "credits_per_answer": rate,
                 "seconds_estimate": chosen["seconds_estimate"],
                 "needs_confirm": chosen["needs_confirm"],
                 "max_rows": max_rows(),
@@ -864,12 +1011,14 @@ class InstantEvalStartView(InstantEvalLicenseRequired, APIView):
             str(c.id): c
             for c in CustomEvalConfig.objects.filter(
                 id__in=wanted, project=project, deleted=False
-            )
+            ).select_related("eval_template")
         }
         if len(configs) != len(set(wanted)) or not all(
             (c.config or {}).get("instant_eval") for c in configs.values()
         ):
             return self._gm.bad_request("Those questions aren't saved in this project.")
+        if missing := _jev_key_missing(self._gm, project, configs.values()):
+            return missing
         active = _active_runs(org)
         if len(active) >= max_active():
             return _busy_response(self._gm, active)
@@ -910,21 +1059,15 @@ class InstantEvalStartView(InstantEvalLicenseRequired, APIView):
                 "Read a sample, or narrow the view.",
                 code="instant_eval_too_large",
             )
-        credits = _credits(rows, questions)
+        rate = credits_per_answer()
+        credits = _credits(rows, questions, rate)
         refused = check_credits(org, credits)
         if refused is not None:
-            return _credit_refusal(self._gm, refused, credits, unit, questions, count)
-        if rows > confirm_rows() and not data.get("confirm"):
-            return self._gm.custom_error_response(
-                409,
-                {
-                    "message": f"Reading {rows:,} rows costs about {credits:,.0f} credits. Confirm to start.",
-                    "error_code": "INSTANT_EVAL_CONFIRM",
-                    "rows_to_read": rows,
-                    "credits_estimate": credits,
-                },
-                code="confirm_required",
+            return _credit_refusal(
+                self._gm, refused, credits, unit, questions, count, rate
             )
+        if rows > confirm_rows() and not data.get("confirm"):
+            return _confirm_response(self._gm, f"Reading {rows:,} rows", rows, credits)
         ordered = [configs[c] for c in dict.fromkeys(wanted)]
         first = _question(ordered[0])["question"]
         filters = {
@@ -966,7 +1109,7 @@ class InstantEvalStartView(InstantEvalLicenseRequired, APIView):
                 sample_size=size,
                 rows_requested=requested,
                 questions=questions,
-                credits_estimate=credits,
+                credits_estimate=credits or 0,
                 # Its answers are recorded as they land.
                 answers_synced=True,
             )
@@ -1172,12 +1315,18 @@ def _stalled(task, status: str, data: dict, progress: dict) -> bool:
     return now_ms - quiet_since > STALL_AFTER_S * 1000 and _workflow_gone(task)
 
 
-def _prepared_run(task, params) -> InstantEvalRun:
+# A rate the caller hasn't read: read only if it's needed.
+_UNREAD = object()
+
+
+def _prepared_run(task, params, rate=_UNREAD) -> InstantEvalRun:
     """The run record, its rows and their answers in place. A task asked
     before runs were recorded (or through the plain eval-task API) gets them
-    on its first read."""
+    on its first read, its credits priced at ``rate``."""
     run = _run_of(task)
     if run is None:
+        if rate is _UNREAD:
+            rate = credits_per_answer()
         unit = _unit_of(task, None, params)
         ensure_rows(task, unit)
         stored = InstantEvalRow.objects.filter(task_id=task.id).count()
@@ -1191,7 +1340,8 @@ def _prepared_run(task, params) -> InstantEvalRun:
                 "population": stored,
                 "rows_requested": stored,
                 "questions": task.evals.count() or 1,
-                "credits_estimate": _credits(stored, task.evals.count() or 1),
+                "credits_estimate": _credits(stored, task.evals.count() or 1, rate)
+                or 0,
             },
         )
         run = _run_of(task)
@@ -1224,10 +1374,12 @@ def _summary_key(task, run, status: str, view) -> str:
         f"{task.id}:{status}:{run.answers_version}:{view.unit}:"
         f"{','.join(view.config_ids)}:{view.tz.key}"
     )
-    return "ie-summary:v8:" + hashlib.sha1(raw.encode()).hexdigest()
+    return "ie-summary:v9:" + hashlib.sha1(raw.encode()).hexdigest()
 
 
-def _summary_payload(task, run, view, questions) -> dict:
+def _summary_payload(task, run, view, questions, price: float | None) -> dict:
+    """The run's summary; ``price`` is credits per answer, None where the
+    run isn't billed."""
     data = summary_service.summary(view)
     progress = data.pop("_progress")
     status = _status(task, run)
@@ -1293,9 +1445,11 @@ def _summary_payload(task, run, view, questions) -> dict:
         "rate_per_min": round(rate, 1) if rate else None,
         "eta_s": eta,
         "created_by": _person(run.created_by),
-        "credits_estimate": run.credits_estimate,
+        "credits_estimate": run.credits_estimate if price is not None else None,
         # What the answers Jev gave so far cost.
-        "credits_used": round(progress["answers_given"] * CREDITS_PER_ANSWER, 2),
+        "credits_used": round(progress["answers_given"] * price, 2)
+        if price is not None
+        else None,
         "in_flight": in_flight,
         "waiting_s": waiting_s,
         "sample": {
@@ -1330,7 +1484,7 @@ def _checked_key(run) -> str:
     return f"ie-answers-checked:{run.eval_task_id}:{run.answers_version}"
 
 
-def compute_summary(task, run, view, questions) -> dict:
+def compute_summary(task, run, view, questions, price: float | None) -> dict:
     """Count a run, copying its answers over first if they weren't recorded
     as they landed (or, once it has finished, if any were missed), and keep
     the result: for a day once the run has finished."""
@@ -1343,7 +1497,7 @@ def compute_summary(task, run, view, questions) -> dict:
     ensure_synced(run, check=check)
     if check:
         cache.set(_checked_key(run), 1, ANSWERS_CHECKED_TTL)
-    payload = _summary_payload(task, run, view, questions)
+    payload = _summary_payload(task, run, view, questions, price)
     finished = payload["status"] not in (*ACTIVE, STALLED, PAUSING)
     cache.set(
         _summary_key(task, run, payload["status"], view),
@@ -1363,7 +1517,7 @@ def prewarm_summary(task_id) -> None:
     if run is None:
         return
     view, questions = _view(task, run, {"tz": run.last_tz or "UTC"})
-    compute_summary(task, run, view, questions)
+    compute_summary(task, run, view, questions, credits_per_answer())
 
 
 # Hundreds of KB of counts every 2 s compress about tenfold.
@@ -1384,8 +1538,10 @@ class InstantEvalSummaryView(InstantEvalLicenseRequired, APIView):
         task, error = _load(request, params, self._gm)
         if error:
             return error
+        # Read once per poll: the run's credits and what it has used so far.
+        price = credits_per_answer()
         try:
-            run = _prepared_run(task, params)
+            run = _prepared_run(task, params, price)
             view, questions = _view(task, run, params)
         except summary_service.BadFilter as exc:
             return self._gm.bad_request(str(exc))
@@ -1424,7 +1580,7 @@ class InstantEvalSummaryView(InstantEvalLicenseRequired, APIView):
         if not counting and stale is not None:
             return self._etagged(request, stale["payload"])
         try:
-            payload = compute_summary(task, run, view, questions)
+            payload = compute_summary(task, run, view, questions, price)
         except summary_service.BadFilter as exc:
             return self._gm.bad_request(str(exc))
         except Exception:
@@ -1669,12 +1825,16 @@ class InstantEvalControlView(InstantEvalLicenseRequired, APIView):
             )
         if busy := self._busy(request, task):
             return busy
+        # Checked again: the key may have gone since the run started.
+        if missing := _jev_key_missing(self._gm, task.project, _questions(task)):
+            return missing
         if run is not None:
+            rate = credits_per_answer()
             left = _unanswered_rows(run)
-            credits = _credits(left, run.questions)
+            credits = _credits(left, run.questions, rate)
             if refused := check_credits(_org(request), credits):
                 return _credit_refusal(
-                    self._gm, refused, credits, run.unit, run.questions, left
+                    self._gm, refused, credits, run.unit, run.questions, left, rate
                 )
         with transaction.atomic():
             if run is not None:
@@ -1718,14 +1878,20 @@ class InstantEvalControlView(InstantEvalLicenseRequired, APIView):
             deleted=False,
             status__in=[EvalEntryStatus.ERRORED, EvalEntryStatus.SKIPPED],
         )
+        if not failed.exists():
+            return self._gm.bad_request("No rows failed.")
         running = task.status in ACTIVE
         if not running and (busy := self._busy(request, task)):
             return busy
+        # Checked again: the key may have gone since the run started.
+        if missing := _jev_key_missing(self._gm, task.project, _questions(task)):
+            return missing
         if run is not None:
             # Each failed entry is one answer to read again.
-            credits = _credits(failed.count(), 1)
+            rate = credits_per_answer()
+            credits = _credits(failed.count(), 1, rate)
             if refused := check_credits(_org(request), credits):
-                return _credit_refusal(self._gm, refused, credits, run.unit, 1, 0)
+                return _credit_refusal(self._gm, refused, credits, run.unit, 1, 0, rate)
         from tracer.services.instant_eval_answers import forget_answers
 
         with transaction.atomic():
@@ -1768,6 +1934,8 @@ class InstantEvalControlView(InstantEvalLicenseRequired, APIView):
             return self._gm.bad_request("This run already reads every row of its view.")
         if busy := self._busy(request, task):
             return busy
+        if missing := _jev_key_missing(self._gm, task.project, _questions(task)):
+            return missing
         more = data.get("more")
         target = (
             run.population
@@ -1782,28 +1950,25 @@ class InstantEvalControlView(InstantEvalLicenseRequired, APIView):
                 f"A run reads at most {max_rows():,} rows; this would read {rows:,}.",
                 code="instant_eval_too_large",
             )
-        credits = _credits(_rows_for(run.unit, added), run.questions)
+        rate = credits_per_answer()
+        credits = _credits(_rows_for(run.unit, added), run.questions, rate)
         if refused := check_credits(_org(request), credits):
             return _credit_refusal(
-                self._gm, refused, credits, run.unit, run.questions, added
+                self._gm, refused, credits, run.unit, run.questions, added, rate
             )
         if _rows_for(run.unit, added) > confirm_rows() and not data.get("confirm"):
-            return self._gm.custom_error_response(
-                409,
-                {
-                    "message": f"Reading {added:,} more rows costs about {credits:,.0f} credits. Confirm to start.",
-                    "error_code": "INSTANT_EVAL_CONFIRM",
-                    "rows_to_read": _rows_for(run.unit, added),
-                    "credits_estimate": credits,
-                },
-                code="confirm_required",
+            return _confirm_response(
+                self._gm,
+                f"Reading {added:,} more rows",
+                _rows_for(run.unit, added),
+                credits,
             )
         with transaction.atomic():
             InstantEvalRun.objects.filter(id=run.id).update(
                 rows_requested=target,
                 # The sample's size stays the size of each "Read more".
                 sample_size=None if target >= run.population else run.sample_size,
-                credits_estimate=run.credits_estimate + credits,
+                credits_estimate=run.credits_estimate + (credits or 0),
                 answers_version=F("answers_version") + 1,
             )
             EvalTask.objects.filter(id=task.id).update(spans_limit=rows)

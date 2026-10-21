@@ -47,11 +47,7 @@ from tracer.views.insights import (
     InsightRunDetailView,
     InsightRunUnitsView,
 )
-from tracer.views.instant_eval import (
-    InstantEvalAnswersView,
-    InstantEvalRunsView,
-    InstantEvalUserSessionsView,
-)
+from tracer.views.instant_eval import InstantEvalRunsView
 from tracer.views.instant_eval_scale import (
     InstantEvalControlView,
     InstantEvalEstimateView,
@@ -279,16 +275,6 @@ urlpatterns = [
         "insights/runs/<uuid:run_id>/ask/",
         InsightRunAskView.as_view(),
         name="insight-run-ask",
-    ),
-    path(
-        "instant-eval/user-sessions/",
-        InstantEvalUserSessionsView.as_view(),
-        name="instant-eval-user-sessions",
-    ),
-    path(
-        "instant-eval/answers/",
-        InstantEvalAnswersView.as_view(),
-        name="instant-eval-answers",
     ),
     path(
         "instant-eval/runs/",

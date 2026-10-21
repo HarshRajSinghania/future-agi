@@ -18,7 +18,7 @@ from ee.jev.mapping import (
     mapping_revision,
     validate_jev_mapping,
 )
-from ee.jev.validation import validate_response
+from ee.jev.validation import JevResponseError, validate_response
 from tfc.ee_gates import is_jev_model
 
 # A value that is nothing but a link to an image, PDF, audio or video file.
@@ -215,14 +215,20 @@ class JevEvaluator(LLM):
             self._model, state, {question_id: question}, timeout=35
         )
         levels = self.mapping.score.get("levels")
-        answer = validate_response(
-            response,
-            self.mapping.question_type,
-            requested_model=self._model,
-            expected_labels=self.mapping.choice.get("labels"),
-            expected_levels=levels,
-            level_count=len(levels) if levels else None,
-        )
+        try:
+            answer = validate_response(
+                response,
+                self.mapping.question_type,
+                requested_model=self._model,
+                expected_labels=self.mapping.choice.get("labels"),
+                expected_levels=levels,
+                level_count=len(levels) if levels else None,
+            )
+        except JevResponseError as exc:
+            # Logged with the gateway's id for the call, so the answer that
+            # came back can be found in the gateway's logs.
+            self.client.invalid_response("invalid_answer", exc.code)
+            raise
         if answer.question_type == "noul":
             metric = answer.probability
             failure = metric < self._pass_threshold
@@ -281,8 +287,9 @@ class JevEvaluator(LLM):
                 "input_tokens": usage["input_tokens"],
                 "output_tokens": usage["output_tokens"],
             },
-            "gateway_request_id": None,
-            "reasoning_available": False,
+            # The call's id in the gateway's logs (None on the direct
+            # transport), to trace a disputed answer.
+            "gateway_request_id": self.client.gateway_request_id,
         }
         self.last_jev = jev
         return {

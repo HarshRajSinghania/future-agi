@@ -1741,6 +1741,24 @@ read these keys.
     text = "Jev calls one worker process makes at once; the rest wait. An Instant eval run keeps up to 32 rows in flight, so workers that serve it want at least `32`."
 
     [[part.section.row]]
+    keys = ["JEV_TOTAL_DEADLINE"]
+    default = "`90`"
+    setups = ["S", "D", "H"]
+    text = "Seconds one Jev eval may take, waiting for a free call and every retry included; past it the eval fails with `JEV_TIMEOUT`. It can only be lowered: values above `90` count as `90`."
+
+    [[part.section.row]]
+    keys = ["JEV_MAX_RETRIES"]
+    default = "`2`"
+    setups = ["S", "D", "H"]
+    text = "Retries of a Jev call that failed in a way a retry can fix (a timeout, a rate limit, TypeSafe briefly unavailable). A rejected key or a refused request is never retried. It can only be lowered: values above `2` count as `2`, and `0` turns retries off."
+
+    [[part.section.row]]
+    keys = ["TYPESAFE_BASE_URL"]
+    default = "`https://api.typesafe.ai`"
+    setups = ["S", "D", "H"]
+    text = "TypeSafe's API, for `JEV_TRANSPORT=direct` only (a sandbox or a proxy in front of TypeSafe). With the default `gateway` transport the gateway calls TypeSafe and this is not read."
+
+    [[part.section.row]]
     keys = ["INSTANT_EVAL_MAX_ROWS"]
     default = "`100000`"
     setups = ["S", "D", "H"]
@@ -1750,7 +1768,7 @@ read these keys.
     keys = ["INSTANT_EVAL_CONFIRM_ROWS"]
     default = "`5000`"
     setups = ["S", "D", "H"]
-    text = "A run over this many rows asks the person to confirm its credits before it starts."
+    text = "A run over this many rows waits for the person to confirm it before it starts."
 
     [[part.section.row]]
     keys = ["INSTANT_EVAL_MAX_ACTIVE_PER_ORG"]

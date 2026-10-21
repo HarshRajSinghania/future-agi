@@ -105,6 +105,21 @@ def instant_eval_enabled(monkeypatch):
     )
 
 
+# What Jev charges an answer on Cloud: its 0.0005 eval fee at a 1.2 markup.
+CLOUD_CREDITS_PER_ANSWER = 0.06
+# The helper itself, for the tests of where it comes from.
+BILLED_RATE = instant_eval_scale.credits_per_answer
+
+
+@pytest.fixture(autouse=True)
+def billed(monkeypatch):
+    """Instant eval billed as Cloud bills it. The tests of other setups, and
+    of where the rate comes from, put the real helper back."""
+    monkeypatch.setattr(
+        instant_eval_scale, "credits_per_answer", lambda: CLOUD_CREDITS_PER_ANSWER
+    )
+
+
 @pytest.fixture
 def fake_view(monkeypatch):
     view = FakeView(40)
@@ -287,6 +302,9 @@ def test_big_runs_need_a_confirm_and_runs_over_the_cap_are_refused(
     body = asked.json()
     assert body["result"]["error_code"] == "INSTANT_EVAL_CONFIRM"
     assert body["result"]["rows_to_read"] == 25
+    assert body["result"]["message"] == (
+        "Reading 25 rows costs about 2 credits. Confirm to start."
+    )
     assert not EvalTask.objects.filter(project=observe_project).exists()
 
     confirmed = _start(
@@ -1180,6 +1198,285 @@ def test_reading_more_and_retrying_check_the_credits_left_too(
     assert control("retry_failed").status_code == status.HTTP_200_OK
 
 
+def _billing(monkeypatch, *, cloud=True, markup="1.2", config=True):
+    """This deployment's billing as Instant eval reads it: on Cloud or not,
+    and the markup on the 0.0005 eval fee its billing config sets, or no
+    billing config at all."""
+    from decimal import Decimal
+
+    from ee.usage.deployment import DeploymentMode
+    from ee.usage.schemas.billing_config import BillingConfigSchema
+    from ee.usage.services.config import BillingConfig, BillingConfigError
+
+    monkeypatch.setattr(instant_eval_scale, "credits_per_answer", BILLED_RATE)
+    monkeypatch.setattr(DeploymentMode, "is_cloud", staticmethod(lambda: cloud))
+    if config:
+        schema = BillingConfigSchema(
+            plans={},
+            dimensions={},
+            pricing_tiers={},
+            entitlements={},
+            api_call_types={},
+            ee_bands={},
+            ai_credit_models={},
+            ai_cost_markup=Decimal(markup),
+            eval_per_run_fee=Decimal("0.0005"),
+        )
+        monkeypatch.setattr(BillingConfig, "_instance", BillingConfig(schema))
+        return
+
+    def missing(cls):
+        raise BillingConfigError("billing.yaml not found")
+
+    monkeypatch.setattr(BillingConfig, "_instance", None)
+    monkeypatch.setattr(BillingConfig, "_load", classmethod(missing))
+
+
+@pytest.mark.requires_ee
+@pytest.mark.django_db
+@pytest.mark.parametrize(("markup", "rate"), [("1.2", 0.06), ("1.0", 0.05)])
+def test_the_credits_are_what_jev_is_charged(
+    auth_client, observe_project, yes_no, fake_view, started, monkeypatch, markup, rate
+):
+    from ee.jev import metering
+    from ee.usage.services.config import BillingConfig
+
+    _billing(monkeypatch, markup=markup)
+    billing = BillingConfig.get()
+    charged = billing.calculate_ai_credits(billing.get_eval_per_run_fee())
+    assert charged == pytest.approx(rate)
+    # One rate: what the estimate prices and what metering charges.
+    assert instant_eval_scale.credits_per_answer() == charged
+    assert metering.credits_per_answer() == charged
+
+    estimate = _estimate(auth_client, observe_project, sample_size=20, questions=2)
+    assert estimate["credits_per_answer"] == charged
+    assert estimate["credits_estimate"] == pytest.approx(20 * 2 * charged)
+    by_size = {c["sample_size"]: c for c in estimate["choices"]}
+    assert by_size[None]["credits_estimate"] == pytest.approx(40 * 2 * charged)
+    result = _start(auth_client, observe_project, [yes_no], sample_size=20).json()[
+        "result"
+    ]
+    assert result["credits_estimate"] == pytest.approx(20 * charged)
+
+
+@pytest.mark.requires_ee
+@pytest.mark.django_db
+@override_settings(INSTANT_EVAL_CONFIRM_ROWS=20)
+@pytest.mark.parametrize(
+    ("cloud", "config"),
+    [(False, True), (True, False)],
+    ids=["self-hosted", "cloud-without-billing-config"],
+)
+def test_no_credits_are_shown_or_checked_where_nothing_is_billed(
+    auth_client,
+    observe_project,
+    yes_no,
+    fake_view,
+    started,
+    monkeypatch,
+    cloud,
+    config,
+):
+    _billing(monkeypatch, cloud=cloud, config=config)
+    # A cap that would refuse any run: it is never asked.
+    calls = _credit_cap(monkeypatch, left=0.0)
+    estimate = _estimate(auth_client, observe_project, sample_size=25)
+    assert estimate["credits_per_answer"] is None
+    assert estimate["credits_estimate"] is None
+    assert estimate["credit_max_sample"] is None
+    assert {c["credits_estimate"] for c in estimate["choices"]} == {None}
+    assert not any(c["credit_limited"] for c in estimate["choices"])
+    check = estimate["credit_check"]
+    assert (
+        check["allowed"],
+        check["credits_left"],
+        check["current_usage"],
+        check["limit"],
+        check["message"],
+    ) == (True, None, None, None, None)
+
+    # A large run still waits for its confirm, which names no credits.
+    held = _start(auth_client, observe_project, [yes_no], sample_size=25)
+    assert held.status_code == status.HTTP_409_CONFLICT
+    detail = held.json()["result"]
+    assert detail["message"] == "Reading 25 rows. Confirm to start."
+    assert detail["credits_estimate"] is None
+    confirmed = _start(
+        auth_client, observe_project, [yes_no], sample_size=25, confirm=True
+    )
+    assert confirmed.status_code == status.HTTP_200_OK
+    result = confirmed.json()["result"]
+    assert result["credits_estimate"] is None
+    task = EvalTask.objects.get(id=result["task_id"])
+    summary = _summary(auth_client, observe_project, task)
+    assert (summary["credits_estimate"], summary["credits_used"]) == (None, None)
+    [history] = auth_client.get(
+        "/tracer/instant-eval/runs/",
+        {"project_id": str(observe_project.id), "task_id": result["task_id"]},
+    ).json()["result"]["runs"]
+    assert history["credits_estimate"] is None
+    assert calls == []
+
+
+@pytest.mark.requires_ee
+@pytest.mark.django_db
+@pytest.mark.parametrize("config", [True, False], ids=["billed", "no-billing-config"])
+def test_an_estimate_reads_the_billing_config_once(
+    auth_client, observe_project, monkeypatch, config
+):
+    """Every figure an estimate prices (each choice, the cap's check, the
+    largest sample that fits) comes from one read of the rate: a billing
+    config that fails to load is tried, and logged, once per estimate."""
+    from ee.usage.services.config import BillingConfig
+
+    view = FakeView(6000)
+    monkeypatch.setattr(rows_service, "count_population", view.count)
+    _billing(monkeypatch, config=config)
+    # A cap that refuses the chosen run, so the sample that fits is priced too.
+    _credit_cap(monkeypatch, left=30.0)
+    get = BillingConfig.get.__func__
+    reads = []
+
+    def counted(cls):
+        reads.append(cls)
+        return get(cls)
+
+    monkeypatch.setattr(BillingConfig, "get", classmethod(counted))
+    estimate = _estimate(auth_client, observe_project, sample_size=1000, questions=2)
+    assert len(estimate["choices"]) == 5
+    assert len(reads) == 1
+    if config:
+        # 30 credits at 2 answers of 0.06 each per session.
+        assert estimate["credits_per_answer"] == pytest.approx(0.06)
+        assert estimate["credit_max_sample"] == 250
+        assert estimate["credit_check"]["error_code"] == "FREE_TIER_LIMIT"
+    else:
+        assert estimate["credits_per_answer"] is None
+        assert estimate["credit_max_sample"] is None
+
+
+@pytest.mark.requires_ee
+@pytest.mark.django_db
+def test_a_question_on_jev_needs_the_organizations_typesafe_key(
+    auth_client, observe_project, eval_template, fake_view, started
+):
+    from agentic_eval.core_evals.run_prompt.litellm_models import (
+        missing_provider_key_message,
+    )
+    from model_hub.models.api_key import ApiKey
+
+    question = _question(observe_project, eval_template, "Did the agent resolve it?")
+    CustomEvalConfig.objects.filter(id=question.id).update(model="jev-latest")
+    refusal = {
+        "message": missing_provider_key_message("typesafe"),
+        "error_code": "JEV_KEY_MISSING",
+        "settings_path": "/dashboard/settings/ai-providers",
+    }
+    refused = _start(auth_client, observe_project, [question], sample_size=5)
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST
+    assert refused.json()["code"] == "JEV_KEY_MISSING"
+    assert refused.json()["result"] == refusal
+    # Refused before anything was counted or queued.
+    assert fake_view.picks == [] and started == []
+    assert not EvalTask.objects.filter(project=observe_project).exists()
+
+    key = ApiKey.objects.create(
+        provider="typesafe",
+        organization=observe_project.organization,
+        key="org-typesafe-key",
+    )
+    result = _start(auth_client, observe_project, [question], sample_size=5)
+    assert result.status_code == status.HTTP_200_OK, result.json()
+    task_id = result.json()["result"]["task_id"]
+
+    def control(action, **body):
+        return auth_client.post(
+            CONTROL,
+            {
+                "project_id": str(observe_project.id),
+                "eval_task_id": task_id,
+                "action": action,
+                **body,
+            },
+            format="json",
+        )
+
+    # Reading more checks again: the key may have gone since.
+    EvalTask.objects.filter(id=task_id).update(status=EvalTaskStatus.COMPLETED)
+    key.delete()
+    more = control("read_more", more=5)
+    assert more.status_code == status.HTTP_400_BAD_REQUEST
+    assert more.json()["result"] == refusal
+    assert InstantEvalRun.objects.get(eval_task_id=task_id).rows_requested == 5
+
+    # So do resuming and retrying the failed answers: both queue Jev answers.
+    EvalTask.objects.filter(id=task_id).update(status=EvalTaskStatus.PAUSED)
+    task = EvalTask.objects.get(id=task_id)
+    _answer(task, question, str(uuid.uuid4()), error=True).save()
+    for action in ("resume", "retry_failed"):
+        response = control(action)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST, action
+        assert response.json()["code"] == "JEV_KEY_MISSING"
+        assert response.json()["result"] == refusal
+    # Nothing was requeued or started again.
+    assert EvalTask.objects.get(id=task_id).status == EvalTaskStatus.PAUSED
+    failed = EvalLogger.objects.filter(
+        eval_task_id=task_id, status=EvalEntryStatus.ERRORED
+    )
+    assert failed.count() == 1
+    assert len(started) == 1
+
+    ApiKey.objects.create(
+        provider="typesafe",
+        organization=observe_project.organization,
+        key="org-typesafe-key",
+    )
+    assert control("retry_failed").status_code == status.HTTP_200_OK
+    assert not failed.exists()
+    assert len(started) == 2
+
+
+@pytest.mark.requires_ee
+@pytest.mark.django_db
+def test_a_key_saved_for_the_organization_counts_from_any_workspace(
+    observe_project, eval_template, user
+):
+    """The runner finds a key saved for the whole organization from a
+    project in any workspace; a request scoped to a non-default workspace
+    would hide it, so the check doesn't read through that scope."""
+    from accounts.models.workspace import Workspace
+    from model_hub.models.api_key import ApiKey
+    from tfc.middleware.workspace_context import (
+        get_current_workspace,
+        workspace_context,
+    )
+    from tfc.utils.general_methods import GeneralMethods
+
+    other = Workspace.objects.create(
+        name="Support", organization=observe_project.organization, created_by=user
+    )
+    observe_project.workspace = other
+    observe_project.save(update_fields=["workspace"])
+    question = _question(observe_project, eval_template, "Did the agent resolve it?")
+    question.model = "jev-latest"
+    key = ApiKey.objects.create(
+        provider="typesafe",
+        organization=observe_project.organization,
+        key="org-typesafe-key",
+    )
+    # Saved for the whole organization (saving puts it in the default one).
+    ApiKey.no_workspace_objects.filter(id=key.id).update(workspace=None)
+    with workspace_context(other, organization=observe_project.organization):
+        # The request's scope hides it from this workspace.
+        assert not ApiKey.objects.filter(id=key.id).exists()
+        missing = instant_eval_scale._jev_key_missing(
+            GeneralMethods(), observe_project, [question]
+        )
+        assert get_current_workspace() == other
+    assert missing is None
+
+
 @pytest.mark.django_db
 def test_history_lists_a_runs_questions_in_the_order_it_asked_them(
     auth_client, observe_project, yes_no, category, fake_view, started
@@ -1398,7 +1695,9 @@ def test_a_finished_runs_summary_and_answer_check_expire(counted, monkeypatch):
         instant_eval_scale, "_status", lambda task, run: EvalTaskStatus.COMPLETED
     )
     run = SimpleNamespace(eval_task_id="t1", answers_version=3)
-    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    instant_eval_scale.compute_summary(
+        SimpleNamespace(), run, SimpleNamespace(), [], None
+    )
     assert kept.timeouts == {
         "ie-answers-checked:t1:3": instant_eval_scale.ANSWERS_CHECKED_TTL,
         "summary:completed:3": instant_eval_scale.FINISHED_SUMMARY_TTL,
@@ -1407,11 +1706,15 @@ def test_a_finished_runs_summary_and_answer_check_expire(counted, monkeypatch):
     # The check outlives the summaries, so counting one again (another time
     # zone, or after it expired) doesn't compare the answers again.
     assert instant_eval_scale.ANSWERS_CHECKED_TTL == 7 * 24 * 60 * 60
-    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    instant_eval_scale.compute_summary(
+        SimpleNamespace(), run, SimpleNamespace(), [], None
+    )
     assert checks == [True, False]
     # Once the check expires the answers are compared again, and kept again.
     del kept.values["ie-answers-checked:t1:3"]
-    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    instant_eval_scale.compute_summary(
+        SimpleNamespace(), run, SimpleNamespace(), [], None
+    )
     assert checks == [True, False, True]
     assert kept.values["ie-answers-checked:t1:3"] == 1
 
@@ -1422,7 +1725,9 @@ def test_a_live_runs_summary_is_kept_a_minute_and_checks_nothing(counted, monkey
         instant_eval_scale, "_status", lambda task, run: EvalTaskStatus.RUNNING
     )
     run = SimpleNamespace(eval_task_id="t1", answers_version=0)
-    instant_eval_scale.compute_summary(SimpleNamespace(), run, SimpleNamespace(), [])
+    instant_eval_scale.compute_summary(
+        SimpleNamespace(), run, SimpleNamespace(), [], None
+    )
     assert kept.timeouts == {"summary:running:0": 60}
     assert checks == [False]
 

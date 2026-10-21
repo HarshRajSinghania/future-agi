@@ -366,6 +366,105 @@ def test_provider_key_rejected_is_not_retried():
     sleep.assert_not_called()
 
 
+FIRST_ID, SECOND_ID = "01JAQ8Z3V5W6X7Y8Z9A0B1C2D3", "01JAQ8Z4V5W6X7Y8Z9A0B1C2D4"
+
+
+def test_each_attempt_keeps_the_gateways_request_id():
+    """A disputed answer, or a failed attempt, can be found in the gateway's
+    logs by the id it answered with."""
+    with (
+        patch(
+            "httpx.post",
+            side_effect=[
+                reply(503, "provider_overloaded", {"x-agentcc-request-id": FIRST_ID}),
+                reply(200, headers={"x-agentcc-request-id": SECOND_ID}),
+            ],
+        ),
+        capture_logs() as logs,
+    ):
+        jev = client(sleep=Mock())
+        assert jev.evaluate("jev-latest", "x", QUESTIONS, timeout=35) == OK
+    assert [a["gateway_request_id"] for a in jev.attempts] == [FIRST_ID, SECOND_ID]
+    assert jev.gateway_request_id == SECOND_ID
+    [line] = [log for log in logs if log["event"] == "jev_gateway_error"]
+    assert line["gateway_request_id"] == FIRST_ID
+
+
+@pytest.mark.parametrize(
+    "header", [f"{FIRST_ID} {ORG_KEY}", "a" * 65, "", "../id;drop"]
+)
+def test_a_request_id_that_is_not_one_is_not_kept(header):
+    with patch(
+        "httpx.post", return_value=reply(200, headers={"x-agentcc-request-id": header})
+    ):
+        jev = client()
+        jev.evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    assert jev.gateway_request_id is None
+    assert jev.attempts[0]["gateway_request_id"] is None
+    assert_no_secret(jev.attempts)
+
+
+def test_the_direct_transport_has_no_gateway_request_id(settings):
+    settings.JEV_TRANSPORT = "direct"
+    with patch(
+        "httpx.post",
+        return_value=reply(200, headers={"x-agentcc-request-id": FIRST_ID}),
+    ):
+        jev = client()
+        jev.evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    assert jev.gateway_request_id is None
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (b"PRIVATE-CANARY", "not_json"),
+        (b'["PRIVATE-CANARY"]', "not_object"),
+        (b'{"error": {"message": "PRIVATE-CANARY"}}', "error_body"),
+        (b" " * (10 * 1024 * 1024 + 1), "too_large"),
+    ],
+)
+def test_an_unusable_answer_is_logged_with_the_gateways_request_id(content, reason):
+    """A 200 whose body can't be used fails the answer; the log keeps the
+    gateway's id for the call, so what came back can be found in its logs."""
+    response = httpx.Response(
+        200, content=content, headers={"x-agentcc-request-id": FIRST_ID}
+    )
+    with (
+        patch("httpx.post", return_value=response),
+        capture_logs() as logs,
+        pytest.raises(JevGatewayError, match="JEV_PROVIDER_ERROR") as error,
+    ):
+        client(sleep=Mock()).evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    assert not error.value.retryable
+    assert_sanitized(error)
+    [line] = [log for log in logs if log["event"] == "jev_invalid_response"]
+    assert line == {
+        "event": "jev_invalid_response",
+        "log_level": "warning",
+        "reason": reason,
+        "code": "JEV_PROVIDER_ERROR",
+        "attempt": 1,
+        "gateway_request_id": FIRST_ID,
+    }
+    assert_no_secret(logs)
+
+
+def test_an_unusable_direct_answer_is_logged_without_a_request_id(settings):
+    settings.JEV_TRANSPORT = "direct"
+    response = httpx.Response(
+        200, json=["PRIVATE-CANARY"], headers={"x-agentcc-request-id": FIRST_ID}
+    )
+    with (
+        patch("httpx.post", return_value=response),
+        capture_logs() as logs,
+        pytest.raises(JevGatewayError, match="JEV_PROVIDER_ERROR"),
+    ):
+        client(sleep=Mock()).evaluate("jev-latest", "x", QUESTIONS, timeout=35)
+    [line] = [log for log in logs if log["event"] == "jev_invalid_response"]
+    assert (line["reason"], line["gateway_request_id"]) == ("not_object", None)
+
+
 @pytest.mark.parametrize(
     "body",
     [

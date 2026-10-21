@@ -3112,7 +3112,7 @@ class EvalTemplateCreateV2View(APIView):
                     config["choices"] = choices_list
                 if choices_map:
                     config["choices_map"] = choices_map
-                    config["multi_choice"] = False
+                    config["multi_choice"] = req.multi_choice
                 criteria = req.instructions
 
             else:
@@ -3142,7 +3142,7 @@ class EvalTemplateCreateV2View(APIView):
                     config["choices"] = choices_list
                 if choices_map:
                     config["choices_map"] = choices_map
-                    config["multi_choice"] = False
+                    config["multi_choice"] = req.multi_choice
                 criteria = req.instructions
 
             # Store template_format in config
@@ -3195,7 +3195,7 @@ class EvalTemplateCreateV2View(APIView):
                 choices=choices_list,
                 description=req.description or "",
                 criteria=criteria,
-                multi_choice=False,
+                multi_choice=req.multi_choice,
                 proxy_agi=True,
                 visible_ui=not is_draft,
                 model=req.model,

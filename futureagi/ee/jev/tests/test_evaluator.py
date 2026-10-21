@@ -22,6 +22,7 @@ def evaluator(answer=None, actual="jev-1.13.0", **config):
         "answers": {"q1": answer or {"type": "noul", "noul": 0.8}},
         "usage": {"input_tokens": 412, "output_tokens": 6},
     }
+    client.gateway_request_id = "01JAGATEWAYREQUEST00000000"
     config.setdefault("model", "jev-latest")
     config.setdefault("rule_prompt", "Judge {{input}}")
     config.setdefault("required_keys", ["input"])
@@ -113,7 +114,9 @@ def test_r06_r13_result_metadata_actual_alias_and_factual_reason(caplog):
     assert result["reason"] == "Jev probability 0.80 vs threshold 0.50 → Pass"
     meta = json.loads(result["metadata"])
     assert "explanation" not in meta
-    assert meta["jev"]["reasoning_available"] is False
+    assert "reasoning_available" not in meta["jev"]
+    # The call can be found in the gateway's logs.
+    assert meta["jev"]["gateway_request_id"] == "01JAGATEWAYREQUEST00000000"
     assert meta["jev"]["requested_model"] == "jev-latest"
     assert meta["usage"] == {
         "prompt_tokens": 412,
@@ -126,9 +129,27 @@ def test_r06_r13_result_metadata_actual_alias_and_factual_reason(caplog):
 
 
 def test_r06_pinned_mismatch_is_error():
-    instance, _ = evaluator(actual="jev-future", model="jev-1.13.0")
+    instance, client = evaluator(actual="jev-future", model="jev-1.13.0")
     with pytest.raises(JevResponseError, match="JEV_MODEL_MISMATCH"):
         instance._evaluate(input="text")
+    client.invalid_response.assert_called_once_with(
+        "invalid_answer", "JEV_MODEL_MISMATCH"
+    )
+
+
+def test_an_unusable_answer_is_reported_with_the_gateway_call():
+    instance, client = evaluator(answer={"type": "noul", "noul": 1.5})
+    with pytest.raises(JevResponseError) as raised:
+        instance._evaluate(input="text")
+    client.invalid_response.assert_called_once_with(
+        "invalid_answer", raised.value.code
+    )
+
+
+def test_a_usable_answer_reports_nothing():
+    instance, client = evaluator()
+    instance._evaluate(input="text")
+    client.invalid_response.assert_not_called()
 
 
 def test_r12_provider_error_never_score():

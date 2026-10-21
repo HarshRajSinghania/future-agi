@@ -1247,53 +1247,6 @@ class CHSpanReader:
             for tid, lat, pt, ct in rows
         }
 
-    def models_by_group(
-        self, column: str, ids: list[str], *, project_id: str
-    ) -> dict[str, str]:
-        """{trace_id or trace_session_id: the model its first LLM call used},
-        for the traces or sessions given. The root of an agent trace rarely
-        names a model; its LLM child spans do.
-
-        Sessions read through the id remap: a straddler's or a consolidated
-        group's spans count for every session id asked for that resolves to
-        the group, keyed as given.
-
-        No FINAL: a model name is the same on every version of a span, so an
-        unmerged duplicate cannot change the answer."""
-        if column not in ("trace_id", "trace_session_id"):
-            raise ValueError(f"cannot group models by {column}")
-        if column == "trace_session_id":
-            askers, aliases = self.resolve_ids("trace_session_id_remap", ids)
-        else:
-            askers = {str(i): [str(i)] for i in ids if i}
-            aliases = {i: i for i in askers}
-        raw_ids = sorted(aliases)
-        # Each raw id's first model, then the first across a survivor's ids.
-        first: dict[str, tuple[datetime, str]] = {}
-        for start in range(0, len(raw_ids), _REMAP_ID_BATCH):
-            rows = self._client.query(
-                f"SELECT toString({column}) AS k, argMin(model, start_time) AS m, "
-                "min(start_time) AS t FROM spans "
-                f"WHERE project_id = %(pid)s AND {column} IN %(ids)s "
-                "AND model != '' AND is_deleted = 0 "
-                "GROUP BY k",
-                parameters={
-                    "pid": str(project_id),
-                    "ids": tuple(raw_ids[start : start + _REMAP_ID_BATCH]),
-                },
-            ).result_rows
-            for key, model, at in rows:
-                survivor = aliases.get(str(key))
-                if not (survivor and model):
-                    continue
-                if survivor not in first or (at, str(model)) < first[survivor]:
-                    first[survivor] = (at, str(model))
-        return {
-            caller: model
-            for survivor, (_, model) in first.items()
-            for caller in askers[survivor]
-        }
-
     # ─── Children of a parent span ────────────────────────────────────────────
     def list_by_parent(
         self, parent_span_id: str, *, limit: int | None = None

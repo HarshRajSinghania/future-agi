@@ -29,6 +29,7 @@ def instance():
         },
     ]
     client.attempt = 2
+    client.gateway_request_id = None
     evaluator = JevEvaluator(rule_prompt="Judge", model="jev-latest", client=client)
     evaluator._evaluate()
     return evaluator
@@ -74,6 +75,41 @@ def test_usage_events_are_accepted_by_the_billing_consumer():
 def test_flat_price_ignores_token_counts():
     # Bring your own key: the eval costs the same however many tokens it used.
     assert instance().cost["total_cost"] == 0
+
+
+@pytest.mark.parametrize(("markup", "credits"), [("1.2", 0.06), ("1.0", 0.05)])
+def test_an_answer_costs_the_eval_fee_in_credits_and_is_charged_that(markup, credits):
+    """credits_per_answer is the one price of a Jev answer: Instant eval
+    estimates with it and the usage event charges it."""
+    from decimal import Decimal
+
+    from ee.jev.metering import credits_per_answer, emit_usage_events
+    from ee.usage.schemas.billing_config import BillingConfigSchema
+    from ee.usage.services.config import BillingConfig
+
+    config = BillingConfig(
+        BillingConfigSchema(
+            plans={},
+            dimensions={},
+            pricing_tiers={},
+            entitlements={},
+            api_call_types={},
+            ee_bands={},
+            ai_credit_models={},
+            ai_cost_markup=Decimal(markup),
+            eval_per_run_fee=Decimal("0.0005"),
+        )
+    )
+    with (
+        patch("ee.usage.services.config.BillingConfig.get", return_value=config),
+        patch("ee.usage.services.emitter.emit") as emit,
+    ):
+        price = credits_per_answer()
+        emit_usage_events(instance(), org_id="org", cell_or_run_id="run")
+    assert price == config.calculate_ai_credits(config.get_eval_per_run_fee())
+    assert price == pytest.approx(credits)
+    # The failed attempt is free; the answer is charged the price.
+    assert [call.args[0].amount for call in emit.call_args_list] == [0, price]
 
 
 def test_r17_completed_result_redelivery_has_same_idempotency_keys():
